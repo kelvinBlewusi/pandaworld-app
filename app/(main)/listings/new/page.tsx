@@ -1120,11 +1120,9 @@ function NewListingWizard() {
       ? urlEntries.filter((u) => u.value.trim()).length || 1
       : productCount ?? 1;
 
-  const needsEnhancement =
-    mode === "ai" ||
-    (mode === "own" &&
-      products.length > 0 &&
-      products.every((p) => p.files.length === 1));
+  // Enhance/Generate step only applies to AI mode (reference photo → AI generates images,
+  // or text description → AI generates images). Own-mode images go straight to Jumia as-is.
+  const needsEnhancement = mode === "ai";
 
   const processingSteps = getProcessingSteps(mode, needsEnhancement);
 
