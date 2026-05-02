@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import type { Marketplace } from "@/lib/mock/listings";
+import type { Marketplace } from "@/lib/types";
 
 const config: Record<Marketplace, { label: string; className: string; emoji: string }> = {
   jumia: {

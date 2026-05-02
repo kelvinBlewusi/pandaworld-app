@@ -38,11 +38,11 @@ const primaryNav = [
   { href: "/imports",          label: "Imports",           icon: Upload },
 ];
 
-const workflowNav = [
-  { href: "/listings?status=draft",            label: "Drafts",            icon: FileText,     count: 5  },
-  { href: "/listings?status=pending_approval", label: "Pending approval",   icon: Clock,        count: 4  },
-  { href: "/listings?status=live",             label: "Published",          icon: CheckCircle,  count: 10 },
-  { href: "/listings?status=failed",           label: "Failed",             icon: AlertCircle,  count: 2  },
+const workflowNavBase = [
+  { href: "/listings?status=draft",            label: "Drafts",            icon: FileText,    statusKey: "draft"             },
+  { href: "/listings?status=pending_approval", label: "Pending approval",   icon: Clock,       statusKey: "pending_approval"  },
+  { href: "/listings?status=live",             label: "Published",          icon: CheckCircle, statusKey: "live"              },
+  { href: "/listings?status=failed",           label: "Failed",             icon: AlertCircle, statusKey: "failed"            },
 ];
 
 const settingsNav = [
@@ -207,7 +207,20 @@ function UserChip() {
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 
-export function Sidebar() {
+interface WorkflowCounts {
+  draft: number;
+  live: number;
+  pending_approval: number;
+  failed: number;
+}
+
+export function Sidebar({ workflowCounts }: { workflowCounts?: WorkflowCounts }) {
+  const counts = workflowCounts ?? { draft: 0, live: 0, pending_approval: 0, failed: 0 };
+  const workflowNav = workflowNavBase.map(({ statusKey, ...item }) => ({
+    ...item,
+    count: counts[statusKey as keyof WorkflowCounts] ?? 0,
+  }));
+
   return (
     <aside className="flex h-screen w-60 flex-col border-r bg-white">
       {/* Brand + workspace switcher */}

@@ -7,14 +7,27 @@ import {
   ArrowRight,
 } from "lucide-react";
 import Link from "next/link";
+import { currentUser } from "@clerk/nextjs/server";
 import { Button } from "@/components/ui/button";
 import { StatCard } from "@/components/ui/stat-card";
 import { ListingTable } from "@/components/ui/listing-table";
-import { mockListings, statusCounts, weeklyEarnings } from "@/lib/mock/listings";
+import { getDashboardStats, getListings } from "@/lib/actions/listings";
 import { formatGHS } from "@/lib/utils";
+import { toListingDisplay } from "@/lib/types";
 
-export default function DashboardPage() {
-  const recentListings = mockListings.slice(0, 6);
+export default async function DashboardPage() {
+  const [user, stats, allListings] = await Promise.all([
+    currentUser(),
+    getDashboardStats(),
+    getListings(),
+  ]);
+
+  const firstName = user?.firstName ?? user?.username ?? "there";
+  const recentListings = allListings.slice(0, 6).map(toListingDisplay);
+
+  const hour = new Date().getHours();
+  const greeting =
+    hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
 
   return (
     <div className="space-y-8">
@@ -22,10 +35,10 @@ export default function DashboardPage() {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold text-zinc-900">
-            Good morning, Kelvin 👋
+            {greeting}, {firstName} 👋
           </h1>
           <p className="mt-1 text-sm text-zinc-500">
-            Here's what's happening with your listings today.
+            Here&apos;s what&apos;s happening with your listings today.
           </p>
         </div>
         <Button asChild className="gap-2">
@@ -40,29 +53,29 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           title="Draft listings"
-          value={statusCounts.draft}
+          value={stats.draft}
           subtitle="Ready to publish"
           icon={<FileText className="h-5 w-5" />}
           gradient="lavender"
         />
         <StatCard
           title="Live listings"
-          value={statusCounts.live}
+          value={stats.live}
           subtitle="Active on Jumia"
           icon={<CheckCircle className="h-5 w-5" />}
           gradient="green"
         />
         <StatCard
           title="Pending approval"
-          value={statusCounts.pending_approval}
+          value={stats.pending_approval}
           subtitle="Awaiting Jumia review"
           icon={<Clock className="h-5 w-5" />}
           gradient="orange"
         />
         <StatCard
           title="This week's earnings"
-          value={formatGHS(weeklyEarnings)}
-          subtitle="+12% vs last week"
+          value={formatGHS(0)}
+          subtitle="Connect Jumia to track"
           icon={<TrendingUp className="h-5 w-5" />}
           gradient="blue"
         />
@@ -81,7 +94,23 @@ export default function DashboardPage() {
             </Link>
           </Button>
         </div>
-        <ListingTable listings={recentListings} compact />
+
+        {recentListings.length > 0 ? (
+          <ListingTable listings={recentListings} compact />
+        ) : (
+          <div className="rounded-2xl border bg-white py-16 text-center">
+            <p className="text-sm font-medium text-zinc-500">No listings yet</p>
+            <p className="mt-1 text-xs text-zinc-400">
+              Create your first listing to get started
+            </p>
+            <Button asChild className="mt-4 gap-2" size="sm">
+              <Link href="/listings/new">
+                <Plus className="h-3.5 w-3.5" />
+                New listing
+              </Link>
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -23,10 +23,10 @@ import {
 import { StatusPill } from "@/components/ui/status-pill";
 import { MarketplaceBadge } from "@/components/ui/marketplace-badge";
 import { formatGHS, formatDate } from "@/lib/utils";
-import type { Listing } from "@/lib/mock/listings";
+import type { ListingDisplay } from "@/lib/types";
 
 interface ListingTableProps {
-  listings: Listing[];
+  listings: ListingDisplay[];
   compact?: boolean;
 }
 
@@ -138,7 +138,7 @@ export function ListingTable({ listings, compact = false }: ListingTableProps) {
               )}
               <TableCell className="text-right">
                 <span className="text-sm font-semibold text-zinc-800">
-                  {formatGHS(listing.price)}
+                  {listing.price != null ? formatGHS(listing.price) : "—"}
                 </span>
               </TableCell>
               {!compact && (

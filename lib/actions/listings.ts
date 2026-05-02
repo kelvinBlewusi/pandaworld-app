@@ -3,11 +3,11 @@
 import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import type { ListingRow } from "@/lib/supabase/types";
+import type { ListingRow, ListingInsert } from "@/lib/supabase/types";
 
 // ─── Fetch all listings for the current user ──────────────────────────────────
 
-export async function getListings() {
+export async function getListings(): Promise<ListingRow[]> {
   const { userId } = await auth();
   if (!userId) return [];
 
@@ -19,25 +19,25 @@ export async function getListings() {
     .order("created_at", { ascending: false });
 
   if (error) { console.error("getListings:", error); return []; }
-  return data ?? [];
+  return (data ?? []) as ListingRow[];
 }
 
 // ─── Fetch a single listing ───────────────────────────────────────────────────
 
-export async function getListing(id: string) {
+export async function getListing(id: string): Promise<ListingRow | null> {
   const { userId } = await auth();
   if (!userId) return null;
 
   const db = createServerClient();
   const { data, error } = await db
     .from("listings")
-    .select("*, variants(*)")
+    .select("*")
     .eq("id", id)
     .eq("user_id", userId)
     .single();
 
   if (error) { console.error("getListing:", error); return null; }
-  return data;
+  return data as ListingRow;
 }
 
 // ─── Create a new listing (draft) ────────────────────────────────────────────
@@ -49,32 +49,55 @@ export async function createListing(input: {
   category_path?: string;
   category_code?: string;
   commission_rate?: number;
-}) {
+}): Promise<ListingRow> {
   const { userId } = await auth();
   if (!userId) throw new Error("Unauthenticated");
 
   const db = createServerClient();
   const sku = `PA-${Date.now().toString(36).toUpperCase()}`;
 
+  const insert: ListingInsert = {
+    user_id: userId,
+    sku,
+    title: input.title ?? null,
+    images: input.images ?? [],
+    category_id: input.category_id ?? null,
+    category_path: input.category_path ?? null,
+    category_code: input.category_code ?? null,
+    commission_rate: input.commission_rate ?? null,
+    status: "draft",
+    description: null,
+    highlights: null,
+    brand: null,
+    color: null,
+    color_family: null,
+    weight_kg: null,
+    main_material: null,
+    material_family: null,
+    production_country: null,
+    warranty_duration: null,
+    warranty_type: null,
+    warranty_text: null,
+    warranty_address: null,
+    model: null,
+    product_line: null,
+    size_l: null,
+    size_w: null,
+    size_h: null,
+    certifications: [],
+    youtube_id: null,
+    selling_price: null,
+  };
+
   const { data, error } = await db
     .from("listings")
-    .insert({
-      user_id: userId,
-      sku,
-      title: input.title ?? null,
-      images: input.images ?? [],
-      category_id: input.category_id ?? null,
-      category_path: input.category_path ?? null,
-      category_code: input.category_code ?? null,
-      commission_rate: input.commission_rate ?? null,
-      status: "draft",
-    })
+    .insert(insert)
     .select()
     .single();
 
   if (error) throw new Error(error.message);
   revalidatePath("/listings");
-  return data;
+  return data as ListingRow;
 }
 
 // ─── Update a listing ─────────────────────────────────────────────────────────
@@ -82,7 +105,7 @@ export async function createListing(input: {
 export async function updateListing(
   id: string,
   updates: Partial<Omit<ListingRow, "id" | "user_id" | "created_at" | "updated_at">>
-) {
+): Promise<ListingRow> {
   const { userId } = await auth();
   if (!userId) throw new Error("Unauthenticated");
 
@@ -98,12 +121,12 @@ export async function updateListing(
   if (error) throw new Error(error.message);
   revalidatePath("/listings");
   revalidatePath(`/listings/${id}/review`);
-  return data;
+  return data as ListingRow;
 }
 
 // ─── Delete a listing ─────────────────────────────────────────────────────────
 
-export async function deleteListing(id: string) {
+export async function deleteListing(id: string): Promise<void> {
   const { userId } = await auth();
   if (!userId) throw new Error("Unauthenticated");
 
@@ -132,12 +155,11 @@ export async function getDashboardStats() {
 
   if (error || !data) return { draft: 0, live: 0, pending_approval: 0, failed: 0 };
 
-  return data.reduce(
-    (acc, row) => {
-      const s = row.status as string;
-      if (s in acc) acc[s as keyof typeof acc]++;
-      return acc;
-    },
-    { draft: 0, live: 0, pending_approval: 0, failed: 0 }
-  );
+  const counts = { draft: 0, live: 0, pending_approval: 0, failed: 0 };
+  for (const row of data as { status: string }[]) {
+    if (row.status in counts) {
+      counts[row.status as keyof typeof counts]++;
+    }
+  }
+  return counts;
 }
