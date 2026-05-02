@@ -141,6 +141,76 @@ export async function deleteListing(id: string): Promise<void> {
   revalidatePath("/listings");
 }
 
+// ─── Duplicate a listing ─────────────────────────────────────────────────────
+
+export async function duplicateListing(id: string): Promise<ListingRow> {
+  const { userId } = await auth();
+  if (!userId) throw new Error("Unauthenticated");
+
+  const original = await getListing(id);
+  if (!original) throw new Error("Listing not found");
+
+  const db = createServerClient();
+  const sku = `PA-${Date.now().toString(36).toUpperCase()}`;
+
+  const { id: _id, created_at: _c, updated_at: _u, ...rest } = original;
+  void _id; void _c; void _u;
+
+  const { data, error } = await db
+    .from("listings")
+    .insert({
+      ...rest,
+      sku,
+      title: original.title ? `${original.title} (Copy)` : null,
+      status: "draft",
+    })
+    .select()
+    .single();
+
+  if (error) throw new Error(error.message);
+  revalidatePath("/listings");
+  return data as ListingRow;
+}
+
+// ─── Bulk delete listings ────────────────────────────────────────────────────
+
+export async function bulkDeleteListings(ids: string[]): Promise<void> {
+  const { userId } = await auth();
+  if (!userId) throw new Error("Unauthenticated");
+  if (!ids.length) return;
+
+  const db = createServerClient();
+  const { error } = await db
+    .from("listings")
+    .delete()
+    .in("id", ids)
+    .eq("user_id", userId);
+
+  if (error) throw new Error(error.message);
+  revalidatePath("/listings");
+}
+
+// ─── Bulk update listing status ──────────────────────────────────────────────
+
+export async function bulkUpdateStatus(
+  ids: string[],
+  status: string
+): Promise<void> {
+  const { userId } = await auth();
+  if (!userId) throw new Error("Unauthenticated");
+  if (!ids.length) return;
+
+  const db = createServerClient();
+  const { error } = await db
+    .from("listings")
+    .update({ status, updated_at: new Date().toISOString() })
+    .in("id", ids)
+    .eq("user_id", userId);
+
+  if (error) throw new Error(error.message);
+  revalidatePath("/listings");
+}
+
 // ─── Dashboard stats ──────────────────────────────────────────────────────────
 
 export async function getDashboardStats() {
