@@ -1,0 +1,941 @@
+"use client";
+
+import { useState, useCallback, useRef, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  ImageIcon,
+  Wand2,
+  Link2,
+  Upload,
+  ArrowRight,
+  ArrowLeft,
+  Check,
+  Plus,
+  X,
+  Sparkles,
+  FileText,
+  ChevronRight,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Stepper } from "@/components/ui/stepper";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { mockCategories } from "@/lib/mock/categories";
+import { cn } from "@/lib/utils";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type WizardMode = "own" | "ai" | "url";
+
+interface MockFile {
+  id: string;
+  name: string;
+  preview: string;
+}
+
+interface ProductDraft {
+  id: string;
+  files: MockFile[];       // own mode: up to 8; ai mode: 0–1 reference
+  description: string;     // ai mode: text description
+}
+
+interface UrlEntry {
+  id: string;
+  value: string;
+}
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+/** 1–10 number tile grid */
+function CountPicker({
+  value,
+  onChange,
+}: {
+  value: number | null;
+  onChange: (n: number) => void;
+}) {
+  return (
+    <div className="grid grid-cols-5 gap-2">
+      {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+        <button
+          key={n}
+          onClick={() => onChange(n)}
+          className={cn(
+            "flex h-12 items-center justify-center rounded-xl border-2 text-base font-bold transition-all duration-150",
+            value === n
+              ? "border-blue-500 bg-blue-50 text-blue-600 shadow-sm"
+              : "border-zinc-200 text-zinc-500 hover:border-zinc-300 hover:bg-zinc-50"
+          )}
+        >
+          {n}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Dot progress indicator for per-product steps */
+function ProductProgress({
+  total,
+  current,
+}: {
+  total: number;
+  current: number; // 0-based
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      {Array.from({ length: total }, (_, i) => (
+        <div
+          key={i}
+          className={cn(
+            "h-2 rounded-full transition-all duration-200",
+            i < current
+              ? "w-4 bg-emerald-400"
+              : i === current
+              ? "w-6 bg-blue-500"
+              : "w-2 bg-zinc-200"
+          )}
+        />
+      ))}
+      <span className="ml-1.5 text-xs text-zinc-400">
+        {current + 1} of {total}
+      </span>
+    </div>
+  );
+}
+
+/** Compact image dropzone used in per-product panels */
+function CompactDropzone({
+  files,
+  maxFiles,
+  onFilesChange,
+  label,
+}: {
+  files: MockFile[];
+  maxFiles: number;
+  onFilesChange: (f: MockFile[]) => void;
+  label?: string;
+}) {
+  const [isDragging, setIsDragging] = useState(false);
+
+  const addFiles = useCallback(
+    (fileList: FileList) => {
+      const added: MockFile[] = Array.from(fileList)
+        .slice(0, maxFiles - files.length)
+        .map((f) => ({
+          id: Math.random().toString(36).slice(2),
+          name: f.name,
+          preview: URL.createObjectURL(f),
+        }));
+      onFilesChange([...files, ...added]);
+    },
+    [files, maxFiles, onFilesChange]
+  );
+
+  const remove = (id: string) =>
+    onFilesChange(files.filter((f) => f.id !== id));
+
+  if (files.length === 0) {
+    return (
+      <label
+        className={cn(
+          "flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-6 text-center transition-all",
+          isDragging
+            ? "border-blue-400 bg-blue-50"
+            : "border-zinc-200 bg-zinc-50/60 hover:border-zinc-300 hover:bg-zinc-50"
+        )}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setIsDragging(true);
+        }}
+        onDragLeave={() => setIsDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setIsDragging(false);
+          if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+        }}
+      >
+        <input
+          type="file"
+          accept="image/*"
+          multiple={maxFiles > 1}
+          className="sr-only"
+          onChange={(e) => {
+            if (e.target.files) addFiles(e.target.files);
+          }}
+        />
+        <div
+          className={cn(
+            "rounded-full p-2.5 transition-colors",
+            isDragging ? "bg-blue-100 text-blue-500" : "bg-zinc-100 text-zinc-400"
+          )}
+        >
+          <Upload className="h-5 w-5" />
+        </div>
+        <div>
+          <p className="text-sm font-medium text-zinc-600">
+            {label ?? "Drop photos here or click to browse"}
+          </p>
+          <p className="mt-0.5 text-xs text-zinc-400">
+            JPG · PNG · WEBP · up to 10 MB each
+            {maxFiles > 1 ? ` · max ${maxFiles} images` : ""}
+          </p>
+        </div>
+      </label>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {files.map((f) => (
+        <div
+          key={f.id}
+          className="group relative h-16 w-16 overflow-hidden rounded-lg border bg-zinc-50"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={f.preview} alt={f.name} className="h-full w-full object-cover" />
+          <button
+            onClick={() => remove(f.id)}
+            className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100"
+          >
+            <X className="h-4 w-4 text-white" />
+          </button>
+        </div>
+      ))}
+      {files.length < maxFiles && (
+        <label className="flex h-16 w-16 cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-zinc-200 text-zinc-400 transition-colors hover:border-zinc-300">
+          <input
+            type="file"
+            accept="image/*"
+            multiple={maxFiles > 1}
+            className="sr-only"
+            onChange={(e) => {
+              if (e.target.files) addFiles(e.target.files);
+            }}
+          />
+          <Plus className="h-4 w-4" />
+          <span className="text-[10px] font-medium">Add</span>
+        </label>
+      )}
+    </div>
+  );
+}
+
+// ─── Dynamic stepper steps based on mode + image count ───────────────────────
+
+function getProcessingSteps(mode: WizardMode, needsEnhancement: boolean) {
+  const base = needsEnhancement
+    ? [
+        { id: 1, label: mode === "ai" ? "Generate" : "Enhance" },
+        { id: 2, label: "Detect" },
+        { id: 3, label: "Populate" },
+      ]
+    : [
+        { id: 1, label: "Detect" },
+        { id: 2, label: "Populate" },
+      ];
+  return base;
+}
+
+// Resolved step name regardless of offset
+function resolveStepName(
+  step: number,
+  mode: WizardMode,
+  needsEnhancement: boolean
+): "enhance" | "detect" | "populate" {
+  if (needsEnhancement) {
+    if (step === 1) return "enhance";
+    if (step === 2) return "detect";
+    return "populate";
+  }
+  if (step === 1) return "detect";
+  return "populate";
+}
+
+function ProcessingStepContent({
+  step,
+  mode,
+  needsEnhancement,
+  totalProducts,
+  onNext,
+}: {
+  step: number;
+  mode: WizardMode;
+  needsEnhancement: boolean;
+  totalProducts: number;
+  onNext: () => void;
+}) {
+  const router = useRouter();
+  const resolved = resolveStepName(step, mode, needsEnhancement);
+  const plural = totalProducts > 1 ? `${totalProducts} products` : "your product";
+
+  // ── Step: Enhance / Generate ──────────────────────────────────────────────
+  if (resolved === "enhance") {
+    const isAI = mode === "ai";
+    return (
+      <div className="space-y-5">
+        <div className="rounded-2xl border bg-gradient-to-br from-blue-50 to-purple-50 p-5">
+          <div className="mb-4 flex items-center gap-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-100">
+              <Sparkles className="h-4 w-4 text-blue-600" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-zinc-800">
+                {isAI ? "Generating product images" : "AI image enhancement"}{" "}
+                {totalProducts > 1 && `— ${totalProducts} products`}
+              </p>
+              <p className="text-xs text-zinc-500">
+                {isAI
+                  ? "Creating up to 8 professional shots from your reference"
+                  : "Single image detected — enhancing & creating additional angles"}
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {(isAI
+              ? ["Image generation", "White-bg rendering", "Lifestyle shots"]
+              : ["Background removal", "Colour correction", "Upscale to 800×800"]
+            ).map((feat) => (
+              <div
+                key={feat}
+                className="flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-2 text-xs text-zinc-600 shadow-sm"
+              >
+                <Check className="h-3 w-3 shrink-0 text-emerald-500" />
+                {feat}
+              </div>
+            ))}
+          </div>
+        </div>
+        <p className="text-center text-xs text-zinc-400">
+          Phase 1 — processing is simulated. Live AI in Phase 2.
+        </p>
+        <Button onClick={onNext} className="w-full gap-2">
+          Continue with {isAI ? "generated" : "enhanced"} images
+          <ArrowRight className="h-4 w-4" />
+        </Button>
+      </div>
+    );
+  }
+
+  // ── Step: Category detection ──────────────────────────────────────────────
+  if (resolved === "detect") {
+    return (
+      <div className="space-y-5">
+        <div className="rounded-2xl border bg-gradient-to-br from-amber-50 to-orange-50 p-5">
+          <div className="mb-4 flex items-center gap-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-100">
+              <Sparkles className="h-4 w-4 text-amber-600" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-zinc-800">
+                AI category detection
+              </p>
+              <p className="text-xs text-zinc-500">
+                Analysing images to find the right Jumia category path
+              </p>
+            </div>
+          </div>
+          {/* Mock detected category */}
+          <div className="space-y-2">
+            <div className="rounded-xl border border-amber-200 bg-white p-3">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] font-semibold uppercase tracking-widest text-zinc-400">
+                  Detected category
+                </span>
+                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-600">
+                  94% confidence
+                </span>
+              </div>
+              <p className="text-xs text-zinc-500 leading-relaxed">
+                Electronics › Mobile Phones & Tablets › Phones › Smartphones
+              </p>
+              <p className="mt-1 text-[10px] text-zinc-400">Category code: 1000000</p>
+            </div>
+            {totalProducts > 1 && (
+              <p className="text-xs text-zinc-500 text-center">
+                Each of your {totalProducts} products is categorised individually.
+              </p>
+            )}
+          </div>
+        </div>
+        <p className="text-center text-xs text-zinc-400">
+          You can change the category in the Review step if the detection is wrong.
+        </p>
+        <Button onClick={onNext} className="w-full gap-2">
+          Category confirmed — populate fields
+          <ArrowRight className="h-4 w-4" />
+        </Button>
+      </div>
+    );
+  }
+
+  // ── Step: Field population → go to review ────────────────────────────────
+  return (
+    <div className="space-y-5">
+      <div className="rounded-2xl border bg-gradient-to-br from-emerald-50 to-teal-50 p-5">
+        <div className="mb-4 flex items-center gap-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100">
+            <Check className="h-4 w-4 text-emerald-600" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-zinc-800">
+              Listing fields populated
+            </p>
+            <p className="text-xs text-zinc-500">
+              AI has filled in all available fields — review before publishing
+            </p>
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          {[
+            { label: "Product name", value: "Samsung Galaxy A35 5G – 128GB – Navy Blue" },
+            { label: "Category path", value: "Electronics › Mobile Phones › Smartphones" },
+            { label: "Brand",         value: "Samsung" },
+            { label: "Color",         value: "Navy Blue" },
+            { label: "Weight",        value: "0.21 kg" },
+          ].map(({ label, value }) => (
+            <div key={label} className="flex items-center justify-between rounded-lg bg-white px-3 py-2 text-xs shadow-sm">
+              <span className="text-zinc-500">{label}</span>
+              <span className="font-medium text-zinc-800 truncate max-w-[180px]">{value}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-700">
+        <strong>Next:</strong> Review the full Jumia listing form — edit any field, set pricing, add variants and specifications, then publish.
+      </div>
+
+      <div className="flex gap-3">
+        <Button
+          variant="outline"
+          className="flex-1"
+          onClick={() => router.push("/listings?status=draft")}
+        >
+          Save as draft
+        </Button>
+        <Button
+          className="flex-1 gap-2 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700"
+          onClick={() => router.push("/listings/lst-001/review")}
+        >
+          <Sparkles className="h-4 w-4" />
+          Review & publish
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Wizard inner (uses useSearchParams) ─────────────────────────────────────
+
+function NewListingWizard() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const modeParam = searchParams.get("mode") as WizardMode | null;
+
+  // ── State ────────────────────────────────────────────────────────────────
+  const [mode, setMode] = useState<WizardMode | null>(
+    ["own", "ai", "url"].includes(modeParam ?? "") ? modeParam : null
+  );
+  const [productCount, setProductCount] = useState<number | null>(null);
+  const [currentProductIdx, setCurrentProductIdx] = useState(0);
+  const [products, setProducts] = useState<ProductDraft[]>([]);
+  const [showStepper, setShowStepper] = useState(false);
+  const [stepperStep, setStepperStep] = useState(1);
+
+  // URL mode entries
+  const [urlEntries, setUrlEntries] = useState<UrlEntry[]>([{ id: "u1", value: "" }]);
+
+  // Initialise products when count is set
+  const initProducts = (count: number) => {
+    setProducts(
+      Array.from({ length: count }, (_, i) => ({
+        id: `p${i + 1}`,
+        files: [],
+        description: "",
+      }))
+    );
+    setCurrentProductIdx(0);
+    setProductCount(count);
+  };
+
+  const updateProduct = (idx: number, patch: Partial<ProductDraft>) =>
+    setProducts((prev) => prev.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
+
+  const currentProduct = products[currentProductIdx];
+
+  // ── Phase: mode not yet chosen ───────────────────────────────────────────
+  if (!mode) {
+    const modeOptions = [
+      {
+        id: "own" as WizardMode,
+        icon: ImageIcon,
+        gradient: "from-blue-500 to-indigo-600",
+        bg: "bg-blue-50 hover:bg-blue-100",
+        border: "border-blue-200",
+        iconColor: "text-blue-600",
+        label: "I have my own product images",
+        sub: "Upload up to 8 high-quality photos per product. AI will enhance, remove backgrounds, and generate listing copy.",
+        badge: "Max 8 images",
+        badgeColor: "bg-blue-100 text-blue-600",
+      },
+      {
+        id: "ai" as WizardMode,
+        icon: Wand2,
+        gradient: "from-violet-500 to-purple-700",
+        bg: "bg-violet-50 hover:bg-violet-100",
+        border: "border-violet-200",
+        iconColor: "text-violet-600",
+        label: "Generate images with AI",
+        sub: "Upload just 1 reference photo or describe your product in words — AI creates up to 8 professional listing images.",
+        badge: "AI generates 8 images",
+        badgeColor: "bg-violet-100 text-violet-600",
+      },
+      {
+        id: "url" as WizardMode,
+        icon: Link2,
+        gradient: "from-emerald-500 to-teal-600",
+        bg: "bg-emerald-50 hover:bg-emerald-100",
+        border: "border-emerald-200",
+        iconColor: "text-emerald-600",
+        label: "Import from product URL",
+        sub: "Paste a link from any product page. PandaWorld will scrape the title, images, description and pre-fill all Jumia fields automatically.",
+        badge: "Multiple URLs",
+        badgeColor: "bg-emerald-100 text-emerald-600",
+      },
+    ];
+
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold text-zinc-900">Create new listing</h1>
+          <p className="mt-1 text-sm text-zinc-500">How would you like to get started?</p>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-1 md:grid-cols-3">
+          {modeOptions.map(({ id, icon: Icon, bg, border, iconColor, gradient, label, sub, badge, badgeColor }) => (
+            <motion.button
+              key={id}
+              whileHover={{ y: -2 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={() => {
+                setMode(id);
+                router.replace(`/listings/new?mode=${id}`, { scroll: false });
+              }}
+              className={cn(
+                "group flex flex-col items-start gap-4 rounded-2xl border-2 bg-white p-6 text-left shadow-sm transition-all hover:shadow-md",
+                border
+              )}
+            >
+              <div className={cn("flex h-11 w-11 items-center justify-center rounded-xl", bg, "transition-colors")}>
+                <Icon className={cn("h-5 w-5", iconColor)} />
+              </div>
+              <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-semibold text-zinc-900">{label}</p>
+                  <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold", badgeColor)}>
+                    {badge}
+                  </span>
+                </div>
+                <p className="text-xs leading-relaxed text-zinc-500">{sub}</p>
+              </div>
+              <div className={cn(
+                "mt-auto flex items-center gap-1 text-xs font-semibold transition-colors",
+                iconColor
+              )}>
+                Select <ChevronRight className="h-3.5 w-3.5" />
+              </div>
+            </motion.button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Phase: URL import ────────────────────────────────────────────────────
+  if (mode === "url" && !showStepper) {
+    const validUrls = urlEntries.filter((u) => u.value.trim().length > 0).length;
+    return (
+      <div className="space-y-6">
+        <WizardHeader mode={mode} onBack={() => { setMode(null); router.replace("/listings/new", { scroll: false }); }} />
+        <div className="rounded-2xl border bg-white p-6 space-y-5">
+          <div>
+            <p className="text-base font-semibold text-zinc-900">Paste product URLs</p>
+            <p className="mt-0.5 text-sm text-zinc-500">
+              One URL per product — PandaWorld will scrape the title, images, and description for each.
+            </p>
+          </div>
+          <div className="space-y-2.5">
+            <AnimatePresence initial={false}>
+              {urlEntries.map((entry, index) => (
+                <motion.div
+                  key={entry.id}
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.15 }}
+                  className="flex items-center gap-2"
+                >
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-xs font-bold text-zinc-500">
+                    {index + 1}
+                  </span>
+                  <div className="relative flex-1">
+                    <Link2 className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
+                    <Input
+                      className="pl-8"
+                      placeholder={`https://www.somestore.com/product-${index + 1}`}
+                      value={entry.value}
+                      onChange={(e) =>
+                        setUrlEntries((prev) =>
+                          prev.map((u) => (u.id === entry.id ? { ...u, value: e.target.value } : u))
+                        )
+                      }
+                    />
+                  </div>
+                  {urlEntries.length > 1 && (
+                    <button
+                      onClick={() => setUrlEntries((prev) => prev.filter((u) => u.id !== entry.id))}
+                      className="rounded-lg p-1.5 text-zinc-400 transition-colors hover:bg-red-50 hover:text-red-500"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          </div>
+          <button
+            onClick={() => setUrlEntries((prev) => [...prev, { id: `u${Date.now()}`, value: "" }])}
+            className="flex items-center gap-1.5 text-xs font-medium text-emerald-600 hover:text-emerald-700"
+          >
+            <Plus className="h-3.5 w-3.5" /> Add another product URL
+          </button>
+          <Button
+            className="w-full gap-2"
+            disabled={validUrls === 0}
+            onClick={() => { setShowStepper(true); }}
+          >
+            <Link2 className="h-4 w-4" />
+            {validUrls > 0
+              ? `Import ${validUrls} ${validUrls === 1 ? "product" : "products"}`
+              : "Paste at least one URL to continue"}
+          </Button>
+          <p className="text-center text-xs text-zinc-400">URL scraping is simulated in Phase 1. Live in Phase 2.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Phase: count picker (own / ai modes) ─────────────────────────────────
+  if (!productCount && !showStepper) {
+    return (
+      <div className="space-y-6">
+        <WizardHeader mode={mode} onBack={() => { setMode(null); router.replace("/listings/new", { scroll: false }); }} />
+        <div className="rounded-2xl border bg-white p-6 space-y-5">
+          <div>
+            <p className="text-base font-semibold text-zinc-900">
+              How many products do you want to list?
+            </p>
+            <p className="mt-0.5 text-sm text-zinc-500">
+              You can list 1 to 10 different products in one go.
+            </p>
+          </div>
+          <CountPicker value={productCount} onChange={initProducts} />
+          {!productCount && (
+            <p className="text-center text-xs text-zinc-400">Select a number above to continue</p>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Phase: per-product upload ─────────────────────────────────────────────
+  if (productCount && !showStepper && currentProduct) {
+    const isLast = currentProductIdx === productCount - 1;
+    const canProceed =
+      mode === "own"
+        ? currentProduct.files.length > 0
+        : currentProduct.files.length > 0 || currentProduct.description.trim().length > 0;
+
+    const handleNext = () => {
+      if (isLast) {
+        setShowStepper(true);
+      } else {
+        setCurrentProductIdx((i) => i + 1);
+      }
+    };
+
+    return (
+      <div className="space-y-6">
+        <WizardHeader
+          mode={mode}
+          onBack={() => {
+            if (currentProductIdx > 0) {
+              setCurrentProductIdx((i) => i - 1);
+            } else {
+              setProductCount(null);
+              setProducts([]);
+            }
+          }}
+        />
+
+        <div className="rounded-2xl border bg-white p-6 space-y-5">
+          {/* Product progress */}
+          <div className="flex items-center justify-between">
+            <ProductProgress total={productCount} current={currentProductIdx} />
+            <span className="text-xs font-semibold text-zinc-400">
+              {mode === "own" ? "Max 8 images" : "1 photo or description"}
+            </span>
+          </div>
+
+          <div className="border-t pt-4">
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={currentProductIdx}
+                initial={{ opacity: 0, x: 12 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -12 }}
+                transition={{ duration: 0.18 }}
+                className="space-y-4"
+              >
+                <p className="text-base font-semibold text-zinc-900">
+                  Product {currentProductIdx + 1}
+                  {productCount > 1 && (
+                    <span className="ml-2 text-sm font-normal text-zinc-400">of {productCount}</span>
+                  )}
+                </p>
+
+                {/* OWN mode — up to 8 images */}
+                {mode === "own" && (
+                  <div className="space-y-3">
+                    <CompactDropzone
+                      files={currentProduct.files}
+                      maxFiles={8}
+                      onFilesChange={(f) => updateProduct(currentProductIdx, { files: f })}
+                      label="Drop up to 8 product photos here or click to browse"
+                    />
+                    {currentProduct.files.length > 0 && (
+                      <p className="text-xs text-zinc-400">
+                        {currentProduct.files.length}/8 images added
+                        {currentProduct.files.length === 8 && " · maximum reached"}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* AI mode — 1 reference photo OR description */}
+                {mode === "ai" && (
+                  <div className="space-y-4">
+                    {/* Reference image */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <div className="h-px flex-1 bg-zinc-100" />
+                        <span className="text-xs font-medium text-zinc-400">
+                          Option A — Reference photo
+                        </span>
+                        <div className="h-px flex-1 bg-zinc-100" />
+                      </div>
+                      <CompactDropzone
+                        files={currentProduct.files}
+                        maxFiles={1}
+                        onFilesChange={(f) => updateProduct(currentProductIdx, { files: f })}
+                        label="Drop 1 reference photo (any angle)"
+                      />
+                      {currentProduct.files.length > 0 && (
+                        <div className="flex items-center gap-2 rounded-lg border border-violet-100 bg-violet-50 px-3 py-2">
+                          <Wand2 className="h-3.5 w-3.5 text-violet-500 shrink-0" />
+                          <p className="text-xs text-violet-700">
+                            AI will generate up to <strong>8 professional product images</strong> from this reference.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Divider */}
+                    <div className="flex items-center gap-3">
+                      <div className="h-px flex-1 bg-zinc-100" />
+                      <span className="text-[11px] font-semibold text-zinc-400">OR</span>
+                      <div className="h-px flex-1 bg-zinc-100" />
+                    </div>
+
+                    {/* Text description */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <div className="h-px flex-1 bg-zinc-100" />
+                        <span className="text-xs font-medium text-zinc-400">
+                          Option B — Describe your product
+                        </span>
+                        <div className="h-px flex-1 bg-zinc-100" />
+                      </div>
+                      <Textarea
+                        placeholder={`Describe Product ${currentProductIdx + 1} in detail…\n\nExample: "A black leather men's wallet with 8 card slots, a coin pocket, and gold-tone zip. The wallet is slim (1cm thick) and made from genuine cowhide. Target market: professional men aged 25–45."`}
+                        className="min-h-[120px] resize-none text-sm"
+                        value={currentProduct.description}
+                        onChange={(e) => updateProduct(currentProductIdx, { description: e.target.value })}
+                      />
+                      {currentProduct.description.trim().length > 0 && (
+                        <div className="flex items-center gap-2 rounded-lg border border-violet-100 bg-violet-50 px-3 py-2">
+                          <Wand2 className="h-3.5 w-3.5 text-violet-500 shrink-0" />
+                          <p className="text-xs text-violet-700">
+                            AI will use this description to generate up to <strong>8 images</strong> and pre-fill all listing fields.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            </AnimatePresence>
+          </div>
+
+          {/* Navigation */}
+          <div className="flex flex-col gap-2 pt-1">
+            <Button
+              className="w-full gap-2"
+              disabled={!canProceed}
+              onClick={handleNext}
+            >
+              {isLast ? (
+                <>
+                  <Sparkles className="h-4 w-4" />
+                  {mode === "own"
+                    ? `Enhance & analyse ${productCount === 1 ? "product" : `all ${productCount} products`}`
+                    : `Generate images & analyse ${productCount === 1 ? "product" : `all ${productCount} products`}`}
+                </>
+              ) : (
+                <>
+                  Next — Product {currentProductIdx + 2}
+                  <ArrowRight className="h-4 w-4" />
+                </>
+              )}
+            </Button>
+            {!canProceed && (
+              <p className="text-center text-xs text-zinc-400">
+                {mode === "own"
+                  ? "Upload at least 1 image to continue"
+                  : "Add a reference photo or description to continue"}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Phase: stepper ────────────────────────────────────────────────────────
+  const totalProducts = mode === "url"
+    ? urlEntries.filter((u) => u.value.trim()).length || 1
+    : productCount ?? 1;
+
+  // Enhancement only needed for AI mode OR own-mode with ALL single-image products
+  const needsEnhancement =
+    mode === "ai" ||
+    (mode === "own" && products.length > 0 && products.every((p) => p.files.length === 1));
+
+  const processingSteps = getProcessingSteps(mode, needsEnhancement);
+
+  return (
+    <div className="space-y-6">
+      <WizardHeader mode={mode} showBack={false} />
+      <div className="rounded-2xl border bg-white p-6 space-y-6">
+        <div className="overflow-x-auto pb-1">
+          <Stepper steps={processingSteps} currentStep={stepperStep} />
+        </div>
+        <div className="border-t pt-5">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={stepperStep}
+              initial={{ opacity: 0, x: 10 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -10 }}
+              transition={{ duration: 0.15 }}
+            >
+              <ProcessingStepContent
+                step={stepperStep}
+                mode={mode}
+                needsEnhancement={needsEnhancement}
+                totalProducts={totalProducts}
+                onNext={() => {
+                  if (stepperStep < processingSteps.length) setStepperStep((s) => s + 1);
+                }}
+              />
+            </motion.div>
+          </AnimatePresence>
+          {stepperStep > 1 && (
+            <button
+              onClick={() => setStepperStep((s) => s - 1)}
+              className="mt-4 flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-600"
+            >
+              <ArrowLeft className="h-3 w-3" /> Back
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Shared header ────────────────────────────────────────────────────────────
+
+const modeLabel: Record<WizardMode, { icon: React.ElementType; color: string; label: string }> = {
+  own: { icon: ImageIcon, color: "text-blue-500", label: "Own images" },
+  ai:  { icon: Wand2,     color: "text-violet-500", label: "AI-generated images" },
+  url: { icon: Link2,     color: "text-emerald-500", label: "Import from URL" },
+};
+
+function WizardHeader({
+  mode,
+  onBack,
+  showBack = true,
+}: {
+  mode: WizardMode;
+  onBack?: () => void;
+  showBack?: boolean;
+}) {
+  const cfg = modeLabel[mode];
+  const Icon = cfg.icon;
+  return (
+    <div className="flex items-center gap-3">
+      {showBack && onBack && (
+        <button
+          onClick={onBack}
+          className="flex h-8 w-8 items-center justify-center rounded-lg border text-zinc-400 transition-colors hover:bg-zinc-50 hover:text-zinc-600"
+        >
+          <ArrowLeft className="h-4 w-4" />
+        </button>
+      )}
+      <div>
+        <div className="flex items-center gap-2">
+          <Icon className={cn("h-4 w-4", cfg.color)} />
+          <span className={cn("text-xs font-semibold", cfg.color)}>{cfg.label}</span>
+        </div>
+        <h1 className="text-2xl font-bold text-zinc-900 leading-tight">Create new listing</h1>
+      </div>
+    </div>
+  );
+}
+
+// ─── Page export ──────────────────────────────────────────────────────────────
+
+export default function NewListingPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="space-y-6">
+          <div className="h-8 w-48 animate-pulse rounded-lg bg-zinc-100" />
+          <div className="h-64 animate-pulse rounded-2xl bg-zinc-100" />
+        </div>
+      }
+    >
+      <NewListingWizard />
+    </Suspense>
+  );
+}
