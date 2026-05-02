@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { UserButton, useUser } from "@clerk/nextjs";
 import {
   LayoutDashboard,
   List,
@@ -179,6 +180,31 @@ function NewListingDropdown() {
   );
 }
 
+// ─── User chip (real Clerk identity) ─────────────────────────────────────────
+
+function UserChip() {
+  const { user } = useUser();
+  return (
+    <div className="mt-3 flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-zinc-50">
+      <UserButton
+        appearance={{
+          elements: {
+            avatarBox: "h-7 w-7",
+          },
+        }}
+      />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-xs font-medium text-zinc-800">
+          {user?.firstName ?? user?.username ?? "You"}
+        </p>
+        <p className="truncate text-[10px] text-zinc-400">
+          {user?.primaryEmailAddress?.emailAddress ?? ""}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 
 export function Sidebar() {
@@ -241,15 +267,7 @@ export function Sidebar() {
         </div>
 
         {/* User chip */}
-        <div className="mt-3 flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-zinc-50">
-          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-orange-400 to-pink-500 text-xs font-bold text-white">
-            K
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-medium text-zinc-800">Kelvin</p>
-            <p className="truncate text-[10px] text-zinc-400">kelvinblewu@gmail.com</p>
-          </div>
-        </div>
+        <UserChip />
       </div>
     </aside>
   );
