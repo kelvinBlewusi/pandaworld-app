@@ -1,9 +1,9 @@
 "use server";
 
-import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { mockCategories } from "@/lib/mock/categories";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
 
 export interface AIProductAnalysis {
   title: string;
@@ -27,16 +27,16 @@ const CATEGORY_LIST = mockCategories
   .map((c) => `${c.id} | ${c.name} | ${c.path}`)
   .join("\n");
 
-const SYSTEM_PROMPT = `You are an expert Jumia GH marketplace listing assistant.
-Analyse the provided product image(s) and return a JSON object with the following fields.
+const PROMPT = `You are an expert Jumia GH marketplace listing assistant.
+Analyse the provided product and return a JSON object with the following fields.
 Be concise, accurate, and use proper title casing.
 
 Available Jumia GH categories (id | name | path):
 ${CATEGORY_LIST}
 
-Return ONLY valid JSON — no markdown fences, no explanation.`;
+Return ONLY valid JSON — no markdown fences, no explanation.
 
-const USER_PROMPT = `Analyse this product and return a JSON object with these exact keys:
+JSON schema:
 {
   "title": "Product name, 15-70 chars, include key spec like size/colour/model",
   "description": "2-3 sentence product description for Jumia listing",
@@ -55,45 +55,21 @@ const USER_PROMPT = `Analyse this product and return a JSON object with these ex
   "material_family": "One of: Metal, Plastic, Fabric, Leather, Wood, Glass, Rubber, Ceramic, Silicone, Carbon Fibre, Mixed"
 }`;
 
-/**
- * Analyse product image URLs using GPT-4o Vision.
- * Returns structured listing data ready to pre-fill the Jumia form.
- */
-export async function analyzeProductImages(
-  imageUrls: string[]
-): Promise<AIProductAnalysis> {
-  if (!imageUrls.length) throw new Error("No images provided");
+/** Fetch an image URL and return it as a Gemini inline-data part */
+async function urlToInlinePart(url: string) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch image: ${url}`);
+  const buffer = await res.arrayBuffer();
+  const base64 = Buffer.from(buffer).toString("base64");
+  const mimeType = (res.headers.get("content-type") ?? "image/jpeg").split(";")[0];
+  return { inlineData: { data: base64, mimeType } };
+}
 
-  // Use up to 4 images for analysis (keep token cost reasonable)
-  const imageContent = imageUrls.slice(0, 4).map((url) => ({
-    type: "image_url" as const,
-    image_url: { url, detail: "high" as const },
-  }));
+/** Parse and validate the raw JSON string from Gemini */
+function parseAndValidate(raw: string): AIProductAnalysis {
+  const cleaned = raw.replace(/```json|```/g, "").trim();
+  const parsed: AIProductAnalysis = JSON.parse(cleaned);
 
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o",
-    max_tokens: 1000,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: [{ type: "text", text: USER_PROMPT }, ...imageContent],
-      },
-    ],
-  });
-
-  const raw = response.choices[0]?.message?.content ?? "{}";
-
-  let parsed: AIProductAnalysis;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    // Strip any accidental markdown fences and retry
-    const cleaned = raw.replace(/```json|```/g, "").trim();
-    parsed = JSON.parse(cleaned);
-  }
-
-  // Validate category against known list, fallback to first if unknown
   const matched = mockCategories.find((c) => c.id === parsed.category_id);
   if (!matched) {
     const fallback = mockCategories[0];
@@ -111,43 +87,53 @@ export async function analyzeProductImages(
 }
 
 /**
+ * Analyse product image URLs using Gemini 1.5 Flash (free tier).
+ * Fetches each image server-side and sends as inline base64 data.
+ */
+export async function analyzeProductImages(
+  imageUrls: string[]
+): Promise<AIProductAnalysis> {
+  if (!imageUrls.length) throw new Error("No images provided");
+
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+  // Fetch up to 4 images and convert to inline parts
+  const imageParts = await Promise.all(
+    imageUrls.slice(0, 4).map(urlToInlinePart)
+  );
+
+  const result = await model.generateContent([
+    PROMPT + "\n\nAnalyse the product shown in the image(s) above.",
+    ...imageParts,
+  ]);
+
+  const raw = result.response.text();
+
+  try {
+    return parseAndValidate(raw);
+  } catch {
+    throw new Error(`Gemini returned invalid JSON: ${raw.slice(0, 200)}`);
+  }
+}
+
+/**
  * Generate listing content from a text description (AI mode, no image).
  */
 export async function analyzeProductDescription(
   description: string
 ): Promise<AIProductAnalysis> {
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o",
-    max_tokens: 1000,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      {
-        role: "user",
-        content: `${USER_PROMPT}\n\nProduct description provided by seller:\n"${description}"`,
-      },
-    ],
-  });
+  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-  const raw = response.choices[0]?.message?.content ?? "{}";
-  let parsed: AIProductAnalysis;
+  const result = await model.generateContent(
+    PROMPT +
+      `\n\nProduct description provided by seller:\n"${description}"\n\nFill in all fields based on this description.`
+  );
+
+  const raw = result.response.text();
+
   try {
-    parsed = JSON.parse(raw);
+    return parseAndValidate(raw);
   } catch {
-    parsed = JSON.parse(raw.replace(/```json|```/g, "").trim());
+    throw new Error(`Gemini returned invalid JSON: ${raw.slice(0, 200)}`);
   }
-
-  const matched = mockCategories.find((c) => c.id === parsed.category_id);
-  if (!matched) {
-    const fallback = mockCategories[0];
-    parsed.category_id = fallback.id;
-    parsed.category_path = fallback.path;
-    parsed.category_code = fallback.code;
-    parsed.commission_rate = fallback.commissionRate / 100;
-  } else {
-    parsed.commission_rate = matched.commissionRate / 100;
-    parsed.category_path = matched.path;
-    parsed.category_code = matched.code;
-  }
-
-  return parsed;
 }
