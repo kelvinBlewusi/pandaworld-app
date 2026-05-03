@@ -16,6 +16,8 @@ import {
   ChevronDown,
   ChevronRight,
   Settings,
+  CreditCard,
+  Plug,
   Zap,
   ImageIcon,
   Wand2,
@@ -46,7 +48,9 @@ const workflowNavBase = [
 ];
 
 const settingsNav = [
-  { href: "/settings/account", label: "Account", icon: Settings },
+  { href: "/settings/account",      label: "Account",          icon: Settings  },
+  { href: "/settings/billing",      label: "Plans & billing",  icon: CreditCard },
+  { href: "/settings/integrations", label: "Integrations",     icon: Plug      },
 ];
 
 // ─── New Listing modes ────────────────────────────────────────────────────────

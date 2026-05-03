@@ -39,6 +39,9 @@ export interface ListingRow {
   status: ListingStatus;
   selling_price: number | null;
   commission_rate: number | null;
+  jumia_ref: string | null;
+  jumia_error: string | null;
+  jumia_synced_at: string | null;
   created_at: string;
   updated_at: string;
 }

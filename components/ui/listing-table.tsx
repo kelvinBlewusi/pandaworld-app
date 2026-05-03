@@ -9,6 +9,10 @@ import {
   Trash2,
   Loader2,
   SendHorizonal,
+  ShoppingBag,
+  CheckCircle2,
+  AlertCircle,
+  X,
 } from "lucide-react";
 import Link from "next/link";
 import {
@@ -30,7 +34,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { StatusPill } from "@/components/ui/status-pill";
 import { MarketplaceBadge } from "@/components/ui/marketplace-badge";
-import { formatGHS, formatDate } from "@/lib/utils";
+import { formatGHS, formatDate, cn } from "@/lib/utils";
 import type { ListingDisplay } from "@/lib/types";
 import {
   deleteListing,
@@ -44,11 +48,26 @@ interface ListingTableProps {
   compact?: boolean;
 }
 
+interface Toast {
+  id: string;
+  type: "success" | "error";
+  msg: string;
+}
+
 export function ListingTable({ listings, compact = false }: ListingTableProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [actionId, setActionId] = useState<string | null>(null); // row being acted on
+  const [selected, setSelected]         = useState<Set<string>>(new Set());
+  const [actionId, setActionId]         = useState<string | null>(null);
+  const [pushingIds, setPushingIds]     = useState<Set<string>>(new Set());
+  const [toasts, setToasts]             = useState<Toast[]>([]);
+
+  // ── Toast helpers ──────────────────────────────────────────────────────────
+  function addToast(type: "success" | "error", msg: string) {
+    const id = crypto.randomUUID();
+    setToasts((t) => [...t, { id, type, msg }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 6000);
+  }
 
   const toggleAll = () => {
     if (selected.size === listings.length) {
@@ -66,7 +85,7 @@ export function ListingTable({ listings, compact = false }: ListingTableProps) {
 
   const allSelected = selected.size === listings.length && listings.length > 0;
 
-  // ── Per-row actions ────────────────────────────────────────────────────────
+  // ── Per-row delete / duplicate ─────────────────────────────────────────────
 
   function handleDelete(id: string, title: string) {
     if (!window.confirm(`Delete "${title}"? This cannot be undone.`)) return;
@@ -98,6 +117,36 @@ export function ListingTable({ listings, compact = false }: ListingTableProps) {
     });
   }
 
+  // ── Push single listing to Jumia ───────────────────────────────────────────
+
+  async function handlePushToJumia(id: string, title: string) {
+    setPushingIds((s) => new Set(s).add(id));
+    try {
+      const res  = await fetch("/api/jumia/push", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ listingId: id }),
+      });
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        addToast("success", `"${title}" submitted to Jumia — now Pending Approval.`);
+        router.refresh();
+      } else {
+        addToast("error", data.error ?? "Push to Jumia failed. Try again.");
+        router.refresh(); // refresh so status badge updates (might show "failed")
+      }
+    } catch {
+      addToast("error", "Network error. Please try again.");
+    } finally {
+      setPushingIds((s) => {
+        const next = new Set(s);
+        next.delete(id);
+        return next;
+      });
+    }
+  }
+
   // ── Bulk actions ───────────────────────────────────────────────────────────
 
   function handleBulkDelete() {
@@ -119,8 +168,47 @@ export function ListingTable({ listings, compact = false }: ListingTableProps) {
     });
   }
 
+  async function handleBulkPushToJumia() {
+    const ids = Array.from(selected);
+    // Push sequentially to avoid hammering the API
+    for (const id of ids) {
+      const listing = listings.find((l) => l.id === id);
+      if (listing) {
+        await handlePushToJumia(id, listing.title);
+      }
+    }
+    setSelected(new Set());
+  }
+
   return (
     <div className="overflow-hidden rounded-2xl border bg-white">
+
+      {/* Toast stack */}
+      <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
+        {toasts.map((t) => (
+          <div
+            key={t.id}
+            className={cn(
+              "flex items-start gap-3 rounded-xl border px-4 py-3 shadow-lg text-sm font-medium",
+              t.type === "success"
+                ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                : "bg-red-50 border-red-200 text-red-800"
+            )}
+          >
+            {t.type === "success"
+              ? <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
+              : <AlertCircle  className="h-4 w-4 shrink-0 mt-0.5" />}
+            <span className="flex-1">{t.msg}</span>
+            <button
+              onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}
+              className="opacity-50 hover:opacity-100"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+
       {/* Bulk action bar */}
       {selected.size > 0 && (
         <div className="flex items-center gap-3 border-b bg-blue-50 px-4 py-2.5">
@@ -140,6 +228,20 @@ export function ListingTable({ listings, compact = false }: ListingTableProps) {
               <SendHorizonal className="h-3 w-3" />
             )}
             Submit for approval
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1.5 text-xs text-orange-600 hover:text-orange-700 border-orange-200 hover:border-orange-300"
+            disabled={isPending || pushingIds.size > 0}
+            onClick={handleBulkPushToJumia}
+          >
+            {pushingIds.size > 0 ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <ShoppingBag className="h-3 w-3" />
+            )}
+            Push to Jumia
           </Button>
           <Button
             variant="outline"
@@ -187,14 +289,17 @@ export function ListingTable({ listings, compact = false }: ListingTableProps) {
         </TableHeader>
         <TableBody>
           {listings.map((listing) => {
-            const isActing = actionId === listing.id;
+            const isActing  = actionId === listing.id;
+            const isPushing = pushingIds.has(listing.id);
+            const isLive    = listing.status === "live";
+
             return (
               <TableRow
                 key={listing.id}
                 className={
                   selected.has(listing.id)
                     ? "bg-blue-50/30"
-                    : isActing
+                    : isActing || isPushing
                     ? "opacity-50"
                     : ""
                 }
@@ -253,7 +358,7 @@ export function ListingTable({ listings, compact = false }: ListingTableProps) {
                   </TableCell>
                 )}
                 <TableCell>
-                  {isActing ? (
+                  {isActing || isPushing ? (
                     <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
                   ) : (
                     <DropdownMenu>
@@ -266,7 +371,7 @@ export function ListingTable({ listings, compact = false }: ListingTableProps) {
                           <MoreHorizontal className="h-4 w-4" />
                         </Button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="w-44">
+                      <DropdownMenuContent align="end" className="w-48">
                         <DropdownMenuItem asChild>
                           <Link href={`/listings/${listing.id}/review`}>
                             <ExternalLink className="h-4 w-4 mr-2" />
@@ -279,6 +384,17 @@ export function ListingTable({ listings, compact = false }: ListingTableProps) {
                           <Copy className="h-4 w-4 mr-2" />
                           Duplicate
                         </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        {/* Push to Jumia — shown for non-live listings */}
+                        {!isLive && (
+                          <DropdownMenuItem
+                            className="text-orange-600 focus:text-orange-600 focus:bg-orange-50"
+                            onClick={() => handlePushToJumia(listing.id, listing.title)}
+                          >
+                            <ShoppingBag className="h-4 w-4 mr-2" />
+                            Push to Jumia
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
                           className="text-red-600 focus:text-red-600"
