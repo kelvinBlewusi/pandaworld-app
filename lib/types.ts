@@ -18,6 +18,7 @@ export interface ListingDisplay {
   price: number | null;
   lastUpdated: string;     // ISO string
   marketplace: Marketplace;
+  jumia_ref: string | null; // feedId — used for status polling
 }
 
 // Map a Supabase ListingRow → ListingDisplay
@@ -36,5 +37,6 @@ export function toListingDisplay(row: ListingRow): ListingDisplay {
     price: row.selling_price ? Number(row.selling_price) : null,
     lastUpdated: row.updated_at,
     marketplace: "jumia" as Marketplace,
+    jumia_ref: row.jumia_ref ?? null,
   };
 }

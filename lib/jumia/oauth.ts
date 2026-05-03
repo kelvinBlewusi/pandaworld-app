@@ -1,16 +1,16 @@
 /**
  * Jumia Vendor API — OAuth 2.0 helpers (server-only)
  *
- * API base: https://vendor-api.jumia.com
- * Spec:     https://vendorcenter.jumia.com/api-docs/openapi.yaml
- *
- * Auth type: Authorization Code Flow
- * Token engine: Keycloak embedded in vendor-api.jumia.com
+ * API base:   https://vendor-api.jumia.com  (product / feed / order APIs)
+ * OAuth IdM:  https://auth-external.jumia.com  (Keycloak — Authorization Code Flow)
+ * Spec:       https://vendorcenter.jumia.com/api-docs/openapi.yaml
  */
 
-// ─── Confirmed endpoints from the official OpenAPI spec ──────────────────────
-const JUMIA_AUTH_URL     = "https://vendor-api.jumia.com/login";
-const JUMIA_TOKEN_URL    = "https://vendor-api.jumia.com/token";
+// ─── Endpoints ────────────────────────────────────────────────────────────────
+// OAuth 2.0 / OIDC lives on auth-external.jumia.com (Keycloak IdM)
+const JUMIA_AUTH_URL     = "https://auth-external.jumia.com/connect/auth";
+const JUMIA_TOKEN_URL    = "https://auth-external.jumia.com/connect/token";
+// All Vendor API calls (products, feeds, orders) go to vendor-api.jumia.com
 export const JUMIA_API_BASE = "https://vendor-api.jumia.com";
 
 // openid is required; offline_access requests a refresh_token

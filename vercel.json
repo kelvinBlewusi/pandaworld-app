@@ -1,6 +1,12 @@
 {
   "framework": "nextjs",
   "buildCommand": "next build",
-  "devCommand": "next dev",
-  "installCommand": "npm install"
+  "devCommand": "next dev -p 3002",
+  "installCommand": "npm install",
+  "crons": [
+    {
+      "path": "/api/cron/jumia-feeds",
+      "schedule": "*/5 * * * *"
+    }
+  ]
 }
