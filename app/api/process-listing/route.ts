@@ -60,17 +60,18 @@ export async function POST(req: NextRequest) {
 
     // ── Step 4: Populate all AI fields ───────────────────────────────────────
     await updateListing(listing.id, {
-      description: analysis.description,
-      highlights: analysis.highlights,
-      brand: analysis.brand || null,
-      color: analysis.color || null,
-      color_family: analysis.color_family || null,
-      weight_kg: analysis.weight_kg,
-      model: analysis.model || null,
-      main_material: analysis.main_material || null,
-      material_family: analysis.material_family || null,
-      selling_price: analysis.selling_price,
-      status: "draft",
+      description:         analysis.description,
+      highlights:          analysis.highlights,
+      brand:               analysis.brand || null,
+      color:               analysis.color || null,
+      color_family:        analysis.color_family || null,
+      weight_kg:           analysis.weight_kg,
+      model:               analysis.model || null,
+      main_material:       analysis.main_material || null,
+      material_family:     analysis.material_family || null,
+      selling_price:       analysis.selling_price,
+      dynamic_attributes:  analysis.dynamic_attributes ?? {},
+      status:              "draft",
     });
 
     return NextResponse.json({
@@ -84,9 +85,9 @@ export async function POST(req: NextRequest) {
     });
   } catch (err) {
     console.error("process-listing error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Processing failed" },
-      { status: 500 }
-    );
+    const message = err instanceof Error ? err.message : "Processing failed";
+    // Return 402 Payment Required for free-tier limit so the UI can show upgrade prompt
+    const status = message.startsWith("FREE_LIMIT_REACHED") ? 402 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }

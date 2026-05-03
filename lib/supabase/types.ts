@@ -42,6 +42,9 @@ export interface ListingRow {
   jumia_ref: string | null;
   jumia_error: string | null;
   jumia_synced_at: string | null;
+  // Category-specific attributes detected by AI and populated in review form
+  // e.g. { ram: "8GB", operating_system: "Android", network: "5G" }
+  dynamic_attributes: Record<string, string> | null;
   created_at: string;
   updated_at: string;
 }

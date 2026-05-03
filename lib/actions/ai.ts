@@ -1,212 +1,368 @@
 "use server";
 
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { getLeafCategories, getCategoryAttributes } from "@/lib/jumia/categories";
 import { mockCategories } from "@/lib/mock/categories";
+import type { JumiaCategoryRow, JumiaCategoryAttribute } from "@/lib/jumia/categories";
+
+// ─── Output types ─────────────────────────────────────────────────────────────
 
 export interface AIProductAnalysis {
-  title: string;
-  description: string;
-  highlights: string;
-  brand: string;
-  color: string;
-  color_family: string;
-  weight_kg: number | null;
-  category_id: string;
-  category_path: string;
-  category_code: string;
-  commission_rate: number;
-  selling_price: number | null;
-  model: string;
-  main_material: string;
+  // Core fields (always present)
+  title:           string;
+  description:     string;
+  highlights:      string;
+  brand:           string;
+  color:           string;
+  color_family:    string;
+  weight_kg:       number | null;
+  selling_price:   number | null;
+  model:           string;
+  main_material:   string;
   material_family: string;
+
+  // Category (resolved from Jumia real tree)
+  category_id:      string;   // kept for backwards compat (= String(category_code))
+  category_path:    string;   // e.g. "Phones & Tablets > Smartphones"
+  category_code:    string;   // Jumia numeric code as string (e.g. "10000799")
+  commission_rate:  number;
+
+  // Category-specific attributes (varies by category)
+  // Stored as a flat key→value map, e.g. { ram: "8GB", operating_system: "Android" }
+  dynamic_attributes: Record<string, string>;
 }
 
-// ─── Mock product templates ───────────────────────────────────────────────────
-// Used when NEXT_PUBLIC_MOCK_AI=true (no API key required).
-// Swap to real AI by setting OPENAI_API_KEY or GOOGLE_API_KEY in .env.local.
+// ─── Build AI prompt ──────────────────────────────────────────────────────────
 
-const MOCK_PRODUCTS: Omit<
-  AIProductAnalysis,
-  "category_id" | "category_path" | "category_code" | "commission_rate"
->[] = [
-  {
-    title: "Samsung Galaxy A55 5G Smartphone – 128GB – Awesome Navy",
-    description:
-      "The Samsung Galaxy A55 5G delivers a premium experience with its 6.6-inch Super AMOLED display and 50MP triple camera system. Built with a sleek aluminium frame and IP67 water resistance for everyday durability.",
-    highlights:
-      "• 6.6-inch Super AMOLED 120Hz display\n• 50MP OIS main camera + 12MP ultra-wide\n• 5000mAh battery with 25W fast charging\n• IP67 water and dust resistance\n• 5G connectivity for ultra-fast speeds",
-    brand: "Samsung",
-    color: "Navy Blue",
-    color_family: "Navy Blue",
-    weight_kg: 0.213,
-    selling_price: 2199,
-    model: "SM-A556E",
-    main_material: "Aluminium",
-    material_family: "Metal",
-  },
-  {
-    title: "Sony WH-1000XM5 Wireless Noise-Cancelling Headphones – Black",
-    description:
-      "Industry-leading noise cancellation with the Sony WH-1000XM5 over-ear headphones. Enjoy up to 30 hours of battery life and crystal-clear hands-free calling with the integrated microphone system.",
-    highlights:
-      "• Industry-leading noise cancellation technology\n• 30-hour battery life with quick charge (3 min = 3 hrs)\n• Multi-device pairing via Bluetooth 5.2\n• Lightweight folding design at 250g\n• Hi-Res Audio and LDAC support",
-    brand: "Sony",
-    color: "Black",
-    color_family: "Black",
-    weight_kg: 0.25,
-    selling_price: 1850,
-    model: "WH-1000XM5",
-    main_material: "Plastic",
-    material_family: "Plastic",
-  },
-  {
-    title: "Nike Air Max 270 Men's Running Shoes – White/Black – Size 42",
-    description:
-      "The Nike Air Max 270 features Nike's biggest heel Air unit yet for a super-soft ride. The breathable mesh upper and foam midsole deliver all-day comfort for casual wear and light training.",
-    highlights:
-      "• Largest heel Air unit for maximum cushioning\n• Breathable engineered mesh upper\n• Foam midsole for lightweight comfort\n• Rubber outsole for durable traction\n• Available in multiple colourways",
-    brand: "Nike",
-    color: "White",
-    color_family: "White",
-    weight_kg: 0.31,
-    selling_price: 650,
-    model: "AH8050-100",
-    main_material: "Fabric",
-    material_family: "Fabric",
-  },
-  {
-    title: "Philips 1000W Stand Mixer – 5L Bowl – Silver",
-    description:
-      "The Philips Stand Mixer combines powerful 1000W motor performance with a generous 5-litre stainless steel bowl. Perfect for kneading dough, whipping cream, and mixing cake batter effortlessly.",
-    highlights:
-      "• 1000W powerful motor for heavy dough\n• 5-litre stainless steel mixing bowl\n• 6 speed settings + pulse function\n• Includes dough hook, whisk and beater\n• Non-slip base for stable operation",
-    brand: "Philips",
-    color: "Silver",
-    color_family: "Silver",
-    weight_kg: 4.8,
-    selling_price: 890,
-    model: "HR3745/00",
-    main_material: "Metal",
-    material_family: "Metal",
-  },
-  {
-    title: "Polo Ralph Lauren Men's Classic Fit Polo Shirt – Navy – Size L",
-    description:
-      "The iconic Polo Ralph Lauren Classic Fit polo shirt in premium soft-touch piqué cotton. Features the embroidered Polo pony logo and a two-button placket for a timeless smart-casual look.",
-    highlights:
-      "• 100% soft-touch piqué cotton\n• Embroidered Polo pony logo at chest\n• Ribbed polo collar and sleeve cuffs\n• Classic fit with a clean, modern silhouette\n• Machine washable",
-    brand: "Polo Ralph Lauren",
-    color: "Navy Blue",
-    color_family: "Navy Blue",
-    weight_kg: 0.22,
-    selling_price: 420,
-    model: "710795080",
-    main_material: "Fabric",
-    material_family: "Fabric",
-  },
-];
+function buildPrompt(
+  categories: JumiaCategoryRow[],
+  attributes: JumiaCategoryAttribute[],
+  categoryContext: string
+): string {
+  const categoryList = categories
+    .map((c) => `${c.code}|${c.path}`)
+    .join("\n");
 
-/** Return a random mock template with a real category attached */
-function buildMockAnalysis(): AIProductAnalysis {
-  const template =
-    MOCK_PRODUCTS[Math.floor(Math.random() * MOCK_PRODUCTS.length)];
-  const cat =
-    mockCategories[Math.floor(Math.random() * mockCategories.length)];
+  const attributeSection = attributes.length > 0
+    ? `\nFor the detected category, fill these EXACT attribute fields:\n${
+        attributes.map((a) => {
+          const valStr = a.allowed_values.length
+            ? ` (allowed values: ${a.allowed_values.join(", ")})`
+            : "";
+          return `  - ${a.name}: ${a.label}${valStr}${a.required ? " [REQUIRED]" : ""}`;
+        }).join("\n")
+      }`
+    : "";
 
-  return {
-    ...template,
-    category_id: cat.id,
-    category_path: cat.path,
-    category_code: cat.code,
-    commission_rate: cat.commissionRate / 100,
-  };
-}
+  return `You are an expert Jumia Ghana product listing assistant.
+Analyse the product and return a single JSON object with these exact fields.
 
-// ─── Attach category to a parsed result ──────────────────────────────────────
+${categoryContext}
 
-function attachCategory(parsed: AIProductAnalysis): AIProductAnalysis {
-  const matched = mockCategories.find((c) => c.id === parsed.category_id);
-  if (!matched) {
-    const fallback = mockCategories[0];
-    return {
-      ...parsed,
-      category_id: fallback.id,
-      category_path: fallback.path,
-      category_code: fallback.code,
-      commission_rate: fallback.commissionRate / 100,
-    };
+JUMIA CATEGORY LIST (code|path):
+${categoryList}
+
+INSTRUCTIONS:
+1. Pick the single most specific matching category from the list above.
+2. Use the exact numeric code from the list.
+3. Set a realistic GHS selling price for the Ghanaian market.
+4. Fill every field as accurately as possible from the product image/description.${attributeSection}
+
+Return ONLY valid JSON (no markdown, no explanation):
+{
+  "title": "Full product title including brand, model and key spec",
+  "description": "2-3 sentence product description for Jumia listing",
+  "highlights": "Bullet points starting with • (5-8 bullets, one per line)",
+  "brand": "Brand name or empty string",
+  "color": "Specific color e.g. Midnight Black",
+  "color_family": "Base color family e.g. Black",
+  "weight_kg": 0.5,
+  "selling_price": 1200,
+  "model": "Model number or name",
+  "main_material": "Primary material e.g. Plastic, Metal, Fabric",
+  "material_family": "Material family e.g. Metal, Fabric, Plastic",
+  "category_code": "EXACT numeric code from category list above",
+  "category_path": "Matching path from category list above",
+  "dynamic_attributes": {
+    "attribute_name": "value"
   }
+}`;
+}
+
+// ─── Gemini AI call ───────────────────────────────────────────────────────────
+
+async function callGemini(
+  prompt: string,
+  imageUrls: string[]
+): Promise<string> {
+  const apiKey = process.env.GOOGLE_API_KEY;
+  if (!apiKey) throw new Error("GOOGLE_API_KEY not set");
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+
+  const parts: Parameters<typeof model.generateContent>[0] extends { contents: infer C } ? never : never[] = [];
+
+  // Fetch images and convert to inline data
+  const imageParts = await Promise.all(
+    imageUrls.slice(0, 4).map(async (url) => {
+      try {
+        const res = await fetch(url);
+        const buffer = await res.arrayBuffer();
+        const base64 = Buffer.from(buffer).toString("base64");
+        const mimeType = (res.headers.get("content-type") ?? "image/jpeg") as string;
+        return { inlineData: { data: base64, mimeType } };
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  const validImageParts = imageParts.filter(Boolean) as { inlineData: { data: string; mimeType: string } }[];
+
+  const result = await model.generateContent([
+    prompt,
+    ...validImageParts,
+  ]);
+
+  return result.response.text();
+}
+
+// ─── Parse + validate AI response ────────────────────────────────────────────
+
+function parseAIResponse(raw: string): Record<string, unknown> {
+  const cleaned = raw
+    .replace(/```json\s*/gi, "")
+    .replace(/```\s*/g, "")
+    .trim();
+
+  // Find the JSON object
+  const start = cleaned.indexOf("{");
+  const end   = cleaned.lastIndexOf("}");
+  if (start === -1 || end === -1) throw new Error("No JSON object in AI response");
+
+  return JSON.parse(cleaned.slice(start, end + 1));
+}
+
+// ─── Resolve category from AI result ─────────────────────────────────────────
+
+function resolveCategory(
+  parsed:     Record<string, unknown>,
+  categories: JumiaCategoryRow[]
+): { code: number; path: string; commission_rate: number } {
+  const aiCode = parseInt(String(parsed.category_code ?? ""), 10);
+
+  // Try exact code match from real categories
+  if (!isNaN(aiCode) && aiCode > 0) {
+    const match = categories.find((c) => c.code === aiCode);
+    if (match) {
+      // Look up commission rate from mock categories (our fee data source)
+      const mock = mockCategories.find(
+        (m) =>
+          m.code === String(aiCode) ||
+          m.path.toLowerCase().includes(match.name.toLowerCase())
+      );
+      return {
+        code:            match.code,
+        path:            match.path,
+        commission_rate: mock ? mock.commissionRate / 100 : 0.1,
+      };
+    }
+  }
+
+  // Fallback: path-based fuzzy match
+  const aiPath = String(parsed.category_path ?? "").toLowerCase();
+  if (aiPath) {
+    const fuzzy = categories.find(
+      (c) =>
+        c.path.toLowerCase().includes(aiPath) ||
+        aiPath.includes(c.name.toLowerCase())
+    );
+    if (fuzzy) {
+      return { code: fuzzy.code, path: fuzzy.path, commission_rate: 0.1 };
+    }
+  }
+
+  // Last resort: first category in list
+  const first = categories[0];
   return {
-    ...parsed,
-    commission_rate: matched.commissionRate / 100,
-    category_path: matched.path,
-    category_code: matched.code,
+    code:            first?.code ?? 0,
+    path:            first?.path ?? "Unknown",
+    commission_rate: 0.1,
   };
 }
 
-// ─── AI provider (swap here when API credits are ready) ──────────────────────
+// ─── Main: analyse images ─────────────────────────────────────────────────────
 
-async function callAI(prompt: string, imageUrls?: string[]): Promise<string> {
-  // ── OpenAI (re-enable when credits are purchased) ─────────────────────────
-  // import OpenAI from "openai";
-  // const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  // const imageContent = (imageUrls ?? []).slice(0, 4).map((url) => ({
-  //   type: "image_url" as const,
-  //   image_url: { url, detail: "high" as const },
-  // }));
-  // const res = await openai.chat.completions.create({
-  //   model: "gpt-4o", max_tokens: 1000,
-  //   messages: [{ role: "user", content: [{ type: "text", text: prompt }, ...imageContent] }],
-  // });
-  // return res.choices[0]?.message?.content ?? "{}";
-
-  // ── Google Gemini (re-enable when project quota is active) ────────────────
-  // import { GoogleGenerativeAI } from "@google/generative-ai";
-  // const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY!);
-  // const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-  // ... (fetch image parts, call model.generateContent)
-
-  // ── Mock mode — remove this block when switching to real AI ───────────────
-  void prompt;
-  void imageUrls;
-  throw new Error("MOCK_MODE");
-}
-
-// ─── Public functions ─────────────────────────────────────────────────────────
-
-/**
- * Analyse product image URLs.
- * Falls back to a realistic mock when no AI provider is configured.
- */
 export async function analyzeProductImages(
   imageUrls: string[]
 ): Promise<AIProductAnalysis> {
   if (!imageUrls.length) throw new Error("No images provided");
 
+  // Load real categories from Supabase
+  const categories = await getLeafCategories();
+
+  // If no real categories synced yet, fall back gracefully
+  const categoryContext = categories.length > 0
+    ? `Choose from the ${categories.length} Jumia GH leaf categories listed below.`
+    : "Use your best knowledge of Jumia Ghana categories.";
+
+  // First pass: category detection without attributes (fast)
+  const firstPassPrompt = buildPrompt(categories, [], categoryContext);
+
+  let parsed: Record<string, unknown>;
   try {
-    const raw = await callAI("Analyse this product.", imageUrls);
-    const cleaned = raw.replace(/```json|```/g, "").trim();
-    return attachCategory(JSON.parse(cleaned));
-  } catch {
-    // Mock fallback — realistic demo data while AI provider is being set up
+    const raw = await callGemini(firstPassPrompt, imageUrls);
+    parsed = parseAIResponse(raw);
+  } catch (e) {
+    console.warn("[AI] Gemini failed, using mock:", e);
     return buildMockAnalysis();
   }
+
+  // Resolve category
+  const cat = resolveCategory(parsed, categories);
+
+  // Second pass: fetch attributes for detected category, re-fill if any
+  let dynamicAttributes: Record<string, string> = {};
+  if (cat.code > 0) {
+    const attrs = await getCategoryAttributes(cat.code);
+    if (attrs.length > 0) {
+      try {
+        const secondPrompt = buildPrompt(categories, attrs, categoryContext);
+        const raw2 = await callGemini(secondPrompt, imageUrls);
+        const parsed2 = parseAIResponse(raw2);
+        dynamicAttributes = (parsed2.dynamic_attributes ?? {}) as Record<string, string>;
+        // Use the re-parsed data (may have better attribute values)
+        Object.assign(parsed, parsed2);
+      } catch {
+        // Non-fatal — use first pass result
+        dynamicAttributes = (parsed.dynamic_attributes ?? {}) as Record<string, string>;
+      }
+    }
+  }
+
+  return {
+    title:              String(parsed.title            ?? ""),
+    description:        String(parsed.description      ?? ""),
+    highlights:         String(parsed.highlights       ?? ""),
+    brand:              String(parsed.brand            ?? ""),
+    color:              String(parsed.color            ?? ""),
+    color_family:       String(parsed.color_family     ?? ""),
+    weight_kg:          parsed.weight_kg != null ? Number(parsed.weight_kg) : null,
+    selling_price:      parsed.selling_price != null ? Number(parsed.selling_price) : null,
+    model:              String(parsed.model            ?? ""),
+    main_material:      String(parsed.main_material    ?? ""),
+    material_family:    String(parsed.material_family  ?? ""),
+    category_id:        String(cat.code),
+    category_code:      String(cat.code),
+    category_path:      cat.path,
+    commission_rate:    cat.commission_rate,
+    dynamic_attributes: dynamicAttributes,
+  };
 }
 
-/**
- * Generate listing content from a text description.
- * Falls back to a realistic mock when no AI provider is configured.
- */
+// ─── Main: analyse text description ──────────────────────────────────────────
+
 export async function analyzeProductDescription(
   description: string
 ): Promise<AIProductAnalysis> {
+  const categories = await getLeafCategories();
+  const categoryContext = categories.length > 0
+    ? `Choose from the ${categories.length} Jumia GH leaf categories listed below.`
+    : "Use your best knowledge of Jumia Ghana categories.";
+
+  const prompt = buildPrompt(categories, [], categoryContext) +
+    `\n\nProduct description to analyse:\n"${description}"`;
+
+  let parsed: Record<string, unknown>;
   try {
-    const raw = await callAI(
-      `Generate a Jumia listing for: "${description}"`,
-    );
-    const cleaned = raw.replace(/```json|```/g, "").trim();
-    return attachCategory(JSON.parse(cleaned));
-  } catch {
-    // Mock fallback
+    const raw = await callGemini(prompt, []);
+    parsed = parseAIResponse(raw);
+  } catch (e) {
+    console.warn("[AI] Gemini failed, using mock:", e);
     return buildMockAnalysis();
   }
+
+  const cat = resolveCategory(parsed, categories);
+
+  let dynamicAttributes: Record<string, string> = (parsed.dynamic_attributes ?? {}) as Record<string, string>;
+  if (cat.code > 0) {
+    const attrs = await getCategoryAttributes(cat.code);
+    if (attrs.length > 0) {
+      try {
+        const secondPrompt = buildPrompt(categories, attrs, categoryContext) +
+          `\n\nProduct description: "${description}"`;
+        const raw2 = await callGemini(secondPrompt, []);
+        const parsed2 = parseAIResponse(raw2);
+        dynamicAttributes = (parsed2.dynamic_attributes ?? dynamicAttributes) as Record<string, string>;
+        Object.assign(parsed, parsed2);
+      } catch { /* use first pass */ }
+    }
+  }
+
+  return {
+    title:              String(parsed.title            ?? ""),
+    description:        String(parsed.description      ?? ""),
+    highlights:         String(parsed.highlights       ?? ""),
+    brand:              String(parsed.brand            ?? ""),
+    color:              String(parsed.color            ?? ""),
+    color_family:       String(parsed.color_family     ?? ""),
+    weight_kg:          parsed.weight_kg != null ? Number(parsed.weight_kg) : null,
+    selling_price:      parsed.selling_price != null ? Number(parsed.selling_price) : null,
+    model:              String(parsed.model            ?? ""),
+    main_material:      String(parsed.main_material    ?? ""),
+    material_family:    String(parsed.material_family  ?? ""),
+    category_id:        String(cat.code),
+    category_code:      String(cat.code),
+    category_path:      cat.path,
+    commission_rate:    cat.commission_rate,
+    dynamic_attributes: dynamicAttributes,
+  };
+}
+
+// ─── Mock fallback ────────────────────────────────────────────────────────────
+
+const MOCK_PRODUCTS = [
+  {
+    title:           "Samsung Galaxy A55 5G Smartphone – 128GB – Awesome Navy",
+    description:     "The Samsung Galaxy A55 5G delivers a premium experience with its 6.6-inch Super AMOLED display and 50MP triple camera system.",
+    highlights:      "• 6.6-inch Super AMOLED 120Hz display\n• 50MP OIS main camera + 12MP ultra-wide\n• 5000mAh battery with 25W fast charging\n• IP67 water resistance\n• 5G connectivity",
+    brand:           "Samsung",
+    color:           "Navy Blue",
+    color_family:    "Navy Blue",
+    weight_kg:       0.213,
+    selling_price:   2199,
+    model:           "SM-A556E",
+    main_material:   "Aluminium",
+    material_family: "Metal",
+    mock_category:   "Mobile Phones",
+    dynamic_attributes: { operating_system: "Android", ram: "8GB", internal_memory: "128GB", sim_type: "Dual SIM", network: "5G" },
+  },
+  {
+    title:           "Sony WH-1000XM5 Wireless Noise-Cancelling Headphones – Black",
+    description:     "Industry-leading noise cancellation with 30-hour battery life and crystal-clear hands-free calling.",
+    highlights:      "• Industry-leading noise cancellation\n• 30-hour battery life\n• Multi-device pairing via Bluetooth 5.2\n• Lightweight 250g design\n• Hi-Res Audio support",
+    brand:           "Sony",
+    color:           "Black",
+    color_family:    "Black",
+    weight_kg:       0.25,
+    selling_price:   1850,
+    model:           "WH-1000XM5",
+    main_material:   "Plastic",
+    material_family: "Plastic",
+    mock_category:   "Headphones",
+    dynamic_attributes: { connectivity: "Bluetooth", battery_life: "30 hours", noise_cancellation: "Yes" },
+  },
+];
+
+function buildMockAnalysis(): AIProductAnalysis {
+  const template = MOCK_PRODUCTS[Math.floor(Math.random() * MOCK_PRODUCTS.length)];
+  const mock = mockCategories.find((c) => c.name === template.mock_category) ?? mockCategories[0];
+  return {
+    ...template,
+    category_id:     mock.id,
+    category_code:   mock.code,
+    category_path:   mock.path,
+    commission_rate: mock.commissionRate / 100,
+  };
 }
