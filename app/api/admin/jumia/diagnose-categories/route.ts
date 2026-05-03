@@ -2,14 +2,13 @@ import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { JUMIA_API_BASE } from "@/lib/jumia/oauth";
-import { createServerClient } from "@/lib/supabase/server";
 
 // ─── GET /api/admin/jumia/diagnose-categories ─────────────────────────────────
-// Diagnostic: shows what the Jumia API actually returns for:
-//  1. GET /catalog/categories          (first 3 raw items)
-//  2. GET /catalog/categories/{code}/attributes  (first synced category code)
-//  3. GET /catalog/attributes?categoryCode={code} (alternative endpoint)
-//  4. Lists first 10 synced category codes from DB
+// Phase 2 diagnostic — tests correct endpoints after learning from phase 1:
+//  1. GET /catalog/categories?parentCode={rootCode}  (children of root)
+//  2. GET /catalog/attribute-sets/{sid}              (attributes via attributeSet.sid)
+//  3. GET /catalog/attribute-sets/{sid}/attributes   (alternative)
+//  4. GET /catalog/categories?parentCode={childCode} (grandchildren — are there more levels?)
 
 export async function GET() {
   const { userId } = await auth();
@@ -25,68 +24,80 @@ export async function GET() {
   const headers = { Authorization: `Bearer ${accessToken}`, Accept: "application/json" };
   const results: Record<string, unknown> = {};
 
-  // ── 1. First 3 raw categories ─────────────────────────────────────────────
+  // ── 1. Get root categories + their attributeSet sids ─────────────────────
+  const rootRes = await fetch(`${JUMIA_API_BASE}/catalog/categories`, { headers });
+  const rootRaw = await rootRes.json() as Record<string, unknown>;
+  const rootList = (Array.isArray(rootRaw) ? rootRaw : (rootRaw.categories ?? [])) as Record<string, unknown>[];
+
+  // Pick "Electronics" (code 1000004) as our test case — always has good subcategories
+  const electronics = rootList.find((c) => c.code === 1000004) ?? rootList[0];
+  const rootCode    = electronics?.code as number;
+  const attrSetSid  = (electronics?.attributeSet as Record<string, unknown>)?.sid as string;
+
+  results.root_sample = { code: rootCode, name: electronics?.name, attrSetSid };
+
+  // ── 2. Fetch children of Electronics ─────────────────────────────────────
   try {
-    const res = await fetch(`${JUMIA_API_BASE}/catalog/categories`, { headers });
+    const url = `${JUMIA_API_BASE}/catalog/categories?parentCode=${rootCode}`;
+    const res = await fetch(url, { headers });
     const text = await res.text();
-    let parsed: unknown;
-    try { parsed = JSON.parse(text); } catch { parsed = text; }
-    results.categories_status = res.status;
-    results.categories_raw_sample = typeof parsed === "object"
-      ? JSON.stringify(parsed).slice(0, 1000)
-      : String(parsed).slice(0, 500);
-  } catch (e) {
-    results.categories_error = (e as Error).message;
+    results.children_url    = url;
+    results.children_status = res.status;
+    results.children_raw    = text.slice(0, 1200);
+  } catch (e) { results.children_error = (e as Error).message; }
+
+  // ── 3. Try attributeSet sid endpoint ─────────────────────────────────────
+  if (attrSetSid) {
+    // 3a. /catalog/attribute-sets/{sid}
+    try {
+      const url = `${JUMIA_API_BASE}/catalog/attribute-sets/${attrSetSid}`;
+      const res = await fetch(url, { headers });
+      const text = await res.text();
+      results.attrset_v1_url    = url;
+      results.attrset_v1_status = res.status;
+      results.attrset_v1_raw    = text.slice(0, 1200);
+    } catch (e) { results.attrset_v1_error = (e as Error).message; }
+
+    // 3b. /catalog/attribute-sets/{sid}/attributes
+    try {
+      const url = `${JUMIA_API_BASE}/catalog/attribute-sets/${attrSetSid}/attributes`;
+      const res = await fetch(url, { headers });
+      const text = await res.text();
+      results.attrset_v2_url    = url;
+      results.attrset_v2_status = res.status;
+      results.attrset_v2_raw    = text.slice(0, 1200);
+    } catch (e) { results.attrset_v2_error = (e as Error).message; }
+
+    // 3c. /catalog/attributeSets/{sid} (camelCase variant)
+    try {
+      const url = `${JUMIA_API_BASE}/catalog/attributeSets/${attrSetSid}`;
+      const res = await fetch(url, { headers });
+      const text = await res.text();
+      results.attrset_v3_url    = url;
+      results.attrset_v3_status = res.status;
+      results.attrset_v3_raw    = text.slice(0, 1200);
+    } catch (e) { results.attrset_v3_error = (e as Error).message; }
   }
 
-  // ── 2. Get first category code from DB ────────────────────────────────────
-  const db = createServerClient();
-  const { data: cats } = await db
-    .from("jumia_categories")
-    .select("code, name, path, is_leaf")
-    .order("code")
-    .limit(10);
+  // ── 4. Try fetching grandchildren (children of first child) ──────────────
+  try {
+    const childRes  = await fetch(`${JUMIA_API_BASE}/catalog/categories?parentCode=${rootCode}`, { headers });
+    if (childRes.ok) {
+      const childRaw  = await childRes.json() as Record<string, unknown>;
+      const childList = (Array.isArray(childRaw) ? childRaw : (childRaw.categories ?? [])) as Record<string, unknown>[];
+      const firstChild = childList[0];
+      results.first_child = firstChild;
 
-  results.synced_categories = cats ?? [];
-
-  // ── 3. Try /catalog/categories/{code}/attributes ──────────────────────────
-  const firstCode = cats?.[0]?.code;
-  if (firstCode) {
-    try {
-      const url = `${JUMIA_API_BASE}/catalog/categories/${firstCode}/attributes`;
-      const res = await fetch(url, { headers });
-      const text = await res.text();
-      results.attributes_v1_url    = url;
-      results.attributes_v1_status = res.status;
-      results.attributes_v1_raw    = text.slice(0, 800);
-    } catch (e) {
-      results.attributes_v1_error = (e as Error).message;
+      if (firstChild?.code) {
+        const grandUrl = `${JUMIA_API_BASE}/catalog/categories?parentCode=${firstChild.code}`;
+        const grandRes = await fetch(grandUrl, { headers });
+        const grandText = await grandRes.text();
+        results.grandchildren_url    = grandUrl;
+        results.grandchildren_status = grandRes.status;
+        results.grandchildren_raw    = grandText.slice(0, 800);
+      }
     }
-
-    // ── 4. Try /catalog/attributes?categoryCode={code} ────────────────────
-    try {
-      const url = `${JUMIA_API_BASE}/catalog/attributes?categoryCode=${firstCode}`;
-      const res = await fetch(url, { headers });
-      const text = await res.text();
-      results.attributes_v2_url    = url;
-      results.attributes_v2_status = res.status;
-      results.attributes_v2_raw    = text.slice(0, 800);
-    } catch (e) {
-      results.attributes_v2_error = (e as Error).message;
-    }
-
-    // ── 5. Try /catalog/categories/{code} (single category detail) ────────
-    try {
-      const url = `${JUMIA_API_BASE}/catalog/categories/${firstCode}`;
-      const res = await fetch(url, { headers });
-      const text = await res.text();
-      results.category_detail_url    = url;
-      results.category_detail_status = res.status;
-      results.category_detail_raw    = text.slice(0, 800);
-    } catch (e) {
-      results.category_detail_error = (e as Error).message;
-    }
-  }
+  } catch (e) { results.grandchildren_error = (e as Error).message; }
 
   return NextResponse.json(results, { status: 200 });
 }
