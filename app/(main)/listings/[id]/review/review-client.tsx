@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -15,6 +15,7 @@ import {
   Star,
   Loader2,
   AlertCircle,
+  Tag,
 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -577,12 +578,179 @@ function ProductSpecificationStep({
   );
 }
 
+// ─── Step 4 — Category-specific Jumia Attributes ─────────────────────────────
+
+interface AttrSchema {
+  name:           string;
+  label:          string;
+  type:           "enum" | "string" | "number" | "boolean" | "multi";
+  allowed_values: string[];
+  required:       boolean;
+}
+
+function CategoryAttributesStep({
+  categoryCode,
+  values,
+  onChange,
+}: {
+  categoryCode: string | null;
+  values:       Record<string, string>;
+  onChange:     (key: string, val: string) => void;
+}) {
+  const [schema,  setSchema]  = useState<AttrSchema[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!categoryCode || isNaN(Number(categoryCode)) || Number(categoryCode) === 0) {
+      setLoading(false);
+      return;
+    }
+    fetch(`/api/jumia/categories/${categoryCode}/attributes`)
+      .then((r) => r.json())
+      .then((d) => setSchema(d.attributes ?? []))
+      .catch(() => setSchema([]))
+      .finally(() => setLoading(false));
+  }, [categoryCode]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 py-10 text-sm text-zinc-400">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading category fields…
+      </div>
+    );
+  }
+
+  if (!schema.length) {
+    return (
+      <div className="rounded-xl border border-dashed border-zinc-200 py-10 text-center text-sm text-zinc-400">
+        No category-specific fields for this category.
+      </div>
+    );
+  }
+
+  // Group: required first, then optional
+  const required = schema.filter((a) => a.required);
+  const optional = schema.filter((a) => !a.required);
+
+  const renderField = (attr: AttrSchema) => {
+    const val = values[attr.name] ?? "";
+
+    if (attr.type === "boolean") {
+      return (
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => onChange(attr.name, val === "true" ? "false" : "true")}
+            className={cn(
+              "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
+              val === "true" ? "bg-orange-500" : "bg-zinc-200"
+            )}
+          >
+            <span className={cn(
+              "pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow ring-0 transition-transform",
+              val === "true" ? "translate-x-4" : "translate-x-0"
+            )} />
+          </button>
+          <span className="text-xs text-zinc-500">{val === "true" ? "Yes" : "No"}</span>
+        </div>
+      );
+    }
+
+    if (attr.type === "enum" && attr.allowed_values.length > 0) {
+      return (
+        <Select value={val} onValueChange={(v) => onChange(attr.name, v)}>
+          <SelectTrigger className="h-9 text-sm">
+            <SelectValue placeholder={`Select ${attr.label}`} />
+          </SelectTrigger>
+          <SelectContent>
+            {attr.allowed_values.map((v) => (
+              <SelectItem key={v} value={v}>{v}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      );
+    }
+
+    if (attr.type === "multi" && attr.allowed_values.length > 0) {
+      const selected = val ? val.split(",").map((s) => s.trim()).filter(Boolean) : [];
+      return (
+        <div className="flex flex-wrap gap-1.5">
+          {attr.allowed_values.map((v) => {
+            const active = selected.includes(v);
+            return (
+              <button
+                key={v}
+                type="button"
+                onClick={() => {
+                  const next = active
+                    ? selected.filter((s) => s !== v)
+                    : [...selected, v];
+                  onChange(attr.name, next.join(", "));
+                }}
+                className={cn(
+                  "rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                  active
+                    ? "border-orange-400 bg-orange-50 text-orange-700"
+                    : "border-zinc-200 bg-white text-zinc-500 hover:border-zinc-300"
+                )}
+              >
+                {v}
+              </button>
+            );
+          })}
+        </div>
+      );
+    }
+
+    return (
+      <Input
+        value={val}
+        type={attr.type === "number" ? "number" : "text"}
+        placeholder={`Enter ${attr.label}`}
+        onChange={(e) => onChange(attr.name, e.target.value)}
+        className="h-9 text-sm"
+      />
+    );
+  };
+
+  const renderGroup = (attrs: AttrSchema[], groupLabel: string, labelColor: string) => (
+    <div className="space-y-4">
+      <p className={cn("text-xs font-semibold uppercase tracking-widest", labelColor)}>{groupLabel}</p>
+      <div className="grid gap-4 sm:grid-cols-2">
+        {attrs.map((attr) => (
+          <div key={attr.name} className="space-y-1.5">
+            <Label className="flex items-center text-sm">
+              {attr.label}
+              {attr.required && <RequiredBadge />}
+            </Label>
+            {renderField(attr)}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-2 rounded-xl border border-orange-100 bg-orange-50 px-4 py-3 text-xs text-orange-700">
+        <Tag className="h-3.5 w-3.5 shrink-0" />
+        These are the exact fields Jumia requires for this category. Fields marked <span className="text-red-500 font-bold mx-0.5">*</span> are required for your listing to be accepted.
+      </div>
+
+      {required.length > 0 && renderGroup(required, "Required fields", "text-red-500")}
+      {optional.length > 0 && renderGroup(optional, "Optional fields", "text-zinc-400")}
+    </div>
+  );
+}
+
 // ─── Main review client ───────────────────────────────────────────────────────
 
 const formSteps = [
   { id: 1, label: "Product Information" },
-  { id: 2, label: "Variants" },
-  { id: 3, label: "Product Specification" },
+  { id: 2, label: "Category Fields" },
+  { id: 3, label: "Variants" },
+  { id: 4, label: "Specification" },
 ];
 
 export function ReviewClient({ listing }: { listing: ListingRow }) {
@@ -615,6 +783,11 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
     },
   ]);
 
+  // ── Dynamic category attributes ───────────────────────────────────────────
+  const [dynAttrs, setDynAttrs] = useState<Record<string, string>>(
+    (listing.dynamic_attributes as Record<string, string>) ?? {}
+  );
+
   // ── Save state ────────────────────────────────────────────────────────────
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -644,26 +817,27 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
 
     try {
       await updateListing(listing.id, {
-        title: str("name"),
-        description: str("description"),
-        highlights: str("highlights"),
-        brand: str("brand"),
-        color: str("color"),
-        color_family: colorFamily || null,
-        weight_kg: num("weight"),
-        selling_price: sellingPrice > 0 ? sellingPrice : null,
-        main_material: str("material"),
-        material_family: materialFamily || null,
-        model: str("model"),
-        product_line: str("product-line"),
+        title:              str("name"),
+        description:        str("description"),
+        highlights:         str("highlights"),
+        brand:              str("brand"),
+        color:              str("color"),
+        color_family:       colorFamily || null,
+        weight_kg:          num("weight"),
+        selling_price:      sellingPrice > 0 ? sellingPrice : null,
+        main_material:      str("material"),
+        material_family:    materialFamily || null,
+        model:              str("model"),
+        product_line:       str("product-line"),
         production_country: productionCountry || null,
-        certifications: certification ? [certification] : [],
-        warranty_duration: warrantyDuration || null,
-        warranty_type: warrantyType || null,
-        warranty_text: str("product-warranty"),
-        warranty_address: str("warranty-address"),
-        youtube_id: str("youtube-id"),
-        status: publish ? "pending_approval" : "draft",
+        certifications:     certification ? [certification] : [],
+        warranty_duration:  warrantyDuration || null,
+        warranty_type:      warrantyType || null,
+        warranty_text:      str("product-warranty"),
+        warranty_address:   str("warranty-address"),
+        youtube_id:         str("youtube-id"),
+        dynamic_attributes: dynAttrs,
+        status:             publish ? "pending_approval" : "draft",
       });
 
       router.push("/listings");
@@ -858,6 +1032,13 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                     />
                   </div>
                   <div className={formStep !== 2 ? "hidden" : ""}>
+                    <CategoryAttributesStep
+                      categoryCode={listing.category_code}
+                      values={dynAttrs}
+                      onChange={(k, v) => setDynAttrs((prev) => ({ ...prev, [k]: v }))}
+                    />
+                  </div>
+                  <div className={formStep !== 3 ? "hidden" : ""}>
                     <VariantsStep
                       variants={variants}
                       setVariants={setVariants}
@@ -865,7 +1046,7 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                       commissionPercent={commissionPercent}
                     />
                   </div>
-                  <div className={formStep !== 3 ? "hidden" : ""}>
+                  <div className={formStep !== 4 ? "hidden" : ""}>
                     <ProductSpecificationStep
                       listing={listing}
                       certification={certification}
@@ -917,12 +1098,12 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                   ))}
                 </div>
 
-                {formStep < 3 ? (
+                {formStep < formSteps.length ? (
                   <Button
                     type="button"
                     size="sm"
                     className="bg-orange-500 hover:bg-orange-600"
-                    onClick={() => setFormStep((s) => Math.min(3, s + 1))}
+                    onClick={() => setFormStep((s) => Math.min(formSteps.length, s + 1))}
                     disabled={saving}
                   >
                     Next <ChevronRight className="h-3.5 w-3.5 ml-1" />

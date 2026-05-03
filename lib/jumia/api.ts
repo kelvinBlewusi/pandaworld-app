@@ -201,6 +201,20 @@ function buildAttributes(listing: ListingRow): { name: string; value: string }[]
     add("certifications", listing.certifications.join(", "));
   }
 
+  // Merge in category-specific dynamic attributes (AI-detected + seller-edited)
+  // These are the real Jumia attribute field names (e.g. ram, operating_system, network)
+  const dynAttrs = listing.dynamic_attributes as Record<string, string> | null;
+  if (dynAttrs) {
+    for (const [name, value] of Object.entries(dynAttrs)) {
+      if (value != null && String(value).trim() !== "") {
+        // Don't duplicate attributes already set above
+        if (!attrs.find((a) => a.name === name)) {
+          attrs.push({ name, value: String(value) });
+        }
+      }
+    }
+  }
+
   return attrs;
 }
 
