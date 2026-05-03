@@ -31,6 +31,8 @@ function IntegrationsPageInner() {
   const [disconnecting,setDisconnecting]= useState(false);
   const [showConfirm,  setShowConfirm]  = useState(false);
   const [toast,        setToast]        = useState<{ type: "success"|"error"; msg: string } | null>(null);
+  const [syncing,      setSyncing]      = useState(false);
+  const [syncResult,   setSyncResult]   = useState<{ categories: number; attributes: number } | null>(null);
 
   // ── Load connection status ─────────────────────────────────────────────────
   useEffect(() => {
@@ -63,6 +65,30 @@ function IntegrationsPageInner() {
   function showToast(type: "success" | "error", msg: string) {
     setToast({ type, msg });
     setTimeout(() => setToast(null), 6000);
+  }
+
+  // ── Sync Jumia categories ─────────────────────────────────────────────────
+  async function handleSyncCategories() {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const res = await fetch("/api/admin/jumia/sync-categories", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ syncAttributes: true }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSyncResult({ categories: data.categories, attributes: data.attributes });
+        showToast("success", `✅ Synced ${data.categories} categories and ${data.attributes} attribute fields from Jumia.`);
+      } else {
+        showToast("error", data.error ?? "Sync failed — please try again.");
+      }
+    } catch {
+      showToast("error", "Network error during sync.");
+    } finally {
+      setSyncing(false);
+    }
   }
 
   // ── Kick off OAuth flow ───────────────────────────────────────────────────
@@ -240,6 +266,40 @@ function IntegrationsPageInner() {
                   </li>
                 ))}
               </ul>
+            </div>
+
+            {/* Category sync */}
+            <div className="rounded-xl border bg-zinc-50 p-4 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-zinc-800">Jumia category database</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    Syncs the real Jumia category tree so AI can detect the exact category and fill the correct fields for every product.
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-2 shrink-0"
+                  onClick={handleSyncCategories}
+                  disabled={syncing}
+                >
+                  <RefreshCw className={cn("h-3.5 w-3.5", syncing && "animate-spin")} />
+                  {syncing ? "Syncing…" : "Sync now"}
+                </Button>
+              </div>
+              {syncing && (
+                <p className="text-xs text-zinc-400 flex items-center gap-1.5">
+                  <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                  Fetching category tree and attribute schemas from Jumia — this takes 2–5 minutes…
+                </p>
+              )}
+              {syncResult && (
+                <p className="text-xs text-emerald-700 flex items-center gap-1.5">
+                  <CheckCircle2 className="h-3 w-3 shrink-0" />
+                  {syncResult.categories} categories · {syncResult.attributes} attribute fields synced
+                </p>
+              )}
             </div>
 
             {/* Token expiry info */}
