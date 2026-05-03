@@ -10,22 +10,21 @@ import {
 
 // ─── POST /api/admin/jumia/sync-categories ────────────────────────────────────
 //
-// Syncs the full Jumia category tree + per-category attributes into Supabase.
-// Run this once (and re-run monthly — Jumia categories rarely change).
+// Syncs the full Jumia category list + per-category attribute schemas into Supabase.
 //
-// Steps:
-//  1. Fetch GET /catalog/categories → upsert into jumia_categories
-//  2. For each leaf category → fetch GET /catalog/categories/{code}/attributes
-//     → upsert into jumia_category_attributes
+// How it works (based on API exploration):
+//  1. GET /catalog/categories            → flat list of ~50 categories, each with attributeSet.sid
+//  2. For each category with a sid:
+//     GET /catalog/attribute-sets/{sid}  → full attribute schema for that category
 //
-// Body: { syncAttributes?: boolean }  (default true — set false for a fast categories-only sync)
+// Body: { syncAttributes?: boolean }  (default true)
 
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return new NextResponse("Unauthorized", { status: 401 });
 
   const body = await req.json().catch(() => ({})) as { syncAttributes?: boolean };
-  const syncAttributes = body.syncAttributes !== false; // default true
+  const syncAttributes = body.syncAttributes !== false;
 
   // ── Get a valid Jumia token ───────────────────────────────────────────────
   let accessToken: string;
@@ -38,8 +37,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ── 1. Fetch + store category tree ────────────────────────────────────────
-  console.info("[Sync] Fetching Jumia category tree…");
+  // ── 1. Fetch + store category list ────────────────────────────────────────
+  console.info("[Sync] Fetching Jumia categories…");
   let categories;
   try {
     categories = await fetchCategoriesFromJumia(accessToken);
@@ -58,28 +57,41 @@ export async function POST(req: NextRequest) {
       success: true,
       categories: categories.length,
       attributes: 0,
-      message: "Category tree synced (attributes skipped)",
+      message: "Category list synced (attributes skipped)",
     });
   }
 
-  // ── 2. Fetch attributes for each leaf category ────────────────────────────
-  const leafCategories = categories.filter((c) => c.is_leaf);
-  console.info(`[Sync] Fetching attributes for ${leafCategories.length} leaf categories…`);
+  // ── 2. Fetch attributes for each category via attributeSet.sid ────────────
+  const withSid = categories.filter((c) => c.attribute_set_sid);
+  console.info(`[Sync] Fetching attributes for ${withSid.length} categories via attribute-sets…`);
 
+  // Deduplicate by sid — multiple categories can share the same attribute set
+  const sidSeen = new Set<string>();
   let attributeCount = 0;
   let errors = 0;
 
-  for (const cat of leafCategories) {
+  for (const cat of withSid) {
+    const sid = cat.attribute_set_sid!;
+    if (sidSeen.has(sid)) {
+      // Copy attributes from the first category that used this sid
+      const existing = withSid.find((c) => c.attribute_set_sid === sid && c.code !== cat.code);
+      if (existing) {
+        // We'll handle dedup by just re-fetching — fast since we already have it
+      }
+    }
+    sidSeen.add(sid);
+
     try {
-      const attrs = await fetchAttributesFromJumia(accessToken, cat.code);
+      const attrs = await fetchAttributesFromJumia(accessToken, sid);
+      console.info(`[Sync] ${cat.name} (${cat.code}): ${attrs.length} attributes`);
       if (attrs.length > 0) {
         await upsertAttributes(cat.code, attrs);
         attributeCount += attrs.length;
       }
-      // Rate limit: max 4 req/sec
+      // Respect Jumia rate limit: max 4 req/sec
       await new Promise((r) => setTimeout(r, 260));
     } catch (e) {
-      console.warn(`[Sync] Attributes failed for category ${cat.code}:`, e);
+      console.warn(`[Sync] Attributes failed for ${cat.name} (${cat.code}):`, e);
       errors++;
     }
   }
@@ -89,7 +101,6 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     success: true,
     categories: categories.length,
-    leafCategories: leafCategories.length,
     attributes: attributeCount,
     errors,
     message: `Synced ${categories.length} categories and ${attributeCount} attribute fields`,
