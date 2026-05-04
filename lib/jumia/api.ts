@@ -15,6 +15,7 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { refreshAccessToken, JUMIA_API_BASE } from "@/lib/jumia/oauth";
 import { mockCategories } from "@/lib/mock/categories";
+import { findBrandExact } from "@/lib/jumia/brands";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
 
 // ─── Token + shopId retrieval ─────────────────────────────────────────────────
@@ -101,8 +102,12 @@ const BRAND_GENERIC_NON_FASHION = { code: 1045133, name: "Generic" };
 const BRAND_GENERIC_FASHION     = { code: 1039426, name: "Fashion" };
 
 /**
- * Look up a brand code via Jumia Catalog API.
- * Falls back to Generic if not found or API unreachable.
+ * Resolve a brand name to a Jumia { code, name } pair.
+ *
+ * Resolution order:
+ *   1. Local `jumia_brands` DB cache  (fast, no network)
+ *   2. Live Jumia Catalog API          (fallback before first sync)
+ *   3. Generic brand code              (last resort)
  */
 async function resolveBrand(
   accessToken: string,
@@ -110,6 +115,15 @@ async function resolveBrand(
 ): Promise<{ code: number; name: string }> {
   if (!brandName) return BRAND_GENERIC_NON_FASHION;
 
+  // ── 1. Local DB (fast path) ──────────────────────────────────────────────
+  try {
+    const cached = await findBrandExact(brandName);
+    if (cached) return { code: cached.code, name: cached.name };
+  } catch {
+    // Table not created yet or DB error — fall through
+  }
+
+  // ── 2. Live Jumia API ────────────────────────────────────────────────────
   try {
     const url = `${JUMIA_API_BASE}/catalog/brands?name=${encodeURIComponent(brandName)}&criteria=EQUALS_IGNORE_CASE`;
     const res = await fetch(url, {
@@ -126,7 +140,8 @@ async function resolveBrand(
   } catch {
     // non-fatal
   }
-  // If brand not found in Jumia, use Generic
+
+  // ── 3. Generic fallback ──────────────────────────────────────────────────
   return { code: BRAND_GENERIC_NON_FASHION.code, name: brandName };
 }
 

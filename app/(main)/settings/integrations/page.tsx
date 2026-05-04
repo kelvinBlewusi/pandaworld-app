@@ -31,8 +31,10 @@ function IntegrationsPageInner() {
   const [disconnecting,setDisconnecting]= useState(false);
   const [showConfirm,  setShowConfirm]  = useState(false);
   const [toast,        setToast]        = useState<{ type: "success"|"error"; msg: string } | null>(null);
-  const [syncing,      setSyncing]      = useState(false);
-  const [syncResult,   setSyncResult]   = useState<{ categories: number; attributes: number } | null>(null);
+  const [syncing,         setSyncing]         = useState(false);
+  const [syncResult,      setSyncResult]      = useState<{ categories: number; attributes: number } | null>(null);
+  const [syncingBrands,   setSyncingBrands]   = useState(false);
+  const [brandSyncResult, setBrandSyncResult] = useState<{ brands: number } | null>(null);
 
   // ── Load connection status ─────────────────────────────────────────────────
   useEffect(() => {
@@ -88,6 +90,26 @@ function IntegrationsPageInner() {
       showToast("error", "Network error during sync.");
     } finally {
       setSyncing(false);
+    }
+  }
+
+  // ── Sync Jumia brand catalog ──────────────────────────────────────────────
+  async function handleSyncBrands() {
+    setSyncingBrands(true);
+    setBrandSyncResult(null);
+    try {
+      const res  = await fetch("/api/admin/jumia/sync-brands", { method: "POST" });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setBrandSyncResult({ brands: data.brands });
+        showToast("success", `✅ Synced ${data.brands} brands from Jumia.`);
+      } else {
+        showToast("error", data.error ?? "Brand sync failed — please try again.");
+      }
+    } catch {
+      showToast("error", "Network error during brand sync.");
+    } finally {
+      setSyncingBrands(false);
     }
   }
 
@@ -298,6 +320,41 @@ function IntegrationsPageInner() {
                 <p className="text-xs text-emerald-700 flex items-center gap-1.5">
                   <CheckCircle2 className="h-3 w-3 shrink-0" />
                   {syncResult.categories} categories · {syncResult.attributes} attribute fields synced
+                </p>
+              )}
+            </div>
+
+            {/* Brand sync */}
+            <div className="rounded-xl border bg-zinc-50 p-4 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-zinc-800">Jumia brand database</p>
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    Syncs the full Jumia brand catalog so brand names resolve instantly
+                    when pushing products — no live API call needed at submission time.
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-2 shrink-0"
+                  onClick={handleSyncBrands}
+                  disabled={syncingBrands}
+                >
+                  <RefreshCw className={cn("h-3.5 w-3.5", syncingBrands && "animate-spin")} />
+                  {syncingBrands ? "Syncing…" : "Sync now"}
+                </Button>
+              </div>
+              {syncingBrands && (
+                <p className="text-xs text-zinc-400 flex items-center gap-1.5">
+                  <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                  Fetching all brand pages from Jumia — this may take a minute or two…
+                </p>
+              )}
+              {brandSyncResult && (
+                <p className="text-xs text-emerald-700 flex items-center gap-1.5">
+                  <CheckCircle2 className="h-3 w-3 shrink-0" />
+                  {brandSyncResult.brands.toLocaleString()} brands synced
                 </p>
               )}
             </div>
