@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { getFeedStatus } from "@/lib/jumia/api";
-import { refreshAccessToken, JUMIA_API_BASE } from "@/lib/jumia/oauth";
+import { refreshAccessToken } from "@/lib/jumia/oauth";
 
 // ─── GET /api/cron/jumia-feeds ────────────────────────────────────────────────
 // Vercel cron — runs every 5 minutes (see vercel.json)
@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
 
   let updated = 0;
 
-  for (const [userId, listings] of byUser) {
+  for (const [userId, listings] of Array.from(byUser)) {
     // Get a valid access token for this user
     let accessToken: string;
     try {

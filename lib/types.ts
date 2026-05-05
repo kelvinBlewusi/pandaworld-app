@@ -13,12 +13,16 @@ export interface ListingDisplay {
   sku: string;
   title: string;
   status: ListingStatus;
-  thumbnail: string;       // first image URL or placeholder
-  category: string;        // display label
+  thumbnail: string;        // first image URL or placeholder
+  category: string;         // display label
   price: number | null;
-  lastUpdated: string;     // ISO string
+  lastUpdated: string;      // ISO string
   marketplace: Marketplace;
   jumia_ref: string | null; // feedId — used for status polling
+  jumia_error: string | null;
+  quantity: number;
+  update_feed_ref:    string | null;
+  update_feed_status: string | null;
 }
 
 // Map a Supabase ListingRow → ListingDisplay
@@ -37,6 +41,10 @@ export function toListingDisplay(row: ListingRow): ListingDisplay {
     price: row.selling_price ? Number(row.selling_price) : null,
     lastUpdated: row.updated_at,
     marketplace: "jumia" as Marketplace,
-    jumia_ref: row.jumia_ref ?? null,
+    jumia_ref:          row.jumia_ref          ?? null,
+    jumia_error:        row.jumia_error        ?? null,
+    quantity:           row.quantity           ?? 1,
+    update_feed_ref:    row.update_feed_ref    ?? null,
+    update_feed_status: row.update_feed_status ?? null,
   };
 }

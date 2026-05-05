@@ -12,14 +12,14 @@ export interface AIProductAnalysis {
   title:           string;
   description:     string;
   highlights:      string;
-  brand:           string;
-  color:           string;
-  color_family:    string;
+  brand:           string | null;
+  color:           string | null;
+  color_family:    string | null;
   weight_kg:       number | null;
   selling_price:   number | null;
-  model:           string;
-  main_material:   string;
-  material_family: string;
+  model:           string | null;
+  main_material:   string | null;
+  material_family: string | null;
 
   // Category (resolved from Jumia real tree)
   category_id:      string;   // kept for backwards compat (= String(category_code))
@@ -28,8 +28,12 @@ export interface AIProductAnalysis {
   commission_rate:  number;
 
   // Category-specific attributes (varies by category)
-  // Stored as a flat key→value map, e.g. { ram: "8GB", operating_system: "Android" }
+  // Stored as a flat key→value map. Only keys where the AI is confident are set.
+  // Unknown / undetectable values are OMITTED (not fabricated).
   dynamic_attributes: Record<string, string>;
+
+  // Tracks which fields were set by AI (all fields in this object are "ai" at creation time)
+  field_sources: Record<string, "ai">;
 }
 
 // ─── Build AI prompt ──────────────────────────────────────────────────────────
@@ -55,36 +59,36 @@ function buildPrompt(
     : "";
 
   return `You are an expert Jumia Ghana product listing assistant.
-Analyse the product and return a single JSON object with these exact fields.
+Analyse the product image(s) and/or description, then return a SINGLE valid JSON object.
 
 ${categoryContext}
 
 JUMIA CATEGORY LIST (code|path):
 ${categoryList}
 
-INSTRUCTIONS:
-1. Pick the single most specific matching category from the list above.
-2. Use the exact numeric code from the list.
-3. Set a realistic GHS selling price for the Ghanaian market.
-4. Fill every field as accurately as possible from the product image/description.${attributeSection}
+STRICT RULES — violations will cause the submission to be rejected:
+1. Pick the single most specific matching category from the list. Use the exact numeric code.
+2. Set a realistic GHS selling price for the Ghanaian market.
+3. NEVER fabricate or guess values. If a field cannot be determined with reasonable confidence, set it to null.
+4. For dynamic_attributes: include ONLY fields you can determine from the product. Omit fields you cannot determine — do NOT guess.${attributeSection}
 
-Return ONLY valid JSON (no markdown, no explanation):
+Return ONLY valid JSON. No markdown fences, no explanation, no trailing text:
 {
-  "title": "Full product title including brand, model and key spec",
-  "description": "2-3 sentence product description for Jumia listing",
-  "highlights": "Bullet points starting with • (5-8 bullets, one per line)",
-  "brand": "Brand name or empty string",
-  "color": "Specific color e.g. Midnight Black",
-  "color_family": "Base color family e.g. Black",
+  "title": "Full product name including brand, model and 1-2 key specs (15-70 chars)",
+  "description": "2-3 sentences for a Jumia listing (min 80 chars)",
+  "highlights": "• bullet1\\n• bullet2\\n• bullet3\\n• bullet4 (min 4 bullets, start each with •)",
+  "brand": "Brand name, or null if not visible",
+  "color": "Specific color e.g. Midnight Black, or null",
+  "color_family": "Base color e.g. Black, or null",
   "weight_kg": 0.5,
   "selling_price": 1200,
-  "model": "Model number or name",
-  "main_material": "Primary material e.g. Plastic, Metal, Fabric",
-  "material_family": "Material family e.g. Metal, Fabric, Plastic",
+  "model": "Model number or null",
+  "main_material": "e.g. Plastic, Metal, Fabric, or null",
+  "material_family": "e.g. Metal, Fabric, Plastic, or null",
   "category_code": "EXACT numeric code from category list above",
   "category_path": "Matching path from category list above",
   "dynamic_attributes": {
-    "attribute_name": "value"
+    "attribute_name": "value — only include if you are confident"
   }
 }`;
 }
@@ -100,8 +104,6 @@ async function callGemini(
 
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-
-  const parts: Parameters<typeof model.generateContent>[0] extends { contents: infer C } ? never : never[] = [];
 
   // Fetch images and convert to inline data
   const imageParts = await Promise.all(
@@ -192,6 +194,64 @@ function resolveCategory(
   };
 }
 
+// ─── Shared result builder ────────────────────────────────────────────────────
+
+function strOrNull(v: unknown): string | null {
+  if (v == null || v === "" || v === "null") return null;
+  return String(v).trim() || null;
+}
+
+function buildCoreResult(
+  parsed:    Record<string, unknown>,
+  cat:       { code: number; path: string; commission_rate: number },
+  dynAttrs:  Record<string, string>
+): AIProductAnalysis {
+  // Strip null / empty-string entries from dynamic attributes
+  const cleanDyn: Record<string, string> = {};
+  for (const [k, v] of Object.entries(dynAttrs)) {
+    if (v != null && String(v).trim() !== "" && String(v).toLowerCase() !== "null") {
+      cleanDyn[k] = String(v).trim();
+    }
+  }
+
+  // Build field_sources: every field set here is "ai"
+  const field_sources: Record<string, "ai"> = {};
+  const coreFields = ["title","description","highlights","brand","color","color_family",
+                      "weight_kg","selling_price","model","main_material","material_family"];
+  for (const f of coreFields) {
+    if (parsed[f] != null && parsed[f] !== "" && parsed[f] !== "null") {
+      field_sources[f] = "ai";
+    }
+  }
+  for (const k of Object.keys(cleanDyn)) {
+    field_sources[`dynamic_attributes.${k}`] = "ai";
+  }
+
+  return {
+    title:              String(parsed.title       ?? ""),
+    description:        String(parsed.description ?? ""),
+    highlights:         String(parsed.highlights  ?? ""),
+    brand:              strOrNull(parsed.brand),
+    color:              strOrNull(parsed.color),
+    color_family:       strOrNull(parsed.color_family),
+    weight_kg:          parsed.weight_kg != null && parsed.weight_kg !== "null"
+                          ? Number(parsed.weight_kg)
+                          : null,
+    selling_price:      parsed.selling_price != null && parsed.selling_price !== "null"
+                          ? Number(parsed.selling_price)
+                          : null,
+    model:              strOrNull(parsed.model),
+    main_material:      strOrNull(parsed.main_material),
+    material_family:    strOrNull(parsed.material_family),
+    category_id:        String(cat.code),
+    category_code:      String(cat.code),
+    category_path:      cat.path,
+    commission_rate:    cat.commission_rate,
+    dynamic_attributes: cleanDyn,
+    field_sources,
+  };
+}
+
 // ─── Main: analyse images ─────────────────────────────────────────────────────
 
 export async function analyzeProductImages(
@@ -241,24 +301,8 @@ export async function analyzeProductImages(
     }
   }
 
-  return {
-    title:              String(parsed.title            ?? ""),
-    description:        String(parsed.description      ?? ""),
-    highlights:         String(parsed.highlights       ?? ""),
-    brand:              String(parsed.brand            ?? ""),
-    color:              String(parsed.color            ?? ""),
-    color_family:       String(parsed.color_family     ?? ""),
-    weight_kg:          parsed.weight_kg != null ? Number(parsed.weight_kg) : null,
-    selling_price:      parsed.selling_price != null ? Number(parsed.selling_price) : null,
-    model:              String(parsed.model            ?? ""),
-    main_material:      String(parsed.main_material    ?? ""),
-    material_family:    String(parsed.material_family  ?? ""),
-    category_id:        String(cat.code),
-    category_code:      String(cat.code),
-    category_path:      cat.path,
-    commission_rate:    cat.commission_rate,
-    dynamic_attributes: dynamicAttributes,
-  };
+  const coreResult = buildCoreResult(parsed, cat, dynamicAttributes);
+  return coreResult;
 }
 
 // ─── Main: analyse text description ──────────────────────────────────────────
@@ -300,24 +344,7 @@ export async function analyzeProductDescription(
     }
   }
 
-  return {
-    title:              String(parsed.title            ?? ""),
-    description:        String(parsed.description      ?? ""),
-    highlights:         String(parsed.highlights       ?? ""),
-    brand:              String(parsed.brand            ?? ""),
-    color:              String(parsed.color            ?? ""),
-    color_family:       String(parsed.color_family     ?? ""),
-    weight_kg:          parsed.weight_kg != null ? Number(parsed.weight_kg) : null,
-    selling_price:      parsed.selling_price != null ? Number(parsed.selling_price) : null,
-    model:              String(parsed.model            ?? ""),
-    main_material:      String(parsed.main_material    ?? ""),
-    material_family:    String(parsed.material_family  ?? ""),
-    category_id:        String(cat.code),
-    category_code:      String(cat.code),
-    category_path:      cat.path,
-    commission_rate:    cat.commission_rate,
-    dynamic_attributes: dynamicAttributes,
-  };
+  return buildCoreResult(parsed, cat, dynamicAttributes);
 }
 
 // ─── Mock fallback ────────────────────────────────────────────────────────────
@@ -358,11 +385,20 @@ const MOCK_PRODUCTS = [
 function buildMockAnalysis(): AIProductAnalysis {
   const template = MOCK_PRODUCTS[Math.floor(Math.random() * MOCK_PRODUCTS.length)];
   const mock = mockCategories.find((c) => c.name === template.mock_category) ?? mockCategories[0];
+  const field_sources: Record<string, "ai"> = {};
+  for (const k of Object.keys(template)) {
+    if (k !== "mock_category" && k !== "dynamic_attributes") field_sources[k] = "ai";
+  }
+  for (const k of Object.keys(template.dynamic_attributes)) {
+    field_sources[`dynamic_attributes.${k}`] = "ai";
+  }
   return {
     ...template,
+    dynamic_attributes: template.dynamic_attributes as unknown as Record<string, string>,
     category_id:     mock.id,
     category_code:   mock.code,
     category_path:   mock.path,
     commission_rate: mock.commissionRate / 100,
+    field_sources,
   };
 }

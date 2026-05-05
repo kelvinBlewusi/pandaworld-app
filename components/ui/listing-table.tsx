@@ -44,7 +44,7 @@ import {
 } from "@/lib/actions/listings";
 
 interface ListingTableProps {
-  listings: ListingDisplay[];
+  listings: (ListingDisplay & { jumia_error?: string | null })[];
   compact?: boolean;
 }
 
@@ -338,7 +338,17 @@ export function ListingTable({ listings, compact = false }: ListingTableProps) {
                   <span className="text-sm text-zinc-600">{listing.category}</span>
                 </TableCell>
                 <TableCell>
-                  <StatusPill status={listing.status} />
+                  <div className="flex flex-col gap-1">
+                    <StatusPill status={listing.status} />
+                    {listing.status === "failed" && listing.jumia_error && (
+                      <p
+                        className="max-w-[180px] truncate text-[10px] text-red-500 cursor-default"
+                        title={listing.jumia_error}
+                      >
+                        {listing.jumia_error}
+                      </p>
+                    )}
+                  </div>
                 </TableCell>
                 {!compact && (
                   <TableCell>
@@ -385,14 +395,14 @@ export function ListingTable({ listings, compact = false }: ListingTableProps) {
                           Duplicate
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
-                        {/* Push to Jumia — shown for non-live listings */}
+                        {/* Push / Retry to Jumia */}
                         {!isLive && (
                           <DropdownMenuItem
                             className="text-orange-600 focus:text-orange-600 focus:bg-orange-50"
                             onClick={() => handlePushToJumia(listing.id, listing.title)}
                           >
                             <ShoppingBag className="h-4 w-4 mr-2" />
-                            Push to Jumia
+                            {listing.status === "failed" ? "Retry push to Jumia" : "Push to Jumia"}
                           </DropdownMenuItem>
                         )}
                         <DropdownMenuSeparator />

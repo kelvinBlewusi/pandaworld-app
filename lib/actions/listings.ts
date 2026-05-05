@@ -54,6 +54,24 @@ export async function createListing(input: {
   if (!userId) throw new Error("Unauthenticated");
 
   const db = createServerClient();
+
+  // ── Plan enforcement: free users limited to 5 listings ───────────────────
+  const [subResult, countResult] = await Promise.all([
+    db.from("subscriptions").select("plan, status").eq("user_id", userId).maybeSingle(),
+    db.from("listings").select("id", { count: "exact", head: true }).eq("user_id", userId),
+  ]);
+
+  const plan = subResult.data?.plan ?? "free";
+  const planStatus = subResult.data?.status ?? "active";
+  const listingCount = countResult.count ?? 0;
+  const isPro = plan === "pro" && planStatus === "active";
+
+  if (!isPro && listingCount >= 5) {
+    throw new Error(
+      "FREE_LIMIT_REACHED: Upgrade to Pro to create unlimited listings."
+    );
+  }
+
   const sku = `PA-${Date.now().toString(36).toUpperCase()}`;
 
   const insert: ListingInsert = {
@@ -147,10 +165,23 @@ export async function duplicateListing(id: string): Promise<ListingRow> {
   const { userId } = await auth();
   if (!userId) throw new Error("Unauthenticated");
 
+  const db = createServerClient();
+
+  // ── Plan enforcement (same limit applies to duplicates) ──────────────────
+  const [subResult, countResult] = await Promise.all([
+    db.from("subscriptions").select("plan, status").eq("user_id", userId).maybeSingle(),
+    db.from("listings").select("id", { count: "exact", head: true }).eq("user_id", userId),
+  ]);
+  const plan = subResult.data?.plan ?? "free";
+  const planStatus = subResult.data?.status ?? "active";
+  const isPro = plan === "pro" && planStatus === "active";
+  if (!isPro && (countResult.count ?? 0) >= 5) {
+    throw new Error("FREE_LIMIT_REACHED: Upgrade to Pro to create unlimited listings.");
+  }
+
   const original = await getListing(id);
   if (!original) throw new Error("Listing not found");
 
-  const db = createServerClient();
   const sku = `PA-${Date.now().toString(36).toUpperCase()}`;
 
   const { id: _id, created_at: _c, updated_at: _u, ...rest } = original;

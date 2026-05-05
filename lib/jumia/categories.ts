@@ -31,6 +31,7 @@ export interface JumiaCategoryAttribute {
   type:           "enum" | "string" | "number" | "boolean" | "multi";
   allowed_values: string[]; // populated for enum/multi types
   required:       boolean;
+  is_variant:     boolean;  // true = can be used as variant axis (e.g. color, ram)
 }
 
 // ─── Supabase reads ───────────────────────────────────────────────────────────
@@ -59,10 +60,33 @@ export async function getCategoryAttributes(categoryCode: number): Promise<Jumia
   const db = createServerClient();
   const { data } = await db
     .from("jumia_category_attributes")
-    .select("name, label, type, allowed_values, required")
+    .select("name, label, type, allowed_values, required, is_variant")
     .eq("category_code", categoryCode)
     .order("sort_order");
-  return (data ?? []) as JumiaCategoryAttribute[];
+  return (data ?? []).map((r) => ({ ...r, is_variant: r.is_variant ?? false })) as JumiaCategoryAttribute[];
+}
+
+export async function getCategoryByPath(path: string): Promise<JumiaCategoryRow | null> {
+  const db = createServerClient();
+  const { data } = await db
+    .from("jumia_categories")
+    .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name")
+    .or(`path.ilike.${encodeURIComponent(path)},name.ilike.${encodeURIComponent(path)}`)
+    .limit(1)
+    .maybeSingle();
+  return (data ?? null) as JumiaCategoryRow | null;
+}
+
+/** Returns only the variant-axis attributes for a category (is_variant = true). */
+export async function getVariantAxes(categoryCode: number): Promise<JumiaCategoryAttribute[]> {
+  const db = createServerClient();
+  const { data } = await db
+    .from("jumia_category_attributes")
+    .select("name, label, type, allowed_values, required, is_variant")
+    .eq("category_code", categoryCode)
+    .eq("is_variant", true)
+    .order("sort_order");
+  return (data ?? []).map((r) => ({ ...r, is_variant: true })) as JumiaCategoryAttribute[];
 }
 
 // ─── Live fetch from Jumia API ────────────────────────────────────────────────
@@ -161,7 +185,8 @@ export async function fetchAttributesFromJumia(
         allowed_values: options.map((o) =>
           String(o.label ?? o.name ?? o.value ?? o.code ?? o)
         ),
-        required: Boolean(attr.mandatory ?? false),
+        required:   Boolean(attr.mandatory ?? false),
+        is_variant: Boolean(attr.variant ?? attr.is_variant ?? false),
       };
     });
 }
@@ -193,6 +218,7 @@ export async function upsertAttributes(
     type:           a.type,
     allowed_values: a.allowed_values,
     required:       a.required,
+    is_variant:     a.is_variant ?? false,
     sort_order:     i,
     synced_at:      new Date().toISOString(),
   }));

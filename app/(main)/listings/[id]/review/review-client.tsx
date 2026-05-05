@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -16,6 +16,11 @@ import {
   Loader2,
   AlertCircle,
   Tag,
+  Search,
+  X,
+  ShieldAlert,
+  CheckCircle2,
+  Info,
 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -45,12 +50,21 @@ import { formatGHS, cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 import type { ListingRow } from "@/lib/supabase/types";
 import { updateListing } from "@/lib/actions/listings";
+import { calculateQualityScore, scoreLabel, scoreColor, DEFAULT_THRESHOLD } from "@/lib/quality-score";
+import { isValidGTIN } from "@/lib/utils/gtin";
+import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
+
+// ─── Auto-SKU ─────────────────────────────────────────────────────────────────
+
+function abbr(v: string, n = 4) {
+  return v.replace(/\s+/g, "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, n);
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface Variant {
+interface VariantRow {
   id: string;
-  variation: string;
+  axes: Record<string, string>;  // e.g. { color: "Black", ram: "8GB" }
   sellerSku: string;
   gtin: string;
   quantity: string;
@@ -60,7 +74,95 @@ interface Variant {
   saleEndDate: string;
 }
 
-// ─── Field quality badges ─────────────────────────────────────────────────────
+// ─── Quality score badge ──────────────────────────────────────────────────────
+
+function QualityScoreBadge({
+  score,
+  threshold,
+  issues,
+}: {
+  score: number;
+  threshold: number;
+  issues: string[];
+}) {
+  const [open, setOpen] = useState(false);
+  const color = scoreColor(score);
+  const label = scoreLabel(score);
+  const blocked = score < threshold;
+
+  const colorClasses: Record<string, string> = {
+    emerald: "bg-emerald-50 border-emerald-200 text-emerald-700",
+    blue:    "bg-blue-50 border-blue-200 text-blue-700",
+    amber:   "bg-amber-50 border-amber-200 text-amber-700",
+    red:     "bg-red-50 border-red-200 text-red-700",
+  };
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={cn(
+          "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors",
+          colorClasses[color] ?? colorClasses.amber
+        )}
+      >
+        <Star className="h-3 w-3" />
+        {score}/100 · {label}
+        {blocked && <ShieldAlert className="h-3 w-3 ml-0.5 text-red-500" />}
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-20 w-72 rounded-xl border bg-white p-4 shadow-lg text-xs space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="font-semibold text-zinc-700">Quality breakdown</span>
+            <button onClick={() => setOpen(false)} className="text-zinc-400 hover:text-zinc-600">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="rounded-lg bg-zinc-50 border px-3 py-2">
+            <div className="flex h-2 overflow-hidden rounded-full bg-zinc-200">
+              <div
+                className={cn("h-full rounded-full transition-all", {
+                  "bg-emerald-500": color === "emerald",
+                  "bg-blue-500":    color === "blue",
+                  "bg-amber-500":   color === "amber",
+                  "bg-red-500":     color === "red",
+                })}
+                style={{ width: `${score}%` }}
+              />
+            </div>
+            <p className="mt-1.5 text-center text-[11px] font-bold text-zinc-600">{score}/100</p>
+          </div>
+          {blocked && (
+            <p className="flex items-start gap-1.5 text-red-600">
+              <ShieldAlert className="h-3 w-3 shrink-0 mt-0.5" />
+              Score below publish threshold ({threshold}). Fix the issues below.
+            </p>
+          )}
+          {issues.length > 0 && (
+            <ul className="space-y-1 text-zinc-500">
+              {issues.slice(0, 6).map((iss, i) => (
+                <li key={i} className="flex items-start gap-1">
+                  <AlertCircle className="h-3 w-3 shrink-0 mt-0.5 text-amber-500" />
+                  {iss}
+                </li>
+              ))}
+              {issues.length > 6 && (
+                <li className="text-zinc-400">+{issues.length - 6} more…</li>
+              )}
+            </ul>
+          )}
+          <p className="text-zinc-400 text-[10px]">
+            Threshold: {threshold} — set via QUALITY_SCORE_MIN env var.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Field badges ─────────────────────────────────────────────────────────────
 
 function RequiredBadge() {
   return <span className="ml-1 text-red-500">*</span>;
@@ -74,6 +176,193 @@ function QualityBadge() {
   );
 }
 
+function AIBadge({ onRegenerate }: { onRegenerate?: () => void }) {
+  return (
+    <span className="ml-1.5 inline-flex items-center gap-0.5 rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold text-blue-600 border border-blue-200">
+      <Sparkles className="h-2.5 w-2.5" /> AI
+      {onRegenerate && (
+        <button
+          type="button"
+          onClick={onRegenerate}
+          className="ml-0.5 rounded hover:text-blue-800"
+          title="Regenerate this field"
+        >
+          <RefreshCw className="h-2.5 w-2.5" />
+        </button>
+      )}
+    </span>
+  );
+}
+
+// ─── Brand combobox ───────────────────────────────────────────────────────────
+
+function BrandCombobox({
+  value,
+  onChange,
+  isAI,
+  onMarkEdited,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  isAI?: boolean;
+  onMarkEdited?: () => void;
+}) {
+  const [query, setQuery] = useState(value);
+  const [results, setResults] = useState<{ code: number; name: string }[]>([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => { setQuery(value); }, [value]);
+
+  const search = useCallback((q: string) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!q.trim()) { setResults([]); setOpen(false); return; }
+    debounceRef.current = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/jumia/brands?q=${encodeURIComponent(q)}`);
+        const data = await res.json() as { brands: { code: number; name: string }[] };
+        setResults(data.brands ?? []);
+        setOpen(true);
+      } catch { setResults([]); }
+      finally { setLoading(false); }
+    }, 300);
+  }, []);
+
+  return (
+    <div className="relative space-y-1.5">
+      <Label className="flex items-center">
+        Brand
+        {isAI && <AIBadge />}
+      </Label>
+      <div className="relative">
+        <Input
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            onChange(e.target.value);
+            onMarkEdited?.();
+            search(e.target.value);
+          }}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          placeholder="Brand name (type to search Jumia catalog)"
+          className="pr-7"
+        />
+        {loading && (
+          <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-zinc-400" />
+        )}
+      </div>
+      {open && results.length > 0 && (
+        <div className="absolute z-10 w-full rounded-lg border bg-white shadow-lg max-h-48 overflow-y-auto">
+          {results.map((b) => (
+            <button
+              key={b.code}
+              type="button"
+              className="w-full px-3 py-2 text-left text-sm hover:bg-zinc-50 border-b last:border-b-0"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onChange(b.name);
+                setQuery(b.name);
+                setOpen(false);
+                onMarkEdited?.();
+              }}
+            >
+              {b.name}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Category picker modal ────────────────────────────────────────────────────
+
+interface CategoryItem {
+  code: number;
+  name: string;
+  path: string;
+}
+
+function CategoryPickerModal({
+  onSelect,
+  onClose,
+}: {
+  onSelect: (cat: CategoryItem) => void;
+  onClose: () => void;
+}) {
+  const [categories, setCategories] = useState<CategoryItem[]>([]);
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/jumia/categories")
+      .then((r) => r.json())
+      .then((d) => setCategories(d.categories ?? []))
+      .catch(() => setCategories([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const filtered = query
+    ? categories.filter(
+        (c) =>
+          c.name.toLowerCase().includes(query.toLowerCase()) ||
+          c.path.toLowerCase().includes(query.toLowerCase())
+      )
+    : categories;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+      <div className="mx-4 w-full max-w-lg rounded-2xl border bg-white shadow-xl flex flex-col max-h-[80vh]">
+        <div className="flex items-center justify-between p-4 border-b">
+          <p className="font-semibold text-zinc-900">Change category</p>
+          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="p-3 border-b">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+            <Input
+              autoFocus
+              placeholder="Search categories…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+        </div>
+        <div className="overflow-y-auto flex-1">
+          {loading ? (
+            <div className="flex items-center justify-center py-10 text-zinc-400">
+              <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading…
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="py-10 text-center text-sm text-zinc-400">
+              {categories.length === 0
+                ? "No categories synced yet. Go to Settings → Integrations → Sync now."
+                : "No results for that query."}
+            </div>
+          ) : (
+            filtered.map((cat) => (
+              <button
+                key={cat.code}
+                type="button"
+                onClick={() => { onSelect(cat); onClose(); }}
+                className="w-full px-4 py-3 text-left border-b last:border-b-0 hover:bg-orange-50 transition-colors"
+              >
+                <p className="text-sm font-medium text-zinc-800">{cat.name}</p>
+                <p className="text-xs text-zinc-400 mt-0.5">{cat.path}</p>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Rich-text field ─────────────────────────────────────────────────────────
 
 function RichTextField({
@@ -83,8 +372,10 @@ function RichTextField({
   defaultValue,
   required,
   quality,
+  isAI,
   hint,
   rows = 4,
+  onMarkEdited,
 }: {
   id: string;
   label: string;
@@ -92,8 +383,10 @@ function RichTextField({
   defaultValue?: string;
   required?: boolean;
   quality?: boolean;
+  isAI?: boolean;
   hint?: string;
   rows?: number;
+  onMarkEdited?: () => void;
 }) {
   return (
     <div className="space-y-1.5">
@@ -101,6 +394,7 @@ function RichTextField({
         {label}
         {required && <RequiredBadge />}
         {quality && <QualityBadge />}
+        {isAI && <AIBadge />}
       </Label>
       <div className="flex items-center gap-1 rounded-t-lg border border-b-0 bg-zinc-50 px-2 py-1.5">
         {["B", "I", "•", "⁋"].map((t) => (
@@ -121,23 +415,35 @@ function RichTextField({
         defaultValue={defaultValue}
         rows={rows}
         className="rounded-t-none"
+        onChange={onMarkEdited}
       />
       {hint && <p className="text-[11px] text-zinc-400">{hint}</p>}
     </div>
   );
 }
 
-// ─── Step 1 — Product Information ────────────────────────────────────────────
+// ─── Step 1 — Product Information ─────────────────────────────────────────────
 
 function ProductInformationStep({
   listing,
   colorFamily,
   setColorFamily,
+  fieldSources,
+  onMarkEdited,
+  brandValue,
+  onBrandChange,
+  onCategoryChange,
 }: {
   listing: ListingRow;
   colorFamily: string;
   setColorFamily: (v: string) => void;
+  fieldSources: Record<string, string>;
+  onMarkEdited: (field: string) => void;
+  brandValue: string;
+  onBrandChange: (v: string) => void;
+  onCategoryChange: (cat: { code: number; name: string; path: string }) => void;
 }) {
+  const [showCategoryPicker, setShowCategoryPicker] = useState(false);
   const images = listing.images ?? [];
   const imageSlots = Array.from({ length: 8 }, (_, i) => images[i] ?? null);
 
@@ -176,7 +482,7 @@ function ProductInformationStep({
           ))}
         </div>
         <p className="text-[11px] text-zinc-400">
-          Image must be between 500×500 and 2000×2000 pixels. White backgrounds recommended. No watermarks. Max 2MB.
+          500×500 – 2000×2000 px · white background · no watermarks · max 2MB · JPG/PNG/WEBP
         </p>
       </div>
 
@@ -185,6 +491,7 @@ function ProductInformationStep({
         <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="name" className="flex items-center">
             Product Name <RequiredBadge />
+            {fieldSources["title"] === "ai" && <AIBadge />}
           </Label>
           <Input
             id="name"
@@ -192,6 +499,7 @@ function ProductInformationStep({
             defaultValue={listing.title ?? ""}
             placeholder="Ex: Wireless Noise-Cancelling Headphones"
             maxLength={70}
+            onChange={() => onMarkEdited("title")}
           />
           <p className="text-[11px] text-zinc-400">
             15–70 characters · Currently {(listing.title ?? "").length} chars
@@ -204,28 +512,44 @@ function ProductInformationStep({
             <div className="flex-1 rounded-lg border bg-zinc-50 px-3 py-2 text-sm text-zinc-700 truncate">
               {listing.category_path ?? listing.category_id ?? "Uncategorised"}
             </div>
-            <button type="button" className="flex items-center gap-1 rounded-lg border px-3 py-2 text-xs font-medium text-blue-600 hover:bg-blue-50">
+            <button
+              type="button"
+              onClick={() => setShowCategoryPicker(true)}
+              className="flex items-center gap-1 rounded-lg border px-3 py-2 text-xs font-medium text-blue-600 hover:bg-blue-50"
+            >
               Change <ChevronRight className="h-3.5 w-3.5" />
             </button>
           </div>
           <p className="text-[11px] text-zinc-400">{listing.category_path ?? ""}</p>
         </div>
 
-        <div className="space-y-1.5">
-          <Label htmlFor="brand">Brand</Label>
-          <Input id="brand" name="brand" defaultValue={listing.brand ?? ""} placeholder="Brand name" />
-        </div>
+        <BrandCombobox
+          value={brandValue}
+          onChange={onBrandChange}
+          isAI={fieldSources["brand"] === "ai"}
+          onMarkEdited={() => onMarkEdited("brand")}
+        />
 
         <div className="space-y-1.5">
-          <Label htmlFor="color" className="flex items-center">Color <RequiredBadge /></Label>
-          <Input id="color" name="color" defaultValue={listing.color ?? ""} placeholder="Main color of product" />
+          <Label htmlFor="color" className="flex items-center">
+            Color <RequiredBadge />
+            {fieldSources["color"] === "ai" && <AIBadge />}
+          </Label>
+          <Input
+            id="color"
+            name="color"
+            defaultValue={listing.color ?? ""}
+            placeholder="Main color of product"
+            onChange={() => onMarkEdited("color")}
+          />
         </div>
 
         <div className="space-y-1.5">
           <Label htmlFor="color-family" className="flex items-center">
             Color Family <QualityBadge />
+            {fieldSources["color_family"] === "ai" && <AIBadge />}
           </Label>
-          <Select value={colorFamily} onValueChange={setColorFamily}>
+          <Select value={colorFamily} onValueChange={(v) => { setColorFamily(v); onMarkEdited("color_family"); }}>
             <SelectTrigger id="color-family">
               <SelectValue placeholder="Ex: Black" />
             </SelectTrigger>
@@ -239,7 +563,10 @@ function ProductInformationStep({
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="weight" className="flex items-center">Weight (kg) <QualityBadge /></Label>
+          <Label htmlFor="weight" className="flex items-center">
+            Weight (kg) <QualityBadge />
+            {fieldSources["weight_kg"] === "ai" && <AIBadge />}
+          </Label>
           <Input
             id="weight"
             name="weight"
@@ -248,6 +575,7 @@ function ProductInformationStep({
             min="0"
             defaultValue={listing.weight_kg?.toString() ?? ""}
             placeholder="Ex: 1.2"
+            onChange={() => onMarkEdited("weight_kg")}
           />
         </div>
       </div>
@@ -256,164 +584,415 @@ function ProductInformationStep({
         id="description"
         label="Product Description"
         required
+        isAI={fieldSources["description"] === "ai"}
         placeholder="Include only product-related information. Write clearly and concisely."
         defaultValue={listing.description ?? ""}
         rows={5}
-        hint="Minimum content required for a good score."
+        hint="Minimum 80 characters. Aim for 200+ for a good quality score."
+        onMarkEdited={() => onMarkEdited("description")}
       />
 
       <RichTextField
         id="highlights"
         label="Highlights"
         quality
+        isAI={fieldSources["highlights"] === "ai"}
         placeholder="Key features in bullet points. Ex: • Lightweight design • Noise cancellation"
         defaultValue={listing.highlights ?? ""}
         rows={4}
-        hint="At least 4 bullet points for a good content score."
+        hint="At least 4 bullets starting with • for a good content score."
+        onMarkEdited={() => onMarkEdited("highlights")}
       />
+
+      {showCategoryPicker && (
+        <CategoryPickerModal
+          onSelect={onCategoryChange}
+          onClose={() => setShowCategoryPicker(false)}
+        />
+      )}
     </div>
   );
 }
 
-// ─── Step 2 — Variants ───────────────────────────────────────────────────────
+// ─── Step 2 — Variant Matrix ──────────────────────────────────────────────────
 
-function VariantsStep({
+interface AxisDef {
+  name: string;
+  label: string;
+  values: string[];        // selected values for this axis
+  allowedValues: string[]; // from attribute schema
+}
+
+function VariantMatrixStep({
+  baseSku,
+  categoryCode,
   variants,
   setVariants,
+  axesDef,
+  setAxesDef,
   commissionRate,
   commissionPercent,
 }: {
-  variants: Variant[];
-  setVariants: React.Dispatch<React.SetStateAction<Variant[]>>;
+  baseSku: string;
+  categoryCode: string | null;
+  variants: VariantRow[];
+  setVariants: React.Dispatch<React.SetStateAction<VariantRow[]>>;
+  axesDef: AxisDef[];
+  setAxesDef: React.Dispatch<React.SetStateAction<AxisDef[]>>;
   commissionRate: number;
   commissionPercent: number;
 }) {
-  const addVariant = () => {
-    setVariants((prev) => [
+  const [schemaAxes, setSchemaAxes] = useState<JumiaCategoryAttribute[]>([]);
+  const [loadingAxes, setLoadingAxes] = useState(false);
+  const [customAxisInput, setCustomAxisInput] = useState("");
+
+  // Load variant axes from category schema
+  useEffect(() => {
+    if (!categoryCode || isNaN(Number(categoryCode))) return;
+    setLoadingAxes(true);
+    fetch(`/api/jumia/categories/${categoryCode}/attributes`)
+      .then((r) => r.json())
+      .then((d) => {
+        const all = (d.attributes ?? []) as JumiaCategoryAttribute[];
+        setSchemaAxes(all.filter((a) => a.is_variant));
+      })
+      .catch(() => setSchemaAxes([]))
+      .finally(() => setLoadingAxes(false));
+  }, [categoryCode]);
+
+  // Rebuild variant matrix whenever axes definitions change
+  useEffect(() => {
+    if (axesDef.length === 0) {
+      setVariants([{
+        id: "v1", axes: {}, sellerSku: baseSku,
+        gtin: "", quantity: "1", globalPrice: "", salePrice: "",
+        saleStartDate: "", saleEndDate: "",
+      }]);
+      return;
+    }
+
+    // Compute cartesian product of selected values
+    const combinations = axesDef.reduce<Record<string, string>[]>(
+      (acc, axis) => {
+        if (!axis.values.length) return acc;
+        return acc.flatMap((combo) =>
+          axis.values.map((v) => ({ ...combo, [axis.name]: v }))
+        );
+      },
+      [{}]
+    );
+
+    if (combinations.length === 0) return;
+
+    setVariants((prev) =>
+      combinations.map((combo) => {
+        const key = Object.values(combo).map((v) => abbr(v)).join("-");
+        const existing = prev.find(
+          (p) => JSON.stringify(p.axes) === JSON.stringify(combo)
+        );
+        return existing ?? {
+          id: `v-${key}-${Math.random().toString(36).slice(2, 6)}`,
+          axes: combo,
+          sellerSku: `${baseSku}-${key}`,
+          gtin: "",
+          quantity: "1",
+          globalPrice: prev[0]?.globalPrice ?? "",
+          salePrice: "",
+          saleStartDate: "",
+          saleEndDate: "",
+        };
+      })
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [axesDef, baseSku]);
+
+  const addAxis = (attr: JumiaCategoryAttribute | { name: string; label: string; allowedValues: string[] }) => {
+    const name = "name" in attr ? attr.name : (attr as {name:string}).name;
+    if (axesDef.find((a) => a.name === name)) return;
+    setAxesDef((prev) => [
       ...prev,
       {
-        id: `v${Date.now()}`,
-        variation: "",
-        sellerSku: "",
-        gtin: "",
-        quantity: "1",
-        globalPrice: prev[0]?.globalPrice ?? "",
-        salePrice: "",
-        saleStartDate: "",
-        saleEndDate: "",
+        name,
+        label: "label" in attr ? attr.label : name,
+        values: [],
+        allowedValues: "allowed_values" in attr ? (attr as JumiaCategoryAttribute).allowed_values : [],
       },
     ]);
   };
 
-  const removeVariant = (id: string) => {
-    if (variants.length === 1) return;
-    setVariants((prev) => prev.filter((v) => v.id !== id));
+  const removeAxis = (name: string) => {
+    setAxesDef((prev) => prev.filter((a) => a.name !== name));
   };
 
-  const update = (id: string, field: keyof Variant, value: string) => {
-    setVariants((prev) =>
-      prev.map((v) => (v.id === id ? { ...v, [field]: value } : v))
+  const toggleValue = (axisName: string, value: string) => {
+    setAxesDef((prev) =>
+      prev.map((a) =>
+        a.name === axisName
+          ? {
+              ...a,
+              values: a.values.includes(value)
+                ? a.values.filter((v) => v !== value)
+                : [...a.values, value],
+            }
+          : a
+      )
     );
   };
 
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-zinc-500">Add one row per variant (e.g. different sizes or colours).</p>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" className="gap-1 text-xs" type="button" disabled>
-            <CalendarIcon className="h-3.5 w-3.5" /> Edit Date
-          </Button>
-          <Button variant="outline" size="sm" className="text-xs" type="button" disabled>
-            Bulk Edit
-          </Button>
-        </div>
-      </div>
+  const updateVariant = (id: string, field: keyof VariantRow, value: string) => {
+    setVariants((prev) => prev.map((v) => (v.id === id ? { ...v, [field]: value } : v)));
+  };
 
-      {variants.map((v, idx) => {
-        const net = v.globalPrice ? calcNetPayout(parseFloat(v.globalPrice), commissionRate) : null;
-        return (
-          <div key={v.id} className="rounded-xl border bg-zinc-50/50 p-4 space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <input type="checkbox" className="h-4 w-4 rounded" />
-                <span className="text-sm font-medium text-zinc-700">
-                  Variation {idx + 1}{v.quantity ? `, Quantity (${v.quantity})` : ""}
-                </span>
-              </div>
-              {variants.length > 1 && (
-                <button type="button" onClick={() => removeVariant(v.id)} className="rounded-lg p-1 text-zinc-400 hover:bg-red-50 hover:text-red-500">
-                  <Trash2 className="h-4 w-4" />
+  return (
+    <div className="space-y-6">
+      {/* Axis selector */}
+      <div className="space-y-3">
+        <p className="text-xs font-semibold uppercase tracking-widest text-zinc-400">Variant dimensions</p>
+
+        {loadingAxes ? (
+          <div className="flex items-center gap-2 text-sm text-zinc-400">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading variant axes…
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {schemaAxes.map((attr) => {
+              const active = !!axesDef.find((a) => a.name === attr.name);
+              return (
+                <button
+                  key={attr.name}
+                  type="button"
+                  onClick={() => active ? removeAxis(attr.name) : addAxis(attr)}
+                  className={cn(
+                    "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                    active
+                      ? "bg-orange-500 border-orange-500 text-white"
+                      : "border-zinc-200 text-zinc-500 hover:border-orange-300 hover:text-orange-600"
+                  )}
+                >
+                  {active && <Check className="inline h-3 w-3 mr-1" />}
+                  {attr.label}
                 </button>
+              );
+            })}
+
+            {/* Custom axis input */}
+            <div className="flex items-center gap-1">
+              <Input
+                value={customAxisInput}
+                onChange={(e) => setCustomAxisInput(e.target.value)}
+                placeholder="Custom axis…"
+                className="h-7 w-28 text-xs"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && customAxisInput.trim()) {
+                    addAxis({ name: customAxisInput.toLowerCase().replace(/\s+/g, "_"), label: customAxisInput, allowedValues: [] });
+                    setCustomAxisInput("");
+                  }
+                }}
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs px-2"
+                onClick={() => {
+                  if (customAxisInput.trim()) {
+                    addAxis({ name: customAxisInput.toLowerCase().replace(/\s+/g, "_"), label: customAxisInput, allowedValues: [] });
+                    setCustomAxisInput("");
+                  }
+                }}
+              >
+                <Plus className="h-3 w-3" />
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Value pickers for each selected axis */}
+        {axesDef.map((axis) => (
+          <div key={axis.name} className="rounded-xl border bg-zinc-50/50 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-semibold text-zinc-600">{axis.label} values</p>
+              <button type="button" onClick={() => removeAxis(axis.name)} className="text-zinc-400 hover:text-red-500">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {axis.allowedValues.map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => toggleValue(axis.name, v)}
+                  className={cn(
+                    "rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors",
+                    axis.values.includes(v)
+                      ? "bg-orange-100 border-orange-300 text-orange-700"
+                      : "bg-white border-zinc-200 text-zinc-500 hover:border-zinc-300"
+                  )}
+                >
+                  {axis.values.includes(v) && "✓ "}
+                  {v}
+                </button>
+              ))}
+              {/* Free-text value input when no allowed_values */}
+              {axis.allowedValues.length === 0 && (
+                <FreeValueInput
+                  values={axis.values}
+                  onAdd={(v) => toggleValue(axis.name, v)}
+                  onRemove={(v) => toggleValue(axis.name, v)}
+                />
               )}
             </div>
-
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs">Variation <RequiredBadge /></Label>
-                <Input placeholder="e.g. Red / XL / 128GB" value={v.variation} onChange={(e) => update(v.id, "variation", e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs">Seller SKU <RequiredBadge /></Label>
-                <Input value={v.sellerSku} onChange={(e) => update(v.id, "sellerSku", e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs">GTIN / Barcode</Label>
-                <Input placeholder="GTIN Barcode" value={v.gtin} onChange={(e) => update(v.id, "gtin", e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs">Quantity <RequiredBadge /></Label>
-                <Input type="number" min="0" value={v.quantity} onChange={(e) => update(v.id, "quantity", e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs">Global Price (GHS) <RequiredBadge /></Label>
-                <div className="relative">
-                  <Input type="number" min="0" step="0.01" placeholder="Global Price" value={v.globalPrice} onChange={(e) => update(v.id, "globalPrice", e.target.value)} className="pr-12" />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-zinc-400">GHS</span>
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs">Sale Price (GHS)</Label>
-                <div className="relative">
-                  <Input type="number" min="0" step="0.01" placeholder="Sale Price" value={v.salePrice} onChange={(e) => update(v.id, "salePrice", e.target.value)} className="pr-12" />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-zinc-400">GHS</span>
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs">Sale Start Date</Label>
-                <Input type="date" value={v.saleStartDate} onChange={(e) => update(v.id, "saleStartDate", e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs">Sale End Date</Label>
-                <Input type="date" value={v.saleEndDate} onChange={(e) => update(v.id, "saleEndDate", e.target.value)} />
-              </div>
-            </div>
-
-            {net !== null && (
-              <div className="flex items-center justify-between rounded-lg border bg-white px-3 py-2 text-xs">
-                <span className="text-zinc-500">Est. net payout after {commissionPercent}% commission</span>
-                <span className="font-semibold text-emerald-600">{formatGHS(net)}</span>
-              </div>
-            )}
-
-            {variants.length > 1 && (
-              <div className="flex justify-end">
-                <button type="button" onClick={() => removeVariant(v.id)} className="flex items-center gap-1 text-xs text-zinc-400 hover:text-red-500">
-                  <Trash2 className="h-3.5 w-3.5" /> Delete
-                </button>
-              </div>
-            )}
           </div>
-        );
-      })}
+        ))}
+      </div>
 
-      <button
-        type="button"
-        onClick={addVariant}
-        className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-zinc-200 py-3 text-sm font-medium text-zinc-500 transition-colors hover:border-blue-300 hover:bg-blue-50/40 hover:text-blue-600"
-      >
-        <Plus className="h-4 w-4" /> ADD VARIATION
-      </button>
+      {/* Variant grid */}
+      {variants.length > 0 && axesDef.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-widest text-zinc-400">
+            {variants.length} combination{variants.length !== 1 ? "s" : ""}
+          </p>
+          <div className="overflow-x-auto rounded-xl border">
+            <table className="w-full text-xs">
+              <thead className="bg-zinc-50 border-b">
+                <tr>
+                  {axesDef.map((a) => (
+                    <th key={a.name} className="px-3 py-2 text-left font-semibold text-zinc-600">{a.label}</th>
+                  ))}
+                  <th className="px-3 py-2 text-left font-semibold text-zinc-600">Seller SKU</th>
+                  <th className="px-3 py-2 text-left font-semibold text-zinc-600">GTIN</th>
+                  <th className="px-3 py-2 text-left font-semibold text-zinc-600">Qty</th>
+                  <th className="px-3 py-2 text-left font-semibold text-zinc-600">Price (GHS)</th>
+                  <th className="px-3 py-2 text-left font-semibold text-zinc-600">Sale Price</th>
+                  <th className="px-3 py-2 text-left font-semibold text-zinc-600">Net Payout</th>
+                </tr>
+              </thead>
+              <tbody>
+                {variants.map((v) => {
+                  const net = v.globalPrice ? calcNetPayout(parseFloat(v.globalPrice), commissionRate) : null;
+                  const gtinOk = !v.gtin || isValidGTIN(v.gtin);
+                  return (
+                    <tr key={v.id} className="border-b last:border-b-0 hover:bg-zinc-50/50">
+                      {axesDef.map((a) => (
+                        <td key={a.name} className="px-3 py-2 font-medium text-zinc-700">
+                          {v.axes[a.name] ?? "—"}
+                        </td>
+                      ))}
+                      <td className="px-3 py-2">
+                        <Input
+                          value={v.sellerSku}
+                          onChange={(e) => updateVariant(v.id, "sellerSku", e.target.value)}
+                          className="h-7 w-32 text-xs font-mono"
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="relative">
+                          <Input
+                            value={v.gtin}
+                            onChange={(e) => updateVariant(v.id, "gtin", e.target.value)}
+                            placeholder="EAN/UPC"
+                            className={cn("h-7 w-32 text-xs", v.gtin && !gtinOk && "border-red-300 focus-visible:ring-red-300")}
+                          />
+                          {v.gtin && !gtinOk && (
+                            <AlertCircle className="absolute right-1.5 top-1/2 -translate-y-1/2 h-3 w-3 text-red-400" />
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2">
+                        <Input
+                          type="number"
+                          min="0"
+                          value={v.quantity}
+                          onChange={(e) => updateVariant(v.id, "quantity", e.target.value)}
+                          className="h-7 w-16 text-xs"
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={v.globalPrice}
+                          onChange={(e) => updateVariant(v.id, "globalPrice", e.target.value)}
+                          className="h-7 w-24 text-xs"
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={v.salePrice}
+                          onChange={(e) => updateVariant(v.id, "salePrice", e.target.value)}
+                          className="h-7 w-24 text-xs"
+                          placeholder="optional"
+                        />
+                      </td>
+                      <td className="px-3 py-2 text-emerald-600 font-semibold whitespace-nowrap">
+                        {net != null ? formatGHS(net) : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Fallback: no axes selected yet */}
+      {axesDef.length === 0 && (
+        <div className="rounded-xl border border-dashed border-zinc-200 p-6 text-center space-y-2">
+          <p className="text-sm text-zinc-500">Select variant axes above to generate the combination matrix.</p>
+          <p className="text-xs text-zinc-400">
+            {schemaAxes.length > 0
+              ? `${schemaAxes.length} variant attribute${schemaAxes.length !== 1 ? "s" : ""} available for this category.`
+              : categoryCode
+              ? "No variant axes in the category schema. You can add a custom axis."
+              : "Category not set — select a category first to see variant options."}
+          </p>
+        </div>
+      )}
+
+      <p className="text-xs text-zinc-400 flex items-start gap-1">
+        <Info className="h-3 w-3 shrink-0 mt-0.5" />
+        Commission shown at {commissionPercent}% (incl. VAT). GTIN must be a valid EAN-8/13, UPC-12, or GTIN-14.
+      </p>
+    </div>
+  );
+}
+
+// Small helper: free-text value chip input
+function FreeValueInput({
+  values,
+  onAdd,
+  onRemove,
+}: {
+  values: string[];
+  onAdd: (v: string) => void;
+  onRemove: (v: string) => void;
+}) {
+  const [input, setInput] = useState("");
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {values.map((v) => (
+        <span key={v} className="flex items-center gap-0.5 rounded-full bg-orange-100 border border-orange-300 px-2 py-0.5 text-[11px] text-orange-700">
+          {v}
+          <button type="button" onClick={() => onRemove(v)} className="ml-0.5"><X className="h-2.5 w-2.5" /></button>
+        </span>
+      ))}
+      <input
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        placeholder="Add value…"
+        className="h-6 w-24 rounded border border-zinc-200 px-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-orange-300"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && input.trim()) {
+            onAdd(input.trim());
+            setInput("");
+          }
+        }}
+      />
     </div>
   );
 }
@@ -432,6 +1011,8 @@ function ProductSpecificationStep({
   setWarrantyDuration,
   warrantyType,
   setWarrantyType,
+  fieldSources,
+  onMarkEdited,
 }: {
   listing: ListingRow;
   certification: string;
@@ -444,71 +1025,62 @@ function ProductSpecificationStep({
   setWarrantyDuration: (v: string) => void;
   warrantyType: string;
   setWarrantyType: (v: string) => void;
+  fieldSources: Record<string, string>;
+  onMarkEdited: (field: string) => void;
 }) {
   return (
     <div className="space-y-5">
-      {/* Certifications */}
-      <div>
-        <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-zinc-400">Certifications & Standards</p>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="cert">Certifications</Label>
-            <Select value={certification} onValueChange={setCertification}>
-              <SelectTrigger id="cert"><SelectValue placeholder="Ex: ISO 9001" /></SelectTrigger>
-              <SelectContent>
-                {certifications.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="fda">FDA</Label>
-            <Input id="fda" name="fda" placeholder="Ex: E1452773G" />
-          </div>
-        </div>
-      </div>
-
-      {/* Material */}
       <div>
         <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-zinc-400">Material & Construction</p>
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1.5">
-            <Label htmlFor="material" className="flex items-center">Main Material <QualityBadge /></Label>
-            <Input id="material" name="material" defaultValue={listing.main_material ?? ""} placeholder="Ex: Stainless Steel" />
-            <p className="text-[11px] text-amber-600">Required to increase listing quality</p>
+            <Label htmlFor="material" className="flex items-center">
+              Main Material <QualityBadge />
+              {fieldSources["main_material"] === "ai" && <AIBadge />}
+            </Label>
+            <Input
+              id="material" name="material"
+              defaultValue={listing.main_material ?? ""}
+              placeholder="Ex: Stainless Steel"
+              onChange={() => onMarkEdited("main_material")}
+            />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="material-family" className="flex items-center">Material Family <QualityBadge /></Label>
-            <Select value={materialFamily} onValueChange={setMaterialFamily}>
+            <Label htmlFor="material-family" className="flex items-center">
+              Material Family <QualityBadge />
+              {fieldSources["material_family"] === "ai" && <AIBadge />}
+            </Label>
+            <Select value={materialFamily} onValueChange={(v) => { setMaterialFamily(v); onMarkEdited("material_family"); }}>
               <SelectTrigger id="material-family"><SelectValue placeholder="Ex: Metal" /></SelectTrigger>
               <SelectContent>
                 {materialFamilies.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
               </SelectContent>
             </Select>
-            <p className="text-[11px] text-amber-600">Required to increase listing quality</p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="size">Size (L × W × H cm)</Label>
             <Input
-              id="size"
-              name="size"
+              id="size" name="size"
               defaultValue={
                 listing.size_l && listing.size_w && listing.size_h
-                  ? `${listing.size_l} × ${listing.size_w} × ${listing.size_h}`
-                  : ""
+                  ? `${listing.size_l} × ${listing.size_w} × ${listing.size_h}` : ""
               }
               placeholder="Ex: 30 × 20 × 5"
+              onChange={() => onMarkEdited("size")}
             />
           </div>
         </div>
       </div>
 
-      {/* Product identity */}
       <div>
         <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-zinc-400">Product Identity</p>
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1.5">
-            <Label htmlFor="model">Model</Label>
-            <Input id="model" name="model" defaultValue={listing.model ?? ""} placeholder="Model ID or manufacturer part number" />
+            <Label htmlFor="model" className="flex items-center">
+              Model
+              {fieldSources["model"] === "ai" && <AIBadge />}
+            </Label>
+            <Input id="model" name="model" defaultValue={listing.model ?? ""} placeholder="Model ID" onChange={() => onMarkEdited("model")} />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="product-line">Product Line</Label>
@@ -524,33 +1096,32 @@ function ProductSpecificationStep({
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="note">Note</Label>
-            <Input id="note" name="note" placeholder="Ex: Limited availability during holiday season" />
+            <Label htmlFor="cert">Certifications</Label>
+            <Select value={certification} onValueChange={setCertification}>
+              <SelectTrigger id="cert"><SelectValue placeholder="Ex: ISO 9001" /></SelectTrigger>
+              <SelectContent>
+                {certifications.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
         </div>
       </div>
 
-      {/* Warranty */}
       <div>
-        <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-zinc-400">Warranty Information</p>
+        <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-zinc-400">Warranty</p>
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label htmlFor="warranty-duration" className="flex items-center">Warranty Duration <QualityBadge /></Label>
-            <Select value={warrantyDuration} onValueChange={setWarrantyDuration}>
+            <Select value={warrantyDuration} onValueChange={(v) => { setWarrantyDuration(v); onMarkEdited("warranty_duration"); }}>
               <SelectTrigger id="warranty-duration"><SelectValue placeholder="Ex: 2 years" /></SelectTrigger>
-              <SelectContent>
-                {warrantyDurations.map((w) => <SelectItem key={w} value={w}>{w}</SelectItem>)}
-              </SelectContent>
+              <SelectContent>{warrantyDurations.map((w) => <SelectItem key={w} value={w}>{w}</SelectItem>)}</SelectContent>
             </Select>
-            <p className="text-[11px] text-amber-600">Required to increase listing quality</p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="warranty-type">Warranty Type</Label>
             <Select value={warrantyType} onValueChange={setWarrantyType}>
               <SelectTrigger id="warranty-type"><SelectValue placeholder="Ex: Service Center" /></SelectTrigger>
-              <SelectContent>
-                {warrantyTypes.map((w) => <SelectItem key={w} value={w}>{w}</SelectItem>)}
-              </SelectContent>
+              <SelectContent>{warrantyTypes.map((w) => <SelectItem key={w} value={w}>{w}</SelectItem>)}</SelectContent>
             </Select>
           </div>
         </div>
@@ -560,25 +1131,15 @@ function ProductSpecificationStep({
         </div>
       </div>
 
-      {/* Additional */}
       <div>
-        <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-zinc-400">Additional Details</p>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="youtube-id">YouTube Video ID</Label>
-            <Input id="youtube-id" name="youtube-id" defaultValue={listing.youtube_id ?? ""} placeholder="Ex: a1b2c3d4" />
-          </div>
-        </div>
-        <div className="mt-4 grid gap-4">
-          <RichTextField id="from-manufacturer" label="From the Manufacturer" placeholder="Official manufacturer product information…" rows={3} />
-          <RichTextField id="whats-in-box" label="What&apos;s in the Box" placeholder="List all package contents…" rows={3} />
-        </div>
+        <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-zinc-400">Additional</p>
+        <Input id="youtube-id" name="youtube-id" defaultValue={listing.youtube_id ?? ""} placeholder="YouTube Video ID (optional)" />
       </div>
     </div>
   );
 }
 
-// ─── Step 4 — Category-specific Jumia Attributes ─────────────────────────────
+// ─── Step 4 — Category-specific Jumia Attributes ──────────────────────────────
 
 interface AttrSchema {
   name:           string;
@@ -586,16 +1147,21 @@ interface AttrSchema {
   type:           "enum" | "string" | "number" | "boolean" | "multi";
   allowed_values: string[];
   required:       boolean;
+  is_variant:     boolean;
 }
 
 function CategoryAttributesStep({
   categoryCode,
   values,
   onChange,
+  fieldSources,
+  onMarkEdited,
 }: {
   categoryCode: string | null;
   values:       Record<string, string>;
   onChange:     (key: string, val: string) => void;
+  fieldSources: Record<string, string>;
+  onMarkEdited: (field: string) => void;
 }) {
   const [schema,  setSchema]  = useState<AttrSchema[]>([]);
   const [loading, setLoading] = useState(true);
@@ -623,25 +1189,29 @@ function CategoryAttributesStep({
 
   if (!schema.length) {
     return (
-      <div className="rounded-xl border border-dashed border-zinc-200 py-10 text-center text-sm text-zinc-400">
-        No category-specific fields for this category.
+      <div className="rounded-xl border border-dashed border-zinc-200 py-10 text-center space-y-2 text-sm text-zinc-400">
+        <p>No category-specific fields for this category.</p>
+        <p className="text-xs">
+          Connect your Jumia account and run <strong>Sync now</strong> in
+          Settings → Integrations to load real attribute schemas.
+        </p>
       </div>
     );
   }
 
-  // Group: required first, then optional
   const required = schema.filter((a) => a.required);
   const optional = schema.filter((a) => !a.required);
 
   const renderField = (attr: AttrSchema) => {
     const val = values[attr.name] ?? "";
+    const sourceKey = `dynamic_attributes.${attr.name}`;
 
     if (attr.type === "boolean") {
       return (
         <div className="flex items-center gap-3">
           <button
             type="button"
-            onClick={() => onChange(attr.name, val === "true" ? "false" : "true")}
+            onClick={() => { onChange(attr.name, val === "true" ? "false" : "true"); onMarkEdited(sourceKey); }}
             className={cn(
               "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
               val === "true" ? "bg-orange-500" : "bg-zinc-200"
@@ -659,7 +1229,7 @@ function CategoryAttributesStep({
 
     if (attr.type === "enum" && attr.allowed_values.length > 0) {
       return (
-        <Select value={val} onValueChange={(v) => onChange(attr.name, v)}>
+        <Select value={val} onValueChange={(v) => { onChange(attr.name, v); onMarkEdited(sourceKey); }}>
           <SelectTrigger className="h-9 text-sm">
             <SelectValue placeholder={`Select ${attr.label}`} />
           </SelectTrigger>
@@ -683,10 +1253,9 @@ function CategoryAttributesStep({
                 key={v}
                 type="button"
                 onClick={() => {
-                  const next = active
-                    ? selected.filter((s) => s !== v)
-                    : [...selected, v];
+                  const next = active ? selected.filter((s) => s !== v) : [...selected, v];
                   onChange(attr.name, next.join(", "));
+                  onMarkEdited(sourceKey);
                 }}
                 className={cn(
                   "rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
@@ -708,7 +1277,7 @@ function CategoryAttributesStep({
         value={val}
         type={attr.type === "number" ? "number" : "text"}
         placeholder={`Enter ${attr.label}`}
-        onChange={(e) => onChange(attr.name, e.target.value)}
+        onChange={(e) => { onChange(attr.name, e.target.value); onMarkEdited(sourceKey); }}
         className="h-9 text-sm"
       />
     );
@@ -723,6 +1292,10 @@ function CategoryAttributesStep({
             <Label className="flex items-center text-sm">
               {attr.label}
               {attr.required && <RequiredBadge />}
+              {attr.is_variant && (
+                <span className="ml-1.5 rounded-full bg-violet-50 border border-violet-200 px-1.5 py-0.5 text-[9px] font-semibold text-violet-600">variant</span>
+              )}
+              {fieldSources[`dynamic_attributes.${attr.name}`] === "ai" && <AIBadge />}
             </Label>
             {renderField(attr)}
           </div>
@@ -735,80 +1308,123 @@ function CategoryAttributesStep({
     <div className="space-y-6">
       <div className="flex items-center gap-2 rounded-xl border border-orange-100 bg-orange-50 px-4 py-3 text-xs text-orange-700">
         <Tag className="h-3.5 w-3.5 shrink-0" />
-        These are the exact fields Jumia requires for this category. Fields marked <span className="text-red-500 font-bold mx-0.5">*</span> are required for your listing to be accepted.
+        These are the exact fields Jumia requires for this category. Fields marked <span className="text-red-500 font-bold mx-0.5">*</span> are required.
+        Fields marked <span className="text-violet-600 font-bold mx-0.5">variant</span> are used as variant axes in the Variants tab.
       </div>
-
       {required.length > 0 && renderGroup(required, "Required fields", "text-red-500")}
       {optional.length > 0 && renderGroup(optional, "Optional fields", "text-zinc-400")}
     </div>
   );
 }
 
-// ─── Main review client ───────────────────────────────────────────────────────
+// ─── Main review client ────────────────────────────────────────────────────────
 
 const formSteps = [
-  { id: 1, label: "Product Information" },
+  { id: 1, label: "Product Info" },
   { id: 2, label: "Category Fields" },
   { id: 3, label: "Variants" },
   { id: 4, label: "Specification" },
 ];
+
+const PUBLISH_THRESHOLD = typeof process !== "undefined"
+  ? parseInt(process.env.NEXT_PUBLIC_QUALITY_THRESHOLD ?? String(DEFAULT_THRESHOLD), 10)
+  : DEFAULT_THRESHOLD;
 
 export function ReviewClient({ listing }: { listing: ListingRow }) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const [formStep, setFormStep] = useState(1);
 
-  // ── Controlled select state ───────────────────────────────────────────────
-  const [colorFamily, setColorFamily] = useState(listing.color_family ?? "");
-  const [certification, setCertification] = useState(listing.certifications?.[0] ?? "");
-  const [materialFamily, setMaterialFamily] = useState(listing.material_family ?? "");
+  // ── Controlled state ──────────────────────────────────────────────────────
+  const [colorFamily,       setColorFamily]       = useState(listing.color_family ?? "");
+  const [certification,     setCertification]     = useState(listing.certifications?.[0] ?? "");
+  const [materialFamily,    setMaterialFamily]    = useState(listing.material_family ?? "");
   const [productionCountry, setProductionCountry] = useState(listing.production_country ?? "");
-  const [warrantyDuration, setWarrantyDuration] = useState(listing.warranty_duration ?? "");
-  const [warrantyType, setWarrantyType] = useState(listing.warranty_type ?? "");
+  const [warrantyDuration,  setWarrantyDuration]  = useState(listing.warranty_duration ?? "");
+  const [warrantyType,      setWarrantyType]      = useState(listing.warranty_type ?? "");
+  const [brandValue,        setBrandValue]        = useState(listing.brand ?? "");
 
-  // ── Lifted variants state ─────────────────────────────────────────────────
-  const commissionRate = listing.commission_rate ?? 0.1;
-  const commissionPercent = Math.round(commissionRate * 100);
-  const [variants, setVariants] = useState<Variant[]>([
-    {
-      id: "v1",
-      variation: "",
-      sellerSku: listing.sku,
-      gtin: "",
-      quantity: "1",
-      globalPrice: listing.selling_price ? String(listing.selling_price) : "",
-      salePrice: "",
-      saleStartDate: "",
-      saleEndDate: "",
-    },
-  ]);
+  // ── Category (can be changed via picker) ──────────────────────────────────
+  const [categoryCode, setCategoryCode] = useState<string | null>(listing.category_code);
+  const [categoryPath, setCategoryPath] = useState<string | null>(listing.category_path);
 
-  // ── Dynamic category attributes ───────────────────────────────────────────
-  const [dynAttrs, setDynAttrs] = useState<Record<string, string>>(
-    (listing.dynamic_attributes as Record<string, string>) ?? {}
+  const handleCategoryChange = (cat: { code: number; name: string; path: string }) => {
+    setCategoryCode(String(cat.code));
+    setCategoryPath(cat.path);
+  };
+
+  // ── Field sources (ai vs user) ────────────────────────────────────────────
+  const [fieldSources, setFieldSources] = useState<Record<string, string>>(
+    (listing.field_sources ?? {}) as Record<string, string>
   );
 
-  // ── Save state ────────────────────────────────────────────────────────────
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const markEdited = useCallback((field: string) => {
+    setFieldSources((prev) => ({ ...prev, [field]: "user" }));
+  }, []);
 
-  // ── Derived display values ────────────────────────────────────────────────
+  // ── Dynamic attributes ────────────────────────────────────────────────────
+  const [dynAttrs, setDynAttrs] = useState<Record<string, string>>(
+    (listing.dynamic_attributes ?? {}) as Record<string, string>
+  );
+
+  // ── Variant matrix ────────────────────────────────────────────────────────
+  const commissionRate    = listing.commission_rate ?? 0.1;
+  const commissionPercent = Math.round(commissionRate * 100);
+
+  const [variants, setVariants] = useState<VariantRow[]>([{
+    id: "v1", axes: {}, sellerSku: listing.sku,
+    gtin: "", quantity: "1",
+    globalPrice: listing.selling_price ? String(listing.selling_price) : "",
+    salePrice: "", saleStartDate: "", saleEndDate: "",
+  }]);
+  const [axesDef, setAxesDef] = useState<AxisDef[]>([]);
+
+  // ── Save + publish state ──────────────────────────────────────────────────
+  const [saving,      setSaving]      = useState(false);
+  const [saveError,   setSaveError]   = useState<string | null>(null);
+  const [jumiaNotConnected, setJumiaNotConnected] = useState(false);
+  const [publishedRef, setPublishedRef] = useState<string | null>(null);
+
+  // ── Quality score ─────────────────────────────────────────────────────────
+  const [qualityResult, setQualityResult] = useState(() =>
+    calculateQualityScore(listing, [], variants)
+  );
+
+  // Recalculate when variants or category attributes change
+  useEffect(() => {
+    setQualityResult(calculateQualityScore(
+      { ...listing, dynamic_attributes: dynAttrs },
+      [],
+      variants.map((v) => ({ globalPrice: v.globalPrice, quantity: v.quantity }))
+    ));
+  }, [dynAttrs, variants, listing]);
+
+  // ── Derived ───────────────────────────────────────────────────────────────
   const cat = mockCategories.find((c) => c.id === listing.category_id);
   const sellingPrice = variants[0]?.globalPrice
     ? parseFloat(variants[0].globalPrice)
     : (listing.selling_price ?? 0);
-  const netPayout = sellingPrice > 0 ? calcNetPayout(sellingPrice, commissionRate) : 0;
-  const thumbnail = listing.images?.[0] ?? null;
+  const netPayout   = sellingPrice > 0 ? calcNetPayout(sellingPrice, commissionRate) : 0;
+  const thumbnail   = listing.images?.[0] ?? null;
   const titleDisplay = listing.title ?? "Untitled listing";
-  const categoryLabel = listing.category_path ?? listing.category_id ?? "Uncategorised";
+  const categoryLabel = categoryPath ?? listing.category_path ?? listing.category_id ?? "Uncategorised";
 
   // ── Save handler ──────────────────────────────────────────────────────────
   async function handleSave(publish: boolean) {
     if (!formRef.current) return;
+
+    if (publish && qualityResult.score < PUBLISH_THRESHOLD) {
+      setSaveError(
+        `Quality score ${qualityResult.score}/100 is below the minimum threshold of ${PUBLISH_THRESHOLD}. Fix the highlighted issues before publishing.`
+      );
+      return;
+    }
+
     setSaving(true);
     setSaveError(null);
+    setJumiaNotConnected(false);
 
-    const fd = new FormData(formRef.current);
+    const fd  = new FormData(formRef.current);
     const str = (key: string) => (fd.get(key) as string | null)?.trim() || null;
     const num = (key: string) => {
       const v = (fd.get(key) as string | null)?.trim();
@@ -820,7 +1436,7 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
         title:              str("name"),
         description:        str("description"),
         highlights:         str("highlights"),
-        brand:              str("brand"),
+        brand:              brandValue || null,
         color:              str("color"),
         color_family:       colorFamily || null,
         weight_kg:          num("weight"),
@@ -836,13 +1452,39 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
         warranty_text:      str("product-warranty"),
         warranty_address:   str("warranty-address"),
         youtube_id:         str("youtube-id"),
+        category_code:      categoryCode,
+        category_path:      categoryPath,
         dynamic_attributes: dynAttrs,
-        status:             publish ? "pending_approval" : "draft",
+        field_sources:      fieldSources as Record<string, "ai" | "user">,
+        quality_score:      qualityResult.score,
+        status:             "draft",
       });
 
-      router.push("/listings");
+      if (!publish) {
+        router.push("/listings");
+        return;
+      }
+
+      // Push to Jumia
+      const pushRes = await fetch("/api/jumia/push", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ listingId: listing.id }),
+      });
+      const pushData = await pushRes.json() as { success?: boolean; error?: string; jumia_ref?: string };
+
+      if (pushRes.ok && pushData.success) {
+        setPublishedRef(pushData.jumia_ref ?? null);
+        router.push("/listings");
+      } else if (pushData.error?.includes("not connected") || pushRes.status === 403) {
+        setJumiaNotConnected(true);
+        setSaveError(pushData.error ?? "Jumia not connected");
+      } else {
+        setSaveError(pushData.error ?? "Jumia submission failed. Try again or check Settings → Integrations.");
+      }
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Save failed. Please try again.");
+    } finally {
       setSaving(false);
     }
   }
@@ -859,6 +1501,11 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
           <p className="text-xs text-zinc-400">{listing.sku}</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <QualityScoreBadge
+            score={qualityResult.score}
+            threshold={PUBLISH_THRESHOLD}
+            issues={qualityResult.issues}
+          />
           <StatusPill status={listing.status} />
           <MarketplaceBadge marketplace="jumia" />
         </div>
@@ -868,16 +1515,39 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
       {cat && (
         <div className="flex items-center gap-2 rounded-xl border bg-zinc-50 px-4 py-2.5 text-xs text-zinc-500">
           <span className="shrink-0 font-semibold text-zinc-700">Category:</span>
-          <span className="truncate">{cat.path}</span>
-          <span className="shrink-0 rounded-full bg-zinc-200 px-1.5 py-0.5 text-[10px] font-mono text-zinc-500">{cat.code}</span>
-          <button type="button" className="ml-auto shrink-0 text-blue-500 hover:text-blue-600 font-medium">Change</button>
+          <span className="truncate">{categoryPath ?? cat.path}</span>
+          {categoryCode && (
+            <span className="shrink-0 rounded-full bg-zinc-200 px-1.5 py-0.5 text-[10px] font-mono text-zinc-500">{categoryCode}</span>
+          )}
+        </div>
+      )}
+
+      {/* Published success banner */}
+      {publishedRef && (
+        <div className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          <CheckCircle2 className="h-4 w-4 shrink-0" />
+          Submitted to Jumia (feed ID: <code className="font-mono text-xs">{publishedRef}</code>). Status will update within a few minutes.
+        </div>
+      )}
+
+      {/* Jumia not connected banner */}
+      {jumiaNotConnected && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+          <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">Jumia account not connected</p>
+            <p className="text-xs mt-0.5">Go to Settings → Integrations to connect your Jumia seller account.</p>
+            <Link href="/settings/integrations" className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-amber-800 hover:underline">
+              Connect now <ChevronRight className="h-3 w-3" />
+            </Link>
+          </div>
         </div>
       )}
 
       {/* Two-column layout */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[360px_1fr]">
 
-        {/* ── LEFT — AI Preview (sticky) ─────────────────────────────────── */}
+        {/* ── LEFT — AI Preview (sticky) ────────────────────────────────── */}
         <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
           <div className="rounded-2xl border bg-white p-5 shadow-sm space-y-4">
             <div className="flex items-center justify-between">
@@ -929,7 +1599,9 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                 <div className="flex items-center gap-1">
                   <Sparkles className="h-3 w-3 text-blue-500" />
                   <span className="text-[10px] font-semibold text-zinc-500">Title</span>
-                  <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[9px] font-bold text-blue-600">AI</span>
+                  {fieldSources["title"] === "ai" && (
+                    <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[9px] font-bold text-blue-600">AI</span>
+                  )}
                 </div>
                 <button type="button" className="rounded p-0.5 text-zinc-400 hover:text-blue-500">
                   <RefreshCw className="h-3 w-3" />
@@ -944,14 +1616,16 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                 <div className="flex items-center gap-1">
                   <Sparkles className="h-3 w-3 text-blue-500" />
                   <span className="text-[10px] font-semibold text-zinc-500">Description</span>
-                  <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[9px] font-bold text-blue-600">AI</span>
+                  {fieldSources["description"] === "ai" && (
+                    <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[9px] font-bold text-blue-600">AI</span>
+                  )}
                 </div>
                 <button type="button" className="rounded p-0.5 text-zinc-400 hover:text-blue-500">
                   <RefreshCw className="h-3 w-3" />
                 </button>
               </div>
               <p className="text-[11px] text-zinc-600 leading-relaxed line-clamp-4">
-                {listing.description ?? `This is a high-quality ${titleDisplay}. Suitable for everyday use.`}
+                {listing.description ?? `This is a high-quality ${titleDisplay}.`}
               </p>
             </div>
 
@@ -979,22 +1653,22 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
           </div>
         </div>
 
-        {/* ── RIGHT — 3-step Jumia form ──────────────────────────────────── */}
+        {/* ── RIGHT — 4-step Jumia form ──────────────────────────────────── */}
         <div className="space-y-4">
           <div className="rounded-2xl border bg-white shadow-sm overflow-hidden">
 
-            {/* Step tabs */}
-            <div className="flex border-b">
+            {/* Step tabs — overflow-x-auto to handle narrow viewports */}
+            <div className="flex border-b overflow-x-auto">
               {formSteps.map((s) => {
                 const isActive = formStep === s.id;
-                const isDone = formStep > s.id;
+                const isDone   = formStep > s.id;
                 return (
                   <button
                     key={s.id}
                     type="button"
                     onClick={() => setFormStep(s.id)}
                     className={cn(
-                      "flex flex-1 items-center justify-center gap-2 border-r px-3 py-3.5 text-xs font-medium transition-colors last:border-r-0",
+                      "flex flex-none items-center justify-center gap-2 border-r px-4 py-3.5 text-xs font-medium transition-colors last:border-r-0 whitespace-nowrap",
                       isActive ? "border-b-2 border-b-orange-500 bg-orange-50 text-orange-700"
                         : isDone ? "bg-zinc-50 text-zinc-400 hover:bg-zinc-100"
                         : "text-zinc-400 hover:bg-zinc-50"
@@ -1008,7 +1682,7 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                     )}>
                       {isDone ? <Check className="h-3 w-3" /> : s.id}
                     </span>
-                    <span className="hidden sm:block">{s.label}</span>
+                    {s.label}
                   </button>
                 );
               })}
@@ -1023,25 +1697,35 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ duration: 0.15 }}
                 >
-                  {/* Always rendered — only active step is visible */}
                   <div className={formStep !== 1 ? "hidden" : ""}>
                     <ProductInformationStep
-                      listing={listing}
+                      listing={{ ...listing, category_code: categoryCode, category_path: categoryPath }}
                       colorFamily={colorFamily}
                       setColorFamily={setColorFamily}
+                      fieldSources={fieldSources}
+                      onMarkEdited={markEdited}
+                      brandValue={brandValue}
+                      onBrandChange={setBrandValue}
+                      onCategoryChange={handleCategoryChange}
                     />
                   </div>
                   <div className={formStep !== 2 ? "hidden" : ""}>
                     <CategoryAttributesStep
-                      categoryCode={listing.category_code}
+                      categoryCode={categoryCode}
                       values={dynAttrs}
                       onChange={(k, v) => setDynAttrs((prev) => ({ ...prev, [k]: v }))}
+                      fieldSources={fieldSources}
+                      onMarkEdited={markEdited}
                     />
                   </div>
                   <div className={formStep !== 3 ? "hidden" : ""}>
-                    <VariantsStep
+                    <VariantMatrixStep
+                      baseSku={listing.sku}
+                      categoryCode={categoryCode}
                       variants={variants}
                       setVariants={setVariants}
+                      axesDef={axesDef}
+                      setAxesDef={setAxesDef}
                       commissionRate={commissionRate}
                       commissionPercent={commissionPercent}
                     />
@@ -1059,16 +1743,29 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                       setWarrantyDuration={setWarrantyDuration}
                       warrantyType={warrantyType}
                       setWarrantyType={setWarrantyType}
+                      fieldSources={fieldSources}
+                      onMarkEdited={markEdited}
                     />
                   </div>
                 </motion.div>
               </div>
 
-              {/* Error banner */}
-              {saveError && (
+              {/* Error / warning banners */}
+              {saveError && !jumiaNotConnected && (
                 <div className="mx-5 mb-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
                   <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
                   {saveError}
+                </div>
+              )}
+
+              {/* Quality warning when trying to publish with low score */}
+              {qualityResult.score < PUBLISH_THRESHOLD && (
+                <div className="mx-5 mb-3 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-700">
+                  <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
+                  Quality score {qualityResult.score}/100 — minimum to publish is {PUBLISH_THRESHOLD}.
+                  <button type="button" onClick={() => {}} className="ml-auto text-amber-600 hover:text-amber-800 flex items-center gap-0.5 font-medium">
+                    See issues <ChevronRight className="h-3 w-3" />
+                  </button>
                 </div>
               )}
 
@@ -1124,14 +1821,17 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                     <Button
                       type="button"
                       size="sm"
-                      className="gap-1 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700"
-                      disabled={saving}
+                      className="gap-1 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 disabled:opacity-60"
+                      disabled={saving || qualityResult.score < PUBLISH_THRESHOLD}
                       onClick={() => handleSave(true)}
+                      title={qualityResult.score < PUBLISH_THRESHOLD
+                        ? `Quality score too low (${qualityResult.score}/${PUBLISH_THRESHOLD})`
+                        : "Approve & publish to Jumia"}
                     >
                       {saving
                         ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         : <Check className="h-3.5 w-3.5" />}
-                      Approve & publish
+                      Approve &amp; publish
                     </Button>
                   </div>
                 )}
