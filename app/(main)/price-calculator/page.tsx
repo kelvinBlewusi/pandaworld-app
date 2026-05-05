@@ -1,8 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { Calculator, Info, TrendingDown } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Calculator, Info, TrendingUp, TrendingDown, ArrowRight, RefreshCw } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -14,37 +13,88 @@ import {
 } from "@/components/ui/select";
 import { mockCategories } from "@/lib/mock/categories";
 import { formatGHS } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
-const SHIPPING_CONTRIBUTION: Record<string, number> = {
-  je: 15,
-  ds: 0,
-};
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+type Mode = "reverse" | "forward";
+type ShippingMode = "je" | "ds";
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Jumia formula (VendorHub GH):
+ * Listing Price = (Vendor Price + Shipping Contribution) / (1 − Commission Rate)
+ * Round UP to nearest 0.01
+ */
+function calcListingPrice(vendorPrice: number, shippingContrib: number, commissionPct: number) {
+  const raw = (vendorPrice + shippingContrib) / (1 - commissionPct / 100);
+  return Math.ceil(raw * 100) / 100;
+}
+
+/**
+ * Forward: given listing price, what does the vendor actually receive?
+ * Net = Listing Price − Commission − Shipping Contribution
+ */
+function calcNetPayout(listingPrice: number, shippingContrib: number, commissionPct: number) {
+  const commission = listingPrice * (commissionPct / 100);
+  return listingPrice - commission - shippingContrib;
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export default function PriceCalculatorPage() {
+  const [mode, setMode] = useState<Mode>("reverse");
   const [categoryId, setCategoryId] = useState<string>("");
-  const [sellingPrice, setSellingPrice] = useState<string>("");
-  const [shippingMode, setShippingMode] = useState<string>("je");
+  const [shippingMode, setShippingMode] = useState<ShippingMode>("je");
+  const [priceInput, setPriceInput] = useState<string>("");
+
+  const category = useMemo(
+    () => mockCategories.find((c) => c.id === categoryId) ?? null,
+    [categoryId]
+  );
+
+  const shippingContrib = category
+    ? shippingMode === "je"
+      ? category.shippingJE
+      : category.shippingDS
+    : 0;
 
   const result = useMemo(() => {
-    const price = parseFloat(sellingPrice);
-    if (!categoryId || isNaN(price) || price <= 0) return null;
+    const price = parseFloat(priceInput);
+    if (!category || isNaN(price) || price <= 0) return null;
 
-    const category = mockCategories.find((c) => c.id === categoryId);
-    if (!category) return null;
+    if (mode === "reverse") {
+      // Vendor price → listing price
+      const listingPrice = calcListingPrice(price, shippingContrib, category.commissionRate);
+      const commissionDeducted = listingPrice * (category.commissionRate / 100);
+      return {
+        listingPrice,
+        vendorPrice: price,
+        commissionDeducted,
+        shippingDeducted: shippingContrib,
+        netPayout: price, // by construction
+        commissionRate: category.commissionRate,
+      };
+    } else {
+      // Listing price → net payout
+      const commissionDeducted = price * (category.commissionRate / 100);
+      const netPayout = calcNetPayout(price, shippingContrib, category.commissionRate);
+      return {
+        listingPrice: price,
+        vendorPrice: null,
+        commissionDeducted,
+        shippingDeducted: shippingContrib,
+        netPayout,
+        commissionRate: category.commissionRate,
+      };
+    }
+  }, [mode, category, priceInput, shippingContrib]);
 
-    const commissionAmount = (price * category.commissionRate) / 100;
-    const shippingContrib = SHIPPING_CONTRIBUTION[shippingMode] ?? 0;
-    const netPayout = price - commissionAmount - shippingContrib;
-
-    return {
-      sellingPrice: price,
-      category: category.name,
-      commissionRate: category.commissionRate,
-      commissionAmount,
-      shippingContrib,
-      netPayout,
-    };
-  }, [categoryId, sellingPrice, shippingMode]);
+  const handleModeSwitch = (newMode: Mode) => {
+    setMode(newMode);
+    setPriceInput("");
+  };
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -52,128 +102,312 @@ export default function PriceCalculatorPage() {
       <div>
         <h1 className="text-2xl font-bold text-zinc-900">Price calculator</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          Understand your Jumia fees and estimate your net payout before you list.
+          Calculate your Jumia listing price or estimate your net payout — using real commission &amp; shipping data.
         </p>
       </div>
 
-      {/* Explainer */}
+      {/* Mode toggle */}
+      <div className="flex rounded-xl border bg-zinc-50 p-1 gap-1">
+        <button
+          onClick={() => handleModeSwitch("reverse")}
+          className={cn(
+            "flex-1 rounded-lg px-4 py-2.5 text-sm font-medium transition-all",
+            mode === "reverse"
+              ? "bg-white shadow-sm text-zinc-900"
+              : "text-zinc-500 hover:text-zinc-700"
+          )}
+        >
+          <span className="flex items-center justify-center gap-2">
+            <TrendingUp className="h-4 w-4" />
+            Set my listing price
+          </span>
+          <p className="mt-0.5 text-xs font-normal text-zinc-400">
+            I know what I want to earn
+          </p>
+        </button>
+        <button
+          onClick={() => handleModeSwitch("forward")}
+          className={cn(
+            "flex-1 rounded-lg px-4 py-2.5 text-sm font-medium transition-all",
+            mode === "forward"
+              ? "bg-white shadow-sm text-zinc-900"
+              : "text-zinc-500 hover:text-zinc-700"
+          )}
+        >
+          <span className="flex items-center justify-center gap-2">
+            <TrendingDown className="h-4 w-4" />
+            Check my earnings
+          </span>
+          <p className="mt-0.5 text-xs font-normal text-zinc-400">
+            I know my listing price
+          </p>
+        </button>
+      </div>
+
+      {/* Formula explainer */}
       <div className="flex gap-3 rounded-xl border border-blue-100 bg-blue-50 p-4">
         <Info className="h-4 w-4 shrink-0 text-blue-500 mt-0.5" />
-        <p className="text-xs text-blue-700 leading-relaxed">
-          Jumia charges a <strong>commission fee</strong> as a percentage of the selling price,
-          which varies by category. If you use <strong>Jumia Express (JE)</strong>, a fixed
-          shipping contribution is also deducted. DS (Drop Shipping) has no shipping deduction.
-          VAT and other charges may apply — check your Jumia Vendor Centre for the latest rates.
-        </p>
+        <div className="text-xs text-blue-700 leading-relaxed space-y-1">
+          {mode === "reverse" ? (
+            <>
+              <p>
+                <strong>Jumia formula:</strong> Listing Price = (Your Price + Shipping Contribution) ÷ (1 − Commission %)
+              </p>
+              <p className="text-blue-600 italic">
+                Example (Fashion, JE): (GHS 950 + 6) ÷ (1 − 0.20) = GHS 1,195.00
+              </p>
+            </>
+          ) : (
+            <>
+              <p>
+                <strong>Net payout:</strong> Listing Price − Commission − Shipping Contribution
+              </p>
+              <p className="text-blue-600 italic">
+                Example (Fashion, JE): GHS 1,195 − GHS 239 − GHS 6 = GHS 950.00
+              </p>
+            </>
+          )}
+          <p className="text-blue-500">
+            Shipping contributions are per-category and differ between Jumia Express (JE) and Drop Shipping (DS).
+          </p>
+        </div>
       </div>
 
       {/* Inputs */}
       <div className="rounded-2xl border bg-white p-6 space-y-5 shadow-sm">
-        <h2 className="text-sm font-semibold text-zinc-700">Your listing details</h2>
+        <h2 className="text-sm font-semibold text-zinc-700">Your details</h2>
         <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5">
+          {/* Category */}
+          <div className="space-y-1.5 sm:col-span-2">
             <Label>Category</Label>
             <Select value={categoryId} onValueChange={setCategoryId}>
               <SelectTrigger>
-                <SelectValue placeholder="Select a category" />
+                <SelectValue placeholder="Select a category…" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="max-h-72">
                 {mockCategories.map((cat) => (
                   <SelectItem key={cat.id} value={cat.id}>
-                    {cat.name} — {cat.commissionRate}%
+                    {cat.name}
+                    <span className="ml-2 text-xs text-zinc-400">
+                      {cat.commissionRate}% commission
+                    </span>
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-1.5">
-            <Label>Selling price (GHS)</Label>
-            <Input
-              type="number"
-              min="0"
-              step="0.01"
-              placeholder="e.g. 1299"
-              value={sellingPrice}
-              onChange={(e) => setSellingPrice(e.target.value)}
-            />
-          </div>
+
+          {/* Shipping mode */}
           <div className="space-y-1.5">
             <Label>Shipping mode</Label>
-            <Select value={shippingMode} onValueChange={setShippingMode}>
+            <Select value={shippingMode} onValueChange={(v) => setShippingMode(v as ShippingMode)}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="je">Jumia Express (JE) – GHS 15 deduction</SelectItem>
-                <SelectItem value="ds">Drop Shipping (DS) – no deduction</SelectItem>
+                <SelectItem value="je">
+                  Jumia Express (JE)
+                  {category ? ` — GHS ${category.shippingJE}` : ""}
+                </SelectItem>
+                <SelectItem value="ds">
+                  Drop Shipping (DS)
+                  {category ? ` — GHS ${category.shippingDS}` : ""}
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>
+
+          {/* Price input */}
+          <div className="space-y-1.5">
+            <Label>
+              {mode === "reverse"
+                ? "What you want to receive (GHS)"
+                : "Your listing price on Jumia (GHS)"}
+            </Label>
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder={mode === "reverse" ? "e.g. 950" : "e.g. 1195"}
+              value={priceInput}
+              onChange={(e) => setPriceInput(e.target.value)}
+            />
+          </div>
         </div>
+
+        {/* Quick shipping info */}
+        {category && (
+          <div className="rounded-lg bg-zinc-50 border px-4 py-3 text-xs text-zinc-500 flex items-center gap-6">
+            <span>
+              <strong className="text-zinc-700">{category.name}</strong> · {category.commissionRate}% commission
+            </span>
+            <span>JE shipping: <strong className="text-zinc-700">GHS {category.shippingJE}</strong></span>
+            <span>DS shipping: <strong className="text-zinc-700">GHS {category.shippingDS}</strong></span>
+          </div>
+        )}
       </div>
 
-      {/* Result breakdown */}
+      {/* Result */}
       {result ? (
         <div className="rounded-2xl border bg-white shadow-sm overflow-hidden">
-          <div className="bg-gradient-to-r from-blue-500 to-purple-600 px-6 py-4">
-            <p className="text-xs font-medium text-blue-100">Estimated breakdown</p>
-            <p className="mt-0.5 text-sm text-white font-semibold">
-              {result.category} · {shippingMode.toUpperCase()}
+          {/* Gradient header */}
+          <div
+            className={cn(
+              "px-6 py-4",
+              mode === "reverse"
+                ? "bg-gradient-to-r from-blue-500 to-indigo-600"
+                : "bg-gradient-to-r from-emerald-500 to-teal-600"
+            )}
+          >
+            <p className="text-xs font-medium text-white/70">
+              {mode === "reverse" ? "Suggested listing price" : "Estimated earnings"}
+            </p>
+            <p className="mt-1 text-3xl font-bold text-white">
+              {mode === "reverse"
+                ? formatGHS(result.listingPrice)
+                : formatGHS(result.netPayout)}
+            </p>
+            <p className="mt-0.5 text-xs text-white/60">
+              {category?.name} · {shippingMode.toUpperCase()}
             </p>
           </div>
+
+          {/* Breakdown */}
           <div className="px-6 py-5 space-y-3">
-            <div className="flex items-center justify-between py-2 border-b">
-              <span className="text-sm text-zinc-600">Selling price</span>
-              <span className="text-sm font-semibold text-zinc-900">
-                {formatGHS(result.sellingPrice)}
-              </span>
-            </div>
-            <div className="flex items-center justify-between py-2 border-b">
-              <div>
-                <span className="text-sm text-zinc-600">
-                  Commission ({result.commissionRate}%)
-                </span>
-                <p className="text-xs text-zinc-400">{result.category}</p>
-              </div>
-              <span className="text-sm font-medium text-red-500">
-                − {formatGHS(result.commissionAmount)}
-              </span>
-            </div>
-            <div className="flex items-center justify-between py-2 border-b">
-              <div>
-                <span className="text-sm text-zinc-600">Shipping contribution</span>
-                <p className="text-xs text-zinc-400">
-                  {shippingMode === "je" ? "Jumia Express" : "Drop Shipping – none"}
-                </p>
-              </div>
-              <span className="text-sm font-medium text-red-500">
-                {result.shippingContrib > 0
-                  ? `− ${formatGHS(result.shippingContrib)}`
-                  : "GHS 0.00"}
-              </span>
-            </div>
-            <div className="flex items-center justify-between pt-3">
-              <div className="flex items-center gap-1.5">
-                <TrendingDown className="h-4 w-4 text-emerald-500" />
-                <span className="text-sm font-bold text-zinc-900">
-                  Net payout to you
-                </span>
-              </div>
-              <span
-                className={
-                  result.netPayout >= 0
-                    ? "text-xl font-bold text-emerald-600"
-                    : "text-xl font-bold text-red-500"
-                }
-              >
-                {formatGHS(result.netPayout)}
-              </span>
-            </div>
-            {result.netPayout < 0 && (
-              <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">
-                ⚠️ At this price, fees exceed your selling price. Consider raising your price.
-              </p>
+            {mode === "reverse" ? (
+              <>
+                {/* Reverse mode: show how listing price was derived */}
+                <div className="flex items-center justify-between py-2 border-b">
+                  <span className="text-sm text-zinc-600">Your desired payout</span>
+                  <span className="text-sm font-semibold text-zinc-900">
+                    {formatGHS(result.vendorPrice!)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-2 border-b">
+                  <div>
+                    <span className="text-sm text-zinc-600">Shipping contribution</span>
+                    <p className="text-xs text-zinc-400">
+                      {shippingMode === "je" ? "Jumia Express" : "Drop Shipping"} — added to base
+                    </p>
+                  </div>
+                  <span className="text-sm font-medium text-zinc-700">
+                    + {formatGHS(result.shippingDeducted)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-2 border-b">
+                  <div>
+                    <span className="text-sm text-zinc-600">
+                      Commission ({result.commissionRate}%)
+                    </span>
+                    <p className="text-xs text-zinc-400">Divided out via formula</p>
+                  </div>
+                  <span className="text-sm font-medium text-zinc-700">
+                    ÷ {(1 - result.commissionRate / 100).toFixed(2)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between pt-3">
+                  <div className="flex items-center gap-2">
+                    <ArrowRight className="h-4 w-4 text-blue-500" />
+                    <span className="text-sm font-bold text-zinc-900">
+                      Set this as your Jumia price
+                    </span>
+                  </div>
+                  <span className="text-xl font-bold text-blue-600">
+                    {formatGHS(result.listingPrice)}
+                  </span>
+                </div>
+                {/* Verification */}
+                <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-700 space-y-1">
+                  <p className="font-medium">Verification (after Jumia deductions)</p>
+                  <div className="flex justify-between">
+                    <span>Listing price</span>
+                    <span>{formatGHS(result.listingPrice)}</span>
+                  </div>
+                  <div className="flex justify-between text-red-600">
+                    <span>− Commission ({result.commissionRate}%)</span>
+                    <span>− {formatGHS(result.commissionDeducted)}</span>
+                  </div>
+                  <div className="flex justify-between text-red-600">
+                    <span>− Shipping ({shippingMode.toUpperCase()})</span>
+                    <span>− {formatGHS(result.shippingDeducted)}</span>
+                  </div>
+                  <div className="flex justify-between font-semibold text-emerald-700 border-t border-blue-200 pt-1 mt-1">
+                    <span>= You receive</span>
+                    <span>{formatGHS(result.netPayout)}</span>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* Forward mode: listing price → net payout */}
+                <div className="flex items-center justify-between py-2 border-b">
+                  <span className="text-sm text-zinc-600">Your listing price</span>
+                  <span className="text-sm font-semibold text-zinc-900">
+                    {formatGHS(result.listingPrice)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-2 border-b">
+                  <div>
+                    <span className="text-sm text-zinc-600">
+                      Commission ({result.commissionRate}%)
+                    </span>
+                    <p className="text-xs text-zinc-400">Jumia fee on selling price</p>
+                  </div>
+                  <span className="text-sm font-medium text-red-500">
+                    − {formatGHS(result.commissionDeducted)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-2 border-b">
+                  <div>
+                    <span className="text-sm text-zinc-600">Shipping contribution</span>
+                    <p className="text-xs text-zinc-400">
+                      {shippingMode === "je" ? "Jumia Express" : "Drop Shipping"}
+                    </p>
+                  </div>
+                  <span className="text-sm font-medium text-red-500">
+                    − {formatGHS(result.shippingDeducted)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between pt-3">
+                  <div className="flex items-center gap-1.5">
+                    <TrendingDown className="h-4 w-4 text-emerald-500" />
+                    <span className="text-sm font-bold text-zinc-900">Net payout to you</span>
+                  </div>
+                  <span
+                    className={cn(
+                      "text-xl font-bold",
+                      result.netPayout >= 0 ? "text-emerald-600" : "text-red-500"
+                    )}
+                  >
+                    {formatGHS(result.netPayout)}
+                  </span>
+                </div>
+                {result.netPayout < 0 && (
+                  <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">
+                    ⚠️ At this price, fees exceed your listing price. Consider raising your price.
+                  </p>
+                )}
+                {result.netPayout >= 0 && (
+                  <div className="rounded-lg border border-zinc-100 bg-zinc-50 px-4 py-2.5 text-xs text-zinc-500 flex items-center justify-between">
+                    <span>Effective margin</span>
+                    <span className="font-semibold text-zinc-700">
+                      {((result.netPayout / result.listingPrice) * 100).toFixed(1)}% of listing price
+                    </span>
+                  </div>
+                )}
+              </>
             )}
+          </div>
+
+          {/* Swap mode hint */}
+          <div className="border-t px-6 py-3 bg-zinc-50">
+            <button
+              className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-600 transition-colors"
+              onClick={() => handleModeSwitch(mode === "reverse" ? "forward" : "reverse")}
+            >
+              <RefreshCw className="h-3 w-3" />
+              Switch to {mode === "reverse" ? "check earnings from a known price" : "calculate listing price from desired payout"}
+            </button>
           </div>
         </div>
       ) : (
@@ -181,9 +415,16 @@ export default function PriceCalculatorPage() {
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-100">
             <Calculator className="h-6 w-6 text-zinc-400" />
           </div>
-          <p className="text-sm font-medium text-zinc-500">
-            Select a category and enter a price to see your breakdown
-          </p>
+          <div>
+            <p className="text-sm font-medium text-zinc-500">
+              {!category
+                ? "Select a category to get started"
+                : "Enter a price to see the breakdown"}
+            </p>
+            <p className="mt-1 text-xs text-zinc-400">
+              Rates sourced from Jumia VendorHub GH commission schedule
+            </p>
+          </div>
         </div>
       )}
     </div>

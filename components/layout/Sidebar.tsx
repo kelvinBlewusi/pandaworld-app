@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { UserButton, useUser } from "@clerk/nextjs";
 import {
   LayoutDashboard,
   List,
@@ -15,6 +16,8 @@ import {
   ChevronDown,
   ChevronRight,
   Settings,
+  CreditCard,
+  Plug,
   Zap,
   ImageIcon,
   Wand2,
@@ -37,15 +40,17 @@ const primaryNav = [
   { href: "/imports",          label: "Imports",           icon: Upload },
 ];
 
-const workflowNav = [
-  { href: "/listings?status=draft",            label: "Drafts",            icon: FileText,     count: 5  },
-  { href: "/listings?status=pending_approval", label: "Pending approval",   icon: Clock,        count: 4  },
-  { href: "/listings?status=live",             label: "Published",          icon: CheckCircle,  count: 10 },
-  { href: "/listings?status=failed",           label: "Failed",             icon: AlertCircle,  count: 2  },
+const workflowNavBase = [
+  { href: "/listings?status=draft",            label: "Drafts",            icon: FileText,    statusKey: "draft"             },
+  { href: "/listings?status=pending_approval", label: "Pending approval",   icon: Clock,       statusKey: "pending_approval"  },
+  { href: "/listings?status=live",             label: "Published",          icon: CheckCircle, statusKey: "live"              },
+  { href: "/listings?status=failed",           label: "Failed",             icon: AlertCircle, statusKey: "failed"            },
 ];
 
 const settingsNav = [
-  { href: "/settings/account", label: "Account", icon: Settings },
+  { href: "/settings/account",      label: "Account",          icon: Settings  },
+  { href: "/settings/billing",      label: "Plans & billing",  icon: CreditCard },
+  { href: "/settings/integrations", label: "Integrations",     icon: Plug      },
 ];
 
 // ─── New Listing modes ────────────────────────────────────────────────────────
@@ -179,9 +184,47 @@ function NewListingDropdown() {
   );
 }
 
+// ─── User chip (real Clerk identity) ─────────────────────────────────────────
+
+function UserChip() {
+  const { user } = useUser();
+  return (
+    <div className="mt-3 flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-zinc-50">
+      <UserButton
+        appearance={{
+          elements: {
+            avatarBox: "h-7 w-7",
+          },
+        }}
+      />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-xs font-medium text-zinc-800">
+          {user?.firstName ?? user?.username ?? "You"}
+        </p>
+        <p className="truncate text-[10px] text-zinc-400">
+          {user?.primaryEmailAddress?.emailAddress ?? ""}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 
-export function Sidebar() {
+interface WorkflowCounts {
+  draft: number;
+  live: number;
+  pending_approval: number;
+  failed: number;
+}
+
+export function Sidebar({ workflowCounts }: { workflowCounts?: WorkflowCounts }) {
+  const counts = workflowCounts ?? { draft: 0, live: 0, pending_approval: 0, failed: 0 };
+  const workflowNav = workflowNavBase.map(({ statusKey, ...item }) => ({
+    ...item,
+    count: counts[statusKey as keyof WorkflowCounts] ?? 0,
+  }));
+
   return (
     <aside className="flex h-screen w-60 flex-col border-r bg-white">
       {/* Brand + workspace switcher */}
@@ -241,15 +284,7 @@ export function Sidebar() {
         </div>
 
         {/* User chip */}
-        <div className="mt-3 flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-zinc-50">
-          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-orange-400 to-pink-500 text-xs font-bold text-white">
-            K
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-medium text-zinc-800">Kelvin</p>
-            <p className="truncate text-[10px] text-zinc-400">kelvinblewu@gmail.com</p>
-          </div>
-        </div>
+        <UserChip />
       </div>
     </aside>
   );

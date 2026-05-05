@@ -8,11 +8,67 @@ AI-powered product listing tool that helps vendors auto-generate Jumia (and late
 # Install dependencies
 npm install
 
-# Start the dev server
+# Start the dev server on port 3002
 npm run dev
+
+# Run unit tests
+npm test
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The app redirects to `/dashboard` automatically.
+Open [http://localhost:3002](http://localhost:3002). The app redirects to `/dashboard` automatically.
+
+---
+
+## Environment variables
+
+Copy `.env.local.example` to `.env.local` and fill in the values below.
+
+| Variable | Required | Description |
+|---|---|---|
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | ✅ | Clerk publishable key (from [clerk.com](https://clerk.com)) |
+| `CLERK_SECRET_KEY` | ✅ | Clerk secret key |
+| `NEXT_PUBLIC_SUPABASE_URL` | ✅ | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✅ | Supabase anon/public key (safe to expose) |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✅ | Supabase service role key — **server only**, never expose to browser |
+| `GOOGLE_API_KEY` | ✅ | Google Gemini API key — used for AI product analysis |
+| `JUMIA_CLIENT_ID` | ✅ | Jumia Vendor Center OAuth client ID |
+| `JUMIA_CLIENT_SECRET` | ✅ | Jumia Vendor Center OAuth client secret |
+| `JUMIA_REDIRECT_URI` | ✅ | Must match the Redirect URI set in Jumia Vendor Center app settings. E.g. `http://localhost:3002/api/jumia/callback` |
+| `NEXT_PUBLIC_APP_URL` | ✅ | Full base URL of this app (no trailing slash). E.g. `http://localhost:3002` |
+| `PAYSTACK_SECRET_KEY` | For billing | Paystack secret key (for Pro/Business subscriptions) |
+| `NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY` | For billing | Paystack public key |
+| `QUALITY_SCORE_MIN` | Optional | Minimum quality score (0–100) required to publish. Default: `60` |
+| `NEXT_PUBLIC_QUALITY_THRESHOLD` | Optional | Same as above, but readable in the browser for the UI gate. Default: `60` |
+
+### Jumia OAuth redirect URI
+
+In [Jumia Vendor Center → Settings → Applications](https://vendorcenter.jumia.com/settings/applications), set your app's Redirect URI to:
+
+```
+http://localhost:3002/api/jumia/callback
+```
+
+For production, replace with your deployed URL.
+
+---
+
+## Database setup
+
+Run the following SQL files in order in **Supabase → SQL Editor**:
+
+```
+supabase/schema.sql                    # Base tables (listings, variants, stores)
+supabase/add_jumia_connections.sql     # OAuth connection table
+supabase/add_jumia_categories.sql      # Category + attribute cache tables
+supabase/add_jumia_attribute_set_sid.sql  # attributeSet.sid column
+supabase/add_jumia_variant_flag.sql    # is_variant flag on attributes
+supabase/add_listings_fields.sql       # field_sources + quality_score columns
+supabase/seed_phone_attributes.sql     # Demo phone attributes (run for local dev)
+```
+
+After connecting your Jumia account, go to **Settings → Integrations → Sync now** to populate real category and attribute data from the Jumia API.
+
+---
 
 ---
 
