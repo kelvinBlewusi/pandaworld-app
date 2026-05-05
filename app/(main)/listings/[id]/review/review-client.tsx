@@ -940,17 +940,46 @@ function VariantMatrixStep({
         </div>
       )}
 
-      {/* Fallback: no axes selected yet */}
+      {/* Simple listing: price + stock (no variant axes) */}
       {axesDef.length === 0 && (
-        <div className="rounded-xl border border-dashed border-zinc-200 p-6 text-center space-y-2">
-          <p className="text-sm text-zinc-500">Select variant axes above to generate the combination matrix.</p>
-          <p className="text-xs text-zinc-400">
-            {schemaAxes.length > 0
-              ? `${schemaAxes.length} variant attribute${schemaAxes.length !== 1 ? "s" : ""} available for this category.`
-              : categoryCode
-              ? "No variant axes in the category schema. You can add a custom axis."
-              : "Category not set — select a category first to see variant options."}
-          </p>
+        <div className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="simple-price" className="flex items-center">
+                Selling Price (GHS) <span className="ml-1 text-[10px] font-semibold text-rose-500">*</span>
+              </Label>
+              <Input
+                id="simple-price"
+                type="number"
+                min="0"
+                step="0.01"
+                value={variants[0]?.globalPrice ?? ""}
+                onChange={(e) => updateVariant(variants[0]?.id ?? "v1", "globalPrice", e.target.value)}
+                placeholder="0.00"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="simple-qty">Stock Quantity</Label>
+              <Input
+                id="simple-qty"
+                type="number"
+                min="0"
+                value={variants[0]?.quantity ?? "1"}
+                onChange={(e) => updateVariant(variants[0]?.id ?? "v1", "quantity", e.target.value)}
+                placeholder="1"
+              />
+              <p className="text-[11px] text-zinc-400">Units available to sell on Jumia</p>
+            </div>
+          </div>
+          <div className="rounded-xl border border-dashed border-zinc-200 p-4 text-center space-y-1">
+            <p className="text-xs text-zinc-400">
+              {schemaAxes.length > 0
+                ? `${schemaAxes.length} variant attribute${schemaAxes.length !== 1 ? "s" : ""} available — add a variant axis above to create combinations.`
+                : categoryCode
+                ? "No variant axes in the category schema. You can add a custom axis above."
+                : "Category not set — select a category first to see variant options."}
+            </p>
+          </div>
         </div>
       )}
 
@@ -1384,6 +1413,7 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
   const [saveError,   setSaveError]   = useState<string | null>(null);
   const [jumiaNotConnected, setJumiaNotConnected] = useState(false);
   const [publishedRef, setPublishedRef] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus]   = useState<"idle" | "saving" | "done" | "error">("idle");
 
   // ── Quality score ─────────────────────────────────────────────────────────
   const [qualityResult, setQualityResult] = useState(() =>
@@ -1410,7 +1440,7 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
   const categoryLabel = categoryPath ?? listing.category_path ?? listing.category_id ?? "Uncategorised";
 
   // ── Save handler ──────────────────────────────────────────────────────────
-  async function handleSave(publish: boolean) {
+  async function handleSave(publish: boolean, opts?: { skipRedirect?: boolean }) {
     if (!formRef.current) return;
 
     if (publish && qualityResult.score < PUBLISH_THRESHOLD) {
@@ -1457,11 +1487,15 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
         dynamic_attributes: dynAttrs,
         field_sources:      fieldSources as Record<string, "ai" | "user">,
         quality_score:      qualityResult.score,
-        status:             "draft",
+        status:             listing.status === "live" ? "live" : "draft",
+        // Persist stock for simple (non-variant) listings
+        ...(axesDef.length === 0 ? {
+          quantity: Math.max(0, parseInt(variants[0]?.quantity ?? "1") || 1),
+        } : {}),
       });
 
       if (!publish) {
-        router.push("/listings");
+        if (!opts?.skipRedirect) router.push("/listings");
         return;
       }
 
@@ -1486,6 +1520,36 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
       setSaveError(err instanceof Error ? err.message : "Save failed. Please try again.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleSyncToJumia() {
+    setSyncStatus("saving");
+    setSaveError(null);
+    try {
+      // Persist latest form state first (skip the /listings redirect)
+      await handleSave(false, { skipRedirect: true });
+    } catch {
+      setSyncStatus("error");
+      return;
+    }
+    try {
+      const res = await fetch("/api/jumia/update", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ listingId: listing.id }),
+      });
+      const data = await res.json() as { success?: boolean; error?: string };
+      if (res.ok && data.success) {
+        setSyncStatus("done");
+        router.refresh();
+      } else {
+        setSyncStatus("error");
+        setSaveError(data.error ?? "Jumia update failed. Try again.");
+      }
+    } catch {
+      setSyncStatus("error");
+      setSaveError("Network error. Please try again.");
     }
   }
 
@@ -1769,6 +1833,33 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                 </div>
               )}
 
+              {/* Sync to Jumia section (live listings only) */}
+              {listing.status === "live" && (
+                <div className="mx-5 mb-3 space-y-2.5 pt-3 border-t">
+                  {listing.update_feed_status === "pending" && (
+                    <div className="rounded-xl bg-amber-50 border border-amber-100 px-4 py-2.5 text-xs text-amber-700 flex items-center gap-2">
+                      <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                      Jumia is processing your update — this usually takes under a minute.
+                    </div>
+                  )}
+                  <div className="flex items-center gap-3">
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="gap-1.5"
+                      onClick={handleSyncToJumia}
+                      disabled={syncStatus === "saving"}
+                    >
+                      {syncStatus === "saving"
+                        ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Submitting…</>
+                        : <><RefreshCw className="h-3.5 w-3.5" />Sync changes to Jumia</>}
+                    </Button>
+                    {syncStatus === "done"  && <span className="text-xs text-emerald-600">✓ Update submitted</span>}
+                    {syncStatus === "error" && <span className="text-xs text-red-500">Submit failed — try again</span>}
+                  </div>
+                </div>
+              )}
+
               {/* Footer */}
               <div className="flex items-center justify-between border-t bg-zinc-50/50 px-5 py-3">
                 <Button
@@ -1804,6 +1895,18 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                     disabled={saving}
                   >
                     Next <ChevronRight className="h-3.5 w-3.5 ml-1" />
+                  </Button>
+                ) : listing.status === "live" ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="gap-1"
+                    disabled={saving || syncStatus === "saving"}
+                    onClick={() => handleSave(false, { skipRedirect: true })}
+                  >
+                    {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                    Save changes
                   </Button>
                 ) : (
                   <div className="flex gap-2">

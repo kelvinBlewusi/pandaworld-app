@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
+
+export const dynamic = "force-dynamic";
 import { getFeedStatus } from "@/lib/jumia/api";
 import { refreshAccessToken } from "@/lib/jumia/oauth";
 

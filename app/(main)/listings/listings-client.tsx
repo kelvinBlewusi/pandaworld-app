@@ -38,13 +38,16 @@ export function ListingsClient({ listings, categories }: ListingsClientProps) {
   // When any listing is pending_approval with a feedId, poll every 10s.
   // As soon as Jumia marks it DONE or ERROR the status flips to live/failed.
 
-  const pendingIds = useMemo(
-    () =>
-      listings
-        .filter((l) => l.status === "pending_approval" && l.jumia_ref)
-        .map((l) => l.id),
-    [listings]
-  );
+  const pendingIds = useMemo(() => {
+    const createPending = listings
+      .filter((l) => l.status === "pending_approval" && l.jumia_ref)
+      .map((l) => l.id);
+    const updatePending = listings
+      .filter((l) => l.update_feed_status === "pending" && l.update_feed_ref)
+      .map((l) => l.id);
+    const combined = [...createPending, ...updatePending];
+    return combined.filter((id, i) => combined.indexOf(id) === i);
+  }, [listings]);
 
   const pollFeeds = useCallback(async () => {
     if (pendingIds.length === 0) return;
@@ -56,9 +59,9 @@ export function ListingsClient({ listings, categories }: ListingsClientProps) {
       });
       if (!res.ok) return;
       const { results } = await res.json() as { results: { id: string; status: string }[] };
-      // If anything changed from pending_approval, refresh the server data
-      const changed = results.some((r) => r.status !== "pending_approval");
-      if (changed) router.refresh();
+      // Refresh whenever we got results — catches both create-feed transitions
+      // and update_feed_status changes (done/error) so banners clear automatically
+      if (results.length > 0) router.refresh();
     } catch {
       // Non-fatal — will retry on next interval
     }
