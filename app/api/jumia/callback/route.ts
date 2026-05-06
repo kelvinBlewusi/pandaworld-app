@@ -96,7 +96,7 @@ export async function GET(req: NextRequest) {
 
   // ── Upsert connection — real access_token replaces credential_auth sentinel
   const resolvedStoreName =
-    profile.store_name ?? conn.store_name ?? storeName || "Jumia Store";
+    profile.store_name ?? conn.store_name ?? storeName ?? "Jumia Store";
 
   const { error: dbError } = await db.from("jumia_connections").upsert(
     {
