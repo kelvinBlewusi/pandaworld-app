@@ -14,6 +14,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ListingTable } from "@/components/ui/listing-table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { ListingDisplay } from "@/lib/types";
 
 const POLL_INTERVAL_MS = 10_000; // 10 seconds
@@ -38,13 +44,16 @@ export function ListingsClient({ listings, categories }: ListingsClientProps) {
   // When any listing is pending_approval with a feedId, poll every 10s.
   // As soon as Jumia marks it DONE or ERROR the status flips to live/failed.
 
-  const pendingIds = useMemo(
-    () =>
-      listings
-        .filter((l) => l.status === "pending_approval" && l.jumia_ref)
-        .map((l) => l.id),
-    [listings]
-  );
+  const pendingIds = useMemo(() => {
+    const createPending = listings
+      .filter((l) => l.status === "pending_approval" && l.jumia_ref)
+      .map((l) => l.id);
+    const updatePending = listings
+      .filter((l) => l.update_feed_status === "pending" && l.update_feed_ref)
+      .map((l) => l.id);
+    const combined = [...createPending, ...updatePending];
+    return combined.filter((id, i) => combined.indexOf(id) === i);
+  }, [listings]);
 
   const pollFeeds = useCallback(async () => {
     if (pendingIds.length === 0) return;
@@ -56,9 +65,9 @@ export function ListingsClient({ listings, categories }: ListingsClientProps) {
       });
       if (!res.ok) return;
       const { results } = await res.json() as { results: { id: string; status: string }[] };
-      // If anything changed from pending_approval, refresh the server data
-      const changed = results.some((r) => r.status !== "pending_approval");
-      if (changed) router.refresh();
+      // Refresh whenever we got results — catches both create-feed transitions
+      // and update_feed_status changes (done/error) so banners clear automatically
+      if (results.length > 0) router.refresh();
     } catch {
       // Non-fatal — will retry on next interval
     }
@@ -130,21 +139,24 @@ export function ListingsClient({ listings, categories }: ListingsClientProps) {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {listings.length > 0 && (
-            <Button
-              variant="outline"
-              className="gap-2"
-              onClick={handleExportXLSX}
-              disabled={exporting}
-            >
-              {exporting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Download className="h-4 w-4" />
-              )}
-              {exporting ? "Exporting…" : "Export for Jumia"}
-            </Button>
-          )}
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <Button
+                    variant="outline"
+                    className="gap-2 opacity-50 cursor-not-allowed"
+                    disabled
+                    tabIndex={-1}
+                  >
+                    <Download className="h-4 w-4" />
+                    Export for Jumia
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>Coming soon</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <Button asChild className="gap-2">
             <Link href="/listings/new">
               <Plus className="h-4 w-4" />

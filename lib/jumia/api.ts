@@ -262,7 +262,7 @@ function buildBaseProduct(listing: ListingRow, brand: { code: number; name: stri
       currency: "GHS",
       value:    listing.selling_price ?? 0,
     },
-    stock:      1,
+    stock:      listing.quantity ?? 1,
     attributes: buildAttributes(listing),
   };
 }
@@ -367,6 +367,58 @@ export async function pushProductsToJumia(
 
   const errorMsg = extractError(raw, res.status);
   console.error("[Jumia API] ❌ Error:", res.status, raw);
+  return { success: false, jumia_ref: null, raw, error: errorMsg };
+}
+
+/**
+ * POST https://vendor-api.jumia.com/feeds/products/update
+ *
+ * Same payload shape as pushProductsToJumia — Jumia matches by sellerSku.
+ * Returns a new feedId; poll GET /feeds/{id} for completion.
+ */
+export async function updateProductOnJumia(
+  accessToken: string,
+  shopId:      string,
+  listing:     ListingRow,
+  variants:    VariantRow[]
+): Promise<JumiaPushResult> {
+  const brand    = await resolveBrand(accessToken, listing.brand);
+  const products = mapListingToJumiaProducts(listing, variants, brand);
+
+  const url  = `${JUMIA_API_BASE}/feeds/products/update`;
+  const body = JSON.stringify({ shopId, products });
+
+  console.info(`[Jumia API] POST ${url} — shopId=${shopId}, products=${products.length}`);
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method:  "POST",
+      headers: {
+        Authorization:  `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        Accept:         "application/json",
+      },
+      body,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Network error";
+    return { success: false, jumia_ref: null, raw: null, error: msg };
+  }
+
+  const contentType = res.headers.get("content-type") ?? "";
+  const raw: unknown = contentType.includes("application/json")
+    ? await res.json().catch(() => null)
+    : await res.text().catch(() => null);
+
+  console.info(`[Jumia API] Update response: ${res.status}`, JSON.stringify(raw)?.slice(0, 400));
+
+  if (res.ok) {
+    const feedId = extractFeedId(raw);
+    return { success: true, jumia_ref: feedId, raw };
+  }
+
+  const errorMsg = extractError(raw, res.status);
   return { success: false, jumia_ref: null, raw, error: errorMsg };
 }
 

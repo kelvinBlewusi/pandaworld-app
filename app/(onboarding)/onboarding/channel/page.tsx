@@ -96,7 +96,7 @@ export default function ChannelPage() {
 
   return (
     <div className="space-y-8">
-      {/* Progress dots */}
+      {/* Progress steps */}
       <div className="flex items-center justify-center gap-2">
         {progressSteps.map((step, i) => (
           <div key={step} className="flex items-center gap-2">
@@ -104,8 +104,8 @@ export default function ChannelPage() {
               className={cn(
                 "flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold",
                 i === 0
-                  ? "bg-blue-600 text-white"
-                  : "bg-zinc-100 text-zinc-400"
+                  ? "bg-fuchsia-500 text-white shadow-lg shadow-fuchsia-500/40"
+                  : "bg-white/10 text-white/40"
               )}
             >
               {i + 1}
@@ -113,13 +113,13 @@ export default function ChannelPage() {
             <span
               className={cn(
                 "text-xs",
-                i === 0 ? "font-medium text-zinc-700" : "text-zinc-400"
+                i === 0 ? "font-medium text-white" : "text-white/35"
               )}
             >
               {step}
             </span>
             {i < progressSteps.length - 1 && (
-              <div className="h-px w-8 bg-zinc-200" />
+              <div className="h-px w-8 bg-white/15" />
             )}
           </div>
         ))}
@@ -127,13 +127,13 @@ export default function ChannelPage() {
 
       {/* Header */}
       <div className="text-center">
-        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-purple-600 text-2xl shadow-lg">
+        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-fuchsia-500 to-orange-400 text-2xl shadow-lg shadow-fuchsia-500/30">
           🐼
         </div>
-        <h1 className="text-2xl font-bold text-zinc-900">
+        <h1 className="text-2xl font-bold text-white">
           Select your selling channel
         </h1>
-        <p className="mt-2 text-sm text-zinc-500">
+        <p className="mt-2 text-sm text-white/50">
           Where do you want to publish your listings?
         </p>
       </div>
@@ -151,18 +151,18 @@ export default function ChannelPage() {
               "relative flex flex-col items-center gap-2.5 rounded-2xl border p-5 text-center transition-all duration-150",
               channel.enabled
                 ? selected === channel.id
-                  ? "border-blue-500 bg-blue-50 ring-2 ring-blue-500/30"
-                  : "border-zinc-200 bg-white hover:border-zinc-300 hover:shadow-sm cursor-pointer"
-                : "border-zinc-100 bg-zinc-50 opacity-60 cursor-not-allowed"
+                  ? "border-fuchsia-400/60 bg-fuchsia-500/15 ring-2 ring-fuchsia-400/30"
+                  : "border-white/10 bg-white/5 hover:border-white/20 hover:bg-white/10 cursor-pointer"
+                : "border-white/5 bg-white/3 opacity-40 cursor-not-allowed"
             )}
           >
             {selected === channel.id && (
-              <div className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-blue-600">
+              <div className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-fuchsia-500">
                 <Check className="h-3 w-3 text-white" />
               </div>
             )}
             {!channel.enabled && (
-              <div className="absolute right-2 top-2 rounded-full bg-zinc-100 px-2 py-0.5 text-[9px] font-semibold text-zinc-400">
+              <div className="absolute right-2 top-2 rounded-full bg-white/10 px-2 py-0.5 text-[9px] font-semibold text-white/40">
                 Soon
               </div>
             )}
@@ -175,10 +175,10 @@ export default function ChannelPage() {
               {channel.emoji}
             </div>
             <div>
-              <p className="text-sm font-semibold text-zinc-800">
+              <p className="text-sm font-semibold text-white">
                 {channel.name}
               </p>
-              <p className="mt-0.5 text-[11px] text-zinc-400 leading-tight">
+              <p className="mt-0.5 text-[11px] text-white/45 leading-tight">
                 {channel.description}
               </p>
             </div>
@@ -188,11 +188,12 @@ export default function ChannelPage() {
 
       {/* CTA */}
       <Button
-        className="w-full gap-2 h-11"
+        className="w-full gap-2 h-11 bg-fuchsia-500 hover:bg-fuchsia-600 text-white shadow-lg shadow-fuchsia-500/30 disabled:opacity-30 disabled:shadow-none"
         disabled={!selected}
         onClick={handleContinue}
       >
-        Continue with {channels.find((c) => c.id === selected)?.name ?? "selected channel"}
+        Continue with{" "}
+        {channels.find((c) => c.id === selected)?.name ?? "selected channel"}
         <ArrowRight className="h-4 w-4" />
       </Button>
     </div>

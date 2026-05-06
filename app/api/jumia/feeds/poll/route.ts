@@ -6,14 +6,11 @@ import { getValidJumiaCredentials, getFeedStatus } from "@/lib/jumia/api";
 // ─── POST /api/jumia/feeds/poll ───────────────────────────────────────────────
 // Body: { listingIds: string[] }
 //
-// For each listing:
-//   1. Fetches the jumia_ref (feedId) from DB
-//   2. Calls GET /feeds/{feedId} on the Jumia API
-//   3. Updates listing status:
-//      - DONE + success > 0  → "live"
-//      - DONE + failed > 0   → "failed" (with error detail)
-//      - ERROR               → "failed"
-//      - PROCESSING / other  → no change (still pending_approval)
+// For each listing, polls TWO feed types:
+//   A. Create feed (jumia_ref)     — status pending_approval
+//      DONE+success → "live" | DONE+failed → "failed" | ERROR → "failed"
+//   B. Update feed (update_feed_ref) — update_feed_status pending
+//      DONE → update_feed_status='done' | ERROR → update_feed_status='error'
 //
 // Returns: { results: { id, status, error? }[] }
 
@@ -44,13 +41,16 @@ export async function POST(req: NextRequest) {
   const db = createServerClient();
 
   // ── Fetch listings (must belong to this user) ─────────────────────────────
+  // ── Fetch create-pending and update-pending listings ─────────────────────
   const { data: rows } = await db
     .from("listings")
-    .select("id, status, jumia_ref")
+    .select("id, status, jumia_ref, update_feed_ref, update_feed_status")
     .in("id", listingIds)
     .eq("user_id", userId)
-    .eq("status", "pending_approval")
-    .not("jumia_ref", "is", null);
+    .or(
+      "and(status.eq.pending_approval,jumia_ref.not.is.null)," +
+      "and(update_feed_status.eq.pending,update_feed_ref.not.is.null)"
+    );
 
   if (!rows || rows.length === 0) {
     return NextResponse.json({ results: [] });
@@ -58,56 +58,78 @@ export async function POST(req: NextRequest) {
 
   const results: { id: string; status: string; error?: string }[] = [];
 
-  // ── Poll each feed ────────────────────────────────────────────────────────
   for (const row of rows) {
-    const feedId = row.jumia_ref as string;
-    const feedStatus = await getFeedStatus(accessToken, feedId);
+    let currentStatus = row.status;
 
-    if (!feedStatus) {
-      // Can't reach Jumia API — leave as-is
-      results.push({ id: row.id, status: row.status });
-      continue;
-    }
+    // ── A. Poll create feed (pending_approval) ──────────────────────────────
+    if (row.status === "pending_approval" && row.jumia_ref) {
+      const feedStatus = await getFeedStatus(accessToken, row.jumia_ref as string);
 
-    console.info(
-      `[Feed Poll] listingId=${row.id} feedId=${feedId} status=${feedStatus.status} success=${feedStatus.success} failed=${feedStatus.failed}`
-    );
+      if (feedStatus) {
+        console.info(
+          `[Feed Poll] listingId=${row.id} feedId=${row.jumia_ref} status=${feedStatus.status} success=${feedStatus.success} failed=${feedStatus.failed}`
+        );
 
-    let newStatus: string | null = null;
-    let errorMsg: string | null = null;
+        let newStatus: string | null = null;
+        let errorMsg:  string | null = null;
 
-    if (feedStatus.status === "DONE") {
-      if (feedStatus.failed > 0) {
-        newStatus = "failed";
-        const firstError = feedStatus.errors[0];
-        errorMsg = firstError
-          ? JSON.stringify(firstError).slice(0, 500)
-          : "Jumia rejected one or more products in the feed";
-      } else {
-        newStatus = "live";
+        if (feedStatus.status === "DONE") {
+          if (feedStatus.failed > 0) {
+            newStatus = "failed";
+            const firstError = feedStatus.errors[0];
+            errorMsg = firstError
+              ? JSON.stringify(firstError).slice(0, 500)
+              : "Jumia rejected one or more products in the feed";
+          } else {
+            newStatus = "live";
+          }
+        } else if (feedStatus.status === "ERROR") {
+          newStatus = "failed";
+          errorMsg = feedStatus.errors.length
+            ? JSON.stringify(feedStatus.errors[0]).slice(0, 500)
+            : "Jumia feed processing error";
+        }
+
+        if (newStatus) {
+          await db.from("listings").update({
+            status:      newStatus,
+            jumia_error: errorMsg,
+            updated_at:  new Date().toISOString(),
+          }).eq("id", row.id);
+          currentStatus = newStatus;
+          results.push({ id: row.id, status: newStatus, ...(errorMsg ? { error: errorMsg } : {}) });
+          continue;
+        }
       }
-    } else if (feedStatus.status === "ERROR") {
-      newStatus = "failed";
-      errorMsg = feedStatus.errors.length
-        ? JSON.stringify(feedStatus.errors[0]).slice(0, 500)
-        : "Jumia feed processing error";
     }
-    // PROCESSING / QUEUED / unknown → leave as pending_approval
 
-    if (newStatus) {
-      await db
-        .from("listings")
-        .update({
-          status:      newStatus,
-          jumia_error: errorMsg,
-          updated_at:  new Date().toISOString(),
-        })
-        .eq("id", row.id);
+    // ── B. Poll update feed (update_feed_status=pending) ────────────────────
+    if (row.update_feed_status === "pending" && row.update_feed_ref) {
+      const feedStatus = await getFeedStatus(accessToken, row.update_feed_ref as string);
 
-      results.push({ id: row.id, status: newStatus, ...(errorMsg ? { error: errorMsg } : {}) });
-    } else {
-      results.push({ id: row.id, status: row.status });
+      if (feedStatus) {
+        console.info(
+          `[Feed Poll] UPDATE listingId=${row.id} feedId=${row.update_feed_ref} status=${feedStatus.status}`
+        );
+
+        let newUpdateStatus: string | null = null;
+
+        if (feedStatus.status === "DONE") {
+          newUpdateStatus = "done";
+        } else if (feedStatus.status === "ERROR") {
+          newUpdateStatus = "error";
+        }
+
+        if (newUpdateStatus) {
+          await db.from("listings").update({
+            update_feed_status: newUpdateStatus,
+            updated_at:         new Date().toISOString(),
+          }).eq("id", row.id);
+        }
+      }
     }
+
+    results.push({ id: row.id, status: currentStatus });
   }
 
   return NextResponse.json({ results });

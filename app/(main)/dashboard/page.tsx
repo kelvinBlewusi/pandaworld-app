@@ -2,7 +2,6 @@ import {
   FileText,
   CheckCircle,
   Clock,
-  TrendingUp,
   Plus,
   ArrowRight,
   ShoppingBag,
@@ -16,7 +15,7 @@ import { StatCard } from "@/components/ui/stat-card";
 import { ListingTable } from "@/components/ui/listing-table";
 import { getDashboardStats, getListings } from "@/lib/actions/listings";
 import { createServerClient } from "@/lib/supabase/server";
-import { formatGHS, cn } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { toListingDisplay } from "@/lib/types";
 import type { JumiaConnectionPublic } from "@/lib/types/jumia";
 
@@ -80,7 +79,7 @@ export default async function DashboardPage() {
       </div>
 
       {/* Stat cards */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCard
           title="Draft listings"
           value={stats.draft}
@@ -101,13 +100,6 @@ export default async function DashboardPage() {
           subtitle="Awaiting Jumia review"
           icon={<Clock className="h-5 w-5" />}
           gradient="orange"
-        />
-        <StatCard
-          title="This week's earnings"
-          value={formatGHS(0)}
-          subtitle="Connect Jumia to track"
-          icon={<TrendingUp className="h-5 w-5" />}
-          gradient="blue"
         />
       </div>
 
