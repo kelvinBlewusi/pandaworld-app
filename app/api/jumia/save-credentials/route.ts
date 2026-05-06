@@ -3,8 +3,10 @@ import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
 
 // ─── POST /api/jumia/save-credentials ─────────────────────────────────────────
-// Saves the user's per-app Jumia credentials after a successful test.
-// Upserts a row in jumia_connections with status="active".
+// Saves the user's Jumia credentials after a successful test.
+// Tries to save app_id/app_secret/country (requires migration); if those
+// columns don't exist yet, falls back to saving just store_name + status
+// so the user can still pass the onboarding gate.
 
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
@@ -16,9 +18,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "App ID and Secret Key are required." }, { status: 400 });
   }
 
-  const db = createServerClient();
+  const db  = createServerClient();
+  const now = new Date().toISOString();
 
-  const { error } = await db.from("jumia_connections").upsert(
+  // Try full upsert (requires add_onboarding.sql migration)
+  const { error: fullError } = await db.from("jumia_connections").upsert(
     {
       user_id:      userId,
       app_id:       appId,
@@ -26,25 +30,39 @@ export async function POST(req: NextRequest) {
       store_name:   storeName || "Jumia Store",
       country:      country ?? "GH",
       status:       "active",
-      connected_at: new Date().toISOString(),
-      updated_at:   new Date().toISOString(),
+      connected_at: now,
+      updated_at:   now,
     },
     { onConflict: "user_id" }
   );
 
-  if (error) {
-    console.error("[save-credentials] DB error:", error);
+  if (!fullError) return NextResponse.json({ ok: true });
 
-    // Gracefully handle missing columns (migration not yet run)
-    if (error.code === "42703") {
-      return NextResponse.json(
-        { error: "Database migration pending. Please run supabase/add_onboarding.sql first." },
-        { status: 500 }
-      );
-    }
+  console.warn("[save-credentials] Full upsert failed, trying minimal:", fullError.code, fullError.message);
 
-    return NextResponse.json({ error: "Failed to save credentials." }, { status: 500 });
+  // Column-not-found means migration hasn't run — fall back to columns we know exist
+  const isMissingColumn = fullError.code === "42703" || fullError.message?.includes("column");
+  if (!isMissingColumn) {
+    console.error("[save-credentials] Unexpected DB error:", fullError);
+    return NextResponse.json({ error: "Failed to save credentials. Please try again." }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true });
+  // Minimal upsert — works without migration
+  const { error: minError } = await db.from("jumia_connections").upsert(
+    {
+      user_id:      userId,
+      store_name:   storeName || "Jumia Store",
+      status:       "active",
+      connected_at: now,
+    },
+    { onConflict: "user_id" }
+  );
+
+  if (minError) {
+    console.error("[save-credentials] Minimal upsert also failed:", minError);
+    return NextResponse.json({ error: "Failed to save credentials. Please try again." }, { status: 500 });
+  }
+
+  // Saved OK, but remind them to run the migration so full credentials persist
+  return NextResponse.json({ ok: true, migrationPending: true });
 }
