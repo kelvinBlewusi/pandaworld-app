@@ -7,11 +7,12 @@ import { exchangeCodeForTokens, fetchJumiaSellerProfile } from "@/lib/jumia/oaut
 // Query params: ?code=<one-time-code>&state=<base64-encoded-state>
 //
 // Flow:
-//  1. Decode the `state` to recover the Clerk userId (set in /connect)
-//  2. Exchange the code for access + refresh tokens
-//  3. Fetch the seller's profile from Jumia API
-//  4. Upsert the connection row in Supabase
-//  5. Redirect to /settings/integrations with ?connected=1
+//  1. Decode `state` to recover Clerk userId (set in /connect)
+//  2. Look up the seller's app_id + app_secret from Supabase
+//  3. Exchange the code for access + refresh tokens using their credentials
+//  4. Fetch the seller's profile from Jumia API
+//  5. Upsert the connection row in Supabase
+//  6. Redirect to /onboarding/done (from onboarding) or /settings/integrations
 
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
@@ -19,9 +20,8 @@ export async function GET(req: NextRequest) {
   const stateRaw = searchParams.get("state");
   const error    = searchParams.get("error");
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3002";
-  const failUrl    = `${appUrl}/settings/integrations?jumia_error=`;
-  const successUrl = `${appUrl}/settings/integrations?connected=1`;
+  const appUrl  = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3002";
+  const failUrl = `${appUrl}/settings/integrations?jumia_error=`;
 
   // ── User denied access ─────────────────────────────────────────────────────
   if (error) {
@@ -30,24 +30,55 @@ export async function GET(req: NextRequest) {
   }
 
   if (!code || !stateRaw) {
-    return NextResponse.redirect(`${failUrl}${encodeURIComponent("Missing code or state parameter")}`);
+    return NextResponse.redirect(
+      `${failUrl}${encodeURIComponent("Missing code or state parameter")}`
+    );
   }
 
   // ── Decode state → recover userId ─────────────────────────────────────────
   let userId: string;
+  let storeName: string = "";
   try {
-    const decoded = JSON.parse(Buffer.from(stateRaw, "base64url").toString("utf-8"));
+    const decoded = JSON.parse(
+      Buffer.from(stateRaw, "base64url").toString("utf-8")
+    );
     userId = decoded.userId;
+    storeName = decoded.storeName ?? "";
     if (!userId) throw new Error("No userId in state");
   } catch (e) {
     console.error("[Jumia OAuth] Invalid state param:", e);
-    return NextResponse.redirect(`${failUrl}${encodeURIComponent("Invalid state parameter — please try again")}`);
+    return NextResponse.redirect(
+      `${failUrl}${encodeURIComponent("Invalid state parameter — please try again")}`
+    );
   }
 
-  // ── Exchange code for tokens ───────────────────────────────────────────────
+  // ── Look up seller's app credentials ─────────────────────────────────────
+  const db = createServerClient();
+  const { data: conn, error: dbLookupError } = await db
+    .from("jumia_connections")
+    .select("app_id, app_secret, store_name")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (dbLookupError || !conn?.app_id || !conn?.app_secret) {
+    console.error("[Jumia OAuth] Could not load seller credentials:", dbLookupError);
+    return NextResponse.redirect(
+      `${failUrl}${encodeURIComponent("Seller credentials not found — please reconnect")}`
+    );
+  }
+
+  // ── Build redirect URI (must match what was sent in /connect) ─────────────
+  const redirectUri = `${appUrl}/api/jumia/callback`;
+
+  // ── Exchange code for tokens using the seller's own app credentials ────────
   let tokens: { access_token: string; refresh_token?: string; expires_in: number };
   try {
-    tokens = await exchangeCodeForTokens(code);
+    tokens = await exchangeCodeForTokens(
+      code,
+      conn.app_id,
+      conn.app_secret,
+      redirectUri,
+    );
   } catch (e) {
     console.error("[Jumia OAuth] Token exchange failed:", e);
     return NextResponse.redirect(
@@ -63,8 +94,9 @@ export async function GET(req: NextRequest) {
     ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
     : null;
 
-  // ── Upsert into Supabase ───────────────────────────────────────────────────
-  const db = createServerClient();
+  // ── Upsert connection — real access_token replaces credential_auth sentinel
+  const resolvedStoreName =
+    profile.store_name ?? conn.store_name ?? storeName || "Jumia Store";
 
   const { error: dbError } = await db.from("jumia_connections").upsert(
     {
@@ -75,8 +107,8 @@ export async function GET(req: NextRequest) {
       seller_id:        profile.seller_id,
       seller_name:      profile.seller_name,
       seller_email:     profile.seller_email,
-      store_name:       profile.store_name,
-      shop_id:          profile.shop_id,          // required for product API calls
+      store_name:       resolvedStoreName,
+      shop_id:          profile.shop_id,
       status:           "active",
       updated_at:       new Date().toISOString(),
     },
@@ -90,6 +122,11 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  console.info(`[Jumia OAuth] Connected seller=${profile.seller_name ?? "unknown"} for user=${userId}`);
+  console.info(
+    `[Jumia OAuth] Connected seller=${profile.seller_name ?? "unknown"} for user=${userId}`
+  );
+
+  // Redirect to done page (onboarding flow) with store name
+  const successUrl = `${appUrl}/onboarding/done?store=${encodeURIComponent(resolvedStoreName)}`;
   return NextResponse.redirect(successUrl);
 }

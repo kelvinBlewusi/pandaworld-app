@@ -17,7 +17,7 @@ export async function GET() {
   const { data, error } = await db
     .from("jumia_connections")
     .select(
-      "status, seller_name, seller_email, store_name, seller_id, connected_at, token_expires_at"
+      "status, access_token, seller_name, seller_email, store_name, seller_id, connected_at, token_expires_at"
     )
     .eq("user_id", userId)
     .maybeSingle();
@@ -40,8 +40,12 @@ export async function GET() {
     } satisfies JumiaConnectionPublic);
   }
 
+  // oauth_required = credentials saved but OAuth flow not yet completed
+  const oauthRequired = data.access_token === "credential_auth";
+
   return NextResponse.json({
-    connected:        data.status === "active",
+    connected:        data.status === "active" && !oauthRequired,
+    oauth_required:   oauthRequired,
     status:           data.status,
     seller_name:      data.seller_name,
     seller_email:     data.seller_email,

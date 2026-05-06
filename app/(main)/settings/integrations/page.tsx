@@ -137,8 +137,9 @@ function IntegrationsPageInner() {
     }
   }
 
-  const isConnected = conn?.connected && conn?.status === "active";
-  const isExpired   = conn?.status === "expired";
+  const isConnected    = conn?.connected && conn?.status === "active";
+  const isExpired      = conn?.status === "expired";
+  const oauthRequired  = !!conn?.oauth_required;
   const connectedDate = conn?.connected_at
     ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" }).format(
         new Date(conn.connected_at)
@@ -216,10 +217,18 @@ function IntegrationsPageInner() {
                   ? "bg-emerald-50 text-emerald-700"
                   : isExpired
                   ? "bg-amber-50 text-amber-700"
+                  : oauthRequired
+                  ? "bg-blue-50 text-blue-700"
                   : "bg-zinc-100 text-zinc-500"
               )}
             >
-              {isConnected ? "Connected" : isExpired ? "Token expired" : "Not connected"}
+              {isConnected
+                ? "Connected"
+                : isExpired
+                ? "Token expired"
+                : oauthRequired
+                ? "Authorisation required"
+                : "Not connected"}
             </span>
           )}
         </div>
@@ -389,6 +398,26 @@ function IntegrationsPageInner() {
                 Disconnect
               </Button>
             </div>
+          </div>
+        ) : oauthRequired ? (
+          /* ── Credentials saved, OAuth not yet completed ─────────────────── */
+          <div className="space-y-4">
+            <div className="rounded-xl bg-blue-50 border border-blue-100 p-4 text-sm text-blue-700 flex items-start gap-2">
+              <Info className="h-4 w-4 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold">One more step</p>
+                <p className="mt-0.5">
+                  Your Jumia credentials are saved. Click <strong>Authorise with Jumia</strong> to complete the connection — you&apos;ll be redirected to Vendor Center to grant access.
+                </p>
+                {conn?.store_name && (
+                  <p className="mt-1 text-blue-600 text-xs">Store: {conn.store_name}</p>
+                )}
+              </div>
+            </div>
+            <Button onClick={handleConnect} disabled={connecting} className="gap-2 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700">
+              {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingBag className="h-4 w-4" />}
+              {connecting ? "Redirecting to Jumia…" : "Authorise with Jumia"}
+            </Button>
           </div>
         ) : isExpired ? (
           /* ── Expired state ──────────────────────────────────────────────── */

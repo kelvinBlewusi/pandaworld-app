@@ -18,16 +18,20 @@ const SCOPES = "openid offline_access";
 
 // ─── Build the URL the user is redirected to ─────────────────────────────────
 
-export function buildAuthorizationUrl(state: string): string {
-  const clientId    = process.env.JUMIA_CLIENT_ID!;
-  const redirectUri = process.env.JUMIA_REDIRECT_URI!;
+export function buildAuthorizationUrl(
+  state: string,
+  clientId?: string,
+  redirectUri?: string,
+): string {
+  const cid = clientId   ?? process.env.JUMIA_CLIENT_ID!;
+  const rdi = redirectUri ?? process.env.JUMIA_REDIRECT_URI!;
 
   const params = new URLSearchParams({
-    client_id:     clientId,
+    client_id:     cid,
     response_type: "code",
     scope:         SCOPES,
     prompt:        "login",   // always show login screen (per Jumia spec)
-    redirect_uri:  redirectUri,
+    redirect_uri:  rdi,
     state,
   });
 
@@ -36,23 +40,28 @@ export function buildAuthorizationUrl(state: string): string {
 
 // ─── Exchange the one-time code for tokens ────────────────────────────────────
 
-export async function exchangeCodeForTokens(code: string): Promise<{
+export async function exchangeCodeForTokens(
+  code: string,
+  clientId?: string,
+  clientSecret?: string,
+  redirectUri?: string,
+): Promise<{
   access_token:   string;
   id_token?:      string;
   refresh_token?: string;
   expires_in:     number;
   token_type:     string;
 }> {
-  const clientId     = process.env.JUMIA_CLIENT_ID!;
-  const clientSecret = process.env.JUMIA_CLIENT_SECRET!;
-  const redirectUri  = process.env.JUMIA_REDIRECT_URI!;
+  const cid = clientId     ?? process.env.JUMIA_CLIENT_ID!;
+  const sec = clientSecret ?? process.env.JUMIA_CLIENT_SECRET!;
+  const rdi = redirectUri  ?? process.env.JUMIA_REDIRECT_URI!;
 
   const body = new URLSearchParams({
     grant_type:    "authorization_code",
     code,
-    redirect_uri:  redirectUri,
-    client_id:     clientId,
-    client_secret: clientSecret,
+    redirect_uri:  rdi,
+    client_id:     cid,
+    client_secret: sec,
   });
 
   const res = await fetch(JUMIA_TOKEN_URL, {
@@ -117,19 +126,23 @@ export async function fetchJumiaSellerProfile(accessToken: string): Promise<{
 
 // ─── Refresh an expired access token ─────────────────────────────────────────
 
-export async function refreshAccessToken(refreshToken: string): Promise<{
+export async function refreshAccessToken(
+  refreshToken: string,
+  clientId?: string,
+  clientSecret?: string,
+): Promise<{
   access_token:   string;
   refresh_token?: string;
   expires_in:     number;
 }> {
-  const clientId     = process.env.JUMIA_CLIENT_ID!;
-  const clientSecret = process.env.JUMIA_CLIENT_SECRET!;
+  const cid = clientId     ?? process.env.JUMIA_CLIENT_ID!;
+  const sec = clientSecret ?? process.env.JUMIA_CLIENT_SECRET!;
 
   const body = new URLSearchParams({
     grant_type:    "refresh_token",
     refresh_token: refreshToken,
-    client_id:     clientId,
-    client_secret: clientSecret,
+    client_id:     cid,
+    client_secret: sec,
   });
 
   const res = await fetch(JUMIA_TOKEN_URL, {
@@ -148,9 +161,13 @@ export async function refreshAccessToken(refreshToken: string): Promise<{
 
 // ─── Revoke a token ───────────────────────────────────────────────────────────
 
-export async function revokeToken(token: string): Promise<void> {
-  const clientId     = process.env.JUMIA_CLIENT_ID!;
-  const clientSecret = process.env.JUMIA_CLIENT_SECRET!;
+export async function revokeToken(
+  token: string,
+  clientId?: string,
+  clientSecret?: string,
+): Promise<void> {
+  const cid = clientId     ?? process.env.JUMIA_CLIENT_ID!;
+  const sec = clientSecret ?? process.env.JUMIA_CLIENT_SECRET!;
 
   // Keycloak revoke endpoint pattern
   await fetch(`${JUMIA_TOKEN_URL.replace("/token", "/revoke")}`, {
@@ -158,8 +175,8 @@ export async function revokeToken(token: string): Promise<void> {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body:    new URLSearchParams({
       token,
-      client_id:     clientId,
-      client_secret: clientSecret,
+      client_id:     cid,
+      client_secret: sec,
     }).toString(),
   }).catch(() => {});
   // Best-effort — don't throw

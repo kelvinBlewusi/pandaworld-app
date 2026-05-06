@@ -84,6 +84,12 @@ export async function POST(req: NextRequest) {
         { status: 403 }
       );
     }
+    if (msg === "JUMIA_OAUTH_REQUIRED") {
+      return NextResponse.json(
+        { error: "Jumia authorisation required. Go to Settings → Integrations → Authorise." },
+        { status: 403 }
+      );
+    }
     if (msg === "JUMIA_TOKEN_EXPIRED") {
       return NextResponse.json(
         { error: "Jumia access token expired. Go to Settings → Integrations → Re-authorise." },
