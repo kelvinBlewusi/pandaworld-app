@@ -26,12 +26,14 @@ async function getJumiaStatus(): Promise<JumiaConnectionPublic | null> {
     const db = createServerClient();
     const { data } = await db
       .from("jumia_connections")
-      .select("status, store_name, seller_email, connected_at, token_expires_at")
+      .select("status, access_token, store_name, seller_email, connected_at, token_expires_at")
       .eq("user_id", userId)
       .maybeSingle();
     if (!data) return null;
+    const oauthRequired = data.access_token === "credential_auth";
     return {
-      connected:        data.status === "active",
+      connected:        data.status === "active" && !oauthRequired,
+      oauth_required:   oauthRequired,
       status:           data.status as JumiaConnectionPublic["status"],
       store_name:       data.store_name ?? null,
       seller_name:      null,
@@ -109,6 +111,8 @@ export default async function DashboardPage() {
           "flex items-center justify-between rounded-2xl border px-5 py-4",
           jumia.connected
             ? "border-emerald-100 bg-emerald-50"
+            : jumia.oauth_required
+            ? "border-blue-100 bg-blue-50"
             : jumia.status === "expired"
             ? "border-amber-100 bg-amber-50"
             : "border-zinc-200 bg-zinc-50"
@@ -116,9 +120,9 @@ export default async function DashboardPage() {
           <div className="flex items-center gap-3">
             <div className={cn(
               "flex h-8 w-8 items-center justify-center rounded-lg text-base",
-              jumia.connected ? "bg-emerald-100" : "bg-zinc-100"
+              jumia.connected ? "bg-emerald-100" : jumia.oauth_required ? "bg-blue-100" : "bg-zinc-100"
             )}>
-              <ShoppingBag className={cn("h-4 w-4", jumia.connected ? "text-emerald-600" : "text-zinc-400")} />
+              <ShoppingBag className={cn("h-4 w-4", jumia.connected ? "text-emerald-600" : jumia.oauth_required ? "text-blue-600" : "text-zinc-400")} />
             </div>
             <div>
               <p className="text-sm font-semibold text-zinc-800">
@@ -128,11 +132,14 @@ export default async function DashboardPage() {
               <p className={cn(
                 "text-xs",
                 jumia.connected ? "text-emerald-600"
+                  : jumia.oauth_required ? "text-blue-600"
                   : jumia.status === "expired" ? "text-amber-600"
                   : "text-zinc-400"
               )}>
                 {jumia.connected
                   ? `Connected${jumia.seller_email ? ` as ${jumia.seller_email}` : ""}`
+                  : jumia.oauth_required
+                  ? "One more step — authorise PandaWorld in Jumia Vendor Center"
                   : jumia.status === "expired"
                   ? "Token expired — re-authorise to push listings"
                   : "Not connected — connect to publish directly from PandaWorld"}
@@ -141,15 +148,15 @@ export default async function DashboardPage() {
           </div>
           <div className="flex items-center gap-2">
             {!jumia.connected && (
-              <AlertCircle className={cn("h-4 w-4", jumia.status === "expired" ? "text-amber-500" : "text-zinc-300")} />
+              <AlertCircle className={cn("h-4 w-4", jumia.oauth_required ? "text-blue-400" : jumia.status === "expired" ? "text-amber-500" : "text-zinc-300")} />
             )}
             {jumia.connected ? (
               <CheckCircle className="h-4 w-4 text-emerald-500" />
             ) : (
               <Button asChild size="sm" variant="outline" className="gap-1.5 text-xs">
-                <Link href="/settings/integrations">
+                <Link href={jumia.oauth_required ? "/api/jumia/connect" : "/settings/integrations"}>
                   <Plug className="h-3 w-3" />
-                  {jumia.status === "expired" ? "Re-authorise" : "Connect"}
+                  {jumia.oauth_required ? "Authorise" : jumia.status === "expired" ? "Re-authorise" : "Connect"}
                 </Link>
               </Button>
             )}
