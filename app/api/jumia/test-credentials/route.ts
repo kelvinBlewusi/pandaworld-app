@@ -40,10 +40,10 @@ export async function POST(req: NextRequest) {
 
     const errorCode = data.error ?? "";
 
-    // "unsupported_grant_type" means the app credentials ARE valid —
-    // Jumia just doesn't allow client_credentials without a prior auth code flow.
-    if (errorCode === "unsupported_grant_type") {
-      return NextResponse.json({ ok: true, message: "Credentials look valid. Proceed to connect." });
+    // These errors confirm the app EXISTS and credentials are correct —
+    // Jumia just doesn't allow client_credentials without an auth code flow.
+    if (errorCode === "unsupported_grant_type" || errorCode === "unauthorized_client") {
+      return NextResponse.json({ ok: true, message: "Credentials verified. Proceed to connect." });
     }
 
     // "invalid_client" means the App ID or Secret Key is wrong.
