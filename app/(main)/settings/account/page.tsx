@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
-import { supabase } from "@/lib/supabase/client";
+import { createClient } from "@supabase/supabase-js";
 import { cn } from "@/lib/utils";
 import { getSubscription } from "@/lib/actions/subscription";
 import type { Plan } from "@/lib/types/subscription";
@@ -37,9 +37,12 @@ export default function AccountSettingsPage() {
     });
   }, []);
 
-  // Load real connected stores
+  // Load real connected stores — create client lazily so missing env vars don't crash the page
   useEffect(() => {
-    supabase
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!url || !key) { setStoresLoading(false); return; }
+    createClient(url, key)
       .from("jumia_connections")
       .select("id, store_name, seller_email, status, connected_at")
       .then(({ data }) => {
