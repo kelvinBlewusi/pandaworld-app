@@ -1,167 +1,367 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { motion } from "framer-motion";
-import { ExternalLink, FileSpreadsheet, ShieldCheck, ArrowLeft } from "lucide-react";
+import {
+  ExternalLink,
+  Copy,
+  Check,
+  Eye,
+  EyeOff,
+  Loader2,
+  CheckCircle2,
+  XCircle,
+  ArrowLeft,
+  ShieldCheck,
+} from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 const progressSteps = ["Select channel", "Connect", "Done"];
 
+const COUNTRIES = [
+  { code: "GH", label: "Ghana 🇬🇭",      url: "vendorcenter.jumia.com.gh"  },
+  { code: "NG", label: "Nigeria 🇳🇬",    url: "vendorcenter.jumia.com.ng"  },
+  { code: "KE", label: "Kenya 🇰🇪",      url: "vendorcenter.jumia.co.ke"   },
+  { code: "EG", label: "Egypt 🇪🇬",      url: "vendorcenter.jumia.com.eg"  },
+  { code: "MA", label: "Morocco 🇲🇦",    url: "vendorcenter.jumia.ma"      },
+  { code: "SN", label: "Senegal 🇸🇳",    url: "vendorcenter.jumia.sn"      },
+  { code: "CI", label: "Ivory Coast 🇨🇮",url: "vendorcenter.jumia.ci"      },
+  { code: "TZ", label: "Tanzania 🇹🇿",   url: "vendorcenter.jumia.co.tz"   },
+  { code: "UG", label: "Uganda 🇺🇬",     url: "vendorcenter.jumia.co.ug"   },
+];
+
+function StepCircle({ n, done }: { n: number; done?: boolean }) {
+  return (
+    <div className={cn(
+      "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold",
+      done ? "bg-emerald-100 text-emerald-600" : "bg-orange-100 text-orange-600"
+    )}>
+      {done ? <Check className="h-3.5 w-3.5" /> : n}
+    </div>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+      className="ml-2 shrink-0 rounded-md border border-zinc-200 p-1.5 text-zinc-400 transition-colors hover:border-zinc-300 hover:text-zinc-700"
+      title="Copy to clipboard"
+    >
+      {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+    </button>
+  );
+}
+
 export default function ConnectPage() {
   const router = useRouter();
-  const [isConnecting, setIsConnecting] = useState(false);
+  const [redirectUri, setRedirectUri] = useState("");
+  const [appId, setAppId]             = useState("");
+  const [secretKey, setSecretKey]     = useState("");
+  const [storeName, setStoreName]     = useState("");
+  const [country, setCountry]         = useState("GH");
+  const [showSecret, setShowSecret]   = useState(false);
 
-  const handleOAuth = () => {
-    setIsConnecting(true);
-    // Simulate OAuth flow
-    setTimeout(() => {
-      router.push("/dashboard");
-    }, 2000);
-  };
+  const [testStatus, setTestStatus]   = useState<"idle" | "loading" | "ok" | "error">("idle");
+  const [testMessage, setTestMessage] = useState("");
+  const [connecting, setConnecting]   = useState(false);
+
+  const selectedCountry = COUNTRIES.find((c) => c.code === country) ?? COUNTRIES[0];
+
+  useEffect(() => {
+    setRedirectUri(`${window.location.origin}/api/jumia/callback`);
+  }, []);
+
+  async function handleTest() {
+    if (!appId.trim() || !secretKey.trim()) return;
+    setTestStatus("loading");
+    setTestMessage("");
+    try {
+      const res = await fetch("/api/jumia/test-credentials", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ appId: appId.trim(), secretKey: secretKey.trim(), country }),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        setTestStatus("ok");
+        setTestMessage(data.message ?? "Credentials verified.");
+      } else {
+        setTestStatus("error");
+        setTestMessage(data.error ?? "Credentials could not be verified. Double-check your App ID and Secret Key.");
+      }
+    } catch {
+      setTestStatus("error");
+      setTestMessage("Network error — please try again.");
+    }
+  }
+
+  async function handleConnect() {
+    setConnecting(true);
+    try {
+      const res = await fetch("/api/jumia/save-credentials", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ appId: appId.trim(), secretKey: secretKey.trim(), storeName: storeName.trim(), country }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        const name = encodeURIComponent(storeName.trim() || "Jumia Store");
+        router.push(`/onboarding/done?store=${name}`);
+      } else {
+        setTestStatus("error");
+        setTestMessage(data.error ?? "Failed to save credentials — please try again.");
+        setConnecting(false);
+      }
+    } catch {
+      setTestStatus("error");
+      setTestMessage("Network error — please try again.");
+      setConnecting(false);
+    }
+  }
+
+  const canTest    = appId.trim().length > 0 && secretKey.trim().length > 0;
+  const canConnect = canTest && storeName.trim().length > 0 && testStatus === "ok";
 
   return (
-    <div className="space-y-8">
-      {/* Progress dots */}
+    <div className="space-y-6">
+      {/* Progress bar */}
       <div className="flex items-center justify-center gap-2">
         {progressSteps.map((step, i) => (
           <div key={step} className="flex items-center gap-2">
-            <div
-              className={cn(
-                "flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold",
-                i <= 1
-                  ? "bg-blue-600 text-white"
-                  : "bg-zinc-100 text-zinc-400"
-              )}
-            >
-              {i + 1}
+            <div className={cn(
+              "flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold",
+              i <= 1 ? "bg-blue-600 text-white" : "bg-zinc-100 text-zinc-400"
+            )}>
+              {i === 0 ? <Check className="h-3.5 w-3.5" /> : i + 1}
             </div>
-            <span
-              className={cn(
-                "text-xs",
-                i <= 1 ? "font-medium text-zinc-700" : "text-zinc-400"
-              )}
-            >
+            <span className={cn("text-xs", i <= 1 ? "font-medium text-zinc-700" : "text-zinc-400")}>
               {step}
             </span>
             {i < progressSteps.length - 1 && (
-              <div
-                className={cn(
-                  "h-px w-8",
-                  i === 0 ? "bg-blue-600" : "bg-zinc-200"
-                )}
-              />
+              <div className={cn("h-px w-8", i === 0 ? "bg-blue-600" : "bg-zinc-200")} />
             )}
           </div>
         ))}
       </div>
 
-      {/* Header */}
-      <div className="text-center">
-        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-orange-400 to-orange-500 text-3xl shadow-lg">
-          🛒
-        </div>
-        <h1 className="text-2xl font-bold text-zinc-900">
-          Connect your Jumia Vendor Center
-        </h1>
-        <p className="mt-2 text-sm text-zinc-500">
-          Authorise PandaWorld to publish listings on your behalf.
-        </p>
-      </div>
-
-      {/* OAuth option */}
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="rounded-2xl border bg-white p-6 shadow-sm space-y-4"
-      >
-        <div className="flex items-start gap-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-50 shrink-0">
-            <ExternalLink className="h-5 w-5 text-orange-500" />
+      {/* Main card */}
+      <div className="mx-auto max-w-[600px] rounded-2xl border bg-white shadow-sm overflow-hidden">
+        {/* Header */}
+        <div className="border-b bg-gradient-to-r from-orange-50 to-amber-50 px-6 py-5 flex items-center gap-4">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-orange-400 to-orange-500 text-2xl shadow-sm">
+            🛒
           </div>
           <div>
-            <p className="font-semibold text-zinc-800">
-              Connect via Jumia OAuth
-            </p>
-            <p className="mt-1 text-sm text-zinc-500">
-              You'll be redirected to Jumia to authorise access. PandaWorld
-              never stores your Jumia password.
+            <h1 className="text-lg font-bold text-zinc-900">Connect Jumia</h1>
+            <p className="text-sm text-zinc-500">
+              Follow these steps to link your Vendor Center account
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 rounded-xl bg-zinc-50 px-4 py-3">
-          <ShieldCheck className="h-4 w-4 text-emerald-500 shrink-0" />
-          <p className="text-xs text-zinc-500">
-            PandaWorld only requests <strong>write access to listings</strong>. We do not
-            access orders, payments, or personal data beyond what's needed.
+        <div className="divide-y">
+          {/* Step 1 — Log in */}
+          <div className="px-6 py-5 space-y-3">
+            <div className="flex items-center gap-3">
+              <StepCircle n={1} />
+              <p className="text-sm font-semibold text-zinc-800">Log into Jumia Vendor Center</p>
+            </div>
+            <p className="ml-10 text-sm text-zinc-500">
+              Go to{" "}
+              <a
+                href={`https://${selectedCountry.url}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-orange-600 hover:underline"
+              >
+                {selectedCountry.url}
+              </a>{" "}
+              and sign in to your seller account.
+            </p>
+            <div className="ml-10">
+              <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" asChild>
+                <a href={`https://${selectedCountry.url}`} target="_blank" rel="noopener noreferrer">
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  Open Vendor Center
+                </a>
+              </Button>
+            </div>
+          </div>
+
+          {/* Step 2 — Create app */}
+          <div className="px-6 py-5 space-y-3">
+            <div className="flex items-center gap-3">
+              <StepCircle n={2} />
+              <p className="text-sm font-semibold text-zinc-800">Create an API application</p>
+            </div>
+            <div className="ml-10 space-y-2 text-sm text-zinc-500">
+              <p>
+                Navigate to{" "}
+                <span className="font-medium text-zinc-700">
+                  Settings → Applications → Create Application
+                </span>
+              </p>
+              <p>
+                Choose:{" "}
+                <span className="font-medium text-zinc-700">Web Application (OAuth)</span>
+              </p>
+              <p className="mt-2">Set the Redirect URI to:</p>
+              <div className="flex items-center rounded-lg border bg-zinc-50 px-3 py-2 font-mono text-xs text-zinc-700">
+                <span className="flex-1 break-all">{redirectUri || "Loading…"}</span>
+                {redirectUri && <CopyButton text={redirectUri} />}
+              </div>
+            </div>
+          </div>
+
+          {/* Step 3 — Copy credentials */}
+          <div className="px-6 py-5 space-y-3">
+            <div className="flex items-center gap-3">
+              <StepCircle n={3} />
+              <p className="text-sm font-semibold text-zinc-800">Copy your credentials</p>
+            </div>
+            <div className="ml-10 text-sm text-zinc-500">
+              <p>After creating the app, copy your:</p>
+              <ul className="mt-2 space-y-1 pl-4 list-disc text-zinc-600">
+                <li><span className="font-medium">Application ID</span></li>
+                <li><span className="font-medium">Secret Key</span></li>
+              </ul>
+            </div>
+          </div>
+
+          {/* Step 4 — Form */}
+          <div className="px-6 py-5 space-y-4">
+            <div className="flex items-center gap-3">
+              <StepCircle n={4} done={testStatus === "ok"} />
+              <p className="text-sm font-semibold text-zinc-800">Paste them below</p>
+            </div>
+
+            <div className="ml-10 space-y-4">
+              {/* Country */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium text-zinc-600">Country</Label>
+                <Select value={country} onValueChange={(v) => { setCountry(v); setTestStatus("idle"); }}>
+                  <SelectTrigger className="h-9 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {COUNTRIES.map((c) => (
+                      <SelectItem key={c.code} value={c.code}>{c.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* App ID */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium text-zinc-600">Application ID</Label>
+                <Input
+                  placeholder="e.g. pandaworld_gh_12345"
+                  value={appId}
+                  onChange={(e) => { setAppId(e.target.value); setTestStatus("idle"); }}
+                  className="h-9 text-sm font-mono"
+                />
+              </div>
+
+              {/* Secret Key */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium text-zinc-600">Secret Key</Label>
+                <div className="relative">
+                  <Input
+                    type={showSecret ? "text" : "password"}
+                    placeholder="Your Jumia app secret"
+                    value={secretKey}
+                    onChange={(e) => { setSecretKey(e.target.value); setTestStatus("idle"); }}
+                    className="h-9 pr-10 text-sm font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowSecret((s) => !s)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
+                  >
+                    {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Store name */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-medium text-zinc-600">Store name</Label>
+                <Input
+                  placeholder="What you want to call this store in PandaWorld"
+                  value={storeName}
+                  onChange={(e) => setStoreName(e.target.value)}
+                  className="h-9 text-sm"
+                />
+              </div>
+
+              {/* Test connection row */}
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 gap-2 text-xs"
+                  disabled={!canTest || testStatus === "loading"}
+                  onClick={handleTest}
+                >
+                  {testStatus === "loading" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Test Connection
+                </Button>
+                {testStatus === "ok" && (
+                  <span className="flex items-center gap-1.5 text-xs font-medium text-emerald-600">
+                    <CheckCircle2 className="h-4 w-4" /> {testMessage}
+                  </span>
+                )}
+                {testStatus === "error" && (
+                  <span className="flex items-center gap-1.5 text-xs text-red-500">
+                    <XCircle className="h-4 w-4" /> {testMessage}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="border-t bg-zinc-50 px-6 py-4 space-y-3">
+          <p className="flex items-center gap-2 text-xs text-zinc-400">
+            <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-500" />
+            Your credentials are encrypted and never shared.
           </p>
+          <Button
+            className="w-full h-11 gap-2 bg-gradient-to-r from-orange-400 to-orange-500 hover:from-orange-500 hover:to-orange-600 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={!canConnect || connecting}
+            onClick={handleConnect}
+          >
+            {connecting ? (
+              <><Loader2 className="h-4 w-4 animate-spin" />Connecting…</>
+            ) : (
+              "Connect Jumia →"
+            )}
+          </Button>
         </div>
-
-        <Button
-          className="w-full h-11 gap-2 bg-gradient-to-r from-orange-400 to-orange-500 hover:from-orange-500 hover:to-orange-600 text-white"
-          onClick={handleOAuth}
-          disabled={isConnecting}
-        >
-          {isConnecting ? (
-            <>
-              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-              Connecting…
-            </>
-          ) : (
-            <>
-              <ExternalLink className="h-4 w-4" />
-              Connect with Jumia
-            </>
-          )}
-        </Button>
-      </motion.div>
-
-      {/* Divider */}
-      <div className="flex items-center gap-3">
-        <div className="flex-1 h-px bg-zinc-200" />
-        <span className="text-xs text-zinc-400">or</span>
-        <div className="flex-1 h-px bg-zinc-200" />
       </div>
 
-      {/* Spreadsheet fallback */}
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-        className="rounded-2xl border border-dashed bg-white p-6 shadow-sm space-y-3"
-      >
-        <div className="flex items-start gap-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-zinc-50 shrink-0">
-            <FileSpreadsheet className="h-5 w-5 text-zinc-400" />
-          </div>
-          <div>
-            <p className="font-semibold text-zinc-800">
-              I'll upload via spreadsheet
-            </p>
-            <p className="mt-1 text-sm text-zinc-500">
-              Skip the OAuth step and manually export listings as a CSV for upload
-              to Jumia. You can always connect later.
-            </p>
-          </div>
-        </div>
-        <Button
-          variant="outline"
-          className="w-full h-11"
-          onClick={() => router.push("/dashboard")}
-        >
-          Skip for now — go to dashboard
+      <div className="mx-auto max-w-[600px]">
+        <Button variant="ghost" size="sm" asChild className="w-full text-zinc-400">
+          <Link href="/onboarding/channel">
+            <ArrowLeft className="mr-1 h-3.5 w-3.5" />
+            Back to channel selection
+          </Link>
         </Button>
-      </motion.div>
-
-      <Button variant="ghost" size="sm" asChild className="w-full text-zinc-400">
-        <Link href="/onboarding/channel">
-          <ArrowLeft className="mr-1 h-3.5 w-3.5" />
-          Back to channel selection
-        </Link>
-      </Button>
+      </div>
     </div>
   );
 }
