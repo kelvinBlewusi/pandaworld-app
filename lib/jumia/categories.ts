@@ -191,6 +191,45 @@ export async function fetchAttributesFromJumia(
     });
 }
 
+// ─── fetchAndCacheCategoryTree ─────────────────────────────────────────────────
+//
+// Top-level orchestrator: fetches the full Jumia category tree for a given
+// access token and stores it in Supabase. Optional: also fetches all attribute
+// schemas (slow — one API call per category). Suitable for a background job
+// or an explicit admin/user-triggered sync.
+
+export async function fetchAndCacheCategoryTree(
+  accessToken: string,
+  options: { syncAttributes?: boolean } = {}
+): Promise<{ categories: number; attributes: number }> {
+  const syncAttributes = options.syncAttributes ?? false;
+
+  // 1. Fetch + store category list
+  const categories = await fetchCategoriesFromJumia(accessToken);
+  await upsertCategories(categories);
+
+  if (!syncAttributes) {
+    return { categories: categories.length, attributes: 0 };
+  }
+
+  // 2. Fetch attribute schemas for each category (one call per category)
+  let attrTotal = 0;
+  for (const cat of categories) {
+    if (!cat.attribute_set_sid) continue;
+    try {
+      const attrs = await fetchAttributesFromJumia(accessToken, cat.attribute_set_sid);
+      if (attrs.length > 0) {
+        await upsertAttributes(cat.code, attrs);
+        attrTotal += attrs.length;
+      }
+    } catch (e) {
+      console.warn(`[categories] Attribute fetch failed for ${cat.name}:`, e);
+    }
+  }
+
+  return { categories: categories.length, attributes: attrTotal };
+}
+
 // ─── Upsert helpers ───────────────────────────────────────────────────────────
 
 export async function upsertCategories(categories: JumiaCategoryRow[]) {
