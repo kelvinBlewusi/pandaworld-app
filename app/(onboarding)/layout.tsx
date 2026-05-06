@@ -6,7 +6,7 @@ export default function OnboardingLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#0a0a0c]">
+    <div className="relative min-h-screen bg-[#0a0a0c]">
       {/* Animated WebGL background */}
       <ShaderBackground />
 
