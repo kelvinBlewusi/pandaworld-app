@@ -20,8 +20,8 @@ export async function GET(req: NextRequest) {
   const stateRaw = searchParams.get("state");
   const error    = searchParams.get("error");
 
-  const appUrl  = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3002";
-  const failUrl = `${appUrl}/settings/integrations?jumia_error=`;
+  const origin  = req.nextUrl.origin;
+  const failUrl = `${origin}/settings/integrations?jumia_error=`;
 
   // ── User denied access ─────────────────────────────────────────────────────
   if (error) {
@@ -68,7 +68,7 @@ export async function GET(req: NextRequest) {
   }
 
   // ── Build redirect URI (must match what was sent in /connect) ─────────────
-  const redirectUri = `${appUrl}/api/jumia/callback`;
+  const redirectUri = `${origin}/api/jumia/callback`;
 
   // ── Exchange code for tokens using the seller's own app credentials ────────
   let tokens: { access_token: string; refresh_token?: string; expires_in: number };
@@ -127,6 +127,6 @@ export async function GET(req: NextRequest) {
   );
 
   // Redirect to done page (onboarding flow) with store name
-  const successUrl = `${appUrl}/onboarding/done?store=${encodeURIComponent(resolvedStoreName)}`;
+  const successUrl = `${origin}/onboarding/done?store=${encodeURIComponent(resolvedStoreName)}`;
   return NextResponse.redirect(successUrl);
 }

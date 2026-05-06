@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { buildAuthorizationUrl } from "@/lib/jumia/oauth";
@@ -7,14 +7,16 @@ import { buildAuthorizationUrl } from "@/lib/jumia/oauth";
 // Looks up the seller's stored app_id, builds the Jumia OAuth authorization
 // URL using it as the client_id, and redirects the browser there.
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
 
-  const appUrl  = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3002";
-  const failUrl = `${appUrl}/settings/integrations?jumia_error=`;
+  // Derive origin from the actual request so redirect_uri always matches
+  // what the onboarding page displayed (window.location.origin).
+  const origin  = req.nextUrl.origin;
+  const failUrl = `${origin}/settings/integrations?jumia_error=`;
 
   // ── Look up the seller's stored Jumia credentials ─────────────────────────
   const db = createServerClient();
@@ -37,8 +39,8 @@ export async function GET() {
     );
   }
 
-  // ── Build redirect URI ─────────────────────────────────────────────────────
-  const redirectUri = `${appUrl}/api/jumia/callback`;
+  // ── Build redirect URI — must match what the seller registered in Vendor Center
+  const redirectUri = `${origin}/api/jumia/callback`;
 
   // ── Generate CSRF state — encodes userId + nonce ──────────────────────────
   const nonce = crypto.randomUUID();
