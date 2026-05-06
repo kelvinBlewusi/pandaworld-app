@@ -22,6 +22,7 @@ import {
   Wand2,
   Link2,
   LogOut,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -219,7 +220,13 @@ interface WorkflowCounts {
   failed: number;
 }
 
-export function Sidebar({ workflowCounts }: { workflowCounts?: WorkflowCounts }) {
+export function Sidebar({
+  workflowCounts,
+  onClose,
+}: {
+  workflowCounts?: WorkflowCounts;
+  onClose?: () => void;
+}) {
   const counts = workflowCounts ?? { draft: 0, live: 0, pending_approval: 0, failed: 0 };
   const workflowNav = workflowNavBase.map(({ statusKey, ...item }) => ({
     ...item,
@@ -230,7 +237,7 @@ export function Sidebar({ workflowCounts }: { workflowCounts?: WorkflowCounts })
   const router = useRouter();
 
   return (
-    <aside className="flex h-screen w-60 flex-col border-r bg-white">
+    <aside className="flex h-screen w-64 flex-col border-r bg-white">
       {/* Brand + workspace dropdown */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -245,6 +252,18 @@ export function Sidebar({ workflowCounts }: { workflowCounts?: WorkflowCounts })
               </p>
             </div>
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+          {onClose && (
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={(e) => { e.stopPropagation(); onClose(); }}
+              onKeyDown={(e) => e.key === "Enter" && onClose()}
+              className="ml-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 transition-colors"
+              aria-label="Close menu"
+            >
+              <X className="h-4 w-4" />
+            </span>
+          )}
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent side="bottom" align="start" className="w-56">
