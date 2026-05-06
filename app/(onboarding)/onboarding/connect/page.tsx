@@ -118,8 +118,11 @@ export default function ConnectPage() {
       });
       const data = await res.json();
       if (res.ok) {
-        const name = encodeURIComponent(storeName.trim() || "Jumia Store");
-        router.push(`/onboarding/done?store=${name}`);
+        // Credentials saved — now kick off the real OAuth flow.
+        // /api/jumia/connect reads the saved app_id and redirects to Jumia's
+        // authorize page; after the seller approves, the callback stores a real
+        // access_token and sends them to /onboarding/done.
+        window.location.href = "/api/jumia/connect";
       } else {
         setTestStatus("error");
         setTestMessage(data.error ?? "Failed to save credentials — please try again.");

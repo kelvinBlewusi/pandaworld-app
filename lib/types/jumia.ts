@@ -18,6 +18,8 @@ export interface JumiaConnection {
 /** Lightweight shape returned to the client (never exposes tokens) */
 export interface JumiaConnectionPublic {
   connected: boolean;
+  /** true when credentials are saved but the seller hasn't completed OAuth yet */
+  oauth_required?: boolean;
   status: JumiaConnection["status"] | null;
   seller_name: string | null;
   seller_email: string | null;

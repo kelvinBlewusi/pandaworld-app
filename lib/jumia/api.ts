@@ -28,12 +28,18 @@ export async function getValidJumiaCredentials(userId: string): Promise<{
 
   const { data: conn, error } = await db
     .from("jumia_connections")
-    .select("access_token, refresh_token, token_expires_at, status, shop_id")
+    .select("access_token, refresh_token, token_expires_at, status, shop_id, app_id, app_secret")
     .eq("user_id", userId)
     .maybeSingle();
 
   if (error || !conn)            throw new Error("JUMIA_NOT_CONNECTED");
   if (conn.status === "revoked") throw new Error("JUMIA_NOT_CONNECTED");
+
+  // "credential_auth" is the sentinel stored when credentials were saved but
+  // the seller hasn't yet completed the OAuth authorization code flow.
+  if (conn.access_token === "credential_auth") {
+    throw new Error("JUMIA_OAUTH_REQUIRED");
+  }
 
   let accessToken = conn.access_token as string;
 
@@ -42,7 +48,14 @@ export async function getValidJumiaCredentials(userId: string): Promise<{
     const expiresAt = new Date(conn.token_expires_at as string).getTime();
     if (Date.now() >= expiresAt - 5 * 60 * 1000) {
       if (!conn.refresh_token) throw new Error("JUMIA_TOKEN_EXPIRED");
-      const fresh     = await refreshAccessToken(conn.refresh_token as string);
+      // Use the seller's own app credentials for the refresh
+      const appId     = (conn.app_id     ?? undefined) as string | undefined;
+      const appSecret = (conn.app_secret ?? undefined) as string | undefined;
+      const fresh     = await refreshAccessToken(
+        conn.refresh_token as string,
+        appId,
+        appSecret,
+      );
       const newExpiry = new Date(Date.now() + fresh.expires_in * 1000).toISOString();
       await db.from("jumia_connections").update({
         access_token:     fresh.access_token,

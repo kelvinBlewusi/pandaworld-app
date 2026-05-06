@@ -1,31 +1,54 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
+import { createServerClient } from "@/lib/supabase/server";
 import { buildAuthorizationUrl } from "@/lib/jumia/oauth";
 
 // ─── GET /api/jumia/connect ───────────────────────────────────────────────────
-// Generates the Jumia OAuth authorization URL and redirects the browser to it.
-// A random `state` token is embedded in the URL — the callback verifies it
-// to prevent CSRF.
+// Looks up the seller's stored app_id, builds the Jumia OAuth authorization
+// URL using it as the client_id, and redirects the browser there.
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
 
-  if (!process.env.JUMIA_CLIENT_ID || !process.env.JUMIA_REDIRECT_URI) {
-    return NextResponse.json(
-      { error: "Jumia OAuth is not configured. Add JUMIA_CLIENT_ID and JUMIA_REDIRECT_URI to .env.local." },
-      { status: 500 }
+  // Derive origin from the actual request so redirect_uri always matches
+  // what the onboarding page displayed (window.location.origin).
+  const origin  = req.nextUrl.origin;
+  const failUrl = `${origin}/settings/integrations?jumia_error=`;
+
+  // ── Look up the seller's stored Jumia credentials ─────────────────────────
+  const db = createServerClient();
+  const { data: conn, error: dbError } = await db
+    .from("jumia_connections")
+    .select("app_id, store_name")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (dbError) {
+    console.error("[Jumia connect] DB error:", dbError);
+    return NextResponse.redirect(
+      `${failUrl}${encodeURIComponent("Database error — please try again")}`
     );
   }
 
-  // Generate a random CSRF state token and embed userId so the callback
-  // can associate the tokens with the right user without a separate session store.
-  const nonce = crypto.randomUUID();
-  const state = Buffer.from(JSON.stringify({ userId, nonce })).toString("base64url");
+  if (!conn?.app_id) {
+    return NextResponse.redirect(
+      `${failUrl}${encodeURIComponent("No Jumia credentials found. Please complete onboarding first.")}`
+    );
+  }
 
-  const authUrl = buildAuthorizationUrl(state);
+  // ── Build redirect URI — must match what the seller registered in Vendor Center
+  const redirectUri = `${origin}/api/jumia/callback`;
+
+  // ── Generate CSRF state — encodes userId + nonce ──────────────────────────
+  const nonce = crypto.randomUUID();
+  const state = Buffer.from(
+    JSON.stringify({ userId, nonce, storeName: conn.store_name ?? "" })
+  ).toString("base64url");
+
+  const authUrl = buildAuthorizationUrl(state, conn.app_id, redirectUri);
 
   return NextResponse.redirect(authUrl);
 }
