@@ -1348,11 +1348,11 @@ function CategoryAttributesStep({
 
 // ─── Main review client ────────────────────────────────────────────────────────
 
+// 3-step structure matching Jumia Vendor Center
 const formSteps = [
-  { id: 1, label: "Product Info" },
-  { id: 2, label: "Category Fields" },
-  { id: 3, label: "Variants" },
-  { id: 4, label: "Specification" },
+  { id: 1, label: "Product Information", sub: "Images, name & description"  },
+  { id: 2, label: "Variants",            sub: "Pricing & combinations"       },
+  { id: 3, label: "Product Specification", sub: "Materials, warranty & more" },
 ];
 
 const PUBLISH_THRESHOLD = typeof process !== "undefined"
@@ -1717,229 +1717,293 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
           </div>
         </div>
 
-        {/* ── RIGHT — 4-step Jumia form ──────────────────────────────────── */}
+        {/* ── RIGHT — Jumia Vendor Center–style form ────────────────────── */}
         <div className="space-y-4">
           <div className="rounded-2xl border bg-white shadow-sm overflow-hidden">
+            <div className="flex" style={{ minHeight: 560 }}>
 
-            {/* Step tabs — overflow-x-auto to handle narrow viewports */}
-            <div className="flex border-b overflow-x-auto">
-              {formSteps.map((s) => {
-                const isActive = formStep === s.id;
-                const isDone   = formStep > s.id;
-                return (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => setFormStep(s.id)}
-                    className={cn(
-                      "flex flex-none items-center justify-center gap-2 border-r px-4 py-3.5 text-xs font-medium transition-colors last:border-r-0 whitespace-nowrap",
-                      isActive ? "border-b-2 border-b-orange-500 bg-orange-50 text-orange-700"
-                        : isDone ? "bg-zinc-50 text-zinc-400 hover:bg-zinc-100"
-                        : "text-zinc-400 hover:bg-zinc-50"
-                    )}
-                  >
-                    <span className={cn(
-                      "flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold",
-                      isActive ? "bg-orange-500 text-white"
-                        : isDone ? "bg-emerald-500 text-white"
-                        : "bg-zinc-200 text-zinc-500"
-                    )}>
-                      {isDone ? <Check className="h-3 w-3" /> : s.id}
-                    </span>
-                    {s.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Form — all steps stay mounted so FormData can collect all inputs */}
-            <form ref={formRef} onSubmit={(e) => e.preventDefault()}>
-              <div className="p-5">
-                <motion.div
-                  key={formStep}
-                  initial={{ opacity: 0, x: 8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ duration: 0.15 }}
-                >
-                  <div className={formStep !== 1 ? "hidden" : ""}>
-                    <ProductInformationStep
-                      listing={{ ...listing, category_code: categoryCode, category_path: categoryPath }}
-                      colorFamily={colorFamily}
-                      setColorFamily={setColorFamily}
-                      fieldSources={fieldSources}
-                      onMarkEdited={markEdited}
-                      brandValue={brandValue}
-                      onBrandChange={setBrandValue}
-                      onCategoryChange={handleCategoryChange}
-                    />
-                  </div>
-                  <div className={formStep !== 2 ? "hidden" : ""}>
-                    <CategoryAttributesStep
-                      categoryCode={categoryCode}
-                      values={dynAttrs}
-                      onChange={(k, v) => setDynAttrs((prev) => ({ ...prev, [k]: v }))}
-                      fieldSources={fieldSources}
-                      onMarkEdited={markEdited}
-                    />
-                  </div>
-                  <div className={formStep !== 3 ? "hidden" : ""}>
-                    <VariantMatrixStep
-                      baseSku={listing.sku}
-                      categoryCode={categoryCode}
-                      variants={variants}
-                      setVariants={setVariants}
-                      axesDef={axesDef}
-                      setAxesDef={setAxesDef}
-                      commissionRate={commissionRate}
-                      commissionPercent={commissionPercent}
-                    />
-                  </div>
-                  <div className={formStep !== 4 ? "hidden" : ""}>
-                    <ProductSpecificationStep
-                      listing={listing}
-                      certification={certification}
-                      setCertification={setCertification}
-                      materialFamily={materialFamily}
-                      setMaterialFamily={setMaterialFamily}
-                      productionCountry={productionCountry}
-                      setProductionCountry={setProductionCountry}
-                      warrantyDuration={warrantyDuration}
-                      setWarrantyDuration={setWarrantyDuration}
-                      warrantyType={warrantyType}
-                      setWarrantyType={setWarrantyType}
-                      fieldSources={fieldSources}
-                      onMarkEdited={markEdited}
-                    />
-                  </div>
-                </motion.div>
+              {/* ── Left vertical step indicator ── */}
+              <div className="hidden sm:flex w-48 shrink-0 flex-col border-r bg-zinc-50/80 pt-8 pb-6 px-5">
+                {formSteps.map((step, i) => {
+                  const isActive = formStep === step.id;
+                  const isDone   = formStep > step.id;
+                  return (
+                    <div key={step.id}>
+                      <button
+                        type="button"
+                        onClick={() => setFormStep(step.id)}
+                        className="flex items-start gap-3 w-full text-left group"
+                      >
+                        {/* Dot */}
+                        <div className="flex shrink-0 flex-col items-center">
+                          <div
+                            className={cn(
+                              "flex h-7 w-7 items-center justify-center rounded-full text-[11px] font-bold transition-all",
+                              isActive
+                                ? "text-white shadow-sm"
+                                : isDone
+                                ? "bg-emerald-500 text-white"
+                                : "bg-zinc-200 text-zinc-500 group-hover:bg-zinc-300"
+                            )}
+                            style={isActive ? { background: "#F68B1E", boxShadow: "0 2px 8px rgba(246,139,30,0.35)" } : undefined}
+                          >
+                            {isDone ? <Check className="h-3.5 w-3.5" /> : step.id}
+                          </div>
+                          {/* Connector line */}
+                          {i < formSteps.length - 1 && (
+                            <div
+                              className={cn("w-0.5 my-2 rounded-full transition-colors", isDone ? "bg-emerald-400" : "bg-zinc-200")}
+                              style={{ height: 48 }}
+                            />
+                          )}
+                        </div>
+                        {/* Labels */}
+                        <div className="pt-0.5 min-w-0">
+                          <p
+                            className={cn("text-xs font-semibold leading-tight transition-colors",
+                              isActive ? "text-[#F68B1E]" : isDone ? "text-zinc-600" : "text-zinc-500"
+                            )}
+                          >
+                            {step.label}
+                          </p>
+                          <p className="mt-0.5 text-[10px] leading-tight text-zinc-400">{step.sub}</p>
+                        </div>
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
 
-              {/* Error / warning banners */}
-              {saveError && !jumiaNotConnected && (
-                <div className="mx-5 mb-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
-                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-                  {saveError}
-                </div>
-              )}
+              {/* ── Right: scrollable form content ── */}
+              <div className="flex flex-1 flex-col overflow-hidden">
 
-              {/* Quality warning when trying to publish with low score */}
-              {qualityResult.score < PUBLISH_THRESHOLD && (
-                <div className="mx-5 mb-3 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-700">
-                  <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
-                  Quality score {qualityResult.score}/100 — minimum to publish is {PUBLISH_THRESHOLD}.
-                  <button type="button" onClick={() => {}} className="ml-auto text-amber-600 hover:text-amber-800 flex items-center gap-0.5 font-medium">
-                    See issues <ChevronRight className="h-3 w-3" />
-                  </button>
+                {/* Mobile step tabs (shown on small screens only) */}
+                <div className="flex border-b overflow-x-auto sm:hidden">
+                  {formSteps.map((s) => {
+                    const isActive = formStep === s.id;
+                    const isDone   = formStep > s.id;
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => setFormStep(s.id)}
+                        className={cn(
+                          "flex flex-none items-center gap-1.5 border-r px-4 py-3 text-xs font-medium whitespace-nowrap last:border-r-0",
+                          isActive ? "border-b-2 border-b-[#F68B1E] bg-orange-50 text-[#F68B1E]"
+                            : isDone ? "bg-zinc-50 text-zinc-400"
+                            : "text-zinc-400"
+                        )}
+                      >
+                        <span className={cn(
+                          "flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-bold",
+                          isActive ? "text-white" : isDone ? "bg-emerald-500 text-white" : "bg-zinc-200 text-zinc-500"
+                        )}
+                          style={isActive ? { background: "#F68B1E" } : undefined}
+                        >
+                          {isDone ? <Check className="h-2.5 w-2.5" /> : s.id}
+                        </span>
+                        {s.label}
+                      </button>
+                    );
+                  })}
                 </div>
-              )}
 
-              {/* Sync to Jumia section (live listings only) */}
-              {listing.status === "live" && (
-                <div className="mx-5 mb-3 space-y-2.5 pt-3 border-t">
-                  {listing.update_feed_status === "pending" && (
-                    <div className="rounded-xl bg-amber-50 border border-amber-100 px-4 py-2.5 text-xs text-amber-700 flex items-center gap-2">
-                      <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-                      Jumia is processing your update — this usually takes under a minute.
-                    </div>
-                  )}
-                  <div className="flex items-center gap-3">
-                    <Button
-                      type="button"
-                      size="sm"
-                      className="gap-1.5"
-                      onClick={handleSyncToJumia}
-                      disabled={syncStatus === "saving"}
+                {/* Form — all steps stay mounted so FormData captures all inputs */}
+                <form ref={formRef} onSubmit={(e) => e.preventDefault()} className="flex flex-1 flex-col">
+                  <div className="flex-1 overflow-y-auto p-5 sm:p-6">
+                    <motion.div
+                      key={formStep}
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.15 }}
                     >
-                      {syncStatus === "saving"
-                        ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Submitting…</>
-                        : <><RefreshCw className="h-3.5 w-3.5" />Sync changes to Jumia</>}
-                    </Button>
-                    {syncStatus === "done"  && <span className="text-xs text-emerald-600">✓ Update submitted</span>}
-                    {syncStatus === "error" && <span className="text-xs text-red-500">Submit failed — try again</span>}
+                      {/* Step 1 — Product Information + Category-specific attributes */}
+                      <div className={formStep !== 1 ? "hidden" : "space-y-8"}>
+                        <ProductInformationStep
+                          listing={{ ...listing, category_code: categoryCode, category_path: categoryPath }}
+                          colorFamily={colorFamily}
+                          setColorFamily={setColorFamily}
+                          fieldSources={fieldSources}
+                          onMarkEdited={markEdited}
+                          brandValue={brandValue}
+                          onBrandChange={setBrandValue}
+                          onCategoryChange={handleCategoryChange}
+                        />
+                        {/* Category-specific Jumia attributes directly below product info */}
+                        <div className="border-t pt-6">
+                          <p className="mb-4 text-sm font-semibold text-zinc-700">Product Specification</p>
+                          <CategoryAttributesStep
+                            categoryCode={categoryCode}
+                            values={dynAttrs}
+                            onChange={(k, v) => setDynAttrs((prev) => ({ ...prev, [k]: v }))}
+                            fieldSources={fieldSources}
+                            onMarkEdited={markEdited}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Step 2 — Variants & pricing */}
+                      <div className={formStep !== 2 ? "hidden" : ""}>
+                        <VariantMatrixStep
+                          baseSku={listing.sku}
+                          categoryCode={categoryCode}
+                          variants={variants}
+                          setVariants={setVariants}
+                          axesDef={axesDef}
+                          setAxesDef={setAxesDef}
+                          commissionRate={commissionRate}
+                          commissionPercent={commissionPercent}
+                        />
+                      </div>
+
+                      {/* Step 3 — Product Specification */}
+                      <div className={formStep !== 3 ? "hidden" : ""}>
+                        <ProductSpecificationStep
+                          listing={listing}
+                          certification={certification}
+                          setCertification={setCertification}
+                          materialFamily={materialFamily}
+                          setMaterialFamily={setMaterialFamily}
+                          productionCountry={productionCountry}
+                          setProductionCountry={setProductionCountry}
+                          warrantyDuration={warrantyDuration}
+                          setWarrantyDuration={setWarrantyDuration}
+                          warrantyType={warrantyType}
+                          setWarrantyType={setWarrantyType}
+                          fieldSources={fieldSources}
+                          onMarkEdited={markEdited}
+                        />
+                      </div>
+                    </motion.div>
                   </div>
-                </div>
-              )}
 
-              {/* Footer */}
-              <div className="flex items-center justify-between border-t bg-zinc-50/50 px-5 py-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setFormStep((s) => Math.max(1, s - 1))}
-                  disabled={formStep === 1 || saving}
-                >
-                  <ArrowLeft className="h-3.5 w-3.5 mr-1" /> Previous
-                </Button>
+                  {/* Inline banners (above footer) */}
+                  <div className="px-5 sm:px-6 space-y-2">
+                    {saveError && !jumiaNotConnected && (
+                      <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
+                        <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                        {saveError}
+                      </div>
+                    )}
+                    {qualityResult.score < PUBLISH_THRESHOLD && (
+                      <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-700">
+                        <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
+                        Quality score {qualityResult.score}/100 — minimum to publish is {PUBLISH_THRESHOLD}.
+                      </div>
+                    )}
+                    {listing.status === "live" && listing.update_feed_status === "pending" && (
+                      <div className="rounded-xl bg-amber-50 border border-amber-100 px-4 py-2.5 text-xs text-amber-700 flex items-center gap-2">
+                        <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                        Jumia is processing your update — this usually takes under a minute.
+                      </div>
+                    )}
+                  </div>
 
-                <div className="flex items-center gap-1.5">
-                  {formSteps.map((s) => (
-                    <div
-                      key={s.id}
-                      className={cn(
-                        "h-1.5 rounded-full transition-all",
-                        formStep === s.id ? "w-5 bg-orange-500"
-                          : formStep > s.id ? "w-3 bg-emerald-400"
-                          : "w-1.5 bg-zinc-300"
-                      )}
-                    />
-                  ))}
-                </div>
-
-                {formStep < formSteps.length ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    className="bg-orange-500 hover:bg-orange-600"
-                    onClick={() => setFormStep((s) => Math.min(formSteps.length, s + 1))}
-                    disabled={saving}
-                  >
-                    Next <ChevronRight className="h-3.5 w-3.5 ml-1" />
-                  </Button>
-                ) : listing.status === "live" ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="gap-1"
-                    disabled={saving || syncStatus === "saving"}
-                    onClick={() => handleSave(false, { skipRedirect: true })}
-                  >
-                    {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                    Save changes
-                  </Button>
-                ) : (
-                  <div className="flex gap-2">
+                  {/* ── Sticky bottom bar — Jumia style ── */}
+                  <div className="mt-2 flex items-center justify-between gap-3 border-t bg-white px-5 py-3.5 sm:px-6">
+                    {/* Left: View drafts */}
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="gap-1"
-                      disabled={saving}
-                      onClick={() => handleSave(false)}
+                      className="gap-1.5 text-zinc-600"
+                      onClick={() => router.push("/listings")}
                     >
-                      {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                      Save draft
+                      View drafts
                     </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      className="gap-1 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 disabled:opacity-60"
-                      disabled={saving || qualityResult.score < PUBLISH_THRESHOLD}
-                      onClick={() => handleSave(true)}
-                      title={qualityResult.score < PUBLISH_THRESHOLD
-                        ? `Quality score too low (${qualityResult.score}/${PUBLISH_THRESHOLD})`
-                        : "Approve & publish to Jumia"}
-                    >
-                      {saving
-                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        : <Check className="h-3.5 w-3.5" />}
-                      Approve &amp; publish
-                    </Button>
+
+                    {/* Right: context-aware action */}
+                    <div className="flex items-center gap-2">
+                      {/* Previous step pill */}
+                      {formStep > 1 && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="text-zinc-400"
+                          onClick={() => setFormStep((s) => Math.max(1, s - 1))}
+                          disabled={saving}
+                        >
+                          <ArrowLeft className="h-3.5 w-3.5 mr-1" /> Back
+                        </Button>
+                      )}
+
+                      {listing.status === "live" ? (
+                        <>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="gap-1"
+                            disabled={saving || syncStatus === "saving"}
+                            onClick={() => handleSave(false, { skipRedirect: true })}
+                          >
+                            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                            Save
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="gap-1.5 text-white disabled:opacity-50"
+                            style={{ background: "linear-gradient(to right, #F68B1E, #e8710a)" }}
+                            onClick={handleSyncToJumia}
+                            disabled={syncStatus === "saving"}
+                          >
+                            {syncStatus === "saving"
+                              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              : <RefreshCw className="h-3.5 w-3.5" />}
+                            Sync to Jumia
+                          </Button>
+                          {syncStatus === "done"  && <span className="text-xs text-emerald-600">✓ Submitted</span>}
+                          {syncStatus === "error" && <span className="text-xs text-red-500">Failed — retry</span>}
+                        </>
+                      ) : formStep < formSteps.length ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="gap-1.5 text-white"
+                          style={{ background: "linear-gradient(to right, #F68B1E, #e8710a)" }}
+                          onClick={() => setFormStep((s) => Math.min(formSteps.length, s + 1))}
+                          disabled={saving}
+                        >
+                          Next <ChevronRight className="h-3.5 w-3.5" />
+                        </Button>
+                      ) : (
+                        <>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="gap-1"
+                            disabled={saving}
+                            onClick={() => handleSave(false)}
+                          >
+                            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                            Save draft
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="gap-1.5 text-white disabled:opacity-50"
+                            style={{ background: "linear-gradient(to right, #F68B1E, #e8710a)" }}
+                            disabled={saving || qualityResult.score < PUBLISH_THRESHOLD}
+                            onClick={() => handleSave(true)}
+                            title={qualityResult.score < PUBLISH_THRESHOLD
+                              ? `Quality score too low (${qualityResult.score}/${PUBLISH_THRESHOLD})`
+                              : "Review & publish to Jumia"}
+                          >
+                            {saving
+                              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              : <Sparkles className="h-3.5 w-3.5" />}
+                            Review &amp; publish
+                          </Button>
+                        </>
+                      )}
+                    </div>
                   </div>
-                )}
+                </form>
               </div>
-            </form>
+            </div>
           </div>
         </div>
       </div>
