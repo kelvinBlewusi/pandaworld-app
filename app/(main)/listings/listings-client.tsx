@@ -14,6 +14,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ListingTable } from "@/components/ui/listing-table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { ListingDisplay } from "@/lib/types";
 
 const POLL_INTERVAL_MS = 10_000; // 10 seconds
@@ -133,21 +139,24 @@ export function ListingsClient({ listings, categories }: ListingsClientProps) {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {listings.length > 0 && (
-            <Button
-              variant="outline"
-              className="gap-2"
-              onClick={handleExportXLSX}
-              disabled={exporting}
-            >
-              {exporting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Download className="h-4 w-4" />
-              )}
-              {exporting ? "Exporting…" : "Export for Jumia"}
-            </Button>
-          )}
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <Button
+                    variant="outline"
+                    className="gap-2 opacity-50 cursor-not-allowed"
+                    disabled
+                    tabIndex={-1}
+                  >
+                    <Download className="h-4 w-4" />
+                    Export for Jumia
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>Coming soon</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <Button asChild className="gap-2">
             <Link href="/listings/new">
               <Plus className="h-4 w-4" />

@@ -2,13 +2,12 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { UserButton, useUser } from "@clerk/nextjs";
+import { UserButton, useUser, useClerk } from "@clerk/nextjs";
 import {
   LayoutDashboard,
   List,
   Plus,
   Calculator,
-  Upload,
   FileText,
   Clock,
   CheckCircle,
@@ -22,12 +21,15 @@ import {
   ImageIcon,
   Wand2,
   Link2,
+  LogOut,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
@@ -37,7 +39,6 @@ const primaryNav = [
   { href: "/dashboard",        label: "Dashboard",        icon: LayoutDashboard },
   { href: "/listings",         label: "Listings",          icon: List },
   { href: "/price-calculator", label: "Price calculator",  icon: Calculator },
-  { href: "/imports",          label: "Imports",           icon: Upload },
 ];
 
 const workflowNavBase = [
@@ -224,20 +225,56 @@ export function Sidebar({ workflowCounts }: { workflowCounts?: WorkflowCounts })
     ...item,
     count: counts[statusKey as keyof WorkflowCounts] ?? 0,
   }));
+  const { user } = useUser();
+  const { signOut } = useClerk();
+  const router = useRouter();
 
   return (
     <aside className="flex h-screen w-60 flex-col border-r bg-white">
-      {/* Brand + workspace switcher */}
-      <div className="flex items-center gap-2.5 border-b px-4 py-4">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 text-base shadow-sm">
-          🐼
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-bold text-zinc-900">PandaWorld</p>
-          <p className="truncate text-[10px] text-zinc-400">Kelvin&apos;s workspace</p>
-        </div>
-        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-      </div>
+      {/* Brand + workspace dropdown */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button className="flex w-full items-center gap-2.5 border-b px-4 py-4 hover:bg-zinc-50 transition-colors focus:outline-none">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 text-base shadow-sm">
+              🐼
+            </div>
+            <div className="min-w-0 flex-1 text-left">
+              <p className="truncate text-sm font-bold text-zinc-900">PandaWorld</p>
+              <p className="truncate text-[10px] text-zinc-400">
+                {user?.primaryEmailAddress?.emailAddress ?? "Workspace"}
+              </p>
+            </div>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent side="bottom" align="start" className="w-56">
+          <div className="px-3 py-2">
+            <p className="text-sm font-semibold text-zinc-800 truncate">
+              {user?.firstName
+                ? `${user.firstName}${user.lastName ? " " + user.lastName : ""}`
+                : user?.username ?? "PandaWorld"}
+            </p>
+            <p className="text-xs text-zinc-400 truncate">
+              {user?.primaryEmailAddress?.emailAddress ?? ""}
+            </p>
+          </div>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem asChild>
+            <Link href="/settings/account" className="flex items-center gap-2 cursor-pointer">
+              <Settings className="h-4 w-4" />
+              Settings
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            className="flex items-center gap-2 text-red-500 focus:text-red-600 cursor-pointer"
+            onClick={() => signOut(() => router.push("/sign-in"))}
+          >
+            <LogOut className="h-4 w-4" />
+            Log out
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       {/* Scrollable nav */}
       <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-3">

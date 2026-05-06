@@ -893,6 +893,13 @@ function NewListingWizard() {
   const [mode, setMode] = useState<WizardMode | null>(
     ["own", "ai", "url"].includes(modeParam ?? "") ? modeParam : null
   );
+
+  // Sync mode with URL so switching methods from sidebar always works
+  useEffect(() => {
+    const valid = ["own", "ai", "url"].includes(modeParam ?? "");
+    setMode(valid ? (modeParam as WizardMode) : null);
+  }, [modeParam]);
+
   const [productCount, setProductCount]       = useState<number | null>(null);
   const [currentProductIdx, setCurrentProductIdx] = useState(0);
   const [products, setProducts]               = useState<ProductDraft[]>([]);

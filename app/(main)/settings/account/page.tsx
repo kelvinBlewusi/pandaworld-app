@@ -2,13 +2,13 @@
 
 import { useState, useEffect } from "react";
 import { useUser } from "@clerk/nextjs";
-import { Unlink, RefreshCw, Bell, Shield, User, Loader2, Check, Zap, Sparkles } from "lucide-react";
+import { Unlink, RefreshCw, Bell, Shield, User, Loader2, Check, Zap, Sparkles, ShoppingBag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
-import { mockStores } from "@/lib/mock/stores";
+import { supabase } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { getSubscription } from "@/lib/actions/subscription";
 import type { Plan } from "@/lib/types/subscription";
@@ -21,12 +21,31 @@ export default function AccountSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [plan, setPlan] = useState<Plan>("free");
+  const [stores, setStores] = useState<Array<{
+    id: string;
+    store_name: string | null;
+    seller_email: string | null;
+    status: string;
+    connected_at: string | null;
+  }>>([]);
+  const [storesLoading, setStoresLoading] = useState(true);
 
   // Load subscription plan
   useEffect(() => {
     getSubscription().then((sub) => {
       if (sub?.plan) setPlan(sub.plan as Plan);
     });
+  }, []);
+
+  // Load real connected stores
+  useEffect(() => {
+    supabase
+      .from("jumia_connections")
+      .select("id, store_name, seller_email, status, connected_at")
+      .then(({ data }) => {
+        setStores(data ?? []);
+        setStoresLoading(false);
+      });
   }, []);
 
   // Populate inputs once Clerk loads
@@ -40,13 +59,7 @@ export default function AccountSettingsPage() {
   const [notifications, setNotifications] = useState({
     listingApproved: true,
     listingFailed: true,
-    weeklyReport: false,
     newFeatures: true,
-  });
-
-  const [warranty, setWarranty] = useState({
-    defaultMonths: "12",
-    type: "Seller warranty",
   });
 
   async function handleSaveProfile() {
@@ -182,92 +195,71 @@ export default function AccountSettingsPage() {
         </div>
         <Separator />
         <div className="space-y-3">
-          {mockStores.map((store) => (
-            <div
-              key={store.id}
-              className="flex items-center gap-4 rounded-xl border p-4"
-            >
-              <div
-                className={cn(
-                  "flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br text-base shrink-0",
-                  store.avatarColor
-                )}
-              >
-                🛒
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-zinc-800 truncate">
-                  {store.storeName}
-                </p>
-                <p className="text-xs text-zinc-400 truncate">{store.email}</p>
-                <p className="text-xs text-zinc-400">
-                  {store.listingsCount} listings · Connected {store.connectedAt}
-                </p>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <span
-                  className={cn(
+          {storesLoading ? (
+            <div className="flex items-center gap-2 py-4 text-sm text-zinc-400">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading stores…
+            </div>
+          ) : stores.length === 0 ? (
+            <div className="rounded-xl border border-dashed p-6 text-center">
+              <ShoppingBag className="mx-auto mb-2 h-8 w-8 text-zinc-300" />
+              <p className="text-sm font-medium text-zinc-500">No stores connected yet</p>
+              <p className="mt-0.5 text-xs text-zinc-400">Connect your first store to start publishing listings</p>
+              <Button asChild size="sm" className="mt-4">
+                <a href="/onboarding/channel">Add your first store</a>
+              </Button>
+            </div>
+          ) : (
+            stores.map((store) => (
+              <div key={store.id} className="flex items-center gap-4 rounded-xl border p-4">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-orange-400 to-pink-500 text-base shrink-0">
+                  🛒
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-zinc-800 truncate">
+                    {store.store_name ?? "Jumia Store"}
+                  </p>
+                  <p className="text-xs text-zinc-400 truncate">{store.seller_email ?? ""}</p>
+                  {store.connected_at && (
+                    <p className="text-xs text-zinc-400">
+                      Connected {new Date(store.connected_at).toLocaleDateString("en-GB", { month: "short", year: "numeric" })}
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className={cn(
                     "rounded-full px-2 py-0.5 text-xs font-medium",
-                    store.status === "connected"
+                    store.status === "active"
                       ? "bg-emerald-50 text-emerald-600"
                       : "bg-red-50 text-red-500"
+                  )}>
+                    {store.status === "active" ? "Connected" : "Expired"}
+                  </span>
+                  {store.status !== "active" ? (
+                    <Button variant="outline" size="sm" className="gap-1 h-7 text-xs" asChild>
+                      <a href="/settings/integrations">
+                        <RefreshCw className="h-3 w-3" />
+                        Reconnect
+                      </a>
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="gap-1 h-7 text-xs text-red-400 hover:text-red-600"
+                      asChild
+                    >
+                      <a href="/api/jumia/disconnect">
+                        <Unlink className="h-3 w-3" />
+                        Disconnect
+                      </a>
+                    </Button>
                   )}
-                >
-                  {store.status === "connected" ? "Connected" : "Expired"}
-                </span>
-                {store.status === "expired" ? (
-                  <Button variant="outline" size="sm" className="gap-1 h-7 text-xs">
-                    <RefreshCw className="h-3 w-3" />
-                    Reconnect
-                  </Button>
-                ) : (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="gap-1 h-7 text-xs text-red-400 hover:text-red-600"
-                  >
-                    <Unlink className="h-3 w-3" />
-                    Disconnect
-                  </Button>
-                )}
+                </div>
               </div>
-            </div>
-          ))}
+            ))
+          )}
         </div>
-      </section>
-
-      {/* Default warranty */}
-      <section className="rounded-2xl border bg-white p-6 shadow-sm space-y-5">
-        <div className="flex items-center gap-3">
-          <Shield className="h-4 w-4 text-zinc-400" />
-          <h2 className="text-sm font-semibold text-zinc-700">Default warranty preferences</h2>
-        </div>
-        <Separator />
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label>Default warranty period (months)</Label>
-            <Input
-              type="number"
-              value={warranty.defaultMonths}
-              onChange={(e) =>
-                setWarranty((w) => ({ ...w, defaultMonths: e.target.value }))
-              }
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Default warranty type</Label>
-            <Input
-              value={warranty.type}
-              onChange={(e) =>
-                setWarranty((w) => ({ ...w, type: e.target.value }))
-              }
-            />
-          </div>
-        </div>
-        <p className="text-xs text-zinc-400">
-          These defaults are pre-filled when you create a new listing.
-        </p>
-        <Button>Save defaults</Button>
       </section>
 
       {/* Notifications */}
@@ -288,11 +280,6 @@ export default function AccountSettingsPage() {
               key: "listingFailed" as const,
               label: "Listing failed",
               desc: "When a listing fails review or publishing",
-            },
-            {
-              key: "weeklyReport" as const,
-              label: "Weekly performance report",
-              desc: "Summary of your listings and earnings every Monday",
             },
             {
               key: "newFeatures" as const,
