@@ -1461,6 +1461,36 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
   const [publishedRef, setPublishedRef] = useState<string | null>(null);
   const [syncStatus, setSyncStatus]   = useState<"idle" | "saving" | "done" | "error">("idle");
 
+  // ── PhotoRoom polish state ────────────────────────────────────────────────
+  const [polishing, setPolishing] = useState(false);
+  const [polishMsg, setPolishMsg] = useState<string | null>(null);
+  const [polishedImages, setPolishedImages] = useState<string[] | null>(null);
+
+  async function handlePolishImages() {
+    setPolishing(true);
+    setPolishMsg(null);
+    try {
+      const res = await fetch("/api/polish-images", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ listingId: listing.id, background: "white" }),
+      });
+      const data = await res.json() as { polished?: string[]; replaced?: number; total?: number; error?: string };
+      if (!res.ok) {
+        setPolishMsg(data.error ?? "Polish failed");
+        return;
+      }
+      setPolishedImages(data.polished ?? null);
+      setPolishMsg(`Polished ${data.replaced ?? 0} of ${data.total ?? 0} images.`);
+      // Refresh server data so the form sees the new image URLs
+      router.refresh();
+    } catch (e) {
+      setPolishMsg(e instanceof Error ? e.message : "Polish failed");
+    } finally {
+      setPolishing(false);
+    }
+  }
+
   // ── Quality score ─────────────────────────────────────────────────────────
   const [qualityResult, setQualityResult] = useState(() =>
     calculateQualityScore(listing, [], variants)
@@ -1692,6 +1722,39 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                   );
                 })}
               </div>
+
+              {/* Polish images CTA */}
+              {(listing.images?.length ?? 0) > 0 && (
+                <div className="rounded-xl border border-violet-100 bg-gradient-to-br from-violet-50 to-fuchsia-50 p-3 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <Sparkles className="h-3.5 w-3.5 mt-0.5 shrink-0 text-violet-500" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold text-zinc-800">Marketplace-ready photos</p>
+                      <p className="text-[11px] text-zinc-500 leading-snug mt-0.5">
+                        Remove background, add white BG + soft shadow, resize to 2000×2000 — Jumia-compliant in one click.
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handlePolishImages}
+                    disabled={polishing}
+                    className="w-full h-8 text-xs gap-1.5 bg-violet-500 hover:bg-violet-600 text-white"
+                  >
+                    {polishing ? (
+                      <><Loader2 className="h-3 w-3 animate-spin" /> Polishing {listing.images?.length} images…</>
+                    ) : polishedImages ? (
+                      <><CheckCircle2 className="h-3 w-3" /> Polish again</>
+                    ) : (
+                      <><Sparkles className="h-3 w-3" /> Polish all {listing.images?.length} images</>
+                    )}
+                  </Button>
+                  {polishMsg && (
+                    <p className="text-[11px] text-center text-emerald-600 font-medium">{polishMsg}</p>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Breadcrumb */}
