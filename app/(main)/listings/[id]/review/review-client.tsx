@@ -1061,6 +1061,56 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
   const [syncStatus, setSyncStatus]   = useState<"idle" | "saving" | "done" | "error">("idle");
 
   // ── Polish state ──────────────────────────────────────────────────────────
+  // ── Test mode (per-browser via localStorage) ──────────────────────────────
+  // When ON: Submit is replaced with "Run pre-flight check" which validates
+  // everything locally + simulates the payload without calling Jumia. Lets
+  // sellers verify the integration end-to-end without polluting their catalog.
+  const [testMode, setTestMode] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("pw_test_mode") === "1";
+  });
+
+  function toggleTestMode() {
+    const next = !testMode;
+    setTestMode(next);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("pw_test_mode", next ? "1" : "0");
+    }
+  }
+
+  // ── Pre-flight check state ────────────────────────────────────────────────
+  const [preflighting, setPreflighting] = useState(false);
+  type PreflightCheck = { level: "pass" | "warn" | "fail"; field: string; rule: string; message: string; jumiaWouldSay?: string; fix?: string };
+  type PreflightReport = {
+    ready: boolean;
+    checks: PreflightCheck[];
+    payload: unknown;
+    summary: { total: number; passed: number; warnings: number; errors: number };
+    meta: { listingId: string; shopId: string | null; storeName: string | null; country: string | null; runAt: string };
+  };
+  const [preflightResult, setPreflightResult] = useState<PreflightReport | null>(null);
+
+  async function runPreflight() {
+    setPreflighting(true);
+    setPreflightResult(null);
+    try {
+      // Save controlled-state fields first so preflight reads fresh values
+      await handleSave(false, { skipRedirect: true });
+
+      const res = await fetch(`/api/jumia/preflight/${listing.id}`);
+      const data = await res.json();
+      if (!res.ok) {
+        setSaveError(data.error ?? "Pre-flight check failed");
+        return;
+      }
+      setPreflightResult(data as PreflightReport);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : "Pre-flight check failed");
+    } finally {
+      setPreflighting(false);
+    }
+  }
+
   const [polishing, setPolishing] = useState(false);
   const [polishMsg, setPolishMsg] = useState<string | null>(null);
 
@@ -1848,7 +1898,27 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
         </div>
       </div>
 
-      {/* ── Floating Submit (bottom-right) ─────────────────────────────────── */}
+      {/* ── Test-mode banner (top, full width) ─────────────────────────────── */}
+      {testMode && (
+        <div className="fixed top-0 left-0 right-0 z-40 bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white shadow-md">
+          <div className="mx-auto max-w-7xl px-4 py-1.5 flex items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-base">🧪</span>
+              <span className="font-semibold">Test mode</span>
+              <span className="opacity-90 truncate">— pre-flight only. No listings will be sent to Jumia.</span>
+            </div>
+            <button
+              type="button"
+              onClick={toggleTestMode}
+              className="shrink-0 rounded-md bg-white/15 hover:bg-white/25 px-2 py-0.5 font-medium transition-colors"
+            >
+              Turn off
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Floating Submit / Pre-flight (bottom-right) ─────────────────────── */}
       <div className="fixed bottom-6 right-6 z-30 flex flex-col items-end gap-2">
         {/* Field-level validation chip — only shown when blocking publish */}
         {!canPublish && (
@@ -1868,26 +1938,196 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
         )}
 
         <div className="flex items-center gap-2">
+          {/* Toggle pill — small, always visible */}
+          <button
+            type="button"
+            onClick={toggleTestMode}
+            className={cn(
+              "rounded-full border px-3 py-1.5 text-[11px] font-medium transition-colors shadow-sm",
+              testMode
+                ? "bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100"
+                : "bg-white border-zinc-200 text-zinc-500 hover:border-zinc-300"
+            )}
+            title={testMode ? "Test mode is ON — Submit goes through pre-flight only" : "Turn on test mode to validate without pushing to Jumia"}
+          >
+            {testMode ? "🧪 Test mode ON" : "Test mode"}
+          </button>
+
           {syncStatus === "done"  && <span className="rounded-md bg-white border px-3 py-1 text-xs text-emerald-600 shadow-sm">✓ Submitted</span>}
           {canPublish && qualityResult.score < PUBLISH_THRESHOLD && (
             <span className="rounded-md bg-white border border-amber-200 px-3 py-1.5 text-[11px] text-amber-700 shadow-sm">
               Quality {qualityResult.score}/{PUBLISH_THRESHOLD}
             </span>
           )}
-          <Button
-            type="button"
-            size="lg"
-            onClick={() => handleSave(true)}
-            disabled={saving || !canPublish || qualityResult.score < PUBLISH_THRESHOLD}
-            className="bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/30 disabled:bg-zinc-200 disabled:text-zinc-400 disabled:shadow-none gap-2 px-8"
-            title={!canPublish ? validationErrors.join(" • ") : ""}
-          >
-            {saving
-              ? <><Loader2 className="h-4 w-4 animate-spin" /> Submitting…</>
-              : "Submit"}
-          </Button>
+
+          {testMode ? (
+            <Button
+              type="button"
+              size="lg"
+              onClick={runPreflight}
+              disabled={preflighting || !canPublish}
+              className="bg-purple-600 hover:bg-purple-700 text-white shadow-lg shadow-purple-500/30 disabled:bg-zinc-200 disabled:text-zinc-400 disabled:shadow-none gap-2 px-8"
+            >
+              {preflighting
+                ? <><Loader2 className="h-4 w-4 animate-spin" /> Running checks…</>
+                : <><Sparkles className="h-4 w-4" /> Run pre-flight check</>}
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="lg"
+              onClick={() => handleSave(true)}
+              disabled={saving || !canPublish || qualityResult.score < PUBLISH_THRESHOLD}
+              className="bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/30 disabled:bg-zinc-200 disabled:text-zinc-400 disabled:shadow-none gap-2 px-8"
+              title={!canPublish ? validationErrors.join(" • ") : ""}
+            >
+              {saving
+                ? <><Loader2 className="h-4 w-4 animate-spin" /> Submitting…</>
+                : "Submit"}
+            </Button>
+          )}
         </div>
       </div>
+
+      {/* ── Pre-flight result modal ─────────────────────────────────────────── */}
+      {preflightResult && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setPreflightResult(null)}
+        >
+          <div
+            className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-2xl bg-white shadow-xl flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b px-5 py-4">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-purple-600" />
+                <h2 className="font-semibold text-zinc-900">Pre-flight check</h2>
+                <span className={cn(
+                  "text-xs font-bold uppercase rounded-full px-2 py-0.5",
+                  preflightResult.ready
+                    ? "bg-emerald-100 text-emerald-700"
+                    : "bg-red-100 text-red-700"
+                )}>
+                  {preflightResult.ready ? "READY" : "NOT READY"}
+                </span>
+              </div>
+              <button onClick={() => setPreflightResult(null)} className="text-zinc-400 hover:text-zinc-700">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto p-5 space-y-4">
+              {/* Verdict */}
+              <div className={cn(
+                "rounded-xl border p-4 text-sm",
+                preflightResult.ready
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : "border-red-200 bg-red-50 text-red-700"
+              )}>
+                {preflightResult.ready ? (
+                  <p className="font-medium">
+                    🎉 Everything looks good. {preflightResult.summary.passed} of {preflightResult.summary.total} checks passed.
+                    {preflightResult.summary.warnings > 0 && ` ${preflightResult.summary.warnings} warning${preflightResult.summary.warnings === 1 ? "" : "s"} to review.`}
+                    {" "}When you turn off test mode, Submit will push this exact payload to Jumia.
+                  </p>
+                ) : (
+                  <p className="font-medium">
+                    {preflightResult.summary.errors} error{preflightResult.summary.errors === 1 ? "" : "s"} blocking the push. Fix these first.
+                  </p>
+                )}
+              </div>
+
+              {/* Check list */}
+              <div className="space-y-1.5">
+                {preflightResult.checks.map((c, i) => (
+                  <div
+                    key={i}
+                    className={cn(
+                      "rounded-md border px-3 py-2 text-xs",
+                      c.level === "pass" ? "border-emerald-100 bg-emerald-50/40" :
+                      c.level === "warn" ? "border-amber-200 bg-amber-50/60" :
+                                           "border-red-200 bg-red-50"
+                    )}
+                  >
+                    <div className="flex items-start gap-2">
+                      <span className="text-base leading-none mt-0.5">
+                        {c.level === "pass" ? "✅" : c.level === "warn" ? "⚠️" : "❌"}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className={cn(
+                          "font-medium",
+                          c.level === "pass" ? "text-emerald-700" :
+                          c.level === "warn" ? "text-amber-800" :
+                                               "text-red-700"
+                        )}>
+                          <span className="text-zinc-500 font-mono text-[10px] mr-1.5">{c.field}</span>
+                          {c.message}
+                        </p>
+                        {c.jumiaWouldSay && (
+                          <p className="mt-0.5 text-[10px] text-zinc-500 italic">
+                            Jumia would respond: &ldquo;{c.jumiaWouldSay}&rdquo;
+                          </p>
+                        )}
+                        {c.fix && (
+                          <p className="mt-0.5 text-[11px] text-zinc-600">
+                            <span className="font-semibold">Fix:</span> {c.fix}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Payload preview */}
+              <details className="rounded-md border bg-zinc-50/50">
+                <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-zinc-600">
+                  Exact payload that would be sent to Jumia (POST /feeds/products/create)
+                </summary>
+                <pre className="max-h-72 overflow-auto bg-zinc-900 text-zinc-100 p-3 font-mono text-[10px] rounded-b-md">
+                  {JSON.stringify(preflightResult.payload, null, 2)}
+                </pre>
+              </details>
+            </div>
+
+            <div className="border-t bg-zinc-50/50 px-5 py-3 flex items-center justify-between gap-3">
+              <p className="text-[11px] text-zinc-500">
+                Connected to {preflightResult.meta.storeName ?? "—"} ({preflightResult.meta.country ?? "—"})
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPreflightResult(null)}
+                >
+                  Close
+                </Button>
+                {preflightResult.ready && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="bg-orange-500 hover:bg-orange-600 text-white gap-1.5"
+                    onClick={() => {
+                      setPreflightResult(null);
+                      // Override test mode for this one push
+                      const confirmGoLive = window.confirm(
+                        "Push this listing to Jumia for real?\n\nThis will create a live product in your Vendor Center (subject to QC review)."
+                      );
+                      if (confirmGoLive) {
+                        handleSave(true);
+                      }
+                    }}
+                  >
+                    Push live anyway →
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Category picker modal */}
       {showCategoryPicker && (
