@@ -95,8 +95,14 @@ Return ONLY valid JSON. No markdown fences, no explanation, no trailing text:
 
 // ─── Gemini AI call ───────────────────────────────────────────────────────────
 
-// Try the primary model, fall back to a known-stable one if it fails
-const GEMINI_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash"];
+// Try the primary model, fall back to known-stable ones if unavailable.
+// Model IDs as of 2025 — gemini-1.5-flash was deprecated Sept 2024.
+const GEMINI_MODELS = [
+  "gemini-2.5-flash",          // current GA, universally available
+  "gemini-2.0-flash",          // older GA — fallback
+  "gemini-flash-latest",       // alias to whatever is current
+  "gemini-1.5-flash-latest",   // last-resort alias
+];
 
 async function callGemini(
   prompt: string,
