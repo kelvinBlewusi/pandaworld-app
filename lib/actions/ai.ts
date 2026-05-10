@@ -95,14 +95,61 @@ Return ONLY valid JSON. No markdown fences, no explanation, no trailing text:
 
 // ─── Gemini AI call ───────────────────────────────────────────────────────────
 
-// Try the primary model, fall back to known-stable ones if unavailable.
-// Model IDs as of 2025 — gemini-1.5-flash was deprecated Sept 2024.
-const GEMINI_MODELS = [
-  "gemini-2.5-flash",          // current GA, universally available
-  "gemini-2.0-flash",          // older GA — fallback
-  "gemini-flash-latest",       // alias to whatever is current
-  "gemini-1.5-flash-latest",   // last-resort alias
+// Preferred models in order. The first one that's available on the user's
+// API key will be used. If none of these resolve, we discover the live model
+// list from Google's API and pick whatever vision-capable model is available.
+const PREFERRED_MODELS = [
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
+  "gemini-2.5-flash-lite",
+  "gemini-2.0-flash-lite",
+  "gemini-flash-latest",
 ];
+
+// Cache the resolved model for the lifetime of the server process so we
+// don't pay the discovery cost on every request.
+let _resolvedModel: string | null = null;
+
+async function discoverWorkingModel(apiKey: string): Promise<string> {
+  // Use the v1beta ListModels endpoint to enumerate what THIS key can use
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}&pageSize=200`,
+    { signal: AbortSignal.timeout(15_000) }
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`ListModels failed: ${res.status} ${text.slice(0, 200)}`);
+  }
+  const data = await res.json() as {
+    models?: Array<{
+      name: string;
+      supportedGenerationMethods?: string[];
+    }>;
+  };
+  const all = data.models ?? [];
+
+  // Models that support generateContent and aren't preview-only
+  const usable = all
+    .filter((m) =>
+      (m.supportedGenerationMethods ?? []).includes("generateContent") &&
+      !m.name.includes("vision-001") &&     // skip stale aliases
+      !m.name.includes("aqa")               // attribution model, not for us
+    )
+    .map((m) => m.name.replace(/^models\//, ""));
+
+  if (usable.length === 0) {
+    throw new Error("No Gemini models support generateContent on this API key.");
+  }
+
+  // Prefer flash-class models (cheap, fast, vision-capable)
+  const preferred = usable.find((m) => /gemini-(2\.5|2\.0)-flash/.test(m) && !m.includes("preview") && !m.includes("thinking"))
+    ?? usable.find((m) => /gemini.*flash/.test(m) && !m.includes("preview"))
+    ?? usable.find((m) => /gemini-(pro|2\.0|2\.5)/.test(m))
+    ?? usable[0];
+
+  console.info(`[AI] Discovered working model: ${preferred} (${usable.length} total available)`);
+  return preferred;
+}
 
 async function callGemini(
   prompt: string,
@@ -134,26 +181,61 @@ async function callGemini(
     .filter((r) => r.ok && r.part)
     .map((r) => r.part!) as { inlineData: { data: string; mimeType: string } }[];
 
-  // If we were given images but couldn't fetch any of them, that's a real error
   if (imageUrls.length > 0 && validImageParts.length === 0) {
     const errors = fetchedImages.map((r) => r.error).filter(Boolean).join(", ");
     throw new Error(`Could not download any of the ${imageUrls.length} images for analysis: ${errors}`);
   }
 
-  // Try each model in order until one succeeds
-  let lastError: Error | null = null;
-  for (const modelName of GEMINI_MODELS) {
-    try {
-      const model = genAI.getGenerativeModel({ model: modelName });
-      const result = await model.generateContent([prompt, ...validImageParts]);
-      return result.response.text();
-    } catch (e) {
-      lastError = e as Error;
-      console.warn(`[AI] Model ${modelName} failed: ${lastError.message}`);
+  // 1. If we previously resolved a working model, try it first
+  const tryModel = async (name: string) => {
+    const model = genAI.getGenerativeModel({ model: name });
+    const result = await model.generateContent([prompt, ...validImageParts]);
+    return result.response.text();
+  };
+
+  if (_resolvedModel) {
+    try { return await tryModel(_resolvedModel); }
+    catch (e) {
+      console.warn(`[AI] Cached model ${_resolvedModel} failed: ${(e as Error).message}`);
+      _resolvedModel = null;
     }
   }
 
-  throw lastError ?? new Error("All Gemini models failed");
+  // 2. Try each preferred model in order
+  const errors: string[] = [];
+  for (const modelName of PREFERRED_MODELS) {
+    try {
+      const text = await tryModel(modelName);
+      _resolvedModel = modelName;
+      console.info(`[AI] Using model: ${modelName}`);
+      return text;
+    } catch (e) {
+      errors.push(`${modelName}: ${(e as Error).message.slice(0, 100)}`);
+    }
+  }
+
+  // 3. None of the preferred models worked — discover what's actually live
+  console.warn(`[AI] All preferred models failed. Discovering available models for this API key…`);
+  let discovered: string;
+  try {
+    discovered = await discoverWorkingModel(apiKey);
+  } catch (e) {
+    throw new Error(
+      `No Gemini model worked. Tried: ${PREFERRED_MODELS.join(", ")}. ` +
+      `Discovery also failed: ${(e as Error).message}`
+    );
+  }
+
+  try {
+    const text = await tryModel(discovered);
+    _resolvedModel = discovered;
+    return text;
+  } catch (e) {
+    throw new Error(
+      `Discovered model ${discovered} also failed: ${(e as Error).message}. ` +
+      `Earlier failures: ${errors.join(" | ")}`
+    );
+  }
 }
 
 // ─── Parse + validate AI response ────────────────────────────────────────────
