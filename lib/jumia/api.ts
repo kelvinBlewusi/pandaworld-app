@@ -533,12 +533,34 @@ export async function getFeedStatus(
     });
     if (!res.ok) return null;
     const raw = await res.json() as Record<string, unknown>;
+
+    // Jumia's actual response shape (per live data):
+    //   { feedSid, status, feedType, feedSource, total, completed, failed,
+    //     feedItems: [{ status, productSid, sellerSKU, errorMessage,
+    //                   errors: { globalMessages: [], businessClients: [] } }] }
+    // Older docs sometimes list `success` and `errors` at the top level —
+    // accept both shapes.
+    const feedItems = (raw.feedItems as Record<string, unknown>[] | undefined) ?? [];
+    const failedItems = feedItems.filter((i) => String(i.status).toUpperCase() === "FAILED");
+
+    // Collect every error message present anywhere in the response
+    const errors: unknown[] = [];
+    if (Array.isArray(raw.errors)) errors.push(...(raw.errors as unknown[]));
+    for (const item of feedItems) {
+      if (item.errorMessage) errors.push(item.errorMessage);
+      const itemErrs = item.errors as Record<string, unknown> | undefined;
+      if (itemErrs) {
+        const global = (itemErrs.globalMessages as unknown[] | undefined) ?? [];
+        errors.push(...global);
+      }
+    }
+
     return {
-      status:  (raw.status  as string) ?? "UNKNOWN",
-      total:   (raw.total   as number) ?? 0,
-      success: (raw.success as number) ?? 0,
-      failed:  (raw.failed  as number) ?? 0,
-      errors:  (raw.errors  as unknown[]) ?? [],
+      status:  String(raw.status ?? "UNKNOWN").toUpperCase(),
+      total:   Number(raw.total   ?? feedItems.length),
+      success: Number(raw.success ?? raw.completed ?? (feedItems.length - failedItems.length)),
+      failed:  Number(raw.failed  ?? failedItems.length),
+      errors,
       raw,
     };
   } catch { return null; }
@@ -577,17 +599,36 @@ export async function getFeedProductDetails(
     if (!res.ok) return null;
     const raw = await res.json() as Record<string, unknown>;
 
-    const products = (raw.products ?? raw.items ?? []) as Record<string, unknown>[];
-    if (!Array.isArray(products)) return [];
+    // Real Jumia response uses `feedItems`. Older docs / different feed types
+    // use `products` or `items`. Accept whichever is present.
+    const items = (
+      raw.feedItems ?? raw.products ?? raw.items ?? []
+    ) as Record<string, unknown>[];
+    if (!Array.isArray(items)) return [];
 
-    return products.map((p) => {
+    return items.map((p) => {
       const qc = (p.qc ?? {}) as Record<string, unknown>;
-      const errs = (p.errors ?? []) as unknown[];
+      // Sometimes productSid is a string like "Product Sid not found on the payload"
+      // when QC hasn't run yet. Treat any non-UUID value as null.
+      let sid = (p.productSid ?? p.product_sid ?? p.sid) as string | null ?? null;
+      if (sid && !/^[0-9a-f-]{36}$/i.test(sid)) sid = null;
+
+      // Collect every error message — top-level errorMessage + nested errors
+      const errs: string[] = [];
+      if (typeof p.errorMessage === "string") errs.push(p.errorMessage);
+      const itemErrs = p.errors as Record<string, unknown> | unknown[] | undefined;
+      if (Array.isArray(itemErrs)) {
+        errs.push(...itemErrs.map((e) => typeof e === "string" ? e : JSON.stringify(e)));
+      } else if (itemErrs && typeof itemErrs === "object") {
+        const global = ((itemErrs as Record<string, unknown>).globalMessages as unknown[] | undefined) ?? [];
+        errs.push(...global.map((e) => typeof e === "string" ? e : JSON.stringify(e)));
+      }
+
       return {
-        sellerSku:  String(p.sellerSku ?? p.seller_sku ?? ""),
-        productSid: (p.productSid ?? p.product_sid ?? p.sid) as string | null ?? null,
-        qcStatus:   (qc.status as string | undefined) ?? null,
-        errors:     errs.map((e) => typeof e === "string" ? e : JSON.stringify(e)),
+        sellerSku:  String(p.sellerSku ?? p.sellerSKU ?? p.seller_sku ?? ""),
+        productSid: sid,
+        qcStatus:   (qc.status as string | undefined) ?? (String(p.status).toUpperCase() === "FAILED" ? "rejected" : null),
+        errors:     errs,
       };
     });
   } catch {

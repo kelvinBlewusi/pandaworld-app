@@ -76,16 +76,17 @@ export async function GET(
   if (feedStatus) {
     let newStatus: string | null = null;
     let errorMsg: string | null = null;
-    if (feedStatus.status === "DONE") {
+    const s = feedStatus.status.toUpperCase();
+    if (s === "DONE" || s === "COMPLETED") {
       newStatus = feedStatus.failed > 0 ? "failed" : "live";
       if (feedStatus.failed > 0 && feedStatus.errors.length > 0) {
-        errorMsg = JSON.stringify(feedStatus.errors[0]).slice(0, 500);
+        errorMsg = String(feedStatus.errors[0]).slice(0, 500);
       }
-    } else if (feedStatus.status === "ERROR") {
+    } else if (s === "ERROR" || s === "FAILED") {
       newStatus = "failed";
       errorMsg = feedStatus.errors.length
-        ? JSON.stringify(feedStatus.errors[0]).slice(0, 500)
-        : "Jumia feed processing error";
+        ? String(feedStatus.errors[0]).slice(0, 500)
+        : "Jumia rejected the feed";
     }
     if (newStatus && newStatus !== listing.status) {
       const updates: Record<string, unknown> = {
@@ -105,19 +106,21 @@ export async function GET(
   // Build a human-readable diagnosis
   let diagnosis: string;
   let humanMessage: string;
+  const s = feedStatus?.status?.toUpperCase();
   if (!feedStatus) {
     diagnosis    = "FEED_NOT_FOUND";
     humanMessage = `Jumia returned no data for feedId ${listing.jumia_ref}. Possible causes: feed too new (try again in 30s), feedId stored incorrectly, or shopId mismatch.`;
-  } else if (feedStatus.status === "PROCESSING" || feedStatus.status === "PENDING" || feedStatus.status === "QUEUED") {
+  } else if (s === "PROCESSING" || s === "PENDING" || s === "QUEUED") {
     diagnosis    = "STILL_PROCESSING";
     humanMessage = `Jumia is still processing the feed (${feedStatus.status}). Check back in 1–2 minutes.`;
-  } else if (feedStatus.status === "DONE" && feedStatus.failed === 0 && feedStatus.success > 0) {
+  } else if ((s === "DONE" || s === "COMPLETED") && feedStatus.failed === 0 && feedStatus.success > 0) {
     diagnosis    = "ACCEPTED";
     humanMessage = `Jumia accepted ${feedStatus.success} product(s). They should appear in Vendor Center now (may take 5–10 min for the UI to refresh).`;
-  } else if (feedStatus.status === "DONE" && feedStatus.failed > 0) {
+  } else if (feedStatus.failed > 0 && feedStatus.errors.length > 0) {
+    // Use the FIRST real error message as the human-readable explanation
     diagnosis    = "PRODUCTS_REJECTED";
-    humanMessage = `Feed processed, but Jumia rejected ${feedStatus.failed} product(s). See errors[] below for the exact reason — usually invalid brand code, invalid category code, missing required attribute, or shop ID mismatch.`;
-  } else if (feedStatus.status === "ERROR") {
+    humanMessage = String(feedStatus.errors[0]);
+  } else if (s === "FAILED" || s === "ERROR") {
     diagnosis    = "FEED_ERROR";
     humanMessage = `The whole feed failed at Jumia. See errors[] below.`;
   } else {
@@ -149,10 +152,25 @@ function suggestionFor(
   const tips: string[] = [];
 
   if (diagnosis === "PRODUCTS_REJECTED") {
-    tips.push("Open the errors[] field below — Jumia tells you exactly which field on which product is invalid.");
-    tips.push("Most common rejections: brand.code (run Sync brands in Settings), category.code (use the category picker, don't type it), missing required attribute for the category.");
-    if (productDetails && productDetails.length > 0 && productDetails.some((p) => p.errors.length > 0)) {
-      tips.push("The per-product errors are also visible under productDetails[].errors below.");
+    // Look at the actual error text to give context-specific advice
+    const errText = [
+      ...(feedStatus?.errors ?? []),
+      ...(productDetails?.flatMap((p) => p.errors) ?? []),
+    ].map(String).join(" ").toLowerCase();
+
+    if (errText.includes("more specific") || errText.includes("can't list products in this category")) {
+      tips.push("CATEGORY ISSUE: Jumia only accepts listings at the deepest (leaf) category — e.g. 'Garden Hoses', not 'Garden & Outdoors'.");
+      tips.push("Open the listing → click 'Change' next to Category → pick a more specific subcategory.");
+      tips.push("Then click Save & Push to Jumia again.");
+    } else if (errText.includes("brand")) {
+      tips.push("BRAND ISSUE: The brand code is invalid. Edit the listing → click the Brand field → pick from the autocomplete (which queries Jumia's live brand catalog).");
+    } else if (errText.includes("image")) {
+      tips.push("IMAGE ISSUE: Re-upload images, or use the Polish button on the review page so they meet Jumia's 500×500–2000×2000 white-BG requirements.");
+    } else if (errText.includes("attribute") || errText.includes("required")) {
+      tips.push("MISSING REQUIRED ATTRIBUTE: Open the listing → scroll to the category-specific attributes → fill any field marked Required.");
+    } else {
+      tips.push("Open the errors[] field below — Jumia tells you exactly which field on which product is invalid.");
+      tips.push("Most common rejections: brand.code, category.code, missing required attribute for the category.");
     }
   } else if (diagnosis === "STILL_PROCESSING") {
     tips.push("Refresh this page in 1–2 minutes. Jumia usually finishes processing within 30 seconds, but during peak hours can take a few minutes.");

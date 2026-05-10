@@ -86,16 +86,17 @@ export async function GET(req: NextRequest) {
 
       let newStatus: string | null = null;
       let errorMsg: string | null = null;
+      const s = feedStatus.status.toUpperCase();
 
-      if (feedStatus.status === "DONE") {
+      if (s === "DONE" || s === "COMPLETED") {
         newStatus = feedStatus.failed > 0 ? "failed" : "live";
         if (feedStatus.failed > 0 && feedStatus.errors.length) {
-          errorMsg = JSON.stringify(feedStatus.errors[0]).slice(0, 500);
+          errorMsg = String(feedStatus.errors[0]).slice(0, 500);
         }
-      } else if (feedStatus.status === "ERROR") {
+      } else if (s === "ERROR" || s === "FAILED") {
         newStatus = "failed";
         errorMsg = feedStatus.errors.length
-          ? JSON.stringify(feedStatus.errors[0]).slice(0, 500)
+          ? String(feedStatus.errors[0]).slice(0, 500)
           : "Jumia feed processing error";
       }
 

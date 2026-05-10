@@ -105,33 +105,81 @@ export async function getVariantAxes(categoryCode: number): Promise<JumiaCategor
 // ─── Live fetch from Jumia API ────────────────────────────────────────────────
 
 /**
- * Fetches the flat category list from Jumia.
- * The API returns ~50 top-level categories — these are the actual leaf categories
- * (the ?parentCode param is ignored; hasChildren: true is misleading).
- * Each category carries attributeSet.sid used to fetch its attribute schema.
+ * Fetches the full paginated category list from Jumia. Walks every page until
+ * the response returns no items. Then derives `is_leaf` from the breadcrumb
+ * paths (`completePath`) — a category is a leaf iff no other category's path
+ * starts with it.
+ *
+ * Critical: Jumia rejects listings against non-leaf categories with the
+ * generic "you can't list products in this category" error.
+ *
+ * Per Postman spec, the response shape is:
+ *   { categories: [{ code, name, completePath, attributeSet: { id, name } }] }
  */
 export async function fetchCategoriesFromJumia(accessToken: string): Promise<JumiaCategoryRow[]> {
-  const res = await fetch(`${JUMIA_API_BASE}/catalog/categories`, {
-    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
-  });
-  if (!res.ok) {
-    throw new Error(`GET /catalog/categories failed: ${res.status}`);
+  const all: Record<string, unknown>[] = [];
+  const MAX_PAGES = 50;            // hard safety stop
+  let page = 1;
+
+  while (page <= MAX_PAGES) {
+    const url = `${JUMIA_API_BASE}/catalog/categories?page=${page}`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+    });
+    if (!res.ok) {
+      if (page === 1) throw new Error(`GET /catalog/categories failed: ${res.status}`);
+      break;
+    }
+    const raw = await res.json() as Record<string, unknown>;
+    const list = (Array.isArray(raw) ? raw : (raw.categories ?? [])) as Record<string, unknown>[];
+    if (list.length === 0) break;
+    all.push(...list);
+
+    // If this is a fresh-style response without a "next page" hint, infer
+    // whether more pages exist from list size. We'll keep going until empty.
+    page += 1;
+
+    // Respect Jumia rate limit (max 4 req/sec)
+    await new Promise((r) => setTimeout(r, 260));
   }
 
-  const raw  = await res.json() as Record<string, unknown>;
-  const list = (Array.isArray(raw) ? raw : (raw.categories ?? [])) as Record<string, unknown>[];
+  console.info(`[Jumia categories] Fetched ${all.length} categories across ${page - 1} page(s)`);
 
-  return list.map((c) => {
+  // Normalise + collect all completePaths so we can compute is_leaf
+  const normalised = all.map((c) => {
     const attrSet = c.attributeSet as Record<string, unknown> | undefined;
+    const code    = Number(c.code);
+    const name    = String(c.name ?? "");
+    const path    = String(c.completePath ?? name);
+    const level   = Math.max(1, path.split(/\s*[>/]\s*/).length);
     return {
-      code:               Number(c.code),
-      name:               String(c.name ?? ""),
-      path:               String(c.completePath ?? c.name ?? ""),
-      parent_code:        null,
-      level:              1,
-      is_leaf:            true,   // all returned categories accept products
+      code,
+      name,
+      path,
+      level,
       attribute_set_sid:  attrSet?.sid ? String(attrSet.sid) : null,
       attribute_set_name: attrSet?.name ? String(attrSet.name) : null,
+    };
+  });
+
+  // A category is a leaf if no other category's path starts with "this path > "
+  // (case insensitive, tolerant of various separators)
+  const allPaths = normalised.map((n) => n.path.toLowerCase());
+
+  return normalised.map((n) => {
+    const myPath = n.path.toLowerCase();
+    const isLeaf = !allPaths.some(
+      (p) => p !== myPath && (p.startsWith(myPath + " > ") || p.startsWith(myPath + ">"))
+    );
+    return {
+      code:               n.code,
+      name:               n.name,
+      path:               n.path,
+      parent_code:        null,
+      level:              n.level,
+      is_leaf:            isLeaf,
+      attribute_set_sid:  n.attribute_set_sid,
+      attribute_set_name: n.attribute_set_name,
     };
   });
 }
