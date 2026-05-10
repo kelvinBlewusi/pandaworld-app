@@ -95,6 +95,9 @@ Return ONLY valid JSON. No markdown fences, no explanation, no trailing text:
 
 // ─── Gemini AI call ───────────────────────────────────────────────────────────
 
+// Try the primary model, fall back to a known-stable one if it fails
+const GEMINI_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash"];
+
 async function callGemini(
   prompt: string,
   imageUrls: string[]
@@ -103,31 +106,48 @@ async function callGemini(
   if (!apiKey) throw new Error("GOOGLE_API_KEY not set");
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
   // Fetch images and convert to inline data
-  const imageParts = await Promise.all(
-    imageUrls.slice(0, 4).map(async (url) => {
-      try {
-        const res = await fetch(url);
-        const buffer = await res.arrayBuffer();
-        const base64 = Buffer.from(buffer).toString("base64");
-        const mimeType = (res.headers.get("content-type") ?? "image/jpeg") as string;
-        return { inlineData: { data: base64, mimeType } };
-      } catch {
-        return null;
-      }
-    })
-  );
+  const fetchedImages: { ok: boolean; part?: { inlineData: { data: string; mimeType: string } }; error?: string }[] =
+    await Promise.all(
+      imageUrls.slice(0, 4).map(async (url) => {
+        try {
+          const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+          if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+          const buffer   = await res.arrayBuffer();
+          const base64   = Buffer.from(buffer).toString("base64");
+          const mimeType = (res.headers.get("content-type") ?? "image/jpeg") as string;
+          return { ok: true, part: { inlineData: { data: base64, mimeType } } };
+        } catch (e) {
+          return { ok: false, error: (e as Error).message };
+        }
+      })
+    );
 
-  const validImageParts = imageParts.filter(Boolean) as { inlineData: { data: string; mimeType: string } }[];
+  const validImageParts = fetchedImages
+    .filter((r) => r.ok && r.part)
+    .map((r) => r.part!) as { inlineData: { data: string; mimeType: string } }[];
 
-  const result = await model.generateContent([
-    prompt,
-    ...validImageParts,
-  ]);
+  // If we were given images but couldn't fetch any of them, that's a real error
+  if (imageUrls.length > 0 && validImageParts.length === 0) {
+    const errors = fetchedImages.map((r) => r.error).filter(Boolean).join(", ");
+    throw new Error(`Could not download any of the ${imageUrls.length} images for analysis: ${errors}`);
+  }
 
-  return result.response.text();
+  // Try each model in order until one succeeds
+  let lastError: Error | null = null;
+  for (const modelName of GEMINI_MODELS) {
+    try {
+      const model = genAI.getGenerativeModel({ model: modelName });
+      const result = await model.generateContent([prompt, ...validImageParts]);
+      return result.response.text();
+    } catch (e) {
+      lastError = e as Error;
+      console.warn(`[AI] Model ${modelName} failed: ${lastError.message}`);
+    }
+  }
+
+  throw lastError ?? new Error("All Gemini models failed");
 }
 
 // ─── Parse + validate AI response ────────────────────────────────────────────
@@ -254,10 +274,24 @@ function buildCoreResult(
 
 // ─── Main: analyse images ─────────────────────────────────────────────────────
 
+const USE_MOCK_AI = process.env.USE_MOCK_AI === "true";
+
 export async function analyzeProductImages(
   imageUrls: string[]
 ): Promise<AIProductAnalysis> {
   if (!imageUrls.length) throw new Error("No images provided");
+
+  // Dev-only mock for local development without a Gemini key
+  if (USE_MOCK_AI) {
+    console.warn("[AI] USE_MOCK_AI=true — returning mock analysis (set USE_MOCK_AI=false in production)");
+    return buildMockAnalysis();
+  }
+
+  if (!process.env.GOOGLE_API_KEY) {
+    throw new Error(
+      "GOOGLE_API_KEY is not set. Add it to your Vercel environment variables to enable AI analysis."
+    );
+  }
 
   // Load real categories from Supabase
   const categories = await getLeafCategories();
@@ -275,8 +309,9 @@ export async function analyzeProductImages(
     const raw = await callGemini(firstPassPrompt, imageUrls);
     parsed = parseAIResponse(raw);
   } catch (e) {
-    console.warn("[AI] Gemini failed, using mock:", e);
-    return buildMockAnalysis();
+    const msg = (e as Error).message ?? "Gemini analysis failed";
+    console.error("[AI] Gemini call failed:", msg);
+    throw new Error(`AI analysis failed: ${msg}`);
   }
 
   // Resolve category
@@ -310,6 +345,17 @@ export async function analyzeProductImages(
 export async function analyzeProductDescription(
   description: string
 ): Promise<AIProductAnalysis> {
+  if (USE_MOCK_AI) {
+    console.warn("[AI] USE_MOCK_AI=true — returning mock analysis");
+    return buildMockAnalysis();
+  }
+
+  if (!process.env.GOOGLE_API_KEY) {
+    throw new Error(
+      "GOOGLE_API_KEY is not set. Add it to your Vercel environment variables to enable AI analysis."
+    );
+  }
+
   const categories = await getLeafCategories();
   const categoryContext = categories.length > 0
     ? `Choose from the ${categories.length} Jumia GH leaf categories listed below.`
@@ -323,8 +369,9 @@ export async function analyzeProductDescription(
     const raw = await callGemini(prompt, []);
     parsed = parseAIResponse(raw);
   } catch (e) {
-    console.warn("[AI] Gemini failed, using mock:", e);
-    return buildMockAnalysis();
+    const msg = (e as Error).message ?? "Gemini analysis failed";
+    console.error("[AI] Gemini call failed:", msg);
+    throw new Error(`AI analysis failed: ${msg}`);
   }
 
   const cat = resolveCategory(parsed, categories);

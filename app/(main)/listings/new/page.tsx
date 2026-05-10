@@ -1386,7 +1386,7 @@ function NewListingWizard() {
 
 const modeLabel: Record<WizardMode, { icon: React.ElementType; color: string; label: string }> = {
   own: { icon: ImageIcon, color: "text-blue-500",    label: "Own images"        },
-  ai:  { icon: Wand2,     color: "text-violet-500",  label: "AI-generated images" },
+  ai:  { icon: Wand2,     color: "text-violet-500",  label: "AI from reference photo" },
   url: { icon: Link2,     color: "text-emerald-500", label: "Import from URL"   },
 };
 
