@@ -286,6 +286,17 @@ function buildBaseProduct(listing: ListingRow, brand: { code: number; name: stri
     .filter(Boolean)
     .map((url, i) => ({ url, primary: i === 0 }));
 
+  // Jumia requires `variation` to be non-empty even for products without
+  // variants. Their error: "The variation 'variation' value has to be filled
+  // in order to create a Product."
+  //
+  // For simple (no-variant) products, use the most distinctive single-axis
+  // value we have: color first, otherwise fall back to "Default".
+  const defaultVariation =
+    listing.color?.trim() ||
+    listing.color_family?.trim() ||
+    "Default";
+
   // Match Jumia Postman spec exactly:
   //   POST /feeds/products/create
   //   { name: {value, translations[]}, description: {value, translations[]},
@@ -298,7 +309,7 @@ function buildBaseProduct(listing: ListingRow, brand: { code: number; name: stri
     description:          t(listing.description ?? ""),
     parentSku:            listing.sku,
     sellerSku:            listing.sku,
-    variation:            "",
+    variation:            defaultVariation,
     brand,
     category,
     images,
@@ -327,12 +338,14 @@ export function mapListingToJumiaProducts(
 
   if (!variants.length) return [base];
 
-  // With variants: one entry per variant; all share the same parentSku
+  // With variants: one entry per variant; all share the same parentSku.
+  // `variation` must be a non-empty descriptive string (e.g. "Red / 64GB").
+  // Fall back to the base default if a variant row is missing it.
   return variants.map((v) => ({
     ...base,
     sellerSku:  v.seller_sku ?? `${listing.sku}-${v.id.slice(0, 4)}`,
     parentSku:  listing.sku,
-    variation:  v.variation ?? "",
+    variation:  v.variation?.trim() || base.variation,
     barcodeEan: v.gtin ?? "",
     price: {
       value:     v.global_price ?? listing.selling_price ?? 0,

@@ -209,6 +209,23 @@ describe("Jumia /feeds/products/create payload conformance", () => {
     it("stock is a number", () => {
       expect(typeof products[0].stock).toBe("number");
     });
+
+    it("variation is never an empty string (Jumia requires a non-empty value)", () => {
+      // Empty variation triggers Jumia error:
+      // "The variation 'variation' value has to be filled in order to create a Product."
+      expect(products[0].variation.length).toBeGreaterThan(0);
+    });
+
+    it("variation falls back to 'Default' when no color is set", () => {
+      const noColorListing: ListingRow = { ...sampleListing, color: null, color_family: null };
+      const ps = mapListingToJumiaProducts(noColorListing, [], brand, currency);
+      expect(ps[0].variation).toBe("Default");
+    });
+
+    it("variation uses color when present (preferred over 'Default')", () => {
+      // Sample listing has color "Navy Blue"
+      expect(products[0].variation).toBe("Navy Blue");
+    });
   });
 
   describe("with variants", () => {
@@ -239,6 +256,12 @@ describe("Jumia /feeds/products/create payload conformance", () => {
 
     it("variant variation field is set from the variant row", () => {
       expect(products[0].variation).toBe("8GB / 128GB / Navy");
+    });
+
+    it("variation falls back to a non-empty value when variant row has none", () => {
+      const variantWithoutVariation: VariantRow = { ...sampleVariants[0], variation: null };
+      const ps = mapListingToJumiaProducts(sampleListing, [variantWithoutVariation], brand, currency);
+      expect(ps[0].variation.length).toBeGreaterThan(0);
     });
 
     it("salePrice is included with startAt/endAt when set", () => {

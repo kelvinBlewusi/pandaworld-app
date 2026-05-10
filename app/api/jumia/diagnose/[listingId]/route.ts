@@ -162,6 +162,10 @@ function suggestionFor(
       tips.push("CATEGORY ISSUE: Jumia only accepts listings at the deepest (leaf) category — e.g. 'Garden Hoses', not 'Garden & Outdoors'.");
       tips.push("Open the listing → click 'Change' next to Category → pick a more specific subcategory.");
       tips.push("Then click Save & Push to Jumia again.");
+    } else if (errText.includes("variation") && errText.includes("filled")) {
+      tips.push("VARIATION FIX: This was a code bug — we were sending an empty variation field. The latest deploy auto-fills it from the product's color (or 'Default' if no color set). Just re-push the listing.");
+    } else if (errText.includes("description") && errText.includes("characters")) {
+      tips.push("DESCRIPTION TOO SHORT: Jumia requires 50–9,000 characters. Open the listing and expand the description to at least 50 characters.");
     } else if (errText.includes("brand")) {
       tips.push("BRAND ISSUE: The brand code is invalid. Edit the listing → click the Brand field → pick from the autocomplete (which queries Jumia's live brand catalog).");
     } else if (errText.includes("image")) {
