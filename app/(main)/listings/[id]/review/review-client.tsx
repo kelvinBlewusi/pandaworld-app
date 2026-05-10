@@ -1192,20 +1192,47 @@ function CategoryAttributesStep({
   fieldSources: Record<string, string>;
   onMarkEdited: (field: string) => void;
 }) {
-  const [schema,  setSchema]  = useState<AttrSchema[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [schema,    setSchema]    = useState<AttrSchema[]>([]);
+  const [loading,   setLoading]   = useState(true);
+  const [syncing,   setSyncing]   = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadAttributes = useCallback(async () => {
     if (!categoryCode || isNaN(Number(categoryCode)) || Number(categoryCode) === 0) {
       setLoading(false);
       return;
     }
-    fetch(`/api/jumia/categories/${categoryCode}/attributes`)
-      .then((r) => r.json())
-      .then((d) => setSchema(d.attributes ?? []))
-      .catch(() => setSchema([]))
-      .finally(() => setLoading(false));
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/jumia/categories/${categoryCode}/attributes`);
+      const d = await r.json();
+      setSchema(d.attributes ?? []);
+    } catch {
+      setSchema([]);
+    } finally {
+      setLoading(false);
+    }
   }, [categoryCode]);
+
+  useEffect(() => { loadAttributes(); }, [loadAttributes]);
+
+  // If the cache is empty, kick off a sync from Jumia and reload
+  const handleSyncNow = useCallback(async () => {
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      const r = await fetch("/api/jumia/sync-categories", { method: "POST" });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error ?? "Sync failed");
+      // Wait a moment for upstream to settle, then reload
+      await new Promise((res) => setTimeout(res, 600));
+      await loadAttributes();
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : "Sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  }, [loadAttributes]);
 
   if (loading) {
     return (
@@ -1218,12 +1245,31 @@ function CategoryAttributesStep({
 
   if (!schema.length) {
     return (
-      <div className="rounded-xl border border-dashed border-zinc-200 py-10 text-center space-y-2 text-sm text-zinc-400">
-        <p>No category-specific fields for this category.</p>
-        <p className="text-xs">
-          Connect your Jumia account and run <strong>Sync now</strong> in
-          Settings → Integrations to load real attribute schemas.
-        </p>
+      <div className="rounded-xl border border-dashed border-zinc-200 py-8 px-5 text-center space-y-3">
+        <Tag className="h-6 w-6 text-zinc-300 mx-auto" />
+        <div className="space-y-1">
+          <p className="text-sm font-medium text-zinc-600">No fields cached for this category yet</p>
+          <p className="text-xs text-zinc-400">
+            We&apos;ll fetch the live Jumia field schema for this category. This usually takes 10–20 seconds.
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={handleSyncNow}
+          disabled={syncing}
+          className="gap-1.5"
+        >
+          {syncing ? (
+            <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Fetching from Jumia…</>
+          ) : (
+            <><RefreshCw className="h-3.5 w-3.5" /> Fetch fields from Jumia</>
+          )}
+        </Button>
+        {syncError && (
+          <p className="text-xs text-red-500">{syncError}</p>
+        )}
       </div>
     );
   }

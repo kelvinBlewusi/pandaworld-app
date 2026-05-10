@@ -214,6 +214,85 @@ function titleFromSlug(url: string): string | null {
   }
 }
 
+// ─── Scraping bypass services ────────────────────────────────────────────────
+//
+// Many marketplaces (Jumia, Amazon, Shopify-on-Cloudflare) use Cloudflare bot
+// management which blocks server-side fetch regardless of User-Agent — they
+// fingerprint TLS/JA3/IP. To get the real HTML we route through a paid bypass
+// service that runs a real headless browser.
+//
+// Configured via env vars (any one is enough):
+//   SCRAPER_API_KEY   — scraperapi.com  (5000 free/mo, simplest)
+//   SCRAPINGBEE_KEY   — scrapingbee.com (1000 free/mo)
+//   ZENROWS_KEY       — zenrows.com     (1000 free/mo)
+//
+// Domains that need a bypass are listed below. Other URLs use direct fetch.
+
+const CLOUDFLARE_DOMAINS = [
+  "jumia.com",
+  "jumia.com.gh",
+  "jumia.com.ng",
+  "jumia.co.ke",
+  "jumia.com.eg",
+  "jumia.ma",
+  "jumia.sn",
+  "jumia.ci",
+  "jumia.co.tz",
+  "jumia.co.ug",
+];
+
+function needsBypass(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return CLOUDFLARE_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`));
+  } catch {
+    return false;
+  }
+}
+
+async function fetchViaBypass(url: string): Promise<string | null> {
+  // Try ScraperAPI first (cheapest credit cost)
+  const scraperApiKey = process.env.SCRAPER_API_KEY;
+  if (scraperApiKey) {
+    const proxyUrl = `https://api.scraperapi.com/?api_key=${scraperApiKey}&url=${encodeURIComponent(url)}&render=true&country_code=us`;
+    try {
+      const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(60_000) });
+      if (res.ok) return await res.text();
+      console.warn(`[scraper] ScraperAPI returned ${res.status}`);
+    } catch (e) {
+      console.warn(`[scraper] ScraperAPI error:`, (e as Error).message);
+    }
+  }
+
+  // ScrapingBee fallback
+  const scrapingBeeKey = process.env.SCRAPINGBEE_KEY;
+  if (scrapingBeeKey) {
+    const proxyUrl = `https://app.scrapingbee.com/api/v1/?api_key=${scrapingBeeKey}&url=${encodeURIComponent(url)}&render_js=true`;
+    try {
+      const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(60_000) });
+      if (res.ok) return await res.text();
+      console.warn(`[scraper] ScrapingBee returned ${res.status}`);
+    } catch (e) {
+      console.warn(`[scraper] ScrapingBee error:`, (e as Error).message);
+    }
+  }
+
+  // ZenRows fallback
+  const zenrowsKey = process.env.ZENROWS_KEY;
+  if (zenrowsKey) {
+    const proxyUrl = `https://api.zenrows.com/v1/?apikey=${zenrowsKey}&url=${encodeURIComponent(url)}&js_render=true&antibot=true`;
+    try {
+      const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(60_000) });
+      if (res.ok) return await res.text();
+      console.warn(`[scraper] ZenRows returned ${res.status}`);
+    } catch (e) {
+      console.warn(`[scraper] ZenRows error:`, (e as Error).message);
+    }
+  }
+
+  return null;
+}
+
 // ─── HTTP fetch with UA cycling ───────────────────────────────────────────────
 
 async function fetchHtml(url: string): Promise<{ html: string; status: number }> {
@@ -266,33 +345,52 @@ async function fetchHtml(url: string): Promise<{ html: string; status: number }>
 // ─── Main scrape ──────────────────────────────────────────────────────────────
 
 export async function scrapeProductUrl(url: string): Promise<ScrapedProduct> {
-  let html: string;
+  let html: string | null = null;
 
-  try {
-    const result = await fetchHtml(url);
-    html = result.html;
-  } catch (e) {
-    // If all UAs were blocked (403/429) try to salvage something from the URL slug
-    // so the AI can still generate a reasonable listing.
-    const msg = (e as Error).message;
-    const isBlocked = msg.includes("403") || msg.includes("429");
+  // 1. For known Cloudflare-protected sites, try the bypass service first
+  if (needsBypass(url)) {
+    console.info(`[scraper] ${new URL(url).hostname} is Cloudflare-protected — using bypass service`);
+    html = await fetchViaBypass(url);
+    if (!html) {
+      console.warn(`[scraper] Bypass service unavailable or failed — falling back to direct fetch`);
+    }
+  }
 
-    if (isBlocked) {
-      const slugTitle = titleFromSlug(url);
-      if (slugTitle) {
-        // Return minimal scraped data — the caller will use AI text-mode
-        return {
-          title:       slugTitle,
-          description: null,
-          brand:       null,
-          price:       null,
-          imageUrls:   [],
-          sourceUrl:   url,
-        };
+  // 2. Fall back to direct fetch with UA rotation
+  if (!html) {
+    try {
+      const result = await fetchHtml(url);
+      html = result.html;
+    } catch (e) {
+      // 3. If everything failed (or domain was Cloudflare-protected with no key), try bypass as last resort
+      if (!needsBypass(url)) {
+        const bypassed = await fetchViaBypass(url);
+        if (bypassed) html = bypassed;
+      }
+
+      if (!html) {
+        // 4. Last-ditch: extract title from URL slug so the AI can still generate a listing
+        const msg = (e as Error).message;
+        const isBlocked = msg.includes("403") || msg.includes("429") || msg.includes("Cloudflare");
+
+        if (isBlocked || needsBypass(url)) {
+          const slugTitle = titleFromSlug(url);
+          if (slugTitle) {
+            console.info(`[scraper] All scrape methods blocked — using slug fallback: "${slugTitle}"`);
+            return {
+              title:       slugTitle,
+              description: null,
+              brand:       null,
+              price:       null,
+              imageUrls:   [],
+              sourceUrl:   url,
+            };
+          }
+        }
+
+        throw new Error(`Could not fetch URL: ${msg}`);
       }
     }
-
-    throw new Error(`Could not fetch URL: ${msg}`);
   }
 
   const lds = getJsonLd(html);

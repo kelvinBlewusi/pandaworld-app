@@ -51,16 +51,27 @@ export async function uploadRemoteImages(
   const db = createServerClient();
   const urls: string[] = [];
 
+  // Real Chrome UA — Googlebot is blocked by most CDNs and image hosts
   const UA =
-    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
   for (const remoteUrl of remoteUrls.slice(0, 8)) {
     try {
       const res = await fetch(remoteUrl, {
-        headers: { "User-Agent": UA },
-        signal: AbortSignal.timeout(10_000),
+        headers: {
+          "User-Agent":      UA,
+          Accept:            "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
+          // Pretend the request came from the source page (helps with hotlink protection)
+          Referer:           (() => { try { return new URL(remoteUrl).origin + "/"; } catch { return ""; } })(),
+        },
+        signal: AbortSignal.timeout(15_000),
+        redirect: "follow",
       });
-      if (!res.ok) continue;
+      if (!res.ok) {
+        console.warn(`[uploadRemoteImages] HTTP ${res.status} for ${remoteUrl}`);
+        continue;
+      }
 
       const contentType = res.headers.get("content-type") ?? "image/jpeg";
       if (!contentType.startsWith("image/")) continue;
