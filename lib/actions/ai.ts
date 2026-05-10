@@ -70,7 +70,10 @@ STRICT RULES — violations will cause the submission to be rejected:
 1. Pick the single most specific matching category from the list. Use the exact numeric code.
 2. Set a realistic GHS selling price for the Ghanaian market.
 3. NEVER fabricate or guess values. If a field cannot be determined with reasonable confidence, set it to null.
-4. For dynamic_attributes: include ONLY fields you can determine from the product. Omit fields you cannot determine — do NOT guess.${attributeSection}
+4. For dynamic_attributes: include ONLY fields you can determine from the product. Omit fields you cannot determine — do NOT guess.
+5. Description MUST be between 80 and 500 characters — Jumia rejects anything under 50. Write 2–3 full sentences.
+6. Title MUST be 15–70 characters. Include the brand, model and 1–2 key specs.
+7. Highlights MUST be at least 4 bullet points starting with "•" (the bullet character). Each on its own line.${attributeSection}
 
 Return ONLY valid JSON. No markdown fences, no explanation, no trailing text:
 {

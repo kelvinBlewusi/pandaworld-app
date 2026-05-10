@@ -932,6 +932,15 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
   const [warrantyType,      setWarrantyType]      = useState(listing.warranty_type ?? "");
   const [brandValue,        setBrandValue]        = useState(listing.brand ?? "");
 
+  // ── Controlled text fields with validation ────────────────────────────────
+  // Jumia enforces strict min/max lengths and rejects feeds that violate them.
+  // We mirror those limits here so Submit is disabled until everything is
+  // valid. The listing also auto-saves to DB on every keystroke (via FormData
+  // capture in handleSave) so the AI suggestion is preserved.
+  const [titleValue,       setTitleValue]       = useState(listing.title ?? "");
+  const [descriptionValue, setDescriptionValue] = useState(listing.description ?? "");
+  const [highlightsValue,  setHighlightsValue]  = useState(listing.highlights ?? "");
+
   // ── Category ──────────────────────────────────────────────────────────────
   const [categoryCode, setCategoryCode] = useState<string | null>(listing.category_code);
   const [categoryPath, setCategoryPath] = useState<string | null>(listing.category_path);
@@ -1096,8 +1105,25 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
   };
 
   // ── Save handler ──────────────────────────────────────────────────────────
+  // Field-level validation matching Jumia API constraints — every check here
+  // mirrors a known Jumia rejection reason. We surface them BEFORE submitting
+  // instead of getting a 400 back from /feeds/products/create.
+  const validationErrors: string[] = [];
+  if (titleValue.length < 15)        validationErrors.push("Name must be at least 15 characters.");
+  if (titleValue.length > 70)        validationErrors.push("Name must be 70 characters or fewer.");
+  if (descriptionValue.length < 50)  validationErrors.push("Description must be at least 50 characters (Jumia hard limit).");
+  if (descriptionValue.length > 9000) validationErrors.push("Description must be 9,000 characters or fewer.");
+  if (!categoryCode)                 validationErrors.push("Pick a category.");
+  if (!brandValue.trim())            validationErrors.push("Brand is required.");
+  if ((listing.images ?? []).length === 0) validationErrors.push("At least 1 product image is required.");
+  const canPublish = validationErrors.length === 0;
+
   async function handleSave(publish: boolean, opts?: { skipRedirect?: boolean }) {
     if (!formRef.current) return;
+    if (publish && !canPublish) {
+      setSaveError(validationErrors.join(" "));
+      return;
+    }
     if (publish && qualityResult.score < PUBLISH_THRESHOLD) {
       setSaveError(`Quality score ${qualityResult.score}/100 is below the minimum threshold of ${PUBLISH_THRESHOLD}.`);
       return;
@@ -1129,9 +1155,9 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
 
     try {
       await updateListing(listing.id, {
-        title:              str("name"),
-        description:        str("description"),
-        highlights:         str("highlights"),
+        title:              titleValue.trim() || null,
+        description:        descriptionValue.trim() || null,
+        highlights:         highlightsValue.trim() || null,
         brand:              brandValue || null,
         color:              str("color"),
         color_family:       colorFamily || null,
@@ -1354,11 +1380,24 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                   <Input
                     id="name"
                     name="name"
-                    defaultValue={listing.title ?? ""}
+                    value={titleValue}
+                    onChange={(e) => setTitleValue(e.target.value)}
                     placeholder="Ex: Wireless Noise-Cancelling Headphones [Clear product name for a better c..."
-                    className="h-10 text-sm"
+                    className={cn(
+                      "h-10 text-sm",
+                      titleValue.length > 0 && titleValue.length < 15 && "border-red-300 focus-visible:ring-red-300"
+                    )}
                     maxLength={70}
                   />
+                  <p className={cn(
+                    "text-[11px]",
+                    titleValue.length === 0 ? "text-zinc-400" :
+                    titleValue.length < 15  ? "text-red-500"  :
+                    titleValue.length > 70  ? "text-red-500"  :
+                                              "text-emerald-600"
+                  )}>
+                    {titleValue.length}/70 characters · min 15
+                  </p>
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-xs font-semibold text-zinc-700">
@@ -1431,10 +1470,21 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                     </Label>
                     <RichTextField
                       id="description"
-                      defaultValue={listing.description ?? ""}
+                      value={descriptionValue}
+                      onChange={setDescriptionValue}
                       rows={4}
                       placeholder="- Include only product - related information.- Write clearly and concisely.- Make sure the description matches your product images.- Testimonials or quotes of any kind are not allowed - No promotional messages or promoting other products except the product itself."
                     />
+                    <p className={cn(
+                      "text-[11px]",
+                      descriptionValue.length === 0    ? "text-zinc-400" :
+                      descriptionValue.length < 50     ? "text-red-500"  :
+                      descriptionValue.length < 80     ? "text-amber-600" :
+                      descriptionValue.length > 9000   ? "text-red-500"  :
+                                                         "text-emerald-600"
+                    )}>
+                      {descriptionValue.length} characters · Jumia requires 50–9,000 · aim for 200+ for a good quality score
+                    </p>
                   </div>
 
                   <div className="space-y-1.5">
@@ -1443,10 +1493,19 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                     </Label>
                     <RichTextField
                       id="highlights"
-                      defaultValue={listing.highlights ?? ""}
+                      value={highlightsValue}
+                      onChange={setHighlightsValue}
                       rows={3}
                       placeholder="[Key features in bullet points, minimum of 4 for a good content score] Ex: - Lightweight design - Noise cancellation - 20 - hour battery life - Wireless connectivity"
                     />
+                    <p className={cn(
+                      "text-[11px]",
+                      highlightsValue.length === 0 ? "text-zinc-400" :
+                      highlightsValue.length < 50  ? "text-amber-600" :
+                                                     "text-emerald-600"
+                    )}>
+                      {highlightsValue.length} characters · 4+ bullets starting with • recommended
+                    </p>
                   </div>
 
                   {/* Category-specific dynamic fields */}
@@ -1763,24 +1822,44 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
       </div>
 
       {/* ── Floating Submit (bottom-right) ─────────────────────────────────── */}
-      <div className="fixed bottom-6 right-6 z-30 flex items-center gap-2">
-        {syncStatus === "done"  && <span className="rounded-md bg-white border px-3 py-1 text-xs text-emerald-600 shadow-sm">✓ Submitted</span>}
-        {qualityResult.score < PUBLISH_THRESHOLD && (
-          <span className="rounded-md bg-white border border-amber-200 px-3 py-1.5 text-[11px] text-amber-700 shadow-sm">
-            Quality {qualityResult.score}/{PUBLISH_THRESHOLD}
-          </span>
+      <div className="fixed bottom-6 right-6 z-30 flex flex-col items-end gap-2">
+        {/* Field-level validation chip — only shown when blocking publish */}
+        {!canPublish && (
+          <div className="max-w-sm rounded-md bg-white border border-red-200 px-3 py-2 text-[11px] text-red-700 shadow-sm space-y-1">
+            <p className="font-semibold flex items-center gap-1">
+              <AlertCircle className="h-3 w-3" /> {validationErrors.length} issue{validationErrors.length === 1 ? "" : "s"} to fix
+            </p>
+            <ul className="space-y-0.5 pl-1">
+              {validationErrors.slice(0, 3).map((e, i) => (
+                <li key={i}>• {e}</li>
+              ))}
+              {validationErrors.length > 3 && (
+                <li className="text-red-500">+{validationErrors.length - 3} more</li>
+              )}
+            </ul>
+          </div>
         )}
-        <Button
-          type="button"
-          size="lg"
-          onClick={() => handleSave(true)}
-          disabled={saving || qualityResult.score < PUBLISH_THRESHOLD}
-          className="bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/30 disabled:bg-zinc-200 disabled:text-zinc-400 disabled:shadow-none gap-2 px-8"
-        >
-          {saving
-            ? <><Loader2 className="h-4 w-4 animate-spin" /> Submitting…</>
-            : "Submit"}
-        </Button>
+
+        <div className="flex items-center gap-2">
+          {syncStatus === "done"  && <span className="rounded-md bg-white border px-3 py-1 text-xs text-emerald-600 shadow-sm">✓ Submitted</span>}
+          {canPublish && qualityResult.score < PUBLISH_THRESHOLD && (
+            <span className="rounded-md bg-white border border-amber-200 px-3 py-1.5 text-[11px] text-amber-700 shadow-sm">
+              Quality {qualityResult.score}/{PUBLISH_THRESHOLD}
+            </span>
+          )}
+          <Button
+            type="button"
+            size="lg"
+            onClick={() => handleSave(true)}
+            disabled={saving || !canPublish || qualityResult.score < PUBLISH_THRESHOLD}
+            className="bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/30 disabled:bg-zinc-200 disabled:text-zinc-400 disabled:shadow-none gap-2 px-8"
+            title={!canPublish ? validationErrors.join(" • ") : ""}
+          >
+            {saving
+              ? <><Loader2 className="h-4 w-4 animate-spin" /> Submitting…</>
+              : "Submit"}
+          </Button>
+        </div>
       </div>
 
       {/* Category picker modal */}

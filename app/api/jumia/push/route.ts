@@ -47,18 +47,24 @@ export async function POST(req: NextRequest) {
 
   const row = listing as ListingRow;
 
-  // ── Validate required fields ──────────────────────────────────────────────
-  const missing: string[] = [];
-  if (!row.title)          missing.push("title");
-  if (!row.selling_price)  missing.push("price");
-  if (!row.category_path && !row.category_id) missing.push("category");
-  if (!row.brand)          missing.push("brand");
-  if (!row.description)    missing.push("description");
-  if ((row.images ?? []).length === 0) missing.push("at least one image");
+  // ── Validate required fields (mirrors Jumia API constraints exactly) ──────
+  const errors: string[] = [];
+  if (!row.title)          errors.push("title is required");
+  else if (row.title.length < 15) errors.push(`title must be at least 15 characters (you have ${row.title.length})`);
+  else if (row.title.length > 70) errors.push(`title must be 70 characters or fewer (you have ${row.title.length})`);
 
-  if (missing.length > 0) {
+  if (!row.description)    errors.push("description is required");
+  else if (row.description.length < 50) errors.push(`description must be at least 50 characters (you have ${row.description.length}) — Jumia hard limit`);
+  else if (row.description.length > 9000) errors.push(`description must be 9,000 characters or fewer (you have ${row.description.length})`);
+
+  if (!row.selling_price)  errors.push("price is required");
+  if (!row.category_path && !row.category_id) errors.push("category is required");
+  if (!row.brand)          errors.push("brand is required");
+  if ((row.images ?? []).length === 0) errors.push("at least one image is required");
+
+  if (errors.length > 0) {
     return NextResponse.json(
-      { error: `Missing required fields: ${missing.join(", ")}` },
+      { error: errors.join(". ") + "." },
       { status: 422 }
     );
   }
