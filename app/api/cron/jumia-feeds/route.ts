@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
-import { getFeedStatus } from "@/lib/jumia/api";
+import { getFeedStatus, getFeedProductDetails } from "@/lib/jumia/api";
 import { refreshAccessToken } from "@/lib/jumia/oauth";
 
 // ─── GET /api/cron/jumia-feeds ────────────────────────────────────────────────
@@ -100,13 +100,40 @@ export async function GET(req: NextRequest) {
       }
 
       if (newStatus) {
-        await db.from("listings").update({
+        // When the feed is DONE, fetch the productSid + qc.status. We need
+        // these to perform any future stock/price/status updates per Jumia
+        // docs: only QC-approved products allow updates.
+        const updates: Record<string, unknown> = {
           status:      newStatus,
           jumia_error: errorMsg,
           updated_at:  new Date().toISOString(),
-        }).eq("id", listing.id);
+        };
+
+        if (feedStatus.status === "DONE" && newStatus === "live") {
+          const productInfos = await getFeedProductDetails(accessToken, listing.jumia_ref as string);
+          if (productInfos && productInfos.length > 0) {
+            // For non-variant listings we expect exactly one product entry
+            const info = productInfos[0];
+            if (info.productSid)        updates.jumia_product_sid = info.productSid;
+            if (info.qcStatus)          updates.jumia_qc_status   = info.qcStatus;
+            // If multiple variants, store the full map for later lookup
+            if (productInfos.length > 1) {
+              updates.jumia_product_map = productInfos.reduce<Record<string, { sid: string | null; qc: string | null }>>(
+                (acc, p) => { acc[p.sellerSku] = { sid: p.productSid, qc: p.qcStatus }; return acc; },
+                {}
+              );
+            }
+            console.info(
+              `[Cron] ${listing.id} → ${newStatus} (sid=${info.productSid ?? "—"}, qc=${info.qcStatus ?? "—"})`
+            );
+          }
+        }
+
+        await db.from("listings").update(updates).eq("id", listing.id);
         updated++;
-        console.info(`[Cron] ${listing.id} → ${newStatus}`);
+        if (!(feedStatus.status === "DONE" && newStatus === "live")) {
+          console.info(`[Cron] ${listing.id} → ${newStatus}`);
+        }
       }
     }
   }

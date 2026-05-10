@@ -10,8 +10,13 @@
 // OAuth 2.0 / OIDC lives on auth-external.jumia.com (Keycloak IdM)
 const JUMIA_AUTH_URL     = "https://auth-external.jumia.com/connect/auth";
 const JUMIA_TOKEN_URL    = "https://auth-external.jumia.com/connect/token";
-// All Vendor API calls (products, feeds, orders) go to vendor-api.jumia.com
-export const JUMIA_API_BASE = "https://vendor-api.jumia.com";
+// All Vendor API calls (products, feeds, orders) go to vendor-api.jumia.com.
+// Set JUMIA_API_ENV=staging to point to vendor-api-staging.jumia.com instead.
+// Useful for testing without touching real seller inventory.
+export const JUMIA_API_BASE =
+  process.env.JUMIA_API_ENV === "staging"
+    ? "https://vendor-api-staging.jumia.com"
+    : "https://vendor-api.jumia.com";
 
 // openid is required; offline_access requests a refresh_token
 const SCOPES = "openid offline_access";

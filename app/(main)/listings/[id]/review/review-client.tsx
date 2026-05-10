@@ -98,7 +98,7 @@ interface AxisDef {
 interface AttrSchema {
   name:           string;
   label:          string;
-  type:           "enum" | "string" | "number" | "boolean" | "multi";
+  type:           "enum" | "string" | "number" | "boolean" | "multi" | "date" | "datetime" | "textarea";
   allowed_values: string[];
   required:       boolean;
   is_variant:     boolean;
@@ -781,6 +781,8 @@ function CategoryDynamicFields({
 
   const renderField = (attr: AttrSchema) => {
     const val = values[attr.name] ?? "";
+
+    // BOOLEAN
     if (attr.type === "boolean") {
       return (
         <Select value={val} onValueChange={(v) => onChange(attr.name, v)}>
@@ -794,6 +796,8 @@ function CategoryDynamicFields({
         </Select>
       );
     }
+
+    // SELECTION
     if (attr.type === "enum" && attr.allowed_values.length > 0) {
       return (
         <Select value={val} onValueChange={(v) => onChange(attr.name, v)}>
@@ -806,6 +810,75 @@ function CategoryDynamicFields({
         </Select>
       );
     }
+
+    // MULTI_SELECTION — comma-separated chips
+    if (attr.type === "multi" && attr.allowed_values.length > 0) {
+      const selected = val ? val.split(",").map((s) => s.trim()).filter(Boolean) : [];
+      return (
+        <div className="flex flex-wrap gap-1.5">
+          {attr.allowed_values.map((v) => {
+            const active = selected.includes(v);
+            return (
+              <button
+                key={v}
+                type="button"
+                onClick={() => {
+                  const next = active ? selected.filter((s) => s !== v) : [...selected, v];
+                  onChange(attr.name, next.join(", "));
+                }}
+                className={cn(
+                  "rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                  active
+                    ? "border-orange-400 bg-orange-50 text-orange-700"
+                    : "border-zinc-200 bg-white text-zinc-500 hover:border-zinc-300"
+                )}
+              >
+                {v}
+              </button>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // DATE
+    if (attr.type === "date") {
+      return (
+        <Input
+          type="date"
+          value={val}
+          onChange={(e) => onChange(attr.name, e.target.value)}
+          className="h-10 text-sm"
+        />
+      );
+    }
+
+    // DATE_TIME
+    if (attr.type === "datetime") {
+      return (
+        <Input
+          type="datetime-local"
+          value={val}
+          onChange={(e) => onChange(attr.name, e.target.value)}
+          className="h-10 text-sm"
+        />
+      );
+    }
+
+    // TEXT_AREA
+    if (attr.type === "textarea") {
+      return (
+        <Textarea
+          value={val}
+          rows={3}
+          placeholder={`Ex: [${attr.label}]`}
+          onChange={(e) => onChange(attr.name, e.target.value)}
+          className="text-sm"
+        />
+      );
+    }
+
+    // TEXT / NUMBER (default)
     return (
       <Input
         value={val}

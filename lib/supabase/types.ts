@@ -55,6 +55,12 @@ export interface ListingRow {
   // In-flight stock/price update feed (separate from the initial create feed jumia_ref)
   update_feed_ref:    string | null;
   update_feed_status: string | null;  // 'pending' | 'done' | 'error'
+  // Jumia productSid + qc.status — populated by cron after feed completes.
+  // Required for any post-creation update calls. Only "approved" qc.status
+  // allows stock/price/status updates per Jumia API docs.
+  jumia_product_sid?:  string | null;
+  jumia_qc_status?:    string | null;
+  jumia_product_map?:  Record<string, { sid: string | null; qc: string | null }> | null;
   created_at: string;
   updated_at: string;
 }

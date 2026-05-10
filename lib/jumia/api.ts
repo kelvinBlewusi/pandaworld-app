@@ -211,11 +211,19 @@ function resolveCategoryCode(listing: ListingRow): { code: number; name: string 
 
 // ─── Attribute builder ────────────────────────────────────────────────────────
 
-function buildAttributes(listing: ListingRow): { name: string; value: string }[] {
-  const attrs: { name: string; value: string }[] = [];
+interface JumiaAttribute {
+  name:         string;
+  value:        string;
+  translations: never[];
+}
+
+function buildAttributes(listing: ListingRow): JumiaAttribute[] {
+  const attrs: JumiaAttribute[] = [];
 
   const add = (name: string, value: string | null | undefined) => {
-    if (value != null && value !== "") attrs.push({ name, value: String(value) });
+    if (value != null && value !== "") {
+      attrs.push({ name, value: String(value), translations: [] });
+    }
   };
 
   add("color",              listing.color);
@@ -254,7 +262,7 @@ function buildAttributes(listing: ListingRow): { name: string; value: string }[]
       if (value != null && String(value).trim() !== "") {
         // Don't duplicate attributes already set above
         if (!attrs.find((a) => a.name === name)) {
-          attrs.push({ name, value: String(value) });
+          attrs.push({ name, value: String(value), translations: [] });
         }
       }
     }
@@ -278,22 +286,30 @@ function buildBaseProduct(listing: ListingRow, brand: { code: number; name: stri
     .filter(Boolean)
     .map((url, i) => ({ url, primary: i === 0 }));
 
+  // Match Jumia Postman spec exactly:
+  //   POST /feeds/products/create
+  //   { name: {value, translations[]}, description: {value, translations[]},
+  //     parentSku, sellerSku, variation, brand: {code, name}, category: {code, name},
+  //     images: [{url, primary}], price: {value, currency, salePrice?},
+  //     stock, attributes: [{name, value, translations[]}],
+  //     barcodeEan, additionalCategories: [{code, name}] }
   return {
-    name:        t(listing.title ?? ""),
-    description: t(listing.description ?? ""),
-    parentSku:   listing.sku,
-    sellerSku:   listing.sku,
-    gtinBarcode: "",
-    variation:   "",
+    name:                 t(listing.title ?? ""),
+    description:          t(listing.description ?? ""),
+    parentSku:            listing.sku,
+    sellerSku:            listing.sku,
+    variation:            "",
     brand,
     category,
     images,
     price: {
-      currency,
       value:    listing.selling_price ?? 0,
+      currency,
     },
-    stock:      listing.quantity ?? 1,
-    attributes: buildAttributes(listing),
+    stock:                listing.quantity ?? 1,
+    attributes:           buildAttributes(listing),
+    barcodeEan:           "",
+    additionalCategories: [] as { code: number; name: string }[],
   };
 }
 
@@ -314,13 +330,13 @@ export function mapListingToJumiaProducts(
   // With variants: one entry per variant; all share the same parentSku
   return variants.map((v) => ({
     ...base,
-    sellerSku:   v.seller_sku ?? `${listing.sku}-${v.id.slice(0, 4)}`,
-    parentSku:   listing.sku,
-    variation:   v.variation ?? "",
-    gtinBarcode: v.gtin ?? "",
+    sellerSku:  v.seller_sku ?? `${listing.sku}-${v.id.slice(0, 4)}`,
+    parentSku:  listing.sku,
+    variation:  v.variation ?? "",
+    barcodeEan: v.gtin ?? "",
     price: {
-      currency,
       value:     v.global_price ?? listing.selling_price ?? 0,
+      currency,
       ...(v.sale_price != null ? {
         salePrice: {
           value:   v.sale_price,
@@ -403,9 +419,16 @@ export async function pushProductsToJumia(
 }
 
 /**
- * POST https://vendor-api.jumia.com/feeds/products/update
+ * POST /feeds/products/update
  *
- * Same payload shape as pushProductsToJumia — Jumia matches by sellerSku.
+ * Same payload shape as pushProductsToJumia, but per Jumia API docs each
+ * product MUST include the `id` field (productSid) returned from the original
+ * create-feed response. Without `id`, Jumia rejects the update.
+ *
+ * Also: products are only updateable once their qc.status === "approved".
+ * Caller (the update route) is responsible for checking that gate before
+ * invoking this function.
+ *
  * Returns a new feedId; poll GET /feeds/{id} for completion.
  */
 export async function updateProductOnJumia(
@@ -415,11 +438,45 @@ export async function updateProductOnJumia(
   variants:    VariantRow[],
   currency:    string = "GHS"
 ): Promise<JumiaPushResult> {
+  if (!listing.jumia_product_sid && !listing.jumia_product_map) {
+    return {
+      success: false, jumia_ref: null, raw: null,
+      error: "JUMIA_NO_PRODUCT_SID: Product hasn't been QC-approved yet. Updates are only allowed after Jumia approves the initial listing.",
+    };
+  }
+  if (listing.jumia_qc_status && listing.jumia_qc_status !== "approved") {
+    return {
+      success: false, jumia_ref: null, raw: null,
+      error: `JUMIA_QC_NOT_APPROVED: Product qc.status is "${listing.jumia_qc_status}". Only QC-approved products allow updates.`,
+    };
+  }
+
   const brand    = await resolveBrand(accessToken, listing.brand);
-  const products = mapListingToJumiaProducts(listing, variants, brand, currency);
+  const products = mapListingToJumiaProducts(listing, variants, brand, currency)
+    .map((p) => {
+      // Inject the productSid required by /feeds/products/update.
+      // For multi-variant listings, look up the SID from the saved map.
+      let sid: string | null = null;
+      if (variants.length > 1 && listing.jumia_product_map) {
+        sid = listing.jumia_product_map[p.sellerSku]?.sid ?? null;
+      } else {
+        sid = listing.jumia_product_sid ?? null;
+      }
+      if (!sid) return null;
+      return { id: sid, ...p };
+    })
+    .filter(Boolean) as Array<{ id: string } & ReturnType<typeof buildBaseProduct>>;
+
+  if (products.length === 0) {
+    return {
+      success: false, jumia_ref: null, raw: null,
+      error: "JUMIA_NO_PRODUCT_SID: No QC-approved products to update.",
+    };
+  }
 
   const url  = `${JUMIA_API_BASE}/feeds/products/update`;
-  const body = JSON.stringify({ shopId, products });
+  // The update endpoint per Postman spec does NOT include shopId — only products.
+  const body = JSON.stringify({ products });
 
   console.info(`[Jumia API] POST ${url} — shopId=${shopId}, products=${products.length}`);
 
@@ -485,6 +542,57 @@ export async function getFeedStatus(
       raw,
     };
   } catch { return null; }
+}
+
+/**
+ * Extract the productSid + qc.status from a feed's products payload.
+ *
+ * Per the Jumia API docs (Retrieve Feed Details):
+ *   "To perform an update of newly created products, you need to get the
+ *    products data at least once, from which you will get 2 valuable
+ *    information: (1) the productSid needed for the update, (2) the qc.status
+ *    i.e if your product is compliant with our listing guideline."
+ *
+ *   "you can only update the stock, price, status of products that have
+ *    qc.status approved at least once."
+ *
+ * Returns null if the feed is still processing and doesn't yet have
+ * productSid info, or if the feed contains no products.
+ */
+export interface FeedProductInfo {
+  sellerSku:  string;
+  productSid: string | null;   // null until QC has run
+  qcStatus:   string | null;   // "approved" | "pending" | "rejected" | etc.
+  errors:     string[];
+}
+
+export async function getFeedProductDetails(
+  accessToken: string,
+  feedId:      string
+): Promise<FeedProductInfo[] | null> {
+  try {
+    const res = await fetch(`${JUMIA_API_BASE}/feeds/${feedId}`, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+    });
+    if (!res.ok) return null;
+    const raw = await res.json() as Record<string, unknown>;
+
+    const products = (raw.products ?? raw.items ?? []) as Record<string, unknown>[];
+    if (!Array.isArray(products)) return [];
+
+    return products.map((p) => {
+      const qc = (p.qc ?? {}) as Record<string, unknown>;
+      const errs = (p.errors ?? []) as unknown[];
+      return {
+        sellerSku:  String(p.sellerSku ?? p.seller_sku ?? ""),
+        productSid: (p.productSid ?? p.product_sid ?? p.sid) as string | null ?? null,
+        qcStatus:   (qc.status as string | undefined) ?? null,
+        errors:     errs.map((e) => typeof e === "string" ? e : JSON.stringify(e)),
+      };
+    });
+  } catch {
+    return null;
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

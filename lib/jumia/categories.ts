@@ -25,10 +25,23 @@ export interface JumiaCategoryRow {
   attribute_set_name: string | null;
 }
 
+// Per official Postman docs, Jumia API attribute types are:
+//   BOOLEAN, DATE, DATE_TIME, MULTI_SELECTION, NUMBER, SELECTION, TEXT, TEXT_AREA
+// We map them to UI-friendly types for rendering.
+export type JumiaAttrType =
+  | "boolean"   // BOOLEAN
+  | "number"    // NUMBER
+  | "date"      // DATE
+  | "datetime"  // DATE_TIME
+  | "enum"      // SELECTION
+  | "multi"     // MULTI_SELECTION
+  | "string"    // TEXT
+  | "textarea"; // TEXT_AREA
+
 export interface JumiaCategoryAttribute {
   name:           string;   // API field name e.g. "battery_capacity"
   label:          string;   // Display label e.g. "Battery Capacity (mAh)"
-  type:           "enum" | "string" | "number" | "boolean" | "multi";
+  type:           JumiaAttrType;
   allowed_values: string[]; // populated for enum/multi types
   required:       boolean;
   is_variant:     boolean;  // true = can be used as variant axis (e.g. color, ram)
@@ -132,11 +145,28 @@ export async function fetchCategoriesFromJumia(accessToken: string): Promise<Jum
  *  4 = enum/select (single value from options list)
  *  5 = date
  */
-function mapAttrType(typeCode: number, hasOptions: boolean): JumiaCategoryAttribute["type"] {
-  if (typeCode === 2) return "boolean";
-  if (typeCode === 1 || typeCode === 5) return "number";
-  if (typeCode === 3) return "multi";
-  if (typeCode === 4 || hasOptions) return "enum";
+function mapAttrType(rawType: unknown, hasOptions: boolean): JumiaAttrType {
+  // The API may return either a numeric legacy code OR the official string code
+  // documented in Postman: BOOLEAN, DATE, DATE_TIME, MULTI_SELECTION, NUMBER,
+  // SELECTION, TEXT, TEXT_AREA.
+  const s = String(rawType ?? "").toUpperCase().trim();
+  switch (s) {
+    case "BOOLEAN":         return "boolean";
+    case "DATE":            return "date";
+    case "DATE_TIME":       return "datetime";
+    case "NUMBER":          return "number";
+    case "MULTI_SELECTION": return "multi";
+    case "SELECTION":       return "enum";
+    case "TEXT_AREA":       return "textarea";
+    case "TEXT":            return "string";
+  }
+
+  // Legacy numeric codes
+  const code = Number(rawType);
+  if (code === 2) return "boolean";
+  if (code === 1 || code === 5) return "number";
+  if (code === 3) return "multi";
+  if (code === 4 || hasOptions) return "enum";
   return "string";
 }
 

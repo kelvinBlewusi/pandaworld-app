@@ -968,83 +968,94 @@ function NewListingWizard() {
 
   // ── Mode selection ────────────────────────────────────────────────────────
   if (!mode) {
-    const modeOptions = [
-      {
-        id: "own" as WizardMode,
-        icon: ImageIcon,
-        bg: "bg-blue-50 hover:bg-blue-100",
-        border: "border-blue-200",
-        iconColor: "text-blue-600",
-        label: "I have my own product images",
-        sub: "Upload up to 8 high-quality photos per product. AI will analyse them and auto-fill all Jumia listing fields.",
-        badge: "Max 8 images",
-        badgeColor: "bg-blue-100 text-blue-600",
-      },
-      {
-        id: "ai" as WizardMode,
-        icon: Wand2,
-        bg: "bg-violet-50 hover:bg-violet-100",
-        border: "border-violet-200",
-        iconColor: "text-violet-600",
-        label: "Generate images with AI",
-        sub: "Upload 1 reference photo or describe your product in words — AI generates listing copy and auto-fills all fields.",
-        badge: "Text or photo",
-        badgeColor: "bg-violet-100 text-violet-600",
-      },
-      {
-        id: "url" as WizardMode,
-        icon: Link2,
-        bg: "bg-emerald-50 hover:bg-emerald-100",
-        border: "border-emerald-200",
-        iconColor: "text-emerald-600",
-        label: "Import from product URL",
-        sub: "Paste a link from any product page. PandaWorld scrapes the title, images and description, then AI fills all Jumia fields automatically.",
-        badge: "Multiple URLs",
-        badgeColor: "bg-emerald-100 text-emerald-600",
-      },
-    ];
-
     return (
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-bold text-zinc-900">Create new listing</h1>
-          <p className="mt-1 text-sm text-zinc-500">How would you like to get started?</p>
+          <p className="mt-1 text-sm text-zinc-500">Upload photos of your product — AI fills the rest.</p>
         </div>
         <div className="grid gap-4 sm:grid-cols-1 md:grid-cols-3">
-          {modeOptions.map(({ id, icon: Icon, bg, border, iconColor, label, sub, badge, badgeColor }) => (
-            <motion.button
-              key={id}
-              whileHover={{ y: -2 }}
-              whileTap={{ scale: 0.98 }}
-              onClick={() => {
-                setMode(id);
-                router.replace(`/listings/new?mode=${id}`, { scroll: false });
-              }}
-              className={cn(
-                "group flex flex-col items-start gap-4 rounded-2xl border-2 bg-white p-6 text-left shadow-sm transition-all hover:shadow-md",
-                border
-              )}
-            >
-              <div className={cn("flex h-11 w-11 items-center justify-center rounded-xl transition-colors", bg)}>
-                <Icon className={cn("h-5 w-5", iconColor)} />
+          {/* Active option — own images */}
+          <motion.button
+            whileHover={{ y: -2 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={() => {
+              setMode("own");
+              router.replace(`/listings/new?mode=own`, { scroll: false });
+            }}
+            className="group flex flex-col items-start gap-4 rounded-2xl border-2 border-blue-200 bg-white p-6 text-left shadow-sm transition-all hover:shadow-md md:col-span-1"
+          >
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 group-hover:bg-blue-100 transition-colors">
+              <ImageIcon className="h-5 w-5 text-blue-600" />
+            </div>
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-semibold text-zinc-900">I have my own product images</p>
+                <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-600">
+                  Max 8 images
+                </span>
               </div>
-              <div className="space-y-1.5">
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-sm font-semibold text-zinc-900">{label}</p>
-                  <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold", badgeColor)}>
-                    {badge}
-                  </span>
-                </div>
-                <p className="text-xs leading-relaxed text-zinc-500">{sub}</p>
+              <p className="text-xs leading-relaxed text-zinc-500">
+                Upload up to 8 high-quality photos per product. AI detects the Jumia category and auto-fills every required field.
+              </p>
+            </div>
+            <div className="mt-auto flex items-center gap-1 text-xs font-semibold text-blue-600">
+              Select <ChevronRight className="h-3.5 w-3.5" />
+            </div>
+          </motion.button>
+
+          {/* Disabled — AI generation (placeholder) */}
+          <div className="relative flex flex-col items-start gap-4 rounded-2xl border-2 border-dashed border-zinc-200 bg-zinc-50 p-6 text-left opacity-60">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-violet-100/50">
+              <Wand2 className="h-5 w-5 text-violet-400" />
+            </div>
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-semibold text-zinc-500">Generate images with AI</p>
+                <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-[10px] font-semibold text-zinc-500">
+                  Coming soon
+                </span>
               </div>
-              <div className={cn("mt-auto flex items-center gap-1 text-xs font-semibold transition-colors", iconColor)}>
-                Select <ChevronRight className="h-3.5 w-3.5" />
+              <p className="text-xs leading-relaxed text-zinc-400">
+                Generate professional product photography from a description or reference image.
+              </p>
+            </div>
+            <div className="mt-auto text-xs font-medium text-zinc-400">In development</div>
+          </div>
+
+          {/* Disabled — URL import (placeholder) */}
+          <div className="relative flex flex-col items-start gap-4 rounded-2xl border-2 border-dashed border-zinc-200 bg-zinc-50 p-6 text-left opacity-60">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-100/50">
+              <Link2 className="h-5 w-5 text-emerald-400" />
+            </div>
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-semibold text-zinc-500">Import from product URL</p>
+                <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-[10px] font-semibold text-zinc-500">
+                  Coming soon
+                </span>
               </div>
-            </motion.button>
-          ))}
+              <p className="text-xs leading-relaxed text-zinc-400">
+                Paste a product page link — we&apos;ll scrape the data and fill the listing.
+              </p>
+            </div>
+            <div className="mt-auto text-xs font-medium text-zinc-400">In development</div>
+          </div>
         </div>
       </div>
     );
+  }
+
+  // Defensive redirect — if user somehow lands on ai/url mode (deep link or
+  // bookmark), send them back to mode picker. Both modes are disabled for now.
+  // We use a runtime string check to avoid narrowing the WizardMode type for
+  // the rest of this component, which still references those branches.
+  const _modeStr = String(mode);
+  if (_modeStr === "ai" || _modeStr === "url") {
+    if (typeof window !== "undefined") {
+      router.replace("/listings/new", { scroll: false });
+    }
+    return null;
   }
 
   // ── URL import input ──────────────────────────────────────────────────────
