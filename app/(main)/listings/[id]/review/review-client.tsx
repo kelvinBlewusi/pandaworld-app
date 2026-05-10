@@ -102,6 +102,8 @@ interface AttrSchema {
   allowed_values: string[];
   required:       boolean;
   is_variant:     boolean;
+  min_length?:    number | null;
+  max_length?:    number | null;
 }
 
 interface CategoryItem {
@@ -892,17 +894,42 @@ function CategoryDynamicFields({
 
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-      {schema.map((attr) => (
-        <div key={attr.name} className="space-y-1.5">
-          <Label className="text-xs font-semibold text-zinc-700">
-            {attr.label}{attr.required && <Required />}
-          </Label>
-          {renderField(attr)}
-          {attr.required && (
-            <p className="text-[11px] text-orange-600">Required to increase listing quality</p>
-          )}
-        </div>
-      ))}
+      {schema.map((attr) => {
+        const val = values[attr.name] ?? "";
+        const hasMin = typeof attr.min_length === "number" && attr.min_length > 0;
+        const hasMax = typeof attr.max_length === "number" && attr.max_length > 0;
+        const len = val.length;
+        const tooShort = hasMin && len > 0 && len < attr.min_length!;
+        const tooLong  = hasMax && len > attr.max_length!;
+        const isText   = ["string", "textarea", "number"].includes(attr.type);
+
+        return (
+          <div key={attr.name} className="space-y-1.5">
+            <Label className="text-xs font-semibold text-zinc-700 flex items-center gap-1.5">
+              <span>{attr.label}</span>
+              {attr.required && <Required />}
+              {attr.is_variant && (
+                <span className="text-[9px] rounded-full bg-violet-100 text-violet-600 px-1.5 py-0.5 font-semibold">variant</span>
+              )}
+            </Label>
+            {renderField(attr)}
+            {isText && (hasMin || hasMax) && (
+              <p className={cn(
+                "text-[11px]",
+                tooShort || tooLong ? "text-red-500" :
+                len > 0             ? "text-emerald-600" :
+                                      "text-zinc-400"
+              )}>
+                {len}{hasMax ? `/${attr.max_length}` : ""} characters
+                {hasMin && len < attr.min_length! && ` · min ${attr.min_length}`}
+              </p>
+            )}
+            {attr.required && !(hasMin || hasMax) && (
+              <p className="text-[11px] text-orange-600">Required to increase listing quality</p>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

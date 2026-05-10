@@ -45,6 +45,9 @@ export interface JumiaCategoryAttribute {
   allowed_values: string[]; // populated for enum/multi types
   required:       boolean;
   is_variant:     boolean;  // true = can be used as variant axis (e.g. color, ram)
+  // Live validation constraints from the Jumia API. Empty when not provided.
+  min_length?:    number | null;
+  max_length?:    number | null;
 }
 
 // ─── Supabase reads ───────────────────────────────────────────────────────────
@@ -73,10 +76,15 @@ export async function getCategoryAttributes(categoryCode: number): Promise<Jumia
   const db = createServerClient();
   const { data } = await db
     .from("jumia_category_attributes")
-    .select("name, label, type, allowed_values, required, is_variant")
+    .select("name, label, type, allowed_values, required, is_variant, min_length, max_length")
     .eq("category_code", categoryCode)
     .order("sort_order");
-  return (data ?? []).map((r) => ({ ...r, is_variant: r.is_variant ?? false })) as JumiaCategoryAttribute[];
+  return (data ?? []).map((r) => ({
+    ...r,
+    is_variant: r.is_variant ?? false,
+    min_length: r.min_length ?? null,
+    max_length: r.max_length ?? null,
+  })) as JumiaCategoryAttribute[];
 }
 
 export async function getCategoryByPath(path: string): Promise<JumiaCategoryRow | null> {
@@ -95,11 +103,16 @@ export async function getVariantAxes(categoryCode: number): Promise<JumiaCategor
   const db = createServerClient();
   const { data } = await db
     .from("jumia_category_attributes")
-    .select("name, label, type, allowed_values, required, is_variant")
+    .select("name, label, type, allowed_values, required, is_variant, min_length, max_length")
     .eq("category_code", categoryCode)
     .eq("is_variant", true)
     .order("sort_order");
-  return (data ?? []).map((r) => ({ ...r, is_variant: true })) as JumiaCategoryAttribute[];
+  return (data ?? []).map((r) => ({
+    ...r,
+    is_variant: true,
+    min_length: r.min_length ?? null,
+    max_length: r.max_length ?? null,
+  })) as JumiaCategoryAttribute[];
 }
 
 // ─── Live fetch from Jumia API ────────────────────────────────────────────────
@@ -221,6 +234,22 @@ function mapAttrType(rawType: unknown, hasOptions: boolean): JumiaAttrType {
 /**
  * Fetches attribute schema for one category using its attributeSet sid.
  * Correct endpoint: GET /catalog/attribute-sets/{sid}
+ *
+ * Per official Postman spec, each attribute object is:
+ *   {
+ *     code:         <number>,
+ *     name:         <string>,           // API field name e.g. "battery_capacity"
+ *     description:  <string>,
+ *     type:         <string>,           // BOOLEAN | DATE | DATE_TIME | MULTI_SELECTION |
+ *                                       // NUMBER | SELECTION | TEXT | TEXT_AREA
+ *     mandatory:    <boolean>,
+ *     variation:    <boolean>,          // ← NOT "variant" or "is_variant"
+ *     translatable: <boolean>,
+ *     sid:          <uuid>,
+ *     translations: [{ languageCode, translation, languageId }],
+ *     options:      [{ id, name, position, isDefault }],   // ← option label is "name"
+ *     validations:  [{ MinLength, MaxLength, DecimalPlaces, ... }]
+ *   }
  */
 export async function fetchAttributesFromJumia(
   accessToken:     string,
@@ -243,28 +272,49 @@ export async function fetchAttributesFromJumia(
     })
     .map((a) => {
       const attr    = a as Record<string, unknown>;
-      const options = (attr.options ?? []) as Record<string, unknown>[];
-      const typeCode = Number(attr.type ?? 0);
-      const hasOpts  = options.length > 0;
 
-      // Use EN translation as label if available
+      // Options: per spec each option has { id, name, position, isDefault }
+      // The display label is `name` (not `label`). Sort by position when present.
+      const rawOptions = (attr.options ?? []) as Record<string, unknown>[];
+      const sortedOptions = [...rawOptions].sort((x, y) =>
+        (Number(x.position ?? 0)) - (Number(y.position ?? 0))
+      );
+      const allowedValues = sortedOptions
+        .map((o) => String(o.name ?? o.label ?? o.value ?? o.code ?? "").trim())
+        .filter(Boolean);
+
+      // Type: per spec this is a string (BOOLEAN, TEXT_AREA, ...). Pass it
+      // raw to mapAttrType which handles both string and legacy numeric codes.
+      const hasOpts = allowedValues.length > 0;
+      const type    = mapAttrType(attr.type, hasOpts);
+
+      // Label: prefer the English translation, fall back to the description,
+      // then to the field name.
       const translations = (attr.translations ?? []) as Record<string, unknown>[];
       const enTranslation = translations.find(
-        (t) => String(t.languageCode).toUpperCase() === "EN" && t.translation
+        (t) => String(t.languageCode ?? "").toUpperCase() === "EN" && t.translation
       );
       const label = String(
         enTranslation?.translation ?? attr.description ?? attr.name ?? ""
       ).trim();
 
+      // Validations array — typically has one entry. Extract length bounds.
+      const validations = (attr.validations ?? []) as Record<string, unknown>[];
+      const firstVal    = validations[0] ?? {};
+      const minLength = firstVal.MinLength != null ? Number(firstVal.MinLength) : null;
+      const maxLength = firstVal.MaxLength != null ? Number(firstVal.MaxLength) : null;
+
       return {
         name:           String(attr.name ?? ""),
-        label,
-        type:           mapAttrType(typeCode, hasOpts),
-        allowed_values: options.map((o) =>
-          String(o.label ?? o.name ?? o.value ?? o.code ?? o)
-        ),
-        required:   Boolean(attr.mandatory ?? false),
-        is_variant: Boolean(attr.variant ?? attr.is_variant ?? false),
+        label:          label || String(attr.name ?? ""),
+        type,
+        allowed_values: allowedValues,
+        required:       Boolean(attr.mandatory ?? false),
+        // Per spec the variant flag is `variation` (boolean). Older naming
+        // attempts kept as fallback in case any cache or response uses them.
+        is_variant:     Boolean(attr.variation ?? attr.variant ?? attr.is_variant ?? false),
+        min_length:     minLength,
+        max_length:     maxLength,
       };
     });
 }
@@ -336,6 +386,8 @@ export async function upsertAttributes(
     allowed_values: a.allowed_values,
     required:       a.required,
     is_variant:     a.is_variant ?? false,
+    min_length:     a.min_length ?? null,
+    max_length:     a.max_length ?? null,
     sort_order:     i,
     synced_at:      new Date().toISOString(),
   }));
