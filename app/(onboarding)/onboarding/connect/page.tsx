@@ -70,7 +70,6 @@ export default function ConnectPage() {
   const [redirectUri, setRedirectUri] = useState("");
   const [appId, setAppId]             = useState("");
   const [secretKey, setSecretKey]     = useState("");
-  const [storeName, setStoreName]     = useState("");
   const [country, setCountry]         = useState("GH");
   const [showSecret, setShowSecret]   = useState(false);
 
@@ -98,13 +97,6 @@ export default function ConnectPage() {
       if (res.ok && data.ok) {
         setTestStatus("ok");
         setTestMessage(data.message ?? "Credentials verified.");
-        // Auto-suggest store name from app_id if field is still empty
-        if (!storeName.trim()) {
-          const suggested = appId.trim()
-            .replace(/_/g, " ")
-            .replace(/\b\w/g, (c) => c.toUpperCase());
-          setStoreName(suggested);
-        }
       } else {
         setTestStatus("error");
         setTestMessage(data.error ?? "Credentials could not be verified. Double-check your App ID and Secret Key.");
@@ -121,7 +113,7 @@ export default function ConnectPage() {
       const res = await fetch("/api/jumia/save-credentials", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ appId: appId.trim(), secretKey: secretKey.trim(), storeName: storeName.trim(), country }),
+        body:    JSON.stringify({ appId: appId.trim(), secretKey: secretKey.trim(), storeName: "", country }),
       });
       const data = await res.json();
       if (res.ok) {
@@ -304,17 +296,6 @@ export default function ConnectPage() {
                     {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
-              </div>
-
-              {/* Store name */}
-              <div className="space-y-1.5">
-                <Label className="text-xs font-medium text-zinc-600">Store name</Label>
-                <Input
-                  placeholder="What you want to call this store in PandaWorld"
-                  value={storeName}
-                  onChange={(e) => setStoreName(e.target.value)}
-                  className="h-9 text-sm"
-                />
               </div>
 
               {/* Test connection row */}
