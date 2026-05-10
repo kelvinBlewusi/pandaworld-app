@@ -164,6 +164,8 @@ function suggestionFor(
       tips.push("Then click Save & Push to Jumia again.");
     } else if (errText.includes("variation") && errText.includes("filled")) {
       tips.push("VARIATION FIX: This was a code bug — we were sending an empty variation field. The latest deploy auto-fills it from the product's color (or 'Default' if no color set). Just re-push the listing.");
+    } else if (errText.includes("already exists in parent sku") || errText.includes("different parent sku")) {
+      tips.push("DUPLICATE SKU: A previous push attempt already registered this product on Jumia's side. The next push will auto-generate a fresh SKU suffix (-RXXXX) to bypass the duplicate check. Just click Retry.");
     } else if (errText.includes("description") && errText.includes("characters")) {
       tips.push("DESCRIPTION TOO SHORT: Jumia requires 50–9,000 characters. Open the listing and expand the description to at least 50 characters.");
     } else if (errText.includes("brand")) {

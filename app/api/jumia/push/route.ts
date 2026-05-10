@@ -112,10 +112,32 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 
-  // Mark as processing while we wait for Jumia
+  // ── Generate a fresh parentSku on retry ────────────────────────────────────
+  // Jumia rejects duplicate (parentSku, variation) pairs with
+  // "Product with variation [X] already exists in parent sku [Y]". A previous
+  // push attempt for this listing may have partially persisted on Jumia's side
+  // even though our DB shows "failed". Append a short suffix so every push
+  // gets a guaranteed-unique parentSku.
+  //
+  // We MUTATE the row.sku on the in-memory object so buildBaseProduct picks
+  // it up, then persist the new SKU back so the user sees a consistent SKU in
+  // their UI matching what Jumia has.
+  const isRetry = row.status === "failed" || (row.jumia_synced_at != null);
+  if (isRetry) {
+    const suffix = Date.now().toString(36).slice(-4).toUpperCase();
+    const baseSku = row.sku.replace(/-R[A-Z0-9]{4}$/i, "");  // strip any prior -RXXXX suffix
+    row.sku = `${baseSku}-R${suffix}`;
+    console.info(`[push] Retry detected — using fresh SKU ${row.sku} (was ${baseSku})`);
+  }
+
+  // Mark as processing while we wait for Jumia (also persist any new SKU)
   await db
     .from("listings")
-    .update({ status: "processing", updated_at: new Date().toISOString() })
+    .update({
+      status:     "processing",
+      sku:        row.sku,
+      updated_at: new Date().toISOString(),
+    })
     .eq("id", listingId);
 
   // ── Push to Jumia API (brand resolution + payload mapping done internally) ─
