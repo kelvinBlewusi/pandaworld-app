@@ -70,6 +70,10 @@ function IntegrationsPageInner() {
   }
 
   // ── Sync Jumia categories ─────────────────────────────────────────────────
+  // FAST path: just the category list (no attributes). Attribute schemas load
+  // lazily when a seller actually opens a listing in that category. Full attr
+  // sync took 50+ seconds for ~200 categories due to Jumia's rate limit; this
+  // version completes in 2-3 seconds.
   async function handleSyncCategories() {
     setSyncing(true);
     setSyncResult(null);
@@ -77,12 +81,12 @@ function IntegrationsPageInner() {
       const res = await fetch("/api/admin/jumia/sync-categories", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ syncAttributes: true }),
+        body:    JSON.stringify({ syncAttributes: false }),
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setSyncResult({ categories: data.categories, attributes: data.attributes });
-        showToast("success", `✅ Synced ${data.categories} categories and ${data.attributes} attribute fields from Jumia.`);
+        setSyncResult({ categories: data.categories, attributes: 0 });
+        showToast("success", `✅ Synced ${data.categories} categories. Attribute fields load automatically when you pick a category in a listing.`);
       } else {
         showToast("error", data.error ?? "Sync failed — please try again.");
       }
