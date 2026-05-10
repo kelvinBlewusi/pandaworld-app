@@ -12,6 +12,7 @@ import {
   ShoppingBag,
   CheckCircle2,
   AlertCircle,
+  Stethoscope,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -118,6 +119,24 @@ export function ListingTable({ listings, compact = false }: ListingTableProps) {
   }
 
   // ── Push single listing to Jumia ───────────────────────────────────────────
+
+  // ── Diagnose a pending/failed listing — pulls live Jumia feed details ──
+  const [diagnoseId, setDiagnoseId] = useState<string | null>(null);
+  const [diagnoseResult, setDiagnoseResult] = useState<Record<string, unknown> | null>(null);
+
+  async function handleDiagnose(id: string) {
+    setDiagnoseId(id);
+    setDiagnoseResult(null);
+    try {
+      const res  = await fetch(`/api/jumia/diagnose/${id}`);
+      const data = await res.json();
+      setDiagnoseResult(data);
+      // Trigger refresh so any auto-applied status change shows up in the list
+      router.refresh();
+    } catch (e) {
+      setDiagnoseResult({ error: (e as Error).message });
+    }
+  }
 
   async function handlePushToJumia(id: string, title: string) {
     setPushingIds((s) => new Set(s).add(id));
@@ -405,6 +424,16 @@ export function ListingTable({ listings, compact = false }: ListingTableProps) {
                             {listing.status === "failed" ? "Retry push to Jumia" : "Push to Jumia"}
                           </DropdownMenuItem>
                         )}
+                        {/* Diagnose — only meaningful when a feed has been pushed */}
+                        {(listing.status === "pending_approval" || listing.status === "failed" || listing.status === "live") && (
+                          <DropdownMenuItem
+                            className="text-blue-600 focus:text-blue-600 focus:bg-blue-50"
+                            onClick={() => handleDiagnose(listing.id)}
+                          >
+                            <Stethoscope className="h-4 w-4 mr-2" />
+                            Check Jumia status
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
                           className="text-red-600 focus:text-red-600"
@@ -430,6 +459,152 @@ export function ListingTable({ listings, compact = false }: ListingTableProps) {
           <p className="text-sm text-zinc-400">No listings found</p>
         </div>
       )}
+
+      {/* Diagnose modal */}
+      {diagnoseId && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => { setDiagnoseId(null); setDiagnoseResult(null); }}
+        >
+          <div
+            className="w-full max-w-2xl max-h-[85vh] overflow-hidden rounded-2xl bg-white shadow-xl flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b px-5 py-4">
+              <div className="flex items-center gap-2">
+                <Stethoscope className="h-5 w-5 text-blue-600" />
+                <h2 className="font-semibold text-zinc-900">Jumia status check</h2>
+              </div>
+              <button
+                onClick={() => { setDiagnoseId(null); setDiagnoseResult(null); }}
+                className="text-zinc-400 hover:text-zinc-700"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="overflow-y-auto p-5 space-y-4">
+              {!diagnoseResult ? (
+                <div className="flex items-center gap-2 text-sm text-zinc-500 py-8 justify-center">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Asking Jumia what happened to this listing…
+                </div>
+              ) : (
+                <DiagnoseResult result={diagnoseResult} />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DiagnoseResult({ result }: { result: Record<string, unknown> }) {
+  const diagnosis    = String(result.diagnosis ?? "UNKNOWN");
+  const humanMessage = String(result.humanMessage ?? result.detail ?? result.error ?? "");
+  const suggestions  = (result.suggestion ?? []) as string[];
+  const feedStatus   = result.feedStatus as { status?: string; success?: number; failed?: number; errors?: unknown[] } | null;
+  const productDetails = result.productDetails as Array<{ sellerSku: string; productSid: string | null; qcStatus: string | null; errors: string[] }> | null;
+
+  const headerColor =
+    diagnosis === "ACCEPTED"          ? "bg-emerald-50 border-emerald-200 text-emerald-700" :
+    diagnosis === "STILL_PROCESSING"  ? "bg-blue-50 border-blue-200 text-blue-700" :
+    diagnosis === "PRODUCTS_REJECTED" ? "bg-red-50 border-red-200 text-red-700" :
+    diagnosis === "FEED_ERROR"        ? "bg-red-50 border-red-200 text-red-700" :
+                                        "bg-zinc-50 border-zinc-200 text-zinc-700";
+
+  return (
+    <>
+      {/* Verdict */}
+      <div className={`rounded-xl border p-4 ${headerColor}`}>
+        <p className="text-xs font-bold uppercase tracking-wider mb-1">{diagnosis.replace(/_/g, " ")}</p>
+        <p className="text-sm">{humanMessage}</p>
+      </div>
+
+      {/* Suggestions */}
+      {suggestions.length > 0 && (
+        <div className="rounded-xl border border-amber-100 bg-amber-50 p-4">
+          <p className="text-xs font-semibold text-amber-700 mb-2">Next steps</p>
+          <ul className="space-y-1 text-xs text-amber-900">
+            {suggestions.map((s, i) => (
+              <li key={i} className="flex items-start gap-1.5">
+                <span className="text-amber-600 mt-0.5">→</span>
+                <span>{s}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Feed summary */}
+      {feedStatus && (
+        <div className="rounded-xl border bg-white p-4 space-y-2">
+          <p className="text-xs font-semibold text-zinc-600">Jumia feed summary</p>
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            <Stat label="Status"  value={feedStatus.status ?? "—"} />
+            <Stat label="Success" value={String(feedStatus.success ?? 0)} />
+            <Stat label="Failed"  value={String(feedStatus.failed ?? 0)} highlight={Number(feedStatus.failed ?? 0) > 0} />
+          </div>
+          {Array.isArray(feedStatus.errors) && feedStatus.errors.length > 0 && (
+            <details className="text-xs">
+              <summary className="cursor-pointer font-medium text-red-600">
+                {feedStatus.errors.length} feed error{feedStatus.errors.length === 1 ? "" : "s"} — click to view
+              </summary>
+              <pre className="mt-2 max-h-48 overflow-auto rounded bg-zinc-900 text-zinc-100 p-3 font-mono text-[11px]">
+                {JSON.stringify(feedStatus.errors, null, 2)}
+              </pre>
+            </details>
+          )}
+        </div>
+      )}
+
+      {/* Per-product details */}
+      {productDetails && productDetails.length > 0 && (
+        <div className="rounded-xl border bg-white p-4 space-y-2">
+          <p className="text-xs font-semibold text-zinc-600">Per-product status ({productDetails.length})</p>
+          <div className="space-y-2">
+            {productDetails.map((p, i) => (
+              <div key={i} className="border rounded p-2 text-xs space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-zinc-700">{p.sellerSku || "(no sku)"}</span>
+                  <span className={
+                    p.qcStatus === "approved" ? "text-emerald-600" :
+                    p.qcStatus === "rejected" ? "text-red-600" :
+                                                "text-amber-600"
+                  }>
+                    QC: {p.qcStatus ?? "pending"}
+                  </span>
+                </div>
+                {p.productSid && (
+                  <p className="text-[10px] text-zinc-400 font-mono">sid: {p.productSid}</p>
+                )}
+                {p.errors.length > 0 && (
+                  <ul className="space-y-0.5 text-red-600 text-[11px]">
+                    {p.errors.map((e, j) => <li key={j}>• {e}</li>)}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Raw response (for debugging) */}
+      <details className="text-xs">
+        <summary className="cursor-pointer font-medium text-zinc-500">Raw response (for debugging)</summary>
+        <pre className="mt-2 max-h-64 overflow-auto rounded bg-zinc-900 text-zinc-100 p-3 font-mono text-[10px]">
+          {JSON.stringify(result, null, 2)}
+        </pre>
+      </details>
+    </>
+  );
+}
+
+function Stat({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+  return (
+    <div className={`rounded border px-2 py-1.5 text-center ${highlight ? "border-red-200 bg-red-50" : "border-zinc-200 bg-zinc-50"}`}>
+      <p className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</p>
+      <p className={`text-sm font-bold ${highlight ? "text-red-700" : "text-zinc-900"}`}>{value}</p>
     </div>
   );
 }
