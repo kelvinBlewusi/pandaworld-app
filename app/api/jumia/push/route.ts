@@ -74,8 +74,9 @@ export async function POST(req: NextRequest) {
   // ── Get valid Jumia token + shopId ───────────────────────────────────────
   let accessToken: string;
   let shopId: string;
+  let currency: string;
   try {
-    ({ accessToken, shopId } = await getValidJumiaCredentials(userId));
+    ({ accessToken, shopId, currency } = await getValidJumiaCredentials(userId));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";
     if (msg === "JUMIA_NOT_CONNECTED") {
@@ -112,7 +113,7 @@ export async function POST(req: NextRequest) {
     .eq("id", listingId);
 
   // ── Push to Jumia API (brand resolution + payload mapping done internally) ─
-  const result = await pushProductsToJumia(accessToken, shopId, row, variants);
+  const result = await pushProductsToJumia(accessToken, shopId, row, variants, currency);
 
   // ── Update listing with result ────────────────────────────────────────────
   if (result.success) {

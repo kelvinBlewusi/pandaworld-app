@@ -48,12 +48,13 @@ export async function POST(req: NextRequest) {
       // 2 — Download & re-upload scraped images to our storage
       let imageUrls: string[] = [];
       if (scraped.imageUrls.length > 0) {
-        imageUrls = await uploadRemoteImages(scraped.imageUrls, userId);
+        imageUrls = await uploadRemoteImages(scraped.imageUrls, userId).catch(() => []);
       }
 
       // 3 — AI analysis
-      //     If we have images → vision mode.
+      //     If we have images → vision mode (images are most accurate).
       //     If no images but we have title/description → text mode.
+      //     (This handles sites that block scraping but have a descriptive URL slug.)
       let analysis;
       if (imageUrls.length > 0) {
         analysis = await analyzeProductImages(imageUrls);
@@ -64,7 +65,7 @@ export async function POST(req: NextRequest) {
         analysis = await analyzeProductDescription(textInput);
       } else {
         return NextResponse.json(
-          { error: "No images or text found at that URL." },
+          { error: "No images or text found at that URL. Try pasting the product name or description instead." },
           { status: 422 }
         );
       }

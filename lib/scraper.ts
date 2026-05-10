@@ -16,8 +16,17 @@ export interface ScrapedProduct {
   sourceUrl:   string;
 }
 
-const UA =
-  "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+// Multiple real-browser UAs to cycle through on failure
+const USER_AGENTS = [
+  // Chrome 124 on Windows
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  // Chrome 124 on Mac
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  // Firefox 125 on Windows
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+  // Safari on Mac
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+];
 
 // ─── HTML mini-parser helpers ─────────────────────────────────────────────────
 
@@ -171,27 +180,119 @@ function jsonLdDescription(lds: Record<string, unknown>[]): string | null {
   return null;
 }
 
+// ─── URL slug → readable title ────────────────────────────────────────────────
+
+/**
+ * Best-effort product title from the URL path segment.
+ * e.g. "samsung-galaxy-a16-128gb-4gb-ram-50mp-camera-6.7-5000mah-black-24-months-warranty-300525223"
+ *   → "Samsung Galaxy A16 128gb 4gb Ram 50mp Camera 6.7 5000mah Black 24 Months Warranty"
+ */
+function titleFromSlug(url: string): string | null {
+  try {
+    const pathname = new URL(url).pathname;
+    // Take the last non-empty path segment, strip file extension
+    const segments = pathname.split("/").filter(Boolean);
+    let slug = segments[segments.length - 1] ?? "";
+    if (!slug) return null;
+
+    // Strip file extension (e.g. .html, .htm)
+    slug = slug.replace(/\.[a-z]{2,4}$/, "");
+
+    // Remove trailing numeric IDs (e.g. -300525223 or just 300525223)
+    const cleaned = slug.replace(/-\d{5,}$/, "").trim();
+    if (!cleaned) return null;
+
+    // Convert slug to title case words
+    return cleaned
+      .split("-")
+      .filter(Boolean)
+      .map((w) => w[0].toUpperCase() + w.slice(1))
+      .join(" ")
+      .trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── HTTP fetch with UA cycling ───────────────────────────────────────────────
+
+async function fetchHtml(url: string): Promise<{ html: string; status: number }> {
+  const baseHeaders = {
+    Accept:          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "no-cache",
+    Pragma:          "no-cache",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+  };
+
+  let lastError: string = "";
+
+  for (const ua of USER_AGENTS) {
+    try {
+      const res = await fetch(url, {
+        headers: { ...baseHeaders, "User-Agent": ua },
+        signal:  AbortSignal.timeout(15_000),
+        redirect: "follow",
+      });
+
+      if (res.ok) {
+        const html = await res.text();
+        return { html, status: res.status };
+      }
+
+      lastError = `HTTP ${res.status}`;
+
+      // Don't retry on client errors other than 403 (e.g. 404 = page gone)
+      if (res.status !== 403 && res.status !== 429) {
+        throw new Error(`HTTP ${res.status} from ${url}`);
+      }
+
+      // Brief pause before next UA attempt
+      await new Promise((r) => setTimeout(r, 300));
+    } catch (e) {
+      if ((e as Error).message.startsWith("HTTP ")) throw e;
+      lastError = (e as Error).message;
+    }
+  }
+
+  throw new Error(`Could not fetch URL: ${lastError} from ${url}`);
+}
+
 // ─── Main scrape ──────────────────────────────────────────────────────────────
 
 export async function scrapeProductUrl(url: string): Promise<ScrapedProduct> {
   let html: string;
 
   try {
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": UA,
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Cache-Control": "no-cache",
-      },
-      // 15 s timeout — supported in Node 18+
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
-    html = await res.text();
+    const result = await fetchHtml(url);
+    html = result.html;
   } catch (e) {
-    throw new Error(`Could not fetch URL: ${(e as Error).message}`);
+    // If all UAs were blocked (403/429) try to salvage something from the URL slug
+    // so the AI can still generate a reasonable listing.
+    const msg = (e as Error).message;
+    const isBlocked = msg.includes("403") || msg.includes("429");
+
+    if (isBlocked) {
+      const slugTitle = titleFromSlug(url);
+      if (slugTitle) {
+        // Return minimal scraped data — the caller will use AI text-mode
+        return {
+          title:       slugTitle,
+          description: null,
+          brand:       null,
+          price:       null,
+          imageUrls:   [],
+          sourceUrl:   url,
+        };
+      }
+    }
+
+    throw new Error(`Could not fetch URL: ${msg}`);
   }
 
   const lds = getJsonLd(html);

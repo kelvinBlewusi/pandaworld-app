@@ -55,15 +55,16 @@ export async function POST(req: NextRequest) {
   // ── Get Jumia credentials ─────────────────────────────────────────────────
   let accessToken: string;
   let shopId:      string;
+  let currency:    string;
   try {
-    ({ accessToken, shopId } = await getValidJumiaCredentials(userId));
+    ({ accessToken, shopId, currency } = await getValidJumiaCredentials(userId));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";
     return NextResponse.json({ error: msg }, { status: 403 });
   }
 
   // ── Push update feed ──────────────────────────────────────────────────────
-  const result = await updateProductOnJumia(accessToken, shopId, listing, variants ?? []);
+  const result = await updateProductOnJumia(accessToken, shopId, listing, variants ?? [], currency);
 
   if (!result.success) {
     return NextResponse.json({ error: result.error ?? "Jumia update failed" }, { status: 502 });

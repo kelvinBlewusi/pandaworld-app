@@ -18,17 +18,32 @@ import { mockCategories } from "@/lib/mock/categories";
 import { findBrandExact } from "@/lib/jumia/brands";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
 
+// ─── Country → ISO 4217 currency code ────────────────────────────────────────
+
+const COUNTRY_CURRENCY: Record<string, string> = {
+  GH: "GHS",
+  NG: "NGN",
+  KE: "KES",
+  EG: "EGP",
+  MA: "MAD",
+  SN: "XOF",
+  CI: "XOF",
+  TZ: "TZS",
+  UG: "UGX",
+};
+
 // ─── Token + shopId retrieval ─────────────────────────────────────────────────
 
 export async function getValidJumiaCredentials(userId: string): Promise<{
   accessToken: string;
   shopId:      string;
+  currency:    string;
 }> {
   const db = createServerClient();
 
   const { data: conn, error } = await db
     .from("jumia_connections")
-    .select("access_token, refresh_token, token_expires_at, status, shop_id, app_id, app_secret")
+    .select("access_token, refresh_token, token_expires_at, status, shop_id, app_id, app_secret, country")
     .eq("user_id", userId)
     .maybeSingle();
 
@@ -71,7 +86,9 @@ export async function getValidJumiaCredentials(userId: string): Promise<{
   if (!shopId) shopId = await fetchAndStoreShopId(userId, accessToken, db);
   if (!shopId) throw new Error("JUMIA_NO_SHOP_ID");
 
-  return { accessToken, shopId };
+  const currency = COUNTRY_CURRENCY[(conn.country ?? "GH") as string] ?? "GHS";
+
+  return { accessToken, shopId, currency };
 }
 
 async function fetchAndStoreShopId(
@@ -255,7 +272,7 @@ function t(value: string) {
 
 export type JumiaProduct = ReturnType<typeof buildBaseProduct>;
 
-function buildBaseProduct(listing: ListingRow, brand: { code: number; name: string }) {
+function buildBaseProduct(listing: ListingRow, brand: { code: number; name: string }, currency: string) {
   const category   = resolveCategoryCode(listing);
   const images     = (listing.images ?? [])
     .filter(Boolean)
@@ -272,7 +289,7 @@ function buildBaseProduct(listing: ListingRow, brand: { code: number; name: stri
     category,
     images,
     price: {
-      currency: "GHS",
+      currency,
       value:    listing.selling_price ?? 0,
     },
     stock:      listing.quantity ?? 1,
@@ -287,9 +304,10 @@ function buildBaseProduct(listing: ListingRow, brand: { code: number; name: stri
 export function mapListingToJumiaProducts(
   listing:  ListingRow,
   variants: VariantRow[],
-  brand:    { code: number; name: string }
+  brand:    { code: number; name: string },
+  currency: string = "GHS"
 ): JumiaProduct[] {
-  const base = buildBaseProduct(listing, brand);
+  const base = buildBaseProduct(listing, brand, currency);
 
   if (!variants.length) return [base];
 
@@ -301,7 +319,7 @@ export function mapListingToJumiaProducts(
     variation:   v.variation ?? "",
     gtinBarcode: v.gtin ?? "",
     price: {
-      currency:  "GHS" as const,
+      currency,
       value:     v.global_price ?? listing.selling_price ?? 0,
       ...(v.sale_price != null ? {
         salePrice: {
@@ -334,11 +352,12 @@ export async function pushProductsToJumia(
   accessToken: string,
   shopId:      string,
   listing:     ListingRow,
-  variants:    VariantRow[]
+  variants:    VariantRow[],
+  currency:    string = "GHS"
 ): Promise<JumiaPushResult> {
   // 1. Resolve brand code (calls /catalog/brands)
   const brand    = await resolveBrand(accessToken, listing.brand);
-  const products = mapListingToJumiaProducts(listing, variants, brand);
+  const products = mapListingToJumiaProducts(listing, variants, brand, currency);
 
   const url  = `${JUMIA_API_BASE}/feeds/products/create`;
   const body = JSON.stringify({ shopId, products });
@@ -393,10 +412,11 @@ export async function updateProductOnJumia(
   accessToken: string,
   shopId:      string,
   listing:     ListingRow,
-  variants:    VariantRow[]
+  variants:    VariantRow[],
+  currency:    string = "GHS"
 ): Promise<JumiaPushResult> {
   const brand    = await resolveBrand(accessToken, listing.brand);
-  const products = mapListingToJumiaProducts(listing, variants, brand);
+  const products = mapListingToJumiaProducts(listing, variants, brand, currency);
 
   const url  = `${JUMIA_API_BASE}/feeds/products/update`;
   const body = JSON.stringify({ shopId, products });
