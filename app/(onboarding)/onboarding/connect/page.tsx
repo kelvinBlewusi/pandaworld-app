@@ -98,6 +98,13 @@ export default function ConnectPage() {
       if (res.ok && data.ok) {
         setTestStatus("ok");
         setTestMessage(data.message ?? "Credentials verified.");
+        // Auto-suggest store name from app_id if field is still empty
+        if (!storeName.trim()) {
+          const suggested = appId.trim()
+            .replace(/_/g, " ")
+            .replace(/\b\w/g, (c) => c.toUpperCase());
+          setStoreName(suggested);
+        }
       } else {
         setTestStatus("error");
         setTestMessage(data.error ?? "Credentials could not be verified. Double-check your App ID and Secret Key.");
@@ -136,7 +143,7 @@ export default function ConnectPage() {
   }
 
   const canTest    = appId.trim().length > 0 && secretKey.trim().length > 0;
-  const canConnect = canTest && storeName.trim().length > 0 && testStatus === "ok";
+  const canConnect = canTest && testStatus === "ok"; // store name optional — OAuth callback sets real name
 
   return (
     <div className="space-y-6">

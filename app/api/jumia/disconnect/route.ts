@@ -4,8 +4,9 @@ import { createServerClient } from "@/lib/supabase/server";
 import { revokeToken } from "@/lib/jumia/oauth";
 
 // ─── POST /api/jumia/disconnect ───────────────────────────────────────────────
-// Revokes the Jumia access token with Jumia Connect IdM, then marks the
-// connection as revoked in Supabase.
+// Revokes the Jumia access token, then DELETES the connection row so that:
+//  - The user's store data is fully removed
+//  - The root page redirect (app/page.tsx) sends them back to onboarding
 
 export async function POST() {
   const { userId } = await auth();
@@ -13,23 +14,26 @@ export async function POST() {
 
   const db = createServerClient();
 
-  // Fetch the stored tokens so we can revoke them
+  // Fetch tokens first so we can revoke them with Jumia
   const { data: conn } = await db
     .from("jumia_connections")
     .select("access_token, refresh_token")
     .eq("user_id", userId)
     .maybeSingle();
 
-  if (conn?.access_token) {
+  // Best-effort token revocation (don't fail if Jumia is unreachable)
+  if (conn?.access_token && conn.access_token !== "credential_auth") {
     await revokeToken(conn.access_token);
   }
   if (conn?.refresh_token) {
     await revokeToken(conn.refresh_token);
   }
 
+  // Delete the row entirely — this clears all shop data and
+  // causes the root page to redirect the user to /onboarding/channel on next login
   const { error } = await db
     .from("jumia_connections")
-    .update({ status: "revoked", updated_at: new Date().toISOString() })
+    .delete()
     .eq("user_id", userId);
 
   if (error) {

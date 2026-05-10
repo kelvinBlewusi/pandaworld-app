@@ -1,5 +1,6 @@
 export type ListingStatus =
   | "draft"
+  | "awaiting_review"
   | "processing"
   | "pending_approval"
   | "live"

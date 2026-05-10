@@ -92,8 +92,10 @@ export function ListingsClient({ listings, categories }: ListingsClientProps) {
         l.sku.toLowerCase().includes(search.toLowerCase());
       const matchesStatus =
         statusFilter === "all" || l.status === statusFilter;
+      // Match on the top-level (mother) category — the first segment of the path
+      const motherCategory = l.category?.split("/")[0]?.trim() ?? "";
       const matchesCategory =
-        categoryFilter === "all" || l.category === categoryFilter;
+        categoryFilter === "all" || motherCategory === categoryFilter;
       return matchesSearch && matchesStatus && matchesCategory;
     });
   }, [listings, search, statusFilter, categoryFilter]);
@@ -185,6 +187,7 @@ export function ListingsClient({ listings, categories }: ListingsClientProps) {
           <SelectContent>
             <SelectItem value="all">All statuses</SelectItem>
             <SelectItem value="draft">Draft</SelectItem>
+            <SelectItem value="awaiting_review">Awaiting review</SelectItem>
             <SelectItem value="processing">Processing</SelectItem>
             <SelectItem value="pending_approval">Pending</SelectItem>
             <SelectItem value="live">Live</SelectItem>

@@ -243,6 +243,7 @@ function CompactDropzone({
 function UrlImportStep({ urls }: { urls: string[] }) {
   const router = useRouter();
   const calledRef = useRef(false);
+  const [retryCount, setRetryCount] = useState(0);
 
   const [status, setStatus]   = useState<"processing" | "done" | "error">("processing");
   const [result, setResult]   = useState<ProcessResult | null>(null);
@@ -250,6 +251,10 @@ function UrlImportStep({ urls }: { urls: string[] }) {
   const [phase, setPhase]     = useState<"scraping" | "analysing" | "saving">("scraping");
 
   const totalUrls = urls.length;
+
+  useEffect(() => {
+    calledRef.current = false;
+  }, [retryCount]);
 
   useEffect(() => {
     if (calledRef.current) return;
@@ -296,7 +301,7 @@ function UrlImportStep({ urls }: { urls: string[] }) {
     }
 
     run();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [retryCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const phaseLabels: Record<typeof phase, string> = {
     scraping:  "Scraping product page…",
@@ -395,10 +400,10 @@ function UrlImportStep({ urls }: { urls: string[] }) {
           <Button
             className="flex-1"
             onClick={() => {
-              calledRef.current = false;
               setStatus("processing");
               setError(null);
               setPhase("scraping");
+              setRetryCount((n) => n + 1);
             }}
           >
             Retry
@@ -511,12 +516,17 @@ function PopulateStep({
   totalProducts: number;
 }) {
   const router = useRouter();
+  const [retryCount, setRetryCount] = useState(0);
   const [status, setStatus] = useState<"processing" | "done" | "error">(
     "processing"
   );
   const [result, setResult] = useState<ProcessResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const calledRef = useRef(false);
+
+  useEffect(() => {
+    calledRef.current = false;
+  }, [retryCount]);
 
   useEffect(() => {
     if (calledRef.current) return;
@@ -556,6 +566,17 @@ function PopulateStep({
 
         const data: ProcessResult = await res.json();
         setResult(data);
+
+        // If batch (multiple products), mark this listing as awaiting_review
+        // so it appears in the listings page for review before publishing
+        if (totalProducts > 1 && data.listingId) {
+          await fetch(`/api/listings/${data.listingId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: "awaiting_review" }),
+          }).catch(() => {}); // best-effort
+        }
+
         setStatus("done");
       } catch (err) {
         setError(err instanceof Error ? err.message : "Processing failed");
@@ -564,7 +585,7 @@ function PopulateStep({
     }
 
     run();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [retryCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (status === "processing") {
     return (
@@ -651,9 +672,9 @@ function PopulateStep({
           <Button
             className="flex-1"
             onClick={() => {
-              calledRef.current = false;
               setStatus("processing");
               setError(null);
+              setRetryCount((n) => n + 1);
             }}
           >
             Retry
@@ -713,15 +734,26 @@ function PopulateStep({
 
       <div className="flex gap-3">
         <Button variant="outline" className="flex-1" onClick={() => router.push("/listings")}>
-          View drafts
+          {totalProducts > 1 ? "Go to listings" : "View drafts"}
         </Button>
-        <Button
-          className="flex-1 gap-2 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700"
-          onClick={() => router.push(`/listings/${result!.listingId}/review`)}
-        >
-          <Sparkles className="h-4 w-4" />
-          Review & publish
-        </Button>
+        {totalProducts === 1 && (
+          <Button
+            className="flex-1 gap-2 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700"
+            onClick={() => router.push(`/listings/${result!.listingId}/review`)}
+          >
+            <Sparkles className="h-4 w-4" />
+            Review & publish
+          </Button>
+        )}
+        {totalProducts > 1 && (
+          <Button
+            className="flex-1 gap-2 bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700"
+            onClick={() => router.push("/listings?status=awaiting_review")}
+          >
+            <Sparkles className="h-4 w-4" />
+            Review all
+          </Button>
+        )}
       </div>
     </div>
   );

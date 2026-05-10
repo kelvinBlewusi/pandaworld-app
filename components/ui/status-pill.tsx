@@ -9,6 +9,10 @@ const statusConfig: Record<
     label: "Draft",
     className: "bg-zinc-100 text-zinc-600 border-zinc-200",
   },
+  awaiting_review: {
+    label: "Awaiting review",
+    className: "bg-violet-50 text-violet-600 border-violet-200",
+  },
   processing: {
     label: "Processing",
     className: "bg-blue-50 text-blue-600 border-blue-200",
@@ -47,6 +51,7 @@ export function StatusPill({ status, className }: StatusPillProps) {
           "h-1.5 w-1.5 rounded-full",
           status === "live" && "bg-emerald-500",
           status === "draft" && "bg-zinc-400",
+          status === "awaiting_review" && "bg-violet-500",
           status === "processing" && "bg-blue-500 animate-pulse",
           status === "pending_approval" && "bg-amber-500",
           status === "failed" && "bg-red-500"

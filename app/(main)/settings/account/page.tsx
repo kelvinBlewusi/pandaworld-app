@@ -8,7 +8,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
-import { createClient } from "@supabase/supabase-js";
 import { cn } from "@/lib/utils";
 import { getSubscription } from "@/lib/actions/subscription";
 import type { Plan } from "@/lib/types/subscription";
@@ -21,13 +20,13 @@ export default function AccountSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [plan, setPlan] = useState<Plan>("free");
-  const [stores, setStores] = useState<Array<{
-    id: string;
+  const [storeConn, setStoreConn] = useState<{
     store_name: string | null;
     seller_email: string | null;
-    status: string;
+    status: string | null;
     connected_at: string | null;
-  }>>([]);
+    oauth_required?: boolean;
+  } | null>(null);
   const [storesLoading, setStoresLoading] = useState(true);
 
   // Load subscription plan
@@ -37,18 +36,16 @@ export default function AccountSettingsPage() {
     });
   }, []);
 
-  // Load real connected stores — create client lazily so missing env vars don't crash the page
+  // Load connected store via authenticated API route
   useEffect(() => {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (!url || !key) { setStoresLoading(false); return; }
-    createClient(url, key)
-      .from("jumia_connections")
-      .select("id, store_name, seller_email, status, connected_at")
-      .then(({ data }) => {
-        setStores(data ?? []);
-        setStoresLoading(false);
-      });
+    fetch("/api/jumia/status")
+      .then((r) => r.json())
+      .then((d) => {
+        // Only show if there's actually a connection record
+        if (d.status) setStoreConn(d);
+      })
+      .catch(() => {})
+      .finally(() => setStoresLoading(false));
   }, []);
 
   // Populate inputs once Clerk loads
@@ -203,7 +200,7 @@ export default function AccountSettingsPage() {
               <Loader2 className="h-4 w-4 animate-spin" />
               Loading stores…
             </div>
-          ) : stores.length === 0 ? (
+          ) : !storeConn ? (
             <div className="rounded-xl border border-dashed p-6 text-center">
               <ShoppingBag className="mx-auto mb-2 h-8 w-8 text-zinc-300" />
               <p className="text-sm font-medium text-zinc-500">No stores connected yet</p>
@@ -213,54 +210,56 @@ export default function AccountSettingsPage() {
               </Button>
             </div>
           ) : (
-            stores.map((store) => (
-              <div key={store.id} className="flex items-center gap-4 rounded-xl border p-4">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-orange-400 to-pink-500 text-base shrink-0">
-                  🛒
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-zinc-800 truncate">
-                    {store.store_name ?? "Jumia Store"}
-                  </p>
-                  <p className="text-xs text-zinc-400 truncate">{store.seller_email ?? ""}</p>
-                  {store.connected_at && (
-                    <p className="text-xs text-zinc-400">
-                      Connected {new Date(store.connected_at).toLocaleDateString("en-GB", { month: "short", year: "numeric" })}
-                    </p>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className={cn(
-                    "rounded-full px-2 py-0.5 text-xs font-medium",
-                    store.status === "active"
-                      ? "bg-emerald-50 text-emerald-600"
-                      : "bg-red-50 text-red-500"
-                  )}>
-                    {store.status === "active" ? "Connected" : "Expired"}
-                  </span>
-                  {store.status !== "active" ? (
-                    <Button variant="outline" size="sm" className="gap-1 h-7 text-xs" asChild>
-                      <a href="/settings/integrations">
-                        <RefreshCw className="h-3 w-3" />
-                        Reconnect
-                      </a>
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="gap-1 h-7 text-xs text-red-400 hover:text-red-600"
-                      asChild
-                    >
-                      <a href="/api/jumia/disconnect">
-                        <Unlink className="h-3 w-3" />
-                        Disconnect
-                      </a>
-                    </Button>
-                  )}
-                </div>
+            <div className="flex items-center gap-4 rounded-xl border p-4">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-orange-400 to-pink-500 text-base shrink-0">
+                🛒
               </div>
-            ))
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-zinc-800 truncate">
+                  {storeConn.store_name ?? "Jumia Store"}
+                </p>
+                <p className="text-xs text-zinc-400 truncate">{storeConn.seller_email ?? ""}</p>
+                {storeConn.connected_at && (
+                  <p className="text-xs text-zinc-400">
+                    Connected {new Date(storeConn.connected_at).toLocaleDateString("en-GB", { month: "short", year: "numeric" })}
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className={cn(
+                  "rounded-full px-2 py-0.5 text-xs font-medium",
+                  storeConn.oauth_required
+                    ? "bg-blue-50 text-blue-600"
+                    : storeConn.status === "active"
+                    ? "bg-emerald-50 text-emerald-600"
+                    : "bg-red-50 text-red-500"
+                )}>
+                  {storeConn.oauth_required ? "Authorise" : storeConn.status === "active" ? "Connected" : "Expired"}
+                </span>
+                {storeConn.oauth_required ? (
+                  <Button variant="outline" size="sm" className="gap-1 h-7 text-xs" asChild>
+                    <a href="/api/jumia/connect">
+                      <RefreshCw className="h-3 w-3" />
+                      Authorise
+                    </a>
+                  </Button>
+                ) : storeConn.status !== "active" ? (
+                  <Button variant="outline" size="sm" className="gap-1 h-7 text-xs" asChild>
+                    <a href="/settings/integrations">
+                      <RefreshCw className="h-3 w-3" />
+                      Reconnect
+                    </a>
+                  </Button>
+                ) : (
+                  <Button variant="ghost" size="sm" className="gap-1 h-7 text-xs text-red-400 hover:text-red-600" asChild>
+                    <a href="/settings/integrations">
+                      <Unlink className="h-3 w-3" />
+                      Manage
+                    </a>
+                  </Button>
+                )}
+              </div>
+            </div>
           )}
         </div>
       </section>
