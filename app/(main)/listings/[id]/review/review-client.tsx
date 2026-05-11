@@ -68,6 +68,7 @@ import { calculateQualityScore, scoreLabel, scoreColor, DEFAULT_THRESHOLD } from
 import { isValidGTIN } from "@/lib/utils/gtin";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import { CategoryDrawer } from "@/components/ui/category-drawer";
+import { MultiSelectDropdown } from "@/components/ui/multi-select";
 
 // ─── Auto-SKU helper ──────────────────────────────────────────────────────────
 
@@ -80,6 +81,12 @@ function abbr(v: string, n = 4) {
 interface VariantRow {
   id: string;
   axes: Record<string, string>;
+  /**
+   * User-facing variation label. Pre-filled from axes (e.g. "Black / 64GB")
+   * but freely editable for sellers who don't use axes — they can type
+   * "Pack of 6" or "Large" directly.
+   */
+  variation: string;
   sellerSku: string;
   gtin: string;
   quantity: string;
@@ -547,9 +554,10 @@ function VariantCard({
   onToggleCollapse: () => void;
   onDelete: () => void;
 }) {
-  const variationLabel = axes.length
-    ? Object.values(variant.axes).filter(Boolean).join(" / ") || "..."
-    : "...";
+  const variationLabel =
+    variant.variation?.trim() ||
+    Object.values(variant.axes ?? {}).filter(Boolean).join(" / ") ||
+    "...";
   const qty = parseInt(variant.quantity || "0", 10) || 0;
   const gtinOk = !variant.gtin || isValidGTIN(variant.gtin);
 
@@ -586,9 +594,9 @@ function VariantCard({
                 Variation<Required />
               </Label>
               <Input
-                placeholder="..."
-                value={variant.axes && Object.values(variant.axes).filter(Boolean).join(" / ")}
-                readOnly
+                placeholder={Object.values(variant.axes ?? {}).filter(Boolean).join(" / ") || "Ex: Black, Large, Pack of 6…"}
+                value={variant.variation}
+                onChange={(e) => onUpdate("variation", e.target.value)}
                 className="h-10 text-sm"
               />
             </div>
@@ -642,46 +650,74 @@ function VariantCard({
                 <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-zinc-400">GHS</span>
               </div>
             </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold text-zinc-700">Sale Price</Label>
-              <div className="relative">
-                <Input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  placeholder="Sale Price"
-                  value={variant.salePrice}
-                  onChange={(e) => onUpdate("salePrice", e.target.value)}
-                  className="h-10 text-sm pr-12"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-zinc-400">GHS</span>
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold text-zinc-700">Sale Start Date</Label>
-              <div className="relative">
-                <Input
-                  type="date"
-                  value={variant.saleStartDate}
-                  onChange={(e) => onUpdate("saleStartDate", e.target.value)}
-                  className="h-10 text-sm pr-9"
-                />
-                <CalendarIcon className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400 pointer-events-none" />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold text-zinc-700">Sale End Date</Label>
-              <div className="relative">
-                <Input
-                  type="date"
-                  value={variant.saleEndDate}
-                  onChange={(e) => onUpdate("saleEndDate", e.target.value)}
-                  className="h-10 text-sm pr-9"
-                />
-                <CalendarIcon className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400 pointer-events-none" />
-              </div>
-            </div>
+            {/* Sale Price + Start/End Date lock behind Global Price per Jumia UX */}
+            {(() => {
+              const saleEnabled = variant.globalPrice.trim().length > 0;
+              const lockTitle   = saleEnabled
+                ? undefined
+                : "Enter a Global Price first to unlock sale fields";
+              return (
+                <>
+                  <div className="space-y-1.5">
+                    <Label className={cn("text-xs font-semibold", saleEnabled ? "text-zinc-700" : "text-zinc-400")}>
+                      Sale Price
+                    </Label>
+                    <div className="relative">
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="Sale Price"
+                        value={variant.salePrice}
+                        onChange={(e) => onUpdate("salePrice", e.target.value)}
+                        disabled={!saleEnabled}
+                        title={lockTitle}
+                        className={cn("h-10 text-sm pr-12", !saleEnabled && "bg-zinc-50 cursor-not-allowed")}
+                      />
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-zinc-400">GHS</span>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className={cn("text-xs font-semibold", saleEnabled ? "text-zinc-700" : "text-zinc-400")}>
+                      Sale Start Date
+                    </Label>
+                    <div className="relative">
+                      <Input
+                        type="date"
+                        value={variant.saleStartDate}
+                        onChange={(e) => onUpdate("saleStartDate", e.target.value)}
+                        disabled={!saleEnabled}
+                        title={lockTitle}
+                        className={cn("h-10 text-sm pr-9", !saleEnabled && "bg-zinc-50 cursor-not-allowed")}
+                      />
+                      <CalendarIcon className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400 pointer-events-none" />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className={cn("text-xs font-semibold", saleEnabled ? "text-zinc-700" : "text-zinc-400")}>
+                      Sale End Date
+                    </Label>
+                    <div className="relative">
+                      <Input
+                        type="date"
+                        value={variant.saleEndDate}
+                        onChange={(e) => onUpdate("saleEndDate", e.target.value)}
+                        disabled={!saleEnabled}
+                        title={lockTitle}
+                        className={cn("h-10 text-sm pr-9", !saleEnabled && "bg-zinc-50 cursor-not-allowed")}
+                      />
+                      <CalendarIcon className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-400 pointer-events-none" />
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
           </div>
+          {!variant.globalPrice.trim() && (
+            <p className="-mt-2 text-[11px] text-zinc-400 italic">
+              Enter a Global Price above to unlock Sale Price and dates.
+            </p>
+          )}
           <div className="flex justify-end">
             <button
               type="button"
@@ -699,6 +735,43 @@ function VariantCard({
 }
 
 // ─── Category attributes loader ──────────────────────────────────────────────
+
+// Attribute names that already have first-class UI in the review form.
+// CategoryDynamicFields filters these out so we don't render duplicates of
+// fields like Brand, Color, Description that the seller is already filling
+// in the static layout.
+const HANDLED_ATTR_NAMES = new Set<string>([
+  // Product Information (top of form)
+  "name", "title", "product_name",
+  "brand",
+  "color", "colour",
+  "color_family", "colour_family",
+  "weight_kg", "weight", "product_weight",
+  "description", "product_description",
+  "highlights",
+  // Product Specification (static spec fields)
+  "certifications", "certification",
+  "main_material", "material",
+  "material_family",
+  "model", "model_number",
+  "note", "notes",
+  "production_country", "country_of_origin",
+  "product_line",
+  "size", "size_l", "size_w", "size_h", "product_size", "product_measures",
+  "warranty_duration",
+  "warranty_type",
+  "warranty_address",
+  "product_warranty", "warranty_text", "warranty",
+  "youtube_id", "video", "youtube",
+  "fda",
+  "from_the_manufacturer", "manufacturer",
+  "whats_in_the_box", "box_contents", "in_the_box",
+  // Price / stock / SKU / GTIN — never AI-fillable anyway
+  "selling_price", "price", "global_price", "sale_price",
+  "quantity", "stock",
+  "sku", "seller_sku", "parent_sku",
+  "gtin", "gtin_barcode", "barcode_ean", "ean", "upc",
+]);
 
 function CategoryDynamicFields({
   categoryCode,
@@ -723,7 +796,14 @@ function CategoryDynamicFields({
     try {
       const r = await fetch(`/api/jumia/categories/${categoryCode}/attributes`);
       const d = await r.json();
-      setSchema(d.attributes ?? []);
+      // Filter out attrs that already have first-class UI elsewhere in the
+      // form — this is what makes the dynamic section TRULY category-specific
+      // (Equipment Type / Voltage / RAM / etc.) instead of duplicating Brand,
+      // Color, etc.
+      const all = ((d.attributes ?? []) as AttrSchema[]).filter(
+        (a) => !HANDLED_ATTR_NAMES.has(a.name.toLowerCase())
+      );
+      setSchema(all);
     } catch {
       setSchema([]);
     } finally {
@@ -814,33 +894,15 @@ function CategoryDynamicFields({
       );
     }
 
-    // MULTI_SELECTION — comma-separated chips
+    // MULTI_SELECTION — checkbox dropdown (Jumia-style)
     if (attr.type === "multi" && attr.allowed_values.length > 0) {
-      const selected = val ? val.split(",").map((s) => s.trim()).filter(Boolean) : [];
       return (
-        <div className="flex flex-wrap gap-1.5">
-          {attr.allowed_values.map((v) => {
-            const active = selected.includes(v);
-            return (
-              <button
-                key={v}
-                type="button"
-                onClick={() => {
-                  const next = active ? selected.filter((s) => s !== v) : [...selected, v];
-                  onChange(attr.name, next.join(", "));
-                }}
-                className={cn(
-                  "rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
-                  active
-                    ? "border-orange-400 bg-orange-50 text-orange-700"
-                    : "border-zinc-200 bg-white text-zinc-500 hover:border-zinc-300"
-                )}
-              >
-                {v}
-              </button>
-            );
-          })}
-        </div>
+        <MultiSelectDropdown
+          options={attr.allowed_values}
+          value={val}
+          onChange={(v) => onChange(attr.name, v)}
+          placeholder={`Pick one or more · ${attr.label}`}
+        />
       );
     }
 
@@ -1207,7 +1269,11 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
 
   // ── Controlled state ──────────────────────────────────────────────────────
   const [colorFamily,       setColorFamily]       = useState(listing.color_family ?? "");
-  const [certification,     setCertification]     = useState(listing.certifications?.[0] ?? "");
+  // Certifications is stored as string[] in the DB but rendered as a
+  // multi-select with comma-separated state for the UI.
+  const [certification,     setCertification]     = useState(
+    Array.isArray(listing.certifications) ? listing.certifications.join(", ") : ""
+  );
   const [materialFamily,    setMaterialFamily]    = useState(listing.material_family ?? "");
   const [productionCountry, setProductionCountry] = useState(listing.production_country ?? "");
   const [warrantyDuration,  setWarrantyDuration]  = useState(listing.warranty_duration ?? "");
@@ -1296,7 +1362,7 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
   const commissionPercent = Math.round(commissionRate * 100);
 
   const [variants, setVariants] = useState<VariantRow[]>([{
-    id: "v1", axes: {}, sellerSku: listing.sku,
+    id: "v1", axes: {}, variation: "", sellerSku: listing.sku,
     gtin: "", quantity: "1",
     globalPrice: listing.selling_price ? String(listing.selling_price) : "",
     salePrice: "", saleStartDate: "", saleEndDate: "",
@@ -1321,7 +1387,7 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
   useEffect(() => {
     if (axesDef.length === 0) {
       setVariants([{
-        id: "v1", axes: {}, sellerSku: listing.sku,
+        id: "v1", axes: {}, variation: "", sellerSku: listing.sku,
         gtin: "", quantity: "1",
         globalPrice: listing.selling_price ? String(listing.selling_price) : "",
         salePrice: "", saleStartDate: "", saleEndDate: "",
@@ -1342,7 +1408,9 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
         const existing = prev.find((p) => JSON.stringify(p.axes) === JSON.stringify(combo));
         return existing ?? {
           id: `v-${key}-${Math.random().toString(36).slice(2, 6)}`,
-          axes: combo, sellerSku: `${listing.sku}-${key}`,
+          axes: combo,
+          variation: Object.values(combo).filter(Boolean).join(" / "),
+          sellerSku: `${listing.sku}-${key}`,
           gtin: "", quantity: "1",
           globalPrice: prev[0]?.globalPrice ?? "",
           salePrice: "", saleStartDate: "", saleEndDate: "",
@@ -1560,7 +1628,9 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
         model:              str("model"),
         product_line:       str("product_line"),
         production_country: productionCountry || null,
-        certifications:     certification ? [certification] : [],
+        certifications:     certification
+                              ? certification.split(",").map((s) => s.trim()).filter(Boolean)
+                              : [],
         warranty_duration:  warrantyDuration || null,
         warranty_type:      warrantyType || null,
         warranty_text:      str("product_warranty"),
@@ -1868,10 +1938,13 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                       <Input
                         id="color" name="color"
                         defaultValue={listing.color ?? ""}
-                        placeholder="Main color of product is mandate..."
+                        placeholder="Ex: Midnight Black, Navy Blue"
                         className="h-10 text-sm"
                       />
-                      <p className="text-[11px] text-orange-600">Required to increase listing quality</p>
+                      <p className="text-[11px] text-zinc-500">
+                        Separate multiple colors with commas.
+                        <span className="text-orange-600"> Required to increase listing quality.</span>
+                      </p>
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-xs font-semibold text-zinc-700 flex items-center">
@@ -1881,15 +1954,13 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                           confidence={listing.field_confidence?.["color_family"]?.confidence}
                         />
                       </Label>
-                      <Select value={colorFamily} onValueChange={setColorFamily}>
-                        <SelectTrigger className="h-10 text-sm">
-                          <SelectValue placeholder="Ex: Black [Family or general cat..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {colorFamilies.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                      <p className="text-[11px] text-orange-600">Required to increase listing quality</p>
+                      <MultiSelectDropdown
+                        options={[...colorFamilies]}
+                        value={colorFamily}
+                        onChange={setColorFamily}
+                        placeholder="Ex: Black, Blue [pick one or more]"
+                      />
+                      <p className="text-[11px] text-orange-600">Required to increase listing quality · select multiple</p>
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="weight" className="text-xs font-semibold text-zinc-700">
@@ -1948,12 +2019,10 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                     </p>
                   </div>
 
-                  {/* Category-specific dynamic fields */}
-                  <CategoryDynamicFields
-                    categoryCode={categoryCode}
-                    values={dynAttrs}
-                    onChange={(k, v) => setDynAttrs((p) => ({ ...p, [k]: v }))}
-                  />
+                  {/* Note: Category-specific attributes render in the Product
+                      Specification section below, NOT here — matching Jumia
+                      VC's structure where Product Information ends at
+                      Highlights and Specification starts at Certifications. */}
                 </>
               )}
             </section>
@@ -2050,11 +2119,30 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
 
               <button
                 type="button"
-                disabled={axesDef.length === 0 || axesDef.some((a) => a.values.length === 0)}
                 onClick={() => {
-                  // Add an empty axis to prompt the user
+                  // Add a new empty variant card. SKU auto-numbered. User
+                  // fills the variation label themselves (e.g. "Black /
+                  // 64GB"). Inherits Global Price from the first variant so
+                  // they don't have to re-type it.
+                  const newId = `v-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+                  const suffix = String(variants.length + 1).padStart(2, "0");
+                  setVariants((prev) => [
+                    ...prev,
+                    {
+                      id:            newId,
+                      axes:          {},
+                      variation:     "",
+                      sellerSku:     `${listing.sku}-${suffix}`,
+                      gtin:          "",
+                      quantity:      "1",
+                      globalPrice:   prev[0]?.globalPrice ?? "",
+                      salePrice:     "",
+                      saleStartDate: "",
+                      saleEndDate:   "",
+                    },
+                  ]);
                 }}
-                className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-zinc-300 bg-white py-3 text-xs font-semibold text-orange-500 hover:border-orange-300 hover:bg-orange-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-zinc-300 bg-white py-3 text-xs font-semibold text-orange-500 hover:border-orange-300 hover:bg-orange-50 transition-colors"
               >
                 <Plus className="h-3.5 w-3.5" /> ADD VARIATION
               </button>
@@ -2075,14 +2163,12 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <div className="space-y-1.5">
                   <Label className="text-xs font-semibold text-zinc-700">Certifications</Label>
-                  <Select value={certification} onValueChange={setCertification}>
-                    <SelectTrigger className="h-10 text-sm">
-                      <SelectValue placeholder="Ex: ISO 9001 [Certification(s) that the product..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {certifications.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  <MultiSelectDropdown
+                    options={[...certifications]}
+                    value={certification}
+                    onChange={setCertification}
+                    placeholder="Ex: ISO 9001, CE [pick one or more]"
+                  />
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="main_material" className="text-xs font-semibold text-zinc-700">Main material</Label>
@@ -2204,6 +2290,22 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                   />
                 </div>
               </div>
+
+              {/* Category-specific dynamic fields — these change PER category.
+                  Empty for categories with no extras beyond the static ones
+                  above. Auto-loads schema from Jumia when category changes. */}
+              {categoryCode && (
+                <div className="border-t pt-5">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-3">
+                    Category-specific fields
+                  </p>
+                  <CategoryDynamicFields
+                    categoryCode={categoryCode}
+                    values={dynAttrs}
+                    onChange={(k, v) => setDynAttrs((p) => ({ ...p, [k]: v }))}
+                  />
+                </div>
+              )}
 
               {/* Rich text spec fields */}
               <div className="space-y-1.5">
