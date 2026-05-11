@@ -21,8 +21,8 @@
  * from that flat list using completePath to build the tree.
  */
 
-import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, ChevronLeft, X, Search, Loader2, Check } from "lucide-react";
+import { useEffect, useMemo, useState, useCallback } from "react";
+import { ChevronRight, ChevronLeft, X, Search, Loader2, Check, RefreshCw } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -100,21 +100,48 @@ interface CategoryDrawerProps {
 
 export function CategoryDrawer({ open, onClose, onSelect, initialPath }: CategoryDrawerProps) {
   const [loading,     setLoading]     = useState(true);
+  const [refreshing,  setRefreshing]  = useState(false);
+  const [refreshMsg,  setRefreshMsg]  = useState<string | null>(null);
   const [rawCategories, setRawCategories] = useState<FlatCategory[]>([]);
   const [query,       setQuery]       = useState("");
   const [stack,       setStack]       = useState<TreeNode[]>([]);     // breadcrumb of drill-down
   const [chosen,      setChosen]      = useState<FlatCategory | null>(null);
 
-  // Fetch all categories once when the drawer opens for the first time
-  useEffect(() => {
-    if (!open || rawCategories.length > 0) return;
+  const loadFromCache = useCallback(() => {
     setLoading(true);
-    fetch("/api/jumia/categories?all=1")
+    return fetch("/api/jumia/categories?all=1")
       .then((r) => r.json())
       .then((d: { categories?: FlatCategory[] }) => setRawCategories(d.categories ?? []))
       .catch(() => setRawCategories([]))
       .finally(() => setLoading(false));
-  }, [open, rawCategories.length]);
+  }, []);
+
+  // Fetch all categories once when the drawer opens for the first time
+  useEffect(() => {
+    if (!open || rawCategories.length > 0) return;
+    loadFromCache();
+  }, [open, rawCategories.length, loadFromCache]);
+
+  // Manual refresh — pulls live from Jumia, repopulates Supabase, reloads cache
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    setRefreshMsg(null);
+    try {
+      const r = await fetch("/api/jumia/sync-categories", { method: "POST" });
+      const d = await r.json();
+      if (!r.ok) {
+        setRefreshMsg(d.error ?? "Refresh failed");
+        return;
+      }
+      await loadFromCache();
+      setRefreshMsg(`Updated · ${d.categories ?? "?"} categories from Jumia`);
+      setTimeout(() => setRefreshMsg(null), 3000);
+    } catch (e) {
+      setRefreshMsg(e instanceof Error ? e.message : "Refresh failed");
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadFromCache]);
 
   // Reset selection + drill state when drawer opens
   useEffect(() => {
@@ -201,15 +228,32 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
           ) : (
             <h2 className="text-base font-semibold text-zinc-900">Categories</h2>
           )}
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
-            aria-label="Close drawer"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 disabled:opacity-50"
+              title="Refresh categories from Jumia"
+              aria-label="Refresh from Jumia"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+              aria-label="Close drawer"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </header>
+        {refreshMsg && (
+          <div className="px-5 py-1.5 bg-violet-50 text-[11px] text-violet-700 border-b border-violet-100 shrink-0">
+            {refreshMsg}
+          </div>
+        )}
 
         {/* Search */}
         <div className="border-b px-5 py-3 shrink-0">

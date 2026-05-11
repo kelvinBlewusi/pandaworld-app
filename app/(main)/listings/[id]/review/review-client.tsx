@@ -1104,10 +1104,53 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
   );
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
 
-  const handleCategoryChange = (cat: { code: number; name: string; path: string }) => {
+  // AI re-fill state — runs when the user changes category so attributes
+  // appear pre-filled per the PDF spec ("when selected, its attributes
+  // should show up for filling by the AI").
+  const [refillingAttributes, setRefillingAttributes] = useState(false);
+  const [refillMsg,           setRefillMsg]           = useState<string | null>(null);
+
+  const handleCategoryChange = async (cat: { code: number; name: string; path: string }) => {
+    const previousCode = categoryCode;
+
+    // Optimistic UI update
     setCategoryCode(String(cat.code));
     setCategoryPath(cat.path);
     setCategoryName(cat.name);
+
+    // If the category actually changed, fire the AI re-fill in the background.
+    // First-time picks (no previous category) ALSO trigger it.
+    if (String(cat.code) === previousCode) return;
+
+    setRefillingAttributes(true);
+    setRefillMsg(null);
+    try {
+      const res = await fetch(`/api/listings/${listing.id}/refill-attributes`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ categoryCode: cat.code, categoryPath: cat.path }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRefillMsg(data.error ?? "Couldn't fetch category fields from Jumia.");
+        return;
+      }
+      // Merge the new attributes back into local state — no full page reload
+      // needed, the form will re-render with the fresh values.
+      if (data.dynamic_attributes) {
+        setDynAttrs(data.dynamic_attributes as Record<string, string>);
+      }
+      setRefillMsg(
+        `${data.attributesSchema} field${data.attributesSchema === 1 ? "" : "s"} from Jumia · AI filled ${data.aiFilled}.`
+      );
+      // Trigger a server refresh so listing.field_confidence + field_sources
+      // are fresh next render (for the confidence dots).
+      router.refresh();
+    } catch (e) {
+      setRefillMsg(e instanceof Error ? e.message : "AI fill failed.");
+    } finally {
+      setRefillingAttributes(false);
+    }
   };
 
   // ── Dynamic attributes (category-specific + extra spec fields) ─────────────
@@ -1566,22 +1609,33 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                   </p>
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold text-zinc-700">
+                  <Label className="text-xs font-semibold text-zinc-700 flex items-center gap-2">
                     Category<Required />
+                    {refillingAttributes && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-700">
+                        <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                        AI filling fields…
+                      </span>
+                    )}
                   </Label>
                   <button
                     type="button"
                     onClick={() => setShowCategoryPicker(true)}
+                    disabled={refillingAttributes}
                     className={cn(
                       "flex h-10 w-full items-center justify-between rounded-md border bg-white px-3 text-sm text-left transition-colors",
                       categoryName
                         ? "border-orange-500 text-zinc-800"
-                        : "border-zinc-200 text-zinc-400 hover:border-zinc-300"
+                        : "border-zinc-200 text-zinc-400 hover:border-zinc-300",
+                      refillingAttributes && "opacity-60 cursor-not-allowed"
                     )}
                   >
                     <span className="truncate">{categoryName || "Category"}</span>
                     <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />
                   </button>
+                  {refillMsg && !refillingAttributes && (
+                    <p className="text-[11px] text-emerald-600">{refillMsg}</p>
+                  )}
                 </div>
               </div>
 

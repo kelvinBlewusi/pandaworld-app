@@ -593,6 +593,95 @@ function extractClassificationConfidence(
   };
 }
 
+// ─── Focused pass: extract attributes for a known category ──────────────────
+//
+// Used when the seller manually picks a category (or switches to one of the
+// AI's alternates) — we already have the right category, we just need to
+// fill its attribute fields from the existing images.
+//
+// Distinct from analyzeProductImages which does category detection + full
+// listing draft. This one is a single AI call, fast, scoped, and idempotent.
+
+export async function extractAttributesForCategory(
+  imageUrls:    string[],
+  categoryCode: number
+): Promise<{
+  dynamic_attributes: Record<string, string>;
+  field_sources:      Record<string, "ai">;
+  field_confidence:   AIProductAnalysis["field_confidence"];
+}> {
+  if (!imageUrls.length) {
+    return { dynamic_attributes: {}, field_sources: {}, field_confidence: {} };
+  }
+
+  if (USE_MOCK_AI) {
+    return { dynamic_attributes: {}, field_sources: {}, field_confidence: {} };
+  }
+  if (!process.env.GOOGLE_API_KEY) {
+    throw new Error("GOOGLE_API_KEY is not set.");
+  }
+
+  const attrs = await getCategoryAttributes(categoryCode);
+  if (attrs.length === 0) {
+    return { dynamic_attributes: {}, field_sources: {}, field_confidence: {} };
+  }
+
+  // Filter out fields the AI must NEVER fill (price, stock, gtin, etc.)
+  const inferableAttrs = attrs.filter((a) => !SELLER_REQUIRED_ATTR_KEYS.has(a.name.toLowerCase()));
+
+  const attrLines = inferableAttrs.map((a) => {
+    const valStr = a.allowed_values.length
+      ? ` (allowed values: ${a.allowed_values.join(", ")})`
+      : "";
+    return `  - ${a.name}: ${a.label}${valStr}${a.required ? " [REQUIRED]" : ""}`;
+  }).join("\n");
+
+  const prompt = `You are a Jumia product-listing assistant. Look at the product images and fill ONLY the attributes listed below for the category. Return a SINGLE JSON object.
+
+CATEGORY ATTRIBUTES TO FILL (use the exact attribute names as keys):
+${attrLines}
+
+RULES:
+1. Use the exact attribute name as the JSON key.
+2. For attributes with allowed values, pick exactly one value from the list (or null if unsure).
+3. Skip / set null for fields you can't determine from the images. NEVER guess price, model, brand (unless logo clearly visible), or warranty terms.
+4. Return only attributes you could fill — omit ones you're not sure about.
+
+Return ONLY valid JSON, no markdown:
+{
+  "attributes": {
+    "attribute_name": "value"
+  }
+}`;
+
+  let parsed: Record<string, unknown>;
+  try {
+    const raw = await callGemini(prompt, imageUrls);
+    parsed = parseAIResponse(raw);
+  } catch (e) {
+    console.error("[AI] extractAttributesForCategory failed:", (e as Error).message);
+    return { dynamic_attributes: {}, field_sources: {}, field_confidence: {} };
+  }
+
+  // Clean + apply seller-required guard
+  const rawAttrs = (parsed.attributes ?? parsed) as Record<string, unknown>;
+  const dynamic_attributes: Record<string, string> = {};
+  for (const [k, v] of Object.entries(rawAttrs)) {
+    if (SELLER_REQUIRED_ATTR_KEYS.has(k.toLowerCase())) continue;
+    if (v == null || String(v).trim() === "" || String(v).toLowerCase() === "null") continue;
+    dynamic_attributes[k] = String(v).trim();
+  }
+
+  const field_sources:    Record<string, "ai"> = {};
+  const field_confidence: AIProductAnalysis["field_confidence"] = {};
+  for (const k of Object.keys(dynamic_attributes)) {
+    field_sources[`dynamic_attributes.${k}`]    = "ai";
+    field_confidence[`dynamic_attributes.${k}`] = { confidence: 0.8, source: "inferred" };
+  }
+
+  return { dynamic_attributes, field_sources, field_confidence };
+}
+
 // ─── Main: analyse text description ──────────────────────────────────────────
 
 export async function analyzeProductDescription(
