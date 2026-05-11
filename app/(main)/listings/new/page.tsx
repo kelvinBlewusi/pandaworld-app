@@ -948,6 +948,14 @@ function NewListingWizard() {
   ]);
 
   const initProducts = (count: number) => {
+    // PDF restructuring spec: own-images flow routes any count to the new
+    // multi-tab "Add Products" batch page. Single-product (count=1) goes
+    // there too so the seller always lands on the Jumia-style form with the
+    // 8-slot image grid + Name + Category.
+    if (mode === "own") {
+      router.push(`/listings/new/batch?count=${count}`);
+      return;
+    }
     setProducts(
       Array.from({ length: count }, (_, i) => ({
         id: `p${i + 1}`,

@@ -57,30 +57,42 @@ const settingsNav = [
 
 // ─── New Listing modes ────────────────────────────────────────────────────────
 
-const listingModes = [
+interface ListingMode {
+  mode:      "own" | "url" | "rough";
+  icon:      React.ElementType;
+  iconColor: string;
+  bg:        string;
+  label:     string;
+  sub:       string;
+  disabled?: boolean;
+}
+
+const listingModes: ListingMode[] = [
   {
-    mode: "own",
-    icon: ImageIcon,
+    mode:      "own",
+    icon:      ImageIcon,
     iconColor: "text-blue-500",
-    bg: "bg-blue-50",
-    label: "My own product images",
-    sub: "Upload up to 8 photos per product",
+    bg:        "bg-blue-50",
+    label:     "Upload product from your own images",
+    sub:       "Up to 8 photos per product",
   },
   {
-    mode: "ai",
-    icon: Wand2,
-    iconColor: "text-violet-500",
-    bg: "bg-violet-50",
-    label: "AI-generated images",
-    sub: "1 reference photo or text description",
-  },
-  {
-    mode: "url",
-    icon: Link2,
+    mode:      "url",
+    icon:      Link2,
     iconColor: "text-emerald-500",
-    bg: "bg-emerald-50",
-    label: "Import from URL",
-    sub: "Paste product page links",
+    bg:        "bg-emerald-50",
+    label:     "Copy and Upload product from a URL",
+    sub:       "Not responsive yet",
+    disabled:  true,
+  },
+  {
+    mode:      "rough",
+    icon:      Wand2,
+    iconColor: "text-violet-500",
+    bg:        "bg-violet-50",
+    label:     "Upload product from rough images",
+    sub:       "Not responsive yet",
+    disabled:  true,
   },
 ];
 
@@ -166,19 +178,40 @@ function NewListingDropdown() {
           Choose listing method
         </p>
 
-        {listingModes.map(({ mode, icon: Icon, iconColor, bg, label, sub }) => (
+        {listingModes.map(({ mode, icon: Icon, iconColor, bg, label, sub, disabled }) => (
           <button
             key={mode}
-            onClick={() => router.push(`/listings/new?mode=${mode}`)}
-            className="flex w-full items-center gap-3 rounded-xl p-2.5 text-left transition-colors hover:bg-zinc-50 active:bg-zinc-100"
+            disabled={disabled}
+            onClick={() => {
+              if (disabled) return;
+              // Own-images now goes through a "how many products?" prompt first
+              if (mode === "own") {
+                router.push("/listings/new?mode=own&step=count");
+              } else {
+                router.push(`/listings/new?mode=${mode}`);
+              }
+            }}
+            className={cn(
+              "flex w-full items-center gap-3 rounded-xl p-2.5 text-left transition-colors",
+              disabled
+                ? "opacity-50 cursor-not-allowed"
+                : "hover:bg-zinc-50 active:bg-zinc-100"
+            )}
           >
-            <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", bg)}>
+            <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", bg, disabled && "grayscale")}>
               <Icon className={cn("h-4 w-4", iconColor)} />
             </div>
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-zinc-800 leading-snug">{label}</p>
+            <div className="min-w-0 flex-1">
+              <p className={cn("text-sm font-medium leading-snug", disabled ? "text-zinc-400" : "text-zinc-800")}>
+                {label}
+              </p>
               <p className="text-[11px] text-zinc-400 leading-snug">{sub}</p>
             </div>
+            {disabled && (
+              <span className="shrink-0 rounded-full bg-zinc-100 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-zinc-500">
+                Soon
+              </span>
+            )}
           </button>
         ))}
       </DropdownMenuContent>
