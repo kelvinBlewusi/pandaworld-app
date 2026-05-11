@@ -99,6 +99,8 @@ export async function POST(req: NextRequest) {
         material_family:    analysis.material_family || null,
         selling_price:      finalPrice ?? null,
         dynamic_attributes: analysis.dynamic_attributes ?? {},
+        field_sources:      analysis.field_sources,
+        field_confidence:   analysis.field_confidence ?? null,
         status:             "draft",
       });
 
@@ -152,18 +154,21 @@ export async function POST(req: NextRequest) {
 
     // Step 4: Populate all AI fields
     await updateListing(listing.id, {
-      description:        analysis.description,
-      highlights:         analysis.highlights,
-      brand:              analysis.brand || null,
-      color:              analysis.color || null,
-      color_family:       analysis.color_family || null,
-      weight_kg:          analysis.weight_kg,
-      model:              analysis.model || null,
-      main_material:      analysis.main_material || null,
-      material_family:    analysis.material_family || null,
-      selling_price:      analysis.selling_price,
-      dynamic_attributes: analysis.dynamic_attributes ?? {},
-      status:             "draft",
+      description:         analysis.description,
+      highlights:          analysis.highlights,
+      brand:               analysis.brand || null,
+      color:               analysis.color || null,
+      color_family:        analysis.color_family || null,
+      weight_kg:           analysis.weight_kg,
+      model:               analysis.model || null,
+      main_material:       analysis.main_material || null,
+      material_family:     analysis.material_family || null,
+      selling_price:       analysis.selling_price,
+      dynamic_attributes:  analysis.dynamic_attributes ?? {},
+      field_sources:       analysis.field_sources,
+      field_confidence:    analysis.field_confidence ?? null,
+      category_alternates: analysis.category_alternates ?? null,
+      status:              "draft",
     });
 
     return NextResponse.json({

@@ -48,6 +48,22 @@ export interface ListingRow {
   dynamic_attributes: Record<string, string> | null;
   // Tracks which fields came from AI vs user edits — used for per-field AI badges
   field_sources: Record<string, "ai" | "user"> | null;
+  // Per-field AI confidence + provenance. Mirrors keys in field_sources.
+  //   source ∈ "image" | "ocr" | "inferred" | "seller-required"
+  // Used to render coloured indicators in the review form.
+  field_confidence?: Record<string, {
+    confidence: number;
+    source:     "image" | "ocr" | "inferred" | "seller-required";
+    reasoning?: string;
+  }> | null;
+  // Top-3 category picks from AI classification (with confidence). Lets the
+  // review page offer a switcher when the primary pick is uncertain.
+  category_alternates?: Array<{
+    code:       number;
+    name:       string;
+    path:       string;
+    confidence: number;
+  }> | null;
   // 0-100 quality score cached on last save
   quality_score: number | null;
   // Stock for simple (non-variant) listings; variant stock is on VariantRow.quantity

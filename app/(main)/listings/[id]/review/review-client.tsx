@@ -935,6 +935,133 @@ function CategoryDynamicFields({
   );
 }
 
+// ─── AI confidence banner ─────────────────────────────────────────────────────
+//
+// Surfaces two pieces of info from the AI run:
+//   1. How many fields were auto-filled vs need seller attention.
+//   2. If the model wasn't confident about the category, offers the top-2
+//      alternates as quick-switch buttons (per PDF spec: needs_user_confirmation).
+
+function AIConfidenceBanner({
+  listing,
+  currentCategoryCode,
+  onSwitchCategory,
+}: {
+  listing:             ListingRow;
+  currentCategoryCode: string | null;
+  onSwitchCategory:    (cat: { code: number; name: string; path: string }) => void;
+}) {
+  const [dismissed, setDismissed] = useState(false);
+  if (dismissed) return null;
+
+  const sources    = (listing.field_sources    ?? {}) as Record<string, string>;
+  const confidence = (listing.field_confidence ?? {}) as Record<string, { confidence: number; source: string }>;
+  const alternates = (listing.category_alternates ?? []) as Array<{ code: number; name: string; path: string; confidence: number }>;
+
+  const aiFieldCount = Object.values(sources).filter((s) => s === "ai").length;
+  const sellerRequiredCount = Object.values(confidence).filter((c) => c.source === "seller-required").length;
+
+  // Show category-confidence prompt when the AI flagged it OR if the primary
+  // pick has < 0.75 confidence (recomputed from alternates).
+  const primaryConf = alternates.find((a) => String(a.code) === currentCategoryCode)?.confidence ?? 0;
+  const otherAlternates = alternates.filter((a) => String(a.code) !== currentCategoryCode).slice(0, 2);
+  const needsCategoryConfirmation = primaryConf > 0 && primaryConf < 0.75 && otherAlternates.length > 0;
+
+  // Only show the banner if we have anything meaningful to surface
+  if (aiFieldCount === 0 && !needsCategoryConfirmation) return null;
+
+  return (
+    <div className="rounded-md border border-violet-200 bg-gradient-to-r from-violet-50 to-fuchsia-50 px-4 py-3 text-sm space-y-2">
+      <div className="flex items-start gap-3">
+        <Sparkles className="h-4 w-4 text-violet-600 mt-0.5 shrink-0" />
+        <div className="flex-1 min-w-0 space-y-1">
+          {aiFieldCount > 0 && (
+            <p className="text-violet-900">
+              <span className="font-semibold">AI pre-filled {aiFieldCount} field{aiFieldCount === 1 ? "" : "s"}.</span>{" "}
+              <span className="text-violet-700">Review each — yellow = AI inferred, gray = you fill in.</span>
+              {sellerRequiredCount > 0 && (
+                <span className="text-violet-600"> ({sellerRequiredCount} need your input.)</span>
+              )}
+            </p>
+          )}
+          {needsCategoryConfirmation && (
+            <div className="pt-1">
+              <p className="text-xs font-semibold text-violet-800">
+                Not sure about the category ({Math.round(primaryConf * 100)}% confident). Pick the right one:
+              </p>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {otherAlternates.map((a) => (
+                  <button
+                    key={a.code}
+                    type="button"
+                    onClick={() => onSwitchCategory({ code: a.code, name: a.name, path: a.path })}
+                    className="rounded-full border border-violet-300 bg-white px-2.5 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100 transition-colors"
+                  >
+                    <span className="opacity-70">{Math.round(a.confidence * 100)}%</span>{" "}
+                    {a.path}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => setDismissed(true)}
+          className="shrink-0 text-violet-400 hover:text-violet-700"
+          aria-label="Dismiss"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Per-field confidence dot ─────────────────────────────────────────────────
+//
+// Tiny coloured pill next to a field's label that reflects how it was filled.
+// Per PDF spec:
+//   green = high confidence (>= 0.9)
+//   yellow = inferred (0 < confidence < 0.9, source = image/inferred/ocr)
+//   gray   = seller-required (AI deliberately left empty)
+
+export function ConfidenceDot({
+  source,
+  confidence,
+}: {
+  source?:     "image" | "ocr" | "inferred" | "seller-required";
+  confidence?: number;
+}) {
+  if (!source) return null;
+  if (source === "seller-required") {
+    return (
+      <span
+        className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[9px] font-semibold text-zinc-500"
+        title="You fill this in — AI cannot infer it from images."
+      >
+        <span className="h-1.5 w-1.5 rounded-full bg-zinc-400" /> you
+      </span>
+    );
+  }
+  const high = (confidence ?? 0) >= 0.9;
+  return (
+    <span
+      className={cn(
+        "ml-1.5 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold",
+        high ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
+      )}
+      title={high
+        ? `AI is highly confident (${Math.round((confidence ?? 0) * 100)}%) — accept or edit.`
+        : `AI inferred from images (${Math.round((confidence ?? 0) * 100)}%) — please verify.`
+      }
+    >
+      <span className={cn("h-1.5 w-1.5 rounded-full", high ? "bg-emerald-500" : "bg-amber-500")} />
+      {high ? "AI ✓" : "AI"}
+    </span>
+  );
+}
+
 // ─── Main review client ───────────────────────────────────────────────────────
 
 const PUBLISH_THRESHOLD = typeof process !== "undefined"
@@ -1369,6 +1496,13 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
               </div>
             )}
 
+            {/* AI confidence banner + category alternates */}
+            <AIConfidenceBanner
+              listing={listing}
+              currentCategoryCode={categoryCode}
+              onSwitchCategory={handleCategoryChange}
+            />
+
             {/* ────────────── Section 1: Product Information ────────────── */}
             <section ref={infoRef} className="bg-white rounded-md border border-zinc-200 p-6 space-y-5 scroll-mt-6">
               <h2 className="text-lg font-bold text-zinc-900">Product Information</h2>
@@ -1402,8 +1536,12 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
               {/* Name + Category */}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <Label htmlFor="name" className="text-xs font-semibold text-zinc-700">
+                  <Label htmlFor="name" className="text-xs font-semibold text-zinc-700 flex items-center">
                     Name<Required />
+                    <ConfidenceDot
+                      source={listing.field_confidence?.["title"]?.source}
+                      confidence={listing.field_confidence?.["title"]?.confidence}
+                    />
                   </Label>
                   <Input
                     id="name"
@@ -1452,13 +1590,23 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                 <>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <div className="space-y-1.5">
-                      <Label className="text-xs font-semibold text-zinc-700">
+                      <Label className="text-xs font-semibold text-zinc-700 flex items-center">
                         Brand<Required />
+                        <ConfidenceDot
+                          source={listing.field_confidence?.["brand"]?.source}
+                          confidence={listing.field_confidence?.["brand"]?.confidence}
+                        />
                       </Label>
                       <BrandCombobox value={brandValue} onChange={setBrandValue} />
                     </div>
                     <div className="space-y-1.5">
-                      <Label htmlFor="color" className="text-xs font-semibold text-zinc-700">Color</Label>
+                      <Label htmlFor="color" className="text-xs font-semibold text-zinc-700 flex items-center">
+                        Color
+                        <ConfidenceDot
+                          source={listing.field_confidence?.["color"]?.source}
+                          confidence={listing.field_confidence?.["color"]?.confidence}
+                        />
+                      </Label>
                       <Input
                         id="color" name="color"
                         defaultValue={listing.color ?? ""}
@@ -1468,7 +1616,13 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                       <p className="text-[11px] text-orange-600">Required to increase listing quality</p>
                     </div>
                     <div className="space-y-1.5">
-                      <Label className="text-xs font-semibold text-zinc-700">Color family</Label>
+                      <Label className="text-xs font-semibold text-zinc-700 flex items-center">
+                        Color family
+                        <ConfidenceDot
+                          source={listing.field_confidence?.["color_family"]?.source}
+                          confidence={listing.field_confidence?.["color_family"]?.confidence}
+                        />
+                      </Label>
                       <Select value={colorFamily} onValueChange={setColorFamily}>
                         <SelectTrigger className="h-10 text-sm">
                           <SelectValue placeholder="Ex: Black [Family or general cat..." />
