@@ -1062,6 +1062,133 @@ export function ConfidenceDot({
   );
 }
 
+// ─── Analyze With AI card ────────────────────────────────────────────────────
+//
+// Single-button auto-analyze CTA. While the pipeline runs it shows a 4-step
+// progress checklist so the seller can see momentum (describing → finding
+// candidates → ranking → filling fields). The total round trip is ~8–12s.
+
+type AnalyzeStep = "idle" | "describing" | "retrieving" | "ranking" | "filling" | "done" | "error";
+
+const ANALYZE_STEPS: { id: AnalyzeStep; label: string }[] = [
+  { id: "describing",  label: "Identifying product from images" },
+  { id: "retrieving",  label: "Finding best-matching Jumia categories" },
+  { id: "ranking",     label: "Picking the best category" },
+  { id: "filling",     label: "Filling category-specific fields" },
+];
+
+function AnalyzeWithAICard({
+  step,
+  error,
+  result,
+  onStart,
+}: {
+  step:    AnalyzeStep;
+  error:   string | null;
+  result:  { title?: string; categoryPath?: string; confidence?: number; attributesFilled?: number; totalMs?: number } | null;
+  onStart: () => void;
+}) {
+  const running = step !== "idle" && step !== "done" && step !== "error";
+  const stepOrder = ["describing", "retrieving", "ranking", "filling", "done"] as const;
+  const currentIdx = stepOrder.indexOf(step as typeof stepOrder[number]);
+
+  if (step === "done" && result) {
+    return (
+      <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 space-y-1.5">
+        <div className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
+          <CheckCircle2 className="h-4 w-4" />
+          AI analysis complete
+          {result.totalMs && (
+            <span className="ml-auto text-[11px] font-normal text-emerald-700">
+              {(result.totalMs / 1000).toFixed(1)}s
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-emerald-700">
+          Category: <span className="font-semibold">{result.categoryPath}</span>
+          {typeof result.confidence === "number" && (
+            <span className="ml-1">({Math.round(result.confidence * 100)}% confident)</span>
+          )}
+        </p>
+        <p className="text-xs text-emerald-700">
+          {result.attributesFilled ?? 0} fields auto-filled · review below before submitting.
+        </p>
+        <button
+          type="button"
+          onClick={onStart}
+          className="text-[11px] font-medium text-emerald-600 hover:text-emerald-800 underline"
+        >
+          Re-run analysis
+        </button>
+      </div>
+    );
+  }
+
+  if (running) {
+    return (
+      <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-3 space-y-2">
+        <div className="flex items-center gap-2 text-sm font-semibold text-blue-900">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Analysing with AI…
+        </div>
+        <ul className="space-y-1 text-xs">
+          {ANALYZE_STEPS.map((s, i) => {
+            const done    = i < currentIdx;
+            const active  = i === currentIdx;
+            return (
+              <li
+                key={s.id}
+                className={cn(
+                  "flex items-center gap-2 transition-opacity",
+                  done   ? "text-emerald-700" :
+                  active ? "text-blue-800 font-medium" :
+                           "text-zinc-400"
+                )}
+              >
+                <span className="w-4 inline-flex justify-center">
+                  {done   ? <CheckCircle2 className="h-3 w-3" /> :
+                   active ? <Loader2 className="h-3 w-3 animate-spin" /> :
+                            <span className="h-1.5 w-1.5 rounded-full bg-zinc-300" />}
+                </span>
+                {s.label}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    );
+  }
+
+  // Idle / error state — show the CTA button
+  return (
+    <div className="rounded-md border border-orange-200 bg-gradient-to-r from-orange-50 to-amber-50 px-4 py-3 flex items-center justify-between gap-3">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 text-sm font-semibold text-orange-900">
+          <Sparkles className="h-4 w-4 text-orange-500" />
+          Analyze with AI
+        </div>
+        <p className="text-[11px] text-orange-700 mt-0.5">
+          One click: AI picks the right Jumia category and fills the category-specific fields from your images.
+        </p>
+        {error && (
+          <p className="text-[11px] text-red-600 mt-1 flex items-start gap-1">
+            <AlertCircle className="h-3 w-3 mt-0.5 shrink-0" /> {error}
+          </p>
+        )}
+      </div>
+      <Button
+        type="button"
+        size="sm"
+        onClick={onStart}
+        className="shrink-0 bg-orange-500 hover:bg-orange-600 text-white gap-1.5"
+      >
+        <Sparkles className="h-3.5 w-3.5" />
+        {error ? "Try again" : "Analyze"}
+      </Button>
+    </div>
+  );
+}
+
 // ─── Main review client ───────────────────────────────────────────────────────
 
 const PUBLISH_THRESHOLD = typeof process !== "undefined"
@@ -1230,6 +1357,73 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
   const [jumiaNotConnected, setJumiaNotConnected] = useState(false);
   const [publishedRef, setPublishedRef] = useState<string | null>(null);
   const [syncStatus, setSyncStatus]   = useState<"idle" | "saving" | "done" | "error">("idle");
+
+  // ── Auto-analyze state (one-click category detection + attribute fill) ────
+  type AnalyzeStep = "idle" | "describing" | "retrieving" | "ranking" | "filling" | "done" | "error";
+  const [analyzeStep,   setAnalyzeStep]   = useState<AnalyzeStep>("idle");
+  const [analyzeError,  setAnalyzeError]  = useState<string | null>(null);
+  const [analyzeResult, setAnalyzeResult] = useState<{
+    title?:               string;
+    categoryPath?:        string;
+    confidence?:          number;
+    attributesFilled?:    number;
+    totalMs?:             number;
+  } | null>(null);
+
+  async function handleAutoAnalyze() {
+    if ((listing.images ?? []).length === 0) {
+      setAnalyzeError("Upload at least one image first.");
+      return;
+    }
+    setAnalyzeError(null);
+    setAnalyzeResult(null);
+
+    // Visual progress — these are estimates; the real timing comes back in the response
+    setAnalyzeStep("describing");
+    // Best-effort UI rhythm: bump through the steps even before the response
+    // arrives so the user sees momentum.
+    const stepTimers: ReturnType<typeof setTimeout>[] = [];
+    stepTimers.push(setTimeout(() => setAnalyzeStep("retrieving"), 1500));
+    stepTimers.push(setTimeout(() => setAnalyzeStep("ranking"),    3500));
+    stepTimers.push(setTimeout(() => setAnalyzeStep("filling"),    6500));
+
+    try {
+      const res = await fetch(`/api/listings/${listing.id}/auto-analyze`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      stepTimers.forEach(clearTimeout);
+
+      if (!res.ok || !data.success) {
+        setAnalyzeStep("error");
+        setAnalyzeError(data.error ?? "AI analysis failed.");
+        return;
+      }
+
+      setAnalyzeStep("done");
+      setAnalyzeResult({
+        title:            data.title,
+        categoryPath:     data.category?.path,
+        confidence:       data.category?.confidence,
+        attributesFilled: data.attributes_filled,
+        totalMs:          data.timings?.total_ms,
+      });
+
+      // Server has already persisted — reflect in client state
+      if (data.category) {
+        setCategoryCode(String(data.category.code));
+        setCategoryPath(data.category.path);
+        setCategoryName(data.category.name);
+      }
+      if (data.title) setTitleValue(data.title);
+      // Refresh to pull updated dynamic_attributes, field_sources, etc.
+      router.refresh();
+    } catch (e) {
+      stepTimers.forEach(clearTimeout);
+      setAnalyzeStep("error");
+      setAnalyzeError(e instanceof Error ? e.message : "Network error.");
+    }
+  }
 
   // ── Polish state ──────────────────────────────────────────────────────────
   const [polishing, setPolishing] = useState(false);
@@ -1552,6 +1746,16 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
 
               {/* Image grid */}
               <ImageGrid images={listing.images ?? []} />
+
+              {/* One-click Analyze with AI CTA — full pipeline */}
+              {(listing.images?.length ?? 0) > 0 && (
+                <AnalyzeWithAICard
+                  step={analyzeStep}
+                  error={analyzeError}
+                  result={analyzeResult}
+                  onStart={handleAutoAnalyze}
+                />
+              )}
 
               {/* Polish CTA — only when images exist */}
               {(listing.images?.length ?? 0) > 0 && (
