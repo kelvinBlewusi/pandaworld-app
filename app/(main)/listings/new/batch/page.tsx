@@ -21,19 +21,13 @@
  */
 
 import { useEffect, useMemo, useState, useRef } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import {
-  ArrowLeft,
-  ChevronRight,
-  Plus,
-  Loader2,
-  X,
-  Search,
-} from "lucide-react";
+import { ArrowLeft, ChevronRight, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { CategoryDrawer } from "@/components/ui/category-drawer";
 import { cn } from "@/lib/utils";
 
 const MIN_PRODUCTS = 1;
@@ -145,90 +139,9 @@ function ImageSlots({
   );
 }
 
-// ─── Category picker (Jumia leaf-only) ───────────────────────────────────────
-
-function CategoryPickerModal({
-  onSelect,
-  onClose,
-}: {
-  onSelect: (cat: { code: number; name: string; path: string }) => void;
-  onClose:  () => void;
-}) {
-  const [categories, setCategories] = useState<{ code: number; name: string; path: string }[]>([]);
-  const [query, setQuery]   = useState("");
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetch("/api/jumia/categories")
-      .then((r) => r.json())
-      .then((d) => setCategories(d.categories ?? []))
-      .catch(() => setCategories([]))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const filtered = query
-    ? categories.filter(
-        (c) =>
-          c.name.toLowerCase().includes(query.toLowerCase()) ||
-          c.path.toLowerCase().includes(query.toLowerCase())
-      )
-    : categories;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div className="mx-4 w-full max-w-lg rounded-2xl border bg-white shadow-xl flex flex-col max-h-[80vh]">
-        <div className="flex items-center justify-between p-4 border-b">
-          <p className="font-semibold text-zinc-900">Select a category</p>
-          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="p-3 border-b">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
-            <Input
-              autoFocus
-              placeholder="Search categories…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              className="pl-9"
-            />
-          </div>
-        </div>
-        <div className="overflow-y-auto flex-1">
-          {loading ? (
-            <div className="flex items-center justify-center py-10 text-zinc-400">
-              <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading…
-            </div>
-          ) : filtered.length === 0 ? (
-            <div className="py-10 text-center text-sm text-zinc-400">
-              {categories.length === 0
-                ? "No categories synced yet. Connect Jumia in Settings → Integrations."
-                : "No results for that query."}
-            </div>
-          ) : (
-            filtered.map((cat) => (
-              <button
-                key={cat.code}
-                type="button"
-                onClick={() => { onSelect(cat); onClose(); }}
-                className="w-full px-4 py-3 text-left border-b last:border-b-0 hover:bg-orange-50 transition-colors"
-              >
-                <p className="text-sm font-medium text-zinc-800">{cat.name}</p>
-                <p className="text-xs text-zinc-400 mt-0.5">{cat.path}</p>
-              </button>
-            ))
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function BatchAddProductsPage() {
-  const router = useRouter();
   const search = useSearchParams();
   const rawCount = parseInt(search.get("count") ?? "1", 10);
   const count = Math.max(MIN_PRODUCTS, Math.min(MAX_PRODUCTS, isNaN(rawCount) ? 1 : rawCount));
@@ -503,12 +416,12 @@ export default function BatchAddProductsPage() {
         </Button>
       </div>
 
-      {showCategoryPicker && (
-        <CategoryPickerModal
-          onSelect={handleCategoryChange}
-          onClose={() => setShowCategoryPicker(false)}
-        />
-      )}
+      <CategoryDrawer
+        open={showCategoryPicker}
+        onClose={() => setShowCategoryPicker(false)}
+        onSelect={handleCategoryChange}
+        initialPath={active.categoryPath ?? undefined}
+      />
     </div>
   );
 }

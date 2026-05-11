@@ -27,6 +27,18 @@ export interface AIProductAnalysis {
   category_code:    string;   // Jumia numeric code as string (e.g. "10000799")
   commission_rate:  number;
 
+  // Top-3 classification alternates with confidence so the UI can offer a
+  // chooser when the model is uncertain. Empty when AI failed or wasn't run.
+  category_alternates?: Array<{
+    code:       number;
+    name:       string;
+    path:       string;
+    confidence: number;          // 0..1
+  }>;
+  category_confidence?: number;  // 0..1 confidence on the primary pick
+  needs_user_confirmation?: boolean;   // true when primary confidence < 0.75
+                                       // or top-2 confidence spread < 0.15
+
   // Category-specific attributes (varies by category)
   // Stored as a flat key→value map. Only keys where the AI is confident are set.
   // Unknown / undetectable values are OMITTED (not fabricated).
@@ -34,7 +46,48 @@ export interface AIProductAnalysis {
 
   // Tracks which fields were set by AI (all fields in this object are "ai" at creation time)
   field_sources: Record<string, "ai">;
+
+  // Per-field confidence + provenance (added so the UI can render coloured
+  // confidence indicators per the PDF spec — yellow=inferred, green=high,
+  // gray=seller-required). Keys mirror field_sources.
+  field_confidence?: Record<string, {
+    confidence: number;                                        // 0..1
+    source:     "image" | "ocr" | "inferred" | "seller-required";
+    reasoning?: string;
+  }>;
 }
+
+// ─── Conservative field exclusions ───────────────────────────────────────────
+//
+// Per the architectural spec: AI must NEVER auto-fill these fields from
+// images alone. They carry legal/commercial risk if wrong. Sellers supply
+// them manually.
+//
+// Brand is the only conditional one — allowed when a logo is clearly visible
+// AND the model returns confidence > 0.9 for it. Below that we leave it null.
+
+export const SELLER_REQUIRED_FIELDS = new Set<string>([
+  "model",
+  "selling_price",
+  "warranty_duration",
+  "warranty_type",
+  "warranty_address",
+  "warranty_text",
+  "production_country",
+  "certifications",
+]);
+
+// Brand has special handling — allowed at high confidence only
+export const BRAND_CONFIDENCE_THRESHOLD = 0.9;
+
+// Dynamic-attribute keys that should never be filled by AI (extends Jumia's
+// per-category list; we also exclude these category-specific ones).
+export const SELLER_REQUIRED_ATTR_KEYS = new Set<string>([
+  "gtin", "gtin_barcode", "barcode_ean", "ean", "upc",
+  "sku", "seller_sku", "parent_sku",
+  "price", "sale_price", "global_price",
+  "stock", "quantity",
+]);
 
 // ─── Build AI prompt ──────────────────────────────────────────────────────────
 
@@ -68,28 +121,36 @@ ${categoryList}
 
 STRICT RULES — violations will cause the submission to be rejected:
 1. Pick the single most specific matching category from the list. Use the exact numeric code.
-2. Set a realistic GHS selling price for the Ghanaian market.
+2. Provide the top 3 best-matching category codes from the list above, in descending confidence order.
 3. NEVER fabricate or guess values. If a field cannot be determined with reasonable confidence, set it to null.
 4. For dynamic_attributes: include ONLY fields you can determine from the product. Omit fields you cannot determine — do NOT guess.
 5. Description MUST be between 80 and 500 characters — Jumia rejects anything under 50. Write 2–3 full sentences.
 6. Title MUST be 15–70 characters. Include the brand, model and 1–2 key specs.
-7. Highlights MUST be at least 4 bullet points starting with "•" (the bullet character). Each on its own line.${attributeSection}
+7. Highlights MUST be at least 4 bullet points starting with "•" (the bullet character). Each on its own line.
+8. Brand: leave NULL unless you can clearly see a brand logo or wordmark in the image AND your confidence is above 0.9. A guessed brand causes legal/commercial issues.
+9. NEVER fill: model, selling_price, warranty fields, production_country, certifications, GTIN, SKU. The seller fills those manually.${attributeSection}
 
 Return ONLY valid JSON. No markdown fences, no explanation, no trailing text:
 {
   "title": "Full product name including brand, model and 1-2 key specs (15-70 chars)",
   "description": "2-3 sentences for a Jumia listing (min 80 chars)",
   "highlights": "• bullet1\\n• bullet2\\n• bullet3\\n• bullet4 (min 4 bullets, start each with •)",
-  "brand": "Brand name, or null if not visible",
+  "brand": "Brand name ONLY if logo is clearly visible AND confidence > 0.9, else null",
+  "brand_confidence": 0.0,
   "color": "Specific color e.g. Midnight Black, or null",
   "color_family": "Base color e.g. Black, or null",
-  "weight_kg": 0.5,
-  "selling_price": 1200,
-  "model": "Model number or null",
+  "weight_kg": null,
+  "selling_price": null,
+  "model": null,
   "main_material": "e.g. Plastic, Metal, Fabric, or null",
   "material_family": "e.g. Metal, Fabric, Plastic, or null",
-  "category_code": "EXACT numeric code from category list above",
-  "category_path": "Matching path from category list above",
+  "category_code": "EXACT numeric code from category list above — your top pick",
+  "category_path": "Matching path from category list above for your top pick",
+  "category_confidence": 0.0,
+  "category_alternates": [
+    { "code": "second-best numeric code", "confidence": 0.0 },
+    { "code": "third-best numeric code",  "confidence": 0.0 }
+  ],
   "dynamic_attributes": {
     "attribute_name": "value — only include if you are confident"
   }
@@ -313,53 +374,128 @@ function strOrNull(v: unknown): string | null {
 }
 
 function buildCoreResult(
-  parsed:    Record<string, unknown>,
-  cat:       { code: number; path: string; commission_rate: number },
-  dynAttrs:  Record<string, string>
+  parsed:        Record<string, unknown>,
+  cat:           { code: number; path: string; commission_rate: number },
+  dynAttrs:      Record<string, string>,
+  classificationCtx: {
+    alternates:    AIProductAnalysis["category_alternates"];
+    confidence:    number;
+    needsUserConfirmation: boolean;
+  }
 ): AIProductAnalysis {
-  // Strip null / empty-string entries from dynamic attributes
+  // ── 1. Filter dynamic attributes through the seller-required key list ─────
+  //
+  // Even if the model returns gtin / sku / price etc., strip them so the
+  // seller is forced to supply them manually. Empty / null entries also
+  // dropped here.
   const cleanDyn: Record<string, string> = {};
-  for (const [k, v] of Object.entries(dynAttrs)) {
+  for (const [rawKey, v] of Object.entries(dynAttrs)) {
+    const k = rawKey.toLowerCase();
+    if (SELLER_REQUIRED_ATTR_KEYS.has(k)) continue;
     if (v != null && String(v).trim() !== "" && String(v).toLowerCase() !== "null") {
-      cleanDyn[k] = String(v).trim();
+      cleanDyn[rawKey] = String(v).trim();
     }
   }
 
-  // Build field_sources: every field set here is "ai"
-  const field_sources: Record<string, "ai"> = {};
-  const coreFields = ["title","description","highlights","brand","color","color_family",
-                      "weight_kg","selling_price","model","main_material","material_family"];
+  // ── 2. Conservative brand inference ──────────────────────────────────────
+  //
+  // Only carry brand through if model self-reported confidence is above the
+  // threshold. Otherwise null so the seller fills it from the autocomplete.
+  const brandConfidence = Number(parsed.brand_confidence ?? 0);
+  const brandValue =
+    brandConfidence >= BRAND_CONFIDENCE_THRESHOLD
+      ? strOrNull(parsed.brand)
+      : null;
+
+  // ── 3. Hard exclusion of seller-required core fields ─────────────────────
+  //
+  // Regardless of what the model returned for these, force null. Keeps a
+  // bad guess off the listing.
+  const overrideNull = (key: string) => (SELLER_REQUIRED_FIELDS.has(key) ? null : undefined);
+
+  // ── 4. Build field_sources + field_confidence maps ───────────────────────
+  const field_sources:    AIProductAnalysis["field_sources"]    = {};
+  const field_confidence: AIProductAnalysis["field_confidence"] = {};
+
+  const coreFields = [
+    "title", "description", "highlights",
+    "color", "color_family",
+    "weight_kg",
+    "main_material", "material_family",
+  ];
+
+  // Brand is its own case
+  if (brandValue) {
+    field_sources["brand"]    = "ai";
+    field_confidence["brand"] = {
+      confidence: brandConfidence,
+      source:     "image",
+      reasoning:  "Logo visible in image",
+    };
+  }
+
   for (const f of coreFields) {
     if (parsed[f] != null && parsed[f] !== "" && parsed[f] !== "null") {
-      field_sources[f] = "ai";
+      field_sources[f]    = "ai";
+      // We don't have explicit per-field confidences for the rest yet, so
+      // tag them as "image" with a default 0.85 — UI can render them yellow
+      // (inferred) until the seller accepts/edits.
+      field_confidence[f] = {
+        confidence: 0.85,
+        source:     "inferred",
+      };
     }
   }
+
   for (const k of Object.keys(cleanDyn)) {
-    field_sources[`dynamic_attributes.${k}`] = "ai";
+    field_sources[`dynamic_attributes.${k}`]    = "ai";
+    field_confidence[`dynamic_attributes.${k}`] = {
+      confidence: 0.8,
+      source:     "inferred",
+    };
   }
+
+  // Tag the explicit seller-required fields so the UI can render them gray
+  Array.from(SELLER_REQUIRED_FIELDS).forEach((f) => {
+    field_confidence[f] = {
+      confidence: 0,
+      source:     "seller-required",
+      reasoning:  "Seller must supply this — legal/commercial risk to auto-fill.",
+    };
+  });
+  Array.from(SELLER_REQUIRED_ATTR_KEYS).forEach((k) => {
+    field_confidence[`dynamic_attributes.${k}`] = {
+      confidence: 0,
+      source:     "seller-required",
+    };
+  });
 
   return {
     title:              String(parsed.title       ?? ""),
     description:        String(parsed.description ?? ""),
     highlights:         String(parsed.highlights  ?? ""),
-    brand:              strOrNull(parsed.brand),
+    brand:              brandValue,
     color:              strOrNull(parsed.color),
     color_family:       strOrNull(parsed.color_family),
-    weight_kg:          parsed.weight_kg != null && parsed.weight_kg !== "null"
-                          ? Number(parsed.weight_kg)
-                          : null,
-    selling_price:      parsed.selling_price != null && parsed.selling_price !== "null"
-                          ? Number(parsed.selling_price)
-                          : null,
-    model:              strOrNull(parsed.model),
+    weight_kg:          overrideNull("weight_kg") !== undefined
+                          ? overrideNull("weight_kg")!
+                          : (parsed.weight_kg != null && parsed.weight_kg !== "null"
+                              ? Number(parsed.weight_kg)
+                              : null),
+    selling_price:      null,   // ALWAYS seller-supplied
+    model:              null,   // ALWAYS seller-supplied
     main_material:      strOrNull(parsed.main_material),
     material_family:    strOrNull(parsed.material_family),
     category_id:        String(cat.code),
     category_code:      String(cat.code),
     category_path:      cat.path,
     commission_rate:    cat.commission_rate,
+    category_alternates: classificationCtx.alternates,
+    category_confidence: classificationCtx.confidence,
+    needs_user_confirmation: classificationCtx.needsUserConfirmation,
     dynamic_attributes: cleanDyn,
     field_sources,
+    field_confidence,
   };
 }
 
@@ -408,6 +544,10 @@ export async function analyzeProductImages(
   // Resolve category
   const cat = resolveCategory(parsed, categories);
 
+  // Extract classification confidence + top-3 alternates so the UI can
+  // offer a chooser when the primary pick is uncertain.
+  const classificationCtx = extractClassificationConfidence(parsed, categories, cat.code);
+
   // Second pass: fetch attributes for detected category, re-fill if any
   let dynamicAttributes: Record<string, string> = {};
   if (cat.code > 0) {
@@ -427,8 +567,54 @@ export async function analyzeProductImages(
     }
   }
 
-  const coreResult = buildCoreResult(parsed, cat, dynamicAttributes);
+  const coreResult = buildCoreResult(parsed, cat, dynamicAttributes, classificationCtx);
   return coreResult;
+}
+
+// Pulls the top-3 alternates + confidence out of the AI response and
+// computes the `needsUserConfirmation` flag per the spec:
+//   - true when primary confidence < 0.75
+//   - OR when the spread between top-1 and top-2 is < 0.15 (close call)
+function extractClassificationConfidence(
+  parsed:     Record<string, unknown>,
+  categories: JumiaCategoryRow[],
+  primaryCode: number
+): {
+  alternates:            AIProductAnalysis["category_alternates"];
+  confidence:            number;
+  needsUserConfirmation: boolean;
+} {
+  const primaryConf = Number(parsed.category_confidence ?? 0);
+  const raw         = (parsed.category_alternates ?? []) as Array<Record<string, unknown>>;
+
+  // Resolve each alternate code → full category row so the UI gets path + name
+  const resolveOne = (code: unknown, confidence: number) => {
+    const num = Number(code);
+    if (!num || isNaN(num)) return null;
+    const cat = categories.find((c) => c.code === num);
+    if (!cat) return null;
+    return { code: cat.code, name: cat.name, path: cat.path, confidence };
+  };
+
+  // Always lead with the primary (so callers always have at least 1 alternate)
+  const primaryAlt = resolveOne(primaryCode, primaryConf);
+  const restAlts   = raw
+    .map((a) => resolveOne(a.code, Number(a.confidence ?? 0)))
+    .filter((a): a is NonNullable<typeof a> => a !== null);
+
+  const alternates = [primaryAlt, ...restAlts]
+    .filter((a): a is NonNullable<typeof a> => a !== null)
+    .slice(0, 3);
+
+  const top1 = alternates[0]?.confidence ?? 0;
+  const top2 = alternates[1]?.confidence ?? 0;
+  const needsUserConfirmation = top1 < 0.75 || (top1 - top2) < 0.15;
+
+  return {
+    alternates,
+    confidence:            primaryConf,
+    needsUserConfirmation,
+  };
 }
 
 // ─── Main: analyse text description ──────────────────────────────────────────
@@ -466,6 +652,7 @@ export async function analyzeProductDescription(
   }
 
   const cat = resolveCategory(parsed, categories);
+  const classificationCtx = extractClassificationConfidence(parsed, categories, cat.code);
 
   let dynamicAttributes: Record<string, string> = (parsed.dynamic_attributes ?? {}) as Record<string, string>;
   if (cat.code > 0) {
@@ -482,7 +669,7 @@ export async function analyzeProductDescription(
     }
   }
 
-  return buildCoreResult(parsed, cat, dynamicAttributes);
+  return buildCoreResult(parsed, cat, dynamicAttributes, classificationCtx);
 }
 
 // ─── Mock fallback ────────────────────────────────────────────────────────────
@@ -537,6 +724,12 @@ function buildMockAnalysis(): AIProductAnalysis {
     category_code:   mock.code,
     category_path:   mock.path,
     commission_rate: mock.commissionRate / 100,
+    category_alternates: [
+      { code: parseInt(mock.code, 10) || 0, name: mock.name, path: mock.path, confidence: 0.9 },
+    ],
+    category_confidence: 0.9,
+    needs_user_confirmation: false,
     field_sources,
+    field_confidence: {},
   };
 }

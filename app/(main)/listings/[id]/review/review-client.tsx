@@ -67,6 +67,7 @@ import { updateListing } from "@/lib/actions/listings";
 import { calculateQualityScore, scoreLabel, scoreColor, DEFAULT_THRESHOLD } from "@/lib/quality-score";
 import { isValidGTIN } from "@/lib/utils/gtin";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
+import { CategoryDrawer } from "@/components/ui/category-drawer";
 
 // ─── Auto-SKU helper ──────────────────────────────────────────────────────────
 
@@ -1889,13 +1890,13 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
         </div>
       </div>
 
-      {/* Category picker modal */}
-      {showCategoryPicker && (
-        <CategoryPickerModal
-          onSelect={handleCategoryChange}
-          onClose={() => setShowCategoryPicker(false)}
-        />
-      )}
+      {/* Category drawer (Jumia-style slide-in) */}
+      <CategoryDrawer
+        open={showCategoryPicker}
+        onClose={() => setShowCategoryPicker(false)}
+        onSelect={handleCategoryChange}
+        initialPath={categoryPath ?? undefined}
+      />
     </div>
   );
 }
