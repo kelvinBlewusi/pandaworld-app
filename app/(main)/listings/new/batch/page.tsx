@@ -21,9 +21,9 @@
  */
 
 import { useEffect, useMemo, useState, useRef } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, ChevronRight, Plus, X } from "lucide-react";
+import { ArrowLeft, ChevronRight, Plus, X, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -218,7 +218,10 @@ export default function BatchAddProductsPage() {
     updateActive({ categoryCode: cat.code, categoryName: cat.name, categoryPath: cat.path });
   };
 
-  // Per-tab readiness summary (shown next to tab name)
+  // Per-tab readiness summary (shown next to tab name).
+  // Only the image is hard-required. Name + category are OPTIONAL because
+  // the AI will fill them on Submit. If the user typed a name or picked a
+  // category, we honour those values; otherwise the AI picks.
   const tabReady = useMemo(
     () =>
       drafts.map((d) => ({
@@ -229,7 +232,74 @@ export default function BatchAddProductsPage() {
     [drafts]
   );
 
-  const allValid = tabReady.every((t) => t.hasImage && t.hasName && t.hasCategory);
+  const allValid = tabReady.every((t) => t.hasImage);
+
+  // ── Submit handler: upload images → create drafts → run auto-analyze ────
+  const [submitting, setSubmitting] = useState(false);
+  const [submitStep, setSubmitStep] = useState<string>("");
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const router = useRouter();
+
+  async function handleSubmit() {
+    setSubmitting(true);
+    setSubmitError(null);
+    const listingIds: string[] = [];
+
+    try {
+      for (let i = 0; i < drafts.length; i++) {
+        const d = drafts[i];
+        const label = drafts.length === 1 ? "Uploading images…" : `Uploading product ${i + 1}/${drafts.length}…`;
+        setSubmitStep(label);
+
+        // 1. Upload images + create draft (no AI analysis yet)
+        const fd = new FormData();
+        fd.append("mode", "own");
+        fd.append("skipAnalysis", "true");
+        d.images.forEach((img) => {
+          if (img.file) fd.append("files", img.file);
+        });
+        if (d.name.trim().length >= 15) fd.append("name", d.name.trim());
+        if (d.categoryCode != null) {
+          fd.append("categoryCode", String(d.categoryCode));
+          if (d.categoryPath) fd.append("categoryPath", d.categoryPath);
+        }
+
+        const createRes = await fetch("/api/process-listing", { method: "POST", body: fd });
+        const createData = await createRes.json();
+        if (!createRes.ok || !createData.listingId) {
+          throw new Error(createData.error ?? "Failed to create listing");
+        }
+        const listingId = createData.listingId as string;
+        listingIds.push(listingId);
+
+        // 2. Run the new auto-analyze pipeline (4 passes — picks category +
+        //    fills attributes). If user already picked a category we still
+        //    run it; the merge logic on the server respects their choice.
+        setSubmitStep(
+          drafts.length === 1
+            ? "Analysing with AI…"
+            : `Analysing product ${i + 1}/${drafts.length} with AI…`
+        );
+        const analyzeRes = await fetch(`/api/listings/${listingId}/auto-analyze`, {
+          method: "POST",
+        });
+        if (!analyzeRes.ok) {
+          // Non-fatal — listing is created, AI just couldn't run. The user
+          // can hit "Analyze with AI" again from the review page.
+          console.warn(`[batch] auto-analyze failed for ${listingId}`);
+        }
+      }
+
+      // All drafts created. Route to first product's review page so the
+      // seller can verify + edit + submit to Jumia.
+      if (listingIds.length > 0) {
+        router.push(`/listings/${listingIds[0]}/review`);
+      }
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : "Something went wrong");
+      setSubmitting(false);
+    }
+  }
 
   return (
     <div className="-m-4 sm:-m-6 lg:-m-8 min-h-[calc(100vh-3.5rem)] lg:min-h-screen bg-zinc-50 flex flex-col">
@@ -313,33 +383,51 @@ export default function BatchAddProductsPage() {
                 onRemove={handleRemoveImage}
               />
 
-              {/* Name + Category */}
+              {/* AI promise banner — explains that the rest is automatic */}
+              <div className="rounded-md border border-orange-200 bg-gradient-to-r from-orange-50 to-amber-50 px-4 py-3 flex items-start gap-3">
+                <Sparkles className="h-4 w-4 text-orange-500 mt-0.5 shrink-0" />
+                <div className="text-xs text-orange-900">
+                  <p className="font-semibold">
+                    AI will pick the right Jumia category and fill the category-specific fields automatically.
+                  </p>
+                  <p className="text-orange-700 mt-0.5">
+                    Just upload your images and click <span className="font-semibold">Submit &amp; Analyze with AI</span>.
+                    Name and Category below are optional — if you leave them blank, the AI fills them.
+                  </p>
+                </div>
+              </div>
+
+              {/* Name + Category — BOTH OPTIONAL (AI fills if blank) */}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <Label htmlFor={`name-${activeIdx}`} className="text-xs font-semibold text-zinc-700">
-                    Name<span className="ml-0.5 text-orange-500">*</span>
+                  <Label htmlFor={`name-${activeIdx}`} className="text-xs font-semibold text-zinc-700 flex items-center gap-1.5">
+                    Name
+                    <span className="text-[10px] font-normal text-zinc-400 normal-case">(optional · AI fills)</span>
                   </Label>
                   <Input
                     id={`name-${activeIdx}`}
                     value={active.name}
                     onChange={(e) => updateActive({ name: e.target.value })}
-                    placeholder="Ex: Wireless Noise-Cancelling Headphones [Clear product name for a better c..."
+                    placeholder="Leave blank to let AI generate the name"
                     className="h-10 text-sm"
                     maxLength={70}
                   />
-                  <p className={cn(
-                    "text-[11px]",
-                    active.name.length === 0 ? "text-zinc-400" :
-                    active.name.length < 15  ? "text-red-500"  :
-                    active.name.length > 70  ? "text-red-500"  :
-                                               "text-emerald-600"
-                  )}>
-                    {active.name.length}/70 characters · min 15
-                  </p>
+                  {active.name.length > 0 && (
+                    <p className={cn(
+                      "text-[11px]",
+                      active.name.length < 15  ? "text-amber-600"   :
+                      active.name.length > 70  ? "text-red-500"     :
+                                                 "text-emerald-600"
+                    )}>
+                      {active.name.length}/70 characters
+                      {active.name.length < 15 && " · min 15 for Jumia (or let AI rewrite)"}
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold text-zinc-700">
-                    Category<span className="ml-0.5 text-orange-500">*</span>
+                  <Label className="text-xs font-semibold text-zinc-700 flex items-center gap-1.5">
+                    Category
+                    <span className="text-[10px] font-normal text-zinc-400 normal-case">(optional · AI picks)</span>
                   </Label>
                   <button
                     type="button"
@@ -351,7 +439,7 @@ export default function BatchAddProductsPage() {
                         : "border-zinc-200 text-zinc-400 hover:border-zinc-300"
                     )}
                   >
-                    <span className="truncate">{active.categoryName || "Category"}</span>
+                    <span className="truncate">{active.categoryName || "Leave blank to let AI pick"}</span>
                     <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />
                   </button>
                 </div>
@@ -363,7 +451,7 @@ export default function BatchAddProductsPage() {
                   {drafts.map((d, i) => {
                     const isActive = i === activeIdx;
                     const status   = tabReady[i];
-                    const ready    = status.hasImage && status.hasName && status.hasCategory;
+                    const ready    = status.hasImage;   // images are the only hard requirement
                     return (
                       <button
                         key={i}
@@ -393,26 +481,34 @@ export default function BatchAddProductsPage() {
         </div>
       </div>
 
-      {/* ── Floating Submit (bottom-right, disabled until all valid) ──────── */}
-      <div className="fixed bottom-6 right-6 z-30 flex items-center gap-2">
-        {!allValid && (
+      {/* ── Floating Submit (bottom-right) ────────────────────────────────── */}
+      <div className="fixed bottom-6 right-6 z-30 flex items-end gap-2 flex-col sm:flex-row">
+        {submitError && (
+          <span className="max-w-[260px] rounded-md bg-white border border-red-200 px-3 py-1.5 text-[11px] text-red-600 shadow-sm">
+            {submitError}
+          </span>
+        )}
+        {!allValid && !submitting && (
           <span className="rounded-md bg-white border border-zinc-200 px-3 py-1.5 text-[11px] text-zinc-500 shadow-sm">
-            Fill name (15+), category and at least 1 image on each tab
+            Upload at least 1 image on each tab
+          </span>
+        )}
+        {submitting && (
+          <span className="rounded-md bg-white border border-blue-200 px-3 py-1.5 text-[11px] text-blue-700 shadow-sm flex items-center gap-1.5">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            {submitStep}
           </span>
         )}
         <Button
           type="button"
           size="lg"
-          disabled={!allValid}
+          disabled={!allValid || submitting}
+          onClick={handleSubmit}
           className="bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/30 disabled:bg-zinc-200 disabled:text-zinc-400 disabled:shadow-none gap-2 px-8"
-          onClick={() => {
-            // Continue to AI processing / review wired up in a follow-up prompt.
-            // For now: show a toast-style hint so the user knows the next step
-            // is intentional and not missing.
-            window.alert("Next step: AI analysis + Variants + Product Specification — wired up in the next prompt.");
-          }}
         >
-          Submit
+          {submitting
+            ? <><Loader2 className="h-4 w-4 animate-spin" /> Working…</>
+            : <><Sparkles className="h-4 w-4" /> Submit & Analyze with AI</>}
         </Button>
       </div>
 

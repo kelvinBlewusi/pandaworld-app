@@ -130,7 +130,34 @@ export async function POST(req: NextRequest) {
       imageUrls = await uploadProductImages(uploadForm);
     }
 
-    // Step 2: AI analysis
+    // skipAnalysis=true → just upload + create a bare draft. Used by the new
+    // batch page so that the (better) auto-analyze pipeline runs separately
+    // via /api/listings/[id]/auto-analyze with one call instead of three.
+    const skipAnalysis = (formData.get("skipAnalysis") as string | null) === "true";
+    const manualName        = (formData.get("name")          as string | null)?.trim() || null;
+    const manualCategoryCode = (formData.get("categoryCode") as string | null)?.trim() || null;
+    const manualCategoryPath = (formData.get("categoryPath") as string | null)?.trim() || null;
+
+    if (skipAnalysis) {
+      if (imageUrls.length === 0) {
+        throw new Error("At least one image is required");
+      }
+      const listing = await createListing({
+        title:         manualName ?? undefined,
+        images:        imageUrls,
+        category_id:   manualCategoryCode ?? undefined,
+        category_code: manualCategoryCode ?? undefined,
+        category_path: manualCategoryPath ?? undefined,
+      });
+      return NextResponse.json({
+        listingId:    listing.id,
+        title:        manualName,
+        category:     manualCategoryPath,
+        skipAnalysis: true,
+      });
+    }
+
+    // Step 2: AI analysis (full one-shot pipeline — legacy)
     let analysis;
     const description = formData.get("description") as string | null;
 
