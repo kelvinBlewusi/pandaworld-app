@@ -4,6 +4,11 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getLeafCategories, getCategoryAttributes } from "@/lib/jumia/categories";
 import { mockCategories } from "@/lib/mock/categories";
 import type { JumiaCategoryRow, JumiaCategoryAttribute } from "@/lib/jumia/categories";
+import {
+  SELLER_REQUIRED_FIELDS,
+  SELLER_REQUIRED_ATTR_KEYS,
+  BRAND_CONFIDENCE_THRESHOLD,
+} from "@/lib/ai/policy";
 
 // ─── Output types ─────────────────────────────────────────────────────────────
 
@@ -57,37 +62,8 @@ export interface AIProductAnalysis {
   }>;
 }
 
-// ─── Conservative field exclusions ───────────────────────────────────────────
-//
-// Per the architectural spec: AI must NEVER auto-fill these fields from
-// images alone. They carry legal/commercial risk if wrong. Sellers supply
-// them manually.
-//
-// Brand is the only conditional one — allowed when a logo is clearly visible
-// AND the model returns confidence > 0.9 for it. Below that we leave it null.
-
-export const SELLER_REQUIRED_FIELDS = new Set<string>([
-  "model",
-  "selling_price",
-  "warranty_duration",
-  "warranty_type",
-  "warranty_address",
-  "warranty_text",
-  "production_country",
-  "certifications",
-]);
-
-// Brand has special handling — allowed at high confidence only
-export const BRAND_CONFIDENCE_THRESHOLD = 0.9;
-
-// Dynamic-attribute keys that should never be filled by AI (extends Jumia's
-// per-category list; we also exclude these category-specific ones).
-export const SELLER_REQUIRED_ATTR_KEYS = new Set<string>([
-  "gtin", "gtin_barcode", "barcode_ean", "ean", "upc",
-  "sku", "seller_sku", "parent_sku",
-  "price", "sale_price", "global_price",
-  "stock", "quantity",
-]);
+// Conservative field exclusions live in lib/ai/policy.ts (regular module —
+// can't export constants from a "use server" file).
 
 // ─── Build AI prompt ──────────────────────────────────────────────────────────
 
