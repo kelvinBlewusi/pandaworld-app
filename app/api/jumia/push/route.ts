@@ -58,7 +58,18 @@ export async function POST(req: NextRequest) {
   else if (row.description.length > 9000) errors.push(`description must be 9,000 characters or fewer (you have ${row.description.length})`);
 
   if (!row.selling_price)  errors.push("price is required");
-  if (!row.category_path && !row.category_id) errors.push("category is required");
+
+  // Category: must have a numeric category_code that resolves to a real
+  // Jumia leaf. The PandaWorld category drawer always sets category_code;
+  // older drafts may only have category_path / category_id (legacy mock
+  // IDs like "cat-mob") which Jumia will reject with code 0.
+  const catCode = row.category_code ? parseInt(row.category_code, 10) : 0;
+  if (!catCode || isNaN(catCode) || catCode <= 0) {
+    errors.push(
+      "category is required — open the listing, click the Category field, and pick a leaf from the drawer (legacy listings need a re-pick)"
+    );
+  }
+
   if (!row.brand)          errors.push("brand is required");
   if ((row.images ?? []).length === 0) errors.push("at least one image is required");
 

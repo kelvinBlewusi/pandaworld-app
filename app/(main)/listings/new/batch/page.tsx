@@ -293,7 +293,13 @@ export default function BatchAddProductsPage() {
       // All drafts created. Route to first product's review page so the
       // seller can verify + edit + submit to Jumia.
       if (listingIds.length > 0) {
-        router.push(`/listings/${listingIds[0]}/review`);
+        // Include the full batch ID list so the review page can show a
+        // product switcher (prdt1 / prdt2 / prdt3 …) — preserves the
+        // tabbed-upload experience after AI has finished.
+        const batchQuery = listingIds.length > 1
+          ? `?batch=${listingIds.join(",")}`
+          : "";
+        router.push(`/listings/${listingIds[0]}/review${batchQuery}`);
       }
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : "Something went wrong");

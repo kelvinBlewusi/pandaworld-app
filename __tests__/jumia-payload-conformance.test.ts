@@ -274,6 +274,33 @@ describe("Jumia /feeds/products/create payload conformance", () => {
     });
   });
 
+  describe("category code safety", () => {
+    it("refuses to build a payload when category_code is missing/zero", () => {
+      const noCategoryListing: ListingRow = {
+        ...sampleListing,
+        category_code: null,
+        category_path: null,
+        category_id:   null,
+      };
+      // Should THROW rather than silently sending category: { code: 0, ... }
+      expect(() =>
+        mapListingToJumiaProducts(noCategoryListing, [], brand, currency)
+      ).toThrow(/JUMIA_NO_CATEGORY_CODE/);
+    });
+
+    it("refuses to build a payload when category_code is non-numeric", () => {
+      const badCategoryListing: ListingRow = {
+        ...sampleListing,
+        category_code: "cat-mob",            // legacy mock id
+        category_path: null,
+        category_id:   "cat-mob",
+      };
+      expect(() =>
+        mapListingToJumiaProducts(badCategoryListing, [], brand, currency)
+      ).toThrow(/JUMIA_NO_CATEGORY_CODE/);
+    });
+  });
+
   describe("payload size sanity", () => {
     it("a single-product payload is well under 1KB compressed", () => {
       const products = mapListingToJumiaProducts(sampleListing, [], brand, currency);

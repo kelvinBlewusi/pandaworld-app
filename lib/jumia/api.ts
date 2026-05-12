@@ -206,7 +206,14 @@ function resolveCategoryCode(listing: ListingRow): { code: number; name: string 
     }
   }
 
-  return { code: 0, name: listing.category_path ?? "Unknown" };
+  // No numeric code anywhere. Fail loudly — the push route's validation
+  // should have caught this; if we reach here, refuse to send code: 0
+  // (which Jumia silently drops and produces the cryptic "category
+  // can't be used for listing" error).
+  throw new Error(
+    "JUMIA_NO_CATEGORY_CODE: Listing has no valid numeric category. " +
+    "Open the listing and pick a category from the drawer."
+  );
 }
 
 // ─── Attribute builder ────────────────────────────────────────────────────────
@@ -393,8 +400,18 @@ export async function pushProductsToJumia(
   currency:    string = "GHS"
 ): Promise<JumiaPushResult> {
   // 1. Resolve brand code (calls /catalog/brands)
-  const brand    = await resolveBrand(accessToken, listing.brand);
-  const products = mapListingToJumiaProducts(listing, variants, brand, currency);
+  const brand = await resolveBrand(accessToken, listing.brand);
+
+  // 2. Build the products payload. Can throw if the listing lacks a real
+  //    numeric category — surface that as a structured push error rather
+  //    than a 500.
+  let products: ReturnType<typeof mapListingToJumiaProducts>;
+  try {
+    products = mapListingToJumiaProducts(listing, variants, brand, currency);
+  } catch (e) {
+    const msg = (e as Error).message ?? "Failed to build payload";
+    return { success: false, jumia_ref: null, raw: null, error: msg };
+  }
 
   const url  = `${JUMIA_API_BASE}/feeds/products/create`;
   const body = JSON.stringify({ shopId, products });
@@ -472,8 +489,15 @@ export async function updateProductOnJumia(
     };
   }
 
-  const brand    = await resolveBrand(accessToken, listing.brand);
-  const products = mapListingToJumiaProducts(listing, variants, brand, currency)
+  const brand = await resolveBrand(accessToken, listing.brand);
+  let basePayload: ReturnType<typeof mapListingToJumiaProducts>;
+  try {
+    basePayload = mapListingToJumiaProducts(listing, variants, brand, currency);
+  } catch (e) {
+    const msg = (e as Error).message ?? "Failed to build update payload";
+    return { success: false, jumia_ref: null, raw: null, error: msg };
+  }
+  const products = basePayload
     .map((p) => {
       // Inject the productSid required by /feeds/products/update.
       // For multi-variant listings, look up the SID from the saved map.

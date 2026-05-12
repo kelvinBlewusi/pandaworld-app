@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
   Sparkles,
@@ -1258,7 +1258,39 @@ const PUBLISH_THRESHOLD = typeof process !== "undefined"
   : DEFAULT_THRESHOLD;
 
 export function ReviewClient({ listing }: { listing: ListingRow }) {
-  const router = useRouter();
+  const router       = useRouter();
+  const searchParams = useSearchParams();
+
+  // ── Batch mode: switcher between sibling products ────────────────────────
+  // When the seller created N products in the batch flow, the URL contains
+  // ?batch=id1,id2,id3 so we can render prdt1 / prdt2 / prdt3 tabs at the
+  // top of the review page — same affordance as the upload step.
+  const batchIds = (searchParams.get("batch") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const inBatch = batchIds.length > 1 && batchIds.includes(listing.id);
+
+  type BatchSibling = {
+    id:        string;
+    title:     string;
+    sku:       string;
+    status:    string;
+    thumbnail: string | null;
+  };
+  const [batchSiblings, setBatchSiblings] = useState<BatchSibling[]>([]);
+
+  useEffect(() => {
+    if (!inBatch) return;
+    fetch(`/api/listings/batch?ids=${batchIds.join(",")}`)
+      .then((r) => r.json())
+      .then((d) => setBatchSiblings(d.listings ?? []))
+      .catch(() => setBatchSiblings([]));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inBatch, batchIds.join(",")]);
+
+  const batchQuery = batchIds.length > 0 ? `?batch=${batchIds.join(",")}` : "";
+  const currentBatchIdx = batchIds.indexOf(listing.id);
   const formRef = useRef<HTMLFormElement>(null);
 
   // ── Section refs for scroll-spy + jump ────────────────────────────────────
@@ -1738,16 +1770,71 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
             <ChevronRight className="h-3 w-3" />
             <span>Add</span>
             <ChevronRight className="h-3 w-3" />
-            <span className="font-semibold text-orange-500">Single Product</span>
+            {inBatch ? (
+              <>
+                <span>Batch</span>
+                <ChevronRight className="h-3 w-3" />
+                <span className="font-semibold text-orange-500">
+                  prdt{currentBatchIdx + 1} of {batchIds.length}
+                </span>
+              </>
+            ) : (
+              <span className="font-semibold text-orange-500">Single Product</span>
+            )}
           </div>
           {/* Title row */}
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="icon" className="h-8 w-8 -ml-2" asChild>
               <Link href="/listings"><ArrowLeft className="h-4 w-4" /></Link>
             </Button>
-            <h1 className="text-xl font-bold text-zinc-900 flex-1">Add Products</h1>
+            <h1 className="text-xl font-bold text-zinc-900 flex-1">
+              {inBatch ? `Review prdt${currentBatchIdx + 1}` : "Add Products"}
+            </h1>
             <QualityScoreBadge score={qualityResult.score} threshold={PUBLISH_THRESHOLD} issues={qualityResult.issues} />
           </div>
+
+          {/* Batch product switcher — only when this listing came from a batch */}
+          {inBatch && (
+            <div className="flex items-center gap-1.5 overflow-x-auto -mx-1 px-1 pb-1">
+              {batchIds.map((id, i) => {
+                const isCurrent = id === listing.id;
+                const sibling = batchSiblings.find((s) => s.id === id);
+                // Status colour pill for at-a-glance progress
+                const status   = sibling?.status ?? "draft";
+                const statusOk = status === "live" || status === "pending_approval";
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => {
+                      if (isCurrent) return;
+                      router.push(`/listings/${id}/review${batchQuery}`);
+                    }}
+                    className={cn(
+                      "shrink-0 inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                      isCurrent
+                        ? "border-orange-500 bg-orange-50 text-orange-700"
+                        : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:bg-zinc-50"
+                    )}
+                    title={sibling?.title || `Product ${i + 1}`}
+                  >
+                    <span className={cn(
+                      "h-1.5 w-1.5 rounded-full",
+                      statusOk         ? "bg-emerald-500" :
+                      status === "failed" ? "bg-red-500" :
+                                           "bg-zinc-300"
+                    )} />
+                    prdt{i + 1}
+                    {sibling?.title && !isCurrent && (
+                      <span className="max-w-[120px] truncate text-zinc-400">
+                        — {sibling.title}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 
