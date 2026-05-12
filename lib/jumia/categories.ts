@@ -131,7 +131,10 @@ export async function getVariantAxes(categoryCode: number): Promise<JumiaCategor
  */
 export async function fetchCategoriesFromJumia(accessToken: string): Promise<JumiaCategoryRow[]> {
   const all: Record<string, unknown>[] = [];
-  const MAX_PAGES = 50;            // hard safety stop
+  // Jumia's category tree typically has ~200-500 leaf categories. With the
+  // default Jumia page size we expect at most ~10 pages. We allow 100 as
+  // a wide safety margin so we never silently miss new categories.
+  const MAX_PAGES = 100;
   let page = 1;
 
   while (page <= MAX_PAGES) {

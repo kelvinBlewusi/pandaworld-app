@@ -36,6 +36,18 @@ function IntegrationsPageInner() {
   const [syncingBrands,   setSyncingBrands]   = useState(false);
   const [brandSyncResult, setBrandSyncResult] = useState<{ brands: number } | null>(null);
 
+  // Persistent stats — count + last-synced timestamp for the cached
+  // Jumia category tree. Fetched on page load so the seller always sees
+  // current sync health without having to click "Sync now".
+  const [categoryStats, setCategoryStats] = useState<{ count: number; lastSynced: string | null } | null>(null);
+
+  const loadCategoryStats = () => {
+    fetch("/api/jumia/sync-categories")
+      .then((r) => r.json())
+      .then((d) => setCategoryStats({ count: d.count ?? 0, lastSynced: d.lastSynced ?? null }))
+      .catch(() => setCategoryStats(null));
+  };
+
   // ── Load connection status ─────────────────────────────────────────────────
   useEffect(() => {
     fetch("/api/jumia/status")
@@ -43,6 +55,7 @@ function IntegrationsPageInner() {
       .then((d) => setConn(d))
       .catch(() => setConn(null))
       .finally(() => setLoading(false));
+    loadCategoryStats();
   }, []);
 
   // ── Handle Jumia OAuth redirect back ──────────────────────────────────────
@@ -87,6 +100,8 @@ function IntegrationsPageInner() {
       if (res.ok && data.success) {
         setSyncResult({ categories: data.categories, attributes: 0 });
         showToast("success", `✅ Synced ${data.categories} categories. Attribute fields load automatically when you pick a category in a listing.`);
+        // Refresh the persistent count + timestamp
+        loadCategoryStats();
       } else {
         showToast("error", data.error ?? "Sync failed — please try again.");
       }
@@ -308,7 +323,7 @@ function IntegrationsPageInner() {
                 <div>
                   <p className="text-sm font-semibold text-zinc-800">Jumia category database</p>
                   <p className="text-xs text-zinc-500 mt-0.5">
-                    Syncs the real Jumia category tree so AI can detect the exact category and fill the correct fields for every product.
+                    The AI picks from these categories when analysing a listing. Keep them fresh.
                   </p>
                 </div>
                 <Button
@@ -322,16 +337,50 @@ function IntegrationsPageInner() {
                   {syncing ? "Syncing…" : "Sync now"}
                 </Button>
               </div>
+
+              {/* Always-visible status bar */}
+              {categoryStats != null && (
+                <div className="rounded-lg border bg-white px-3 py-2 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs text-zinc-500">Categories the AI knows about</p>
+                    <p className="text-lg font-bold text-zinc-900">
+                      {categoryStats.count.toLocaleString()}
+                      <span className="ml-2 text-xs font-normal text-zinc-400">
+                        {categoryStats.count === 0
+                          ? "— nothing synced yet"
+                          : categoryStats.count < 50
+                          ? "— looks low, click Sync now"
+                          : "leaf categories"}
+                      </span>
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-[10px] uppercase tracking-wider text-zinc-400">Last sync</p>
+                    <p className="text-xs text-zinc-700">
+                      {categoryStats.lastSynced
+                        ? new Date(categoryStats.lastSynced).toLocaleString("en-GB", {
+                            day:   "numeric",
+                            month: "short",
+                            hour:  "2-digit",
+                            minute:"2-digit",
+                          })
+                        : "Never"}
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {syncing && (
                 <p className="text-xs text-zinc-400 flex items-center gap-1.5">
                   <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-                  Fetching category tree and attribute schemas from Jumia — this takes 2–5 minutes…
+                  Walking every page of /catalog/categories from Jumia…
                 </p>
               )}
-              {syncResult && (
+              {syncResult && !syncing && (
                 <p className="text-xs text-emerald-700 flex items-center gap-1.5">
                   <CheckCircle2 className="h-3 w-3 shrink-0" />
-                  {syncResult.categories} categories · {syncResult.attributes} attribute fields synced
+                  {syncResult.categories} categories synced from Jumia.
+                  Attribute schemas load on demand when you pick a category in a listing.
                 </p>
               )}
             </div>
