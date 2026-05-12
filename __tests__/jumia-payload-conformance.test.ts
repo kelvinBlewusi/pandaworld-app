@@ -26,7 +26,7 @@ const PRODUCT_SHAPE: Record<string, ExpectedShape> = {
       "brand", "category", "images", "price", "stock", "attributes",
       "barcodeEan",
     ],
-    optional: ["additionalCategories"],
+    optional: ["gtinBarcode"],   // duplicate of barcodeEan; both sent for safety
   },
   name: { required: ["value", "translations"] },
   description: { required: ["value", "translations"] },
@@ -121,9 +121,11 @@ function assertHasKeys(obj: unknown, shape: ExpectedShape, path: string) {
   }
 }
 
-function assertNoExtraTopLevelKeys(p: JumiaProduct) {
-  // Ensure we don't send the deprecated/wrong field name
-  expect("gtinBarcode" in p).toBe(false);
+function assertCorrectBarcodeFields(p: JumiaProduct) {
+  // Per official spec (PDF page 4) the field is `gtinBarcode`. Postman sample
+  // and the live API use `barcodeEan`. We send BOTH for safety since Jumia's
+  // own docs disagree. Either way `barcodeEan` MUST be present.
+  expect("barcodeEan" in p).toBe(true);
 }
 
 // ─── Test cases ─────────────────────────────────────────────────────────────
@@ -140,9 +142,8 @@ describe("Jumia /feeds/products/create payload conformance", () => {
       assertHasKeys(products[0], PRODUCT_SHAPE.root, "product");
     });
 
-    it("uses barcodeEan (not gtinBarcode)", () => {
-      assertNoExtraTopLevelKeys(products[0]);
-      expect("barcodeEan" in products[0]).toBe(true);
+    it("includes barcodeEan (the live API field name)", () => {
+      assertCorrectBarcodeFields(products[0]);
     });
 
     it("name is { value, translations: [] }", () => {
@@ -246,10 +247,9 @@ describe("Jumia /feeds/products/create payload conformance", () => {
       expect(new Set(skus).size).toBe(skus.length);
     });
 
-    it("variant carries barcodeEan (not gtinBarcode)", () => {
+    it("variant carries barcodeEan with the GTIN from the variant row", () => {
       products.forEach((p) => {
-        assertNoExtraTopLevelKeys(p);
-        expect("barcodeEan" in p).toBe(true);
+        assertCorrectBarcodeFields(p);
         expect((p as JumiaProduct & { barcodeEan: string }).barcodeEan).toBe("8806094956542");
       });
     });
@@ -290,10 +290,11 @@ describe("Jumia /feeds/products/create payload conformance", () => {
       const products = mapListingToJumiaProducts(sampleListing, sampleVariants, brand, currency);
       const json = JSON.stringify(products);
       // Common past mistakes — these should NEVER appear in the wire payload
-      expect(json).not.toContain("gtinBarcode");
       expect(json).not.toContain("gtin_barcode");
       expect(json).not.toContain("seller_sku");   // snake_case wrong
       expect(json).not.toContain("parent_sku");
+      // additionalCategories is officially deprecated per PDF page 5
+      expect(json).not.toContain("additionalCategories");
     });
 
     it("does include the correct field names per spec", () => {

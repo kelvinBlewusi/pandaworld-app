@@ -304,12 +304,18 @@ function buildBaseProduct(listing: ListingRow, brand: { code: number; name: stri
   //     images: [{url, primary}], price: {value, currency, salePrice?},
   //     stock, attributes: [{name, value, translations[]}],
   //     barcodeEan, additionalCategories: [{code, name}] }
+  // Note on barcode field name: Jumia's docs disagree with themselves.
+  // - The schema reference (PDF page 4) uses `gtinBarcode`
+  // - The Postman request sample uses `barcodeEan`
+  // - Live API accepts `barcodeEan`
+  // We send BOTH so we're safe regardless of which the live endpoint
+  // actually validates. Unknown fields are ignored by Jumia.
   return {
-    name:                 t(listing.title ?? ""),
-    description:          t(listing.description ?? ""),
-    parentSku:            listing.sku,
-    sellerSku:            listing.sku,
-    variation:            defaultVariation,
+    name:        t(listing.title ?? ""),
+    description: t(listing.description ?? ""),
+    parentSku:   listing.sku,
+    sellerSku:   listing.sku,
+    variation:   defaultVariation,
     brand,
     category,
     images,
@@ -317,10 +323,12 @@ function buildBaseProduct(listing: ListingRow, brand: { code: number; name: stri
       value:    listing.selling_price ?? 0,
       currency,
     },
-    stock:                listing.quantity ?? 1,
-    attributes:           buildAttributes(listing),
-    barcodeEan:           "",
-    additionalCategories: [] as { code: number; name: string }[],
+    stock:       listing.quantity ?? 1,
+    attributes:  buildAttributes(listing),
+    barcodeEan:  "",
+    gtinBarcode: "",      // schema reference uses this name; harmless duplicate
+    // additionalCategories: DEPRECATED per official spec (PDF page 5).
+    // Do not send.
   };
 }
 
