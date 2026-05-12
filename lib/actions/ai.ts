@@ -622,10 +622,20 @@ function extractClassificationConfidence(
 // classify 1-of-200 in a single shot.
 
 export interface ProductDescription {
-  title:    string;
-  brand:    string | null;       // null unless logo clearly visible
-  keywords: string[];            // 5-10 search keywords
-  summary:  string;              // one-sentence description
+  title:           string;
+  brand:           string | null;       // null unless logo clearly visible
+  keywords:        string[];            // 5-10 search keywords
+  summary:         string;              // one-sentence description
+  // Universal Jumia listing fields the AI can infer from images. The
+  // auto-analyze route persists these to the listing alongside the
+  // category-specific dynamic_attributes from Pass C.
+  description:     string;              // 80-500 chars, full sentences
+  highlights:      string;              // 4+ bullets starting with •
+  color:           string | null;       // specific colour name(s), comma-separated
+  color_family:    string | null;       // base colour from common Jumia families
+  weight_kg:       number | null;       // only if visible on packaging
+  main_material:   string | null;       // e.g. "Plastic", "Aluminium"
+  material_family: string | null;       // e.g. "Plastic", "Metal", "Fabric"
 }
 
 export async function aiPassA_describeProduct(
@@ -633,24 +643,42 @@ export async function aiPassA_describeProduct(
 ): Promise<ProductDescription> {
   if (!imageUrls.length) throw new Error("No images provided");
   if (USE_MOCK_AI) {
-    return { title: "Mock Product", brand: null, keywords: ["mock"], summary: "Mock product." };
+    return {
+      title: "Mock Product", brand: null, keywords: ["mock"], summary: "Mock product.",
+      description: "Mock description filler text for development.", highlights: "• mock\n• mock\n• mock\n• mock",
+      color: null, color_family: null, weight_kg: null, main_material: null, material_family: null,
+    };
   }
   if (!process.env.GOOGLE_API_KEY) throw new Error("GOOGLE_API_KEY is not set.");
 
-  const prompt = `You are a product-listing assistant. Look at the product images and return a short JSON description.
+  const prompt = `You are a product-listing assistant. Look at the product images and return a JSON object that fills every visible product attribute.
 
 Rules:
 - title: Concise product name (e.g. "Sony WH-1000XM5 Wireless Noise-Cancelling Headphones"). 5-12 words. NO category names like "headphones for sale".
-- brand: Only fill if a brand logo or wordmark is clearly visible. Otherwise null.
+- brand: ONLY fill if a brand logo or wordmark is clearly visible AND you are confident. Otherwise null.
 - keywords: 5-10 single-word lower-case keywords (no quotes, no underscores). Think of what a buyer would search for.
 - summary: One sentence describing what the product is and its key visible features.
+- description: 80-500 characters. 2-3 full sentences. Describe what the product is and its visible features. JUMIA REJECTS anything under 50 chars. Do not include price, brand claims, or promotional language.
+- highlights: 4-6 bullet points, each starting with "•" (the bullet character) on its own line. Concise feature highlights based on what you see.
+- color: Specific visible colour(s). Multiple colours separated by commas (e.g. "Blue, Black"). Null if uncertain.
+- color_family: Base colour family from {Black, White, Grey, Brown, Beige, Red, Orange, Yellow, Green, Blue, Purple, Pink, Multicolour}. Null if uncertain.
+- weight_kg: Only fill if you can see the weight printed on packaging or the product itself. Numeric kilograms (e.g. 1.2). Null otherwise.
+- main_material: e.g. "Plastic", "Stainless Steel", "Cotton". Null if uncertain.
+- material_family: e.g. "Plastic", "Metal", "Fabric", "Wood", "Glass". Null if uncertain.
 
 Return ONLY valid JSON. No markdown, no commentary:
 {
-  "title":    "...",
-  "brand":    null,
-  "keywords": ["...", "..."],
-  "summary":  "..."
+  "title": "...",
+  "brand": null,
+  "keywords": ["..."],
+  "summary": "...",
+  "description": "...",
+  "highlights": "• ...\\n• ...\\n• ...\\n• ...",
+  "color": null,
+  "color_family": null,
+  "weight_kg": null,
+  "main_material": null,
+  "material_family": null
 }`;
 
   let parsed: Record<string, unknown>;
@@ -666,10 +694,19 @@ Return ONLY valid JSON. No markdown, no commentary:
     : [];
 
   return {
-    title:    String(parsed.title ?? "").trim() || "Unknown product",
-    brand:    strOrNull(parsed.brand),
-    keywords: keywords.slice(0, 10),
-    summary:  String(parsed.summary ?? "").trim(),
+    title:           String(parsed.title ?? "").trim() || "Unknown product",
+    brand:           strOrNull(parsed.brand),
+    keywords:        keywords.slice(0, 10),
+    summary:         String(parsed.summary ?? "").trim(),
+    description:     String(parsed.description ?? "").trim(),
+    highlights:      String(parsed.highlights ?? "").trim(),
+    color:           strOrNull(parsed.color),
+    color_family:    strOrNull(parsed.color_family),
+    weight_kg:       parsed.weight_kg != null && parsed.weight_kg !== "null"
+                       ? Number(parsed.weight_kg) || null
+                       : null,
+    main_material:   strOrNull(parsed.main_material),
+    material_family: strOrNull(parsed.material_family),
   };
 }
 

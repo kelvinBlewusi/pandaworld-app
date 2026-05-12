@@ -185,20 +185,60 @@ export async function POST(
   }
 
   // ── 6. Build merged updates and persist ──────────────────────────────────
+  //
+  // Strategy: fill every empty top-level field from Pass A's response.
+  // NEVER overwrite seller-edited values (those with field_sources[k] ===
+  // "user"). Brand has a special fallback to "Generic" since Jumia requires
+  // it and an empty brand blocks Submit.
   const previousSources    = (listing.field_sources    ?? {}) as Record<string, "ai" | "user">;
   const previousConfidence = (listing.field_confidence ?? {}) as Record<string, { confidence: number; source: string; reasoning?: string }>;
 
-  // Apply title + brand-hint to the listing if it's still empty (don't
-  // overwrite seller-edited values).
-  const titleUpdate: { title?: string; brand?: string | null } = {};
-  if (!listing.title || listing.title.length < 15) {
-    titleUpdate.title = description.title;
+  const isUserEdited = (key: string) => previousSources[key] === "user";
+
+  // Updates payload — every visible top-level field the AI can infer
+  const updates: Record<string, unknown> = {};
+  const newSources:    Record<string, "ai">                                                                            = {};
+  const newConfidence: Record<string, { confidence: number; source: "image" | "ocr" | "inferred" | "seller-required"; reasoning?: string }> = {};
+
+  const setIfEmpty = (col: string, val: string | number | null, conf: { confidence: number; source: "image" | "ocr" | "inferred" | "seller-required"; reasoning?: string }) => {
+    if (val == null || val === "") return;
+    // Only set when DB is empty OR contains a stale AI value
+    const existing = (listing as unknown as Record<string, unknown>)[col];
+    const stale = !existing || (typeof existing === "string" && existing.trim() === "");
+    if (!stale) return;
+    if (isUserEdited(col)) return;
+    updates[col] = val;
+    newSources[col] = "ai";
+    newConfidence[col] = conf;
+  };
+
+  // Title — only fill if too short / missing
+  if (!isUserEdited("title") && (!listing.title || listing.title.length < 15)) {
+    updates.title = description.title;
+    newSources["title"] = "ai";
+    newConfidence["title"] = { confidence: 0.9, source: "inferred" };
   }
-  // Brand: only when truly empty AND Pass A returned a value (only happens
-  // when logo is clearly visible per the prompt rules).
-  if (!listing.brand && description.brand) {
-    titleUpdate.brand = description.brand;
+
+  // Brand — Pass A's brand if confident, else "Generic" fallback so the
+  // required field is never empty. Per Jumia API docs, code 1045133 for
+  // Generic; resolveBrand maps the name → code at push time.
+  if (!isUserEdited("brand") && !listing.brand) {
+    const brandValue = description.brand && description.brand.trim() ? description.brand : "Generic";
+    updates.brand = brandValue;
+    newSources["brand"] = "ai";
+    newConfidence["brand"] = description.brand
+      ? { confidence: 0.9, source: "image",    reasoning: "Logo visible in image" }
+      : { confidence: 0.5, source: "inferred", reasoning: "No brand logo detected — defaulted to Generic. Edit if you know the real brand." };
   }
+
+  // Other top-level fields
+  setIfEmpty("description",     description.description,     { confidence: 0.85, source: "inferred" });
+  setIfEmpty("highlights",      description.highlights,      { confidence: 0.85, source: "inferred" });
+  setIfEmpty("color",           description.color,           { confidence: 0.85, source: "image" });
+  setIfEmpty("color_family",    description.color_family,    { confidence: 0.85, source: "image" });
+  setIfEmpty("weight_kg",       description.weight_kg,       { confidence: 0.7,  source: "image",  reasoning: "Weight inferred from visible packaging" });
+  setIfEmpty("main_material",   description.main_material,   { confidence: 0.8,  source: "inferred" });
+  setIfEmpty("material_family", description.material_family, { confidence: 0.8,  source: "inferred" });
 
   // Merge category alternates → top-3 with confidence
   const alternatesForUI = [
@@ -207,8 +247,8 @@ export async function POST(
   ].slice(0, 3);
 
   // Merge field_sources + field_confidence (keep user-edited keys intact)
-  const mergedSources    = { ...previousSources };
-  const mergedConfidence = { ...previousConfidence };
+  const mergedSources    = { ...previousSources, ...newSources };
+  const mergedConfidence = { ...previousConfidence, ...newConfidence };
   for (const [k, v] of Object.entries(filled.field_sources ?? {})) {
     if (mergedSources[k] !== "user") mergedSources[k] = v;
   }
@@ -217,11 +257,9 @@ export async function POST(
       mergedConfidence[k] = v as { confidence: number; source: "image" | "ocr" | "inferred" | "seller-required"; reasoning?: string };
     }
   }
-  if (titleUpdate.title)         mergedSources["title"] = "ai";
-  if (titleUpdate.brand)         mergedSources["brand"] = "ai";
 
   await db.from("listings").update({
-    ...titleUpdate,
+    ...updates,
     category_code:       String(chosen.code),
     category_path:       chosen.path,
     dynamic_attributes:  filled.dynamic_attributes,
@@ -250,7 +288,7 @@ export async function POST(
     candidates_considered: candidates.length,
     attributes_in_schema:  attrs.length,
     attributes_filled:     Object.keys(filled.dynamic_attributes).length,
-    title:                 titleUpdate.title ?? listing.title,
-    brand:                 titleUpdate.brand ?? listing.brand,
+    title:                 (updates.title as string | undefined) ?? listing.title,
+    brand:                 (updates.brand as string | undefined) ?? listing.brand,
   });
 }
