@@ -113,14 +113,41 @@ export async function getValidJumiaCredentials(userId: string): Promise<{
  * Vendor Center → Applications). The UI watches for this status and
  * shows a persistent banner directing the seller to /onboarding/connect.
  */
-async function markNeedsReconnect(
-  db:     ReturnType<typeof createServerClient>,
-  userId: string
+export async function markNeedsReconnect(
+  userIdOrDb: string | ReturnType<typeof createServerClient>,
+  userIdArg?: string
 ) {
+  // Two call shapes for ergonomics:
+  //   markNeedsReconnect(userId)
+  //   markNeedsReconnect(db, userId)
+  let db: ReturnType<typeof createServerClient>;
+  let userId: string;
+  if (typeof userIdOrDb === "string") {
+    db = createServerClient();
+    userId = userIdOrDb;
+  } else {
+    db = userIdOrDb;
+    userId = userIdArg!;
+  }
   await db.from("jumia_connections").update({
     status:     "needs_reconnect",
     updated_at: new Date().toISOString(),
   }).eq("user_id", userId);
+}
+
+/**
+ * Test whether an arbitrary error / response status from a Jumia API call
+ * indicates an OAuth problem (401 / 403). Used by route handlers to
+ * decide whether to mark the connection needs_reconnect.
+ */
+export function isJumiaAuthError(status: number | undefined, body: unknown): boolean {
+  if (status === 401 || status === 403) return true;
+  if (typeof body === "object" && body !== null) {
+    const b = body as Record<string, unknown>;
+    const msg = String(b.error ?? b.message ?? "").toLowerCase();
+    if (msg.includes("unauthor") || msg.includes("invalid_grant") || msg.includes("invalid_token")) return true;
+  }
+  return false;
 }
 
 async function fetchAndStoreShopId(

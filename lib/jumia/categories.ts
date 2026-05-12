@@ -143,6 +143,12 @@ export async function fetchCategoriesFromJumia(accessToken: string): Promise<Jum
       headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
     });
     if (!res.ok) {
+      // Surface auth failures distinctly so callers (sync route) can mark
+      // the connection as needs_reconnect rather than treating it as a
+      // generic network blip.
+      if (res.status === 401 || res.status === 403) {
+        throw new Error(`JUMIA_AUTH_FAILED: GET /catalog/categories returned ${res.status}`);
+      }
       if (page === 1) throw new Error(`GET /catalog/categories failed: ${res.status}`);
       break;
     }
@@ -261,6 +267,9 @@ export async function fetchAttributesFromJumia(
   const res = await fetch(`${JUMIA_API_BASE}/catalog/attribute-sets/${attributeSetSid}`, {
     headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
   });
+  if (res.status === 401 || res.status === 403) {
+    throw new Error(`JUMIA_AUTH_FAILED: GET /catalog/attribute-sets returned ${res.status}`);
+  }
   if (!res.ok) return [];
 
   const raw  = await res.json() as Record<string, unknown>;

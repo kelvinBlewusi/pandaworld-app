@@ -4,6 +4,7 @@ import { createServerClient } from "@/lib/supabase/server";
 import {
   getValidJumiaCredentials,
   pushProductsToJumia,
+  markNeedsReconnect,
 } from "@/lib/jumia/api";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
 
@@ -104,14 +105,20 @@ export async function POST(req: NextRequest) {
     }
     if (msg === "JUMIA_OAUTH_REQUIRED") {
       return NextResponse.json(
-        { error: "Jumia authorisation required. Go to Settings → Integrations → Authorise." },
-        { status: 403 }
+        { error: "Jumia authorisation required. Go to Settings → Integrations → Authorise.", needsReconnect: true },
+        { status: 401 }
       );
     }
     if (msg === "JUMIA_TOKEN_EXPIRED") {
       return NextResponse.json(
-        { error: "Jumia access token expired. Go to Settings → Integrations → Re-authorise." },
-        { status: 403 }
+        { error: "Jumia access token expired. Reconnect in Settings → Integrations.", needsReconnect: true },
+        { status: 401 }
+      );
+    }
+    if (msg === "JUMIA_RECONNECT_REQUIRED") {
+      return NextResponse.json(
+        { error: "Your Jumia OAuth app was deleted or revoked. Please reconnect.", needsReconnect: true },
+        { status: 401 }
       );
     }
     if (msg === "JUMIA_NO_SHOP_ID") {
@@ -173,6 +180,14 @@ export async function POST(req: NextRequest) {
       message:   "Listing submitted to Jumia. It will appear as Pending Approval.",
     });
   } else {
+    // If Jumia returned 401/403, the OAuth app is likely dead. Mark the
+    // connection as needs_reconnect so the global banner appears and
+    // the user is funnelled back to onboarding.
+    const errMsg = String(result.error ?? "");
+    if (errMsg.includes("401") || errMsg.includes("403") || errMsg.toLowerCase().includes("unauthor")) {
+      await markNeedsReconnect(db, userId);
+    }
+
     await db
       .from("listings")
       .update({
