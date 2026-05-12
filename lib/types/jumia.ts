@@ -10,7 +10,7 @@ export interface JumiaConnection {
   seller_name: string | null;
   seller_email: string | null;
   store_name: string | null;
-  status: "active" | "expired" | "revoked";
+  status: "active" | "expired" | "revoked" | "needs_reconnect" | "credential_auth";
   connected_at: string;
   updated_at: string;
 }
@@ -20,6 +20,13 @@ export interface JumiaConnectionPublic {
   connected: boolean;
   /** true when credentials are saved but the seller hasn't completed OAuth yet */
   oauth_required?: boolean;
+  /**
+   * true when OAuth was completed but the refresh token no longer works
+   * (usually because the seller deleted the Application from their
+   * Jumia Vendor Center → Applications). The UI surfaces a persistent
+   * banner directing back to /onboarding/connect.
+   */
+  needs_reconnect?: boolean;
   status: JumiaConnection["status"] | null;
   seller_name: string | null;
   seller_email: string | null;

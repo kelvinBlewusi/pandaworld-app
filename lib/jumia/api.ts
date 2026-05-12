@@ -47,8 +47,9 @@ export async function getValidJumiaCredentials(userId: string): Promise<{
     .eq("user_id", userId)
     .maybeSingle();
 
-  if (error || !conn)            throw new Error("JUMIA_NOT_CONNECTED");
-  if (conn.status === "revoked") throw new Error("JUMIA_NOT_CONNECTED");
+  if (error || !conn)                     throw new Error("JUMIA_NOT_CONNECTED");
+  if (conn.status === "revoked")          throw new Error("JUMIA_NOT_CONNECTED");
+  if (conn.status === "needs_reconnect")  throw new Error("JUMIA_RECONNECT_REQUIRED");
 
   // "credential_auth" is the sentinel stored when credentials were saved but
   // the seller hasn't yet completed the OAuth authorization code flow.
@@ -58,27 +59,42 @@ export async function getValidJumiaCredentials(userId: string): Promise<{
 
   let accessToken = conn.access_token as string;
 
-  // Auto-refresh within 5 minutes of expiry
+  // Auto-refresh within 5 minutes of expiry. If the refresh itself fails
+  // (typically because the seller deleted the OAuth application from their
+  // Vendor Center → Applications), mark the connection as needs_reconnect
+  // and surface a clear error the UI can route to the onboarding page.
   if (conn.token_expires_at) {
     const expiresAt = new Date(conn.token_expires_at as string).getTime();
     if (Date.now() >= expiresAt - 5 * 60 * 1000) {
-      if (!conn.refresh_token) throw new Error("JUMIA_TOKEN_EXPIRED");
-      // Use the seller's own app credentials for the refresh
+      if (!conn.refresh_token) {
+        await markNeedsReconnect(db, userId);
+        throw new Error("JUMIA_RECONNECT_REQUIRED");
+      }
       const appId     = (conn.app_id     ?? undefined) as string | undefined;
       const appSecret = (conn.app_secret ?? undefined) as string | undefined;
-      const fresh     = await refreshAccessToken(
-        conn.refresh_token as string,
-        appId,
-        appSecret,
-      );
-      const newExpiry = new Date(Date.now() + fresh.expires_in * 1000).toISOString();
-      await db.from("jumia_connections").update({
-        access_token:     fresh.access_token,
-        refresh_token:    fresh.refresh_token ?? conn.refresh_token,
-        token_expires_at: newExpiry,
-        updated_at:       new Date().toISOString(),
-      }).eq("user_id", userId);
-      accessToken = fresh.access_token;
+      try {
+        const fresh = await refreshAccessToken(
+          conn.refresh_token as string,
+          appId,
+          appSecret,
+        );
+        const newExpiry = new Date(Date.now() + fresh.expires_in * 1000).toISOString();
+        await db.from("jumia_connections").update({
+          access_token:     fresh.access_token,
+          refresh_token:    fresh.refresh_token ?? conn.refresh_token,
+          token_expires_at: newExpiry,
+          status:           "active",            // recover from past needs_reconnect
+          updated_at:       new Date().toISOString(),
+        }).eq("user_id", userId);
+        accessToken = fresh.access_token;
+      } catch (e) {
+        // Refresh failed — most likely the app was deleted on Jumia's side.
+        // Mark the connection as needs_reconnect so the UI can prompt
+        // the seller to redo onboarding.
+        console.error("[Jumia] refresh failed, marking needs_reconnect:", (e as Error).message);
+        await markNeedsReconnect(db, userId);
+        throw new Error("JUMIA_RECONNECT_REQUIRED");
+      }
     }
   }
 
@@ -89,6 +105,22 @@ export async function getValidJumiaCredentials(userId: string): Promise<{
   const currency = COUNTRY_CURRENCY[(conn.country ?? "GH") as string] ?? "GHS";
 
   return { accessToken, shopId, currency };
+}
+
+/**
+ * Mark a connection as needing reconnect. Called when the OAuth refresh
+ * fails (usually because the seller deleted the OAuth app from their
+ * Vendor Center → Applications). The UI watches for this status and
+ * shows a persistent banner directing the seller to /onboarding/connect.
+ */
+async function markNeedsReconnect(
+  db:     ReturnType<typeof createServerClient>,
+  userId: string
+) {
+  await db.from("jumia_connections").update({
+    status:     "needs_reconnect",
+    updated_at: new Date().toISOString(),
+  }).eq("user_id", userId);
 }
 
 async function fetchAndStoreShopId(

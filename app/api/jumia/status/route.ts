@@ -41,11 +41,16 @@ export async function GET() {
   }
 
   // oauth_required = credentials saved but OAuth flow not yet completed
-  const oauthRequired = data.access_token === "credential_auth";
+  const oauthRequired   = data.access_token === "credential_auth";
+  // needs_reconnect = OAuth was completed but refresh failed (usually
+  // because the seller deleted the app from Vendor Center → Applications).
+  // UI shows a persistent banner directing back to onboarding.
+  const needsReconnect  = data.status === "needs_reconnect";
 
   return NextResponse.json({
     connected:        data.status === "active" && !oauthRequired,
     oauth_required:   oauthRequired,
+    needs_reconnect:  needsReconnect,
     status:           data.status,
     seller_name:      data.seller_name,
     seller_email:     data.seller_email,

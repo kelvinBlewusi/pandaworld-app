@@ -376,12 +376,16 @@ function buildCoreResult(
   // ── 2. Conservative brand inference ──────────────────────────────────────
   //
   // Only carry brand through if model self-reported confidence is above the
-  // threshold. Otherwise null so the seller fills it from the autocomplete.
+  // threshold. Otherwise fall back to "Generic" — per Jumia API docs, the
+  // generic brand code is 1045133 (or 1039426 for Fashion). Resolving the
+  // numeric code happens at push time via resolveBrand(). What matters
+  // here is the seller sees a pre-filled brand instead of an empty field
+  // they need to chase.
   const brandConfidence = Number(parsed.brand_confidence ?? 0);
-  const brandValue =
-    brandConfidence >= BRAND_CONFIDENCE_THRESHOLD
-      ? strOrNull(parsed.brand)
-      : null;
+  const aiBrand         = strOrNull(parsed.brand);
+  const brandValue      = brandConfidence >= BRAND_CONFIDENCE_THRESHOLD && aiBrand
+    ? aiBrand
+    : "Generic";
 
   // ── 3. Hard exclusion of seller-required core fields ─────────────────────
   //
@@ -400,13 +404,21 @@ function buildCoreResult(
     "main_material", "material_family",
   ];
 
-  // Brand is its own case
-  if (brandValue) {
-    field_sources["brand"]    = "ai";
+  // Brand confidence depends on how we resolved it:
+  //   - Above threshold + AI detected a real brand → high (image source)
+  //   - Below threshold OR no AI brand → "Generic" fallback (inferred, low)
+  field_sources["brand"] = "ai";
+  if (brandConfidence >= BRAND_CONFIDENCE_THRESHOLD && aiBrand) {
     field_confidence["brand"] = {
       confidence: brandConfidence,
       source:     "image",
       reasoning:  "Logo visible in image",
+    };
+  } else {
+    field_confidence["brand"] = {
+      confidence: 0.5,
+      source:     "inferred",
+      reasoning:  "No brand logo detected — defaulted to Generic. Edit if you know the real brand.",
     };
   }
 
