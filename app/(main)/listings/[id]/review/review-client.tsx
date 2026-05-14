@@ -69,6 +69,12 @@ import { isValidGTIN } from "@/lib/utils/gtin";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import { CategoryDrawer } from "@/components/ui/category-drawer";
 import { MultiSelectDropdown } from "@/components/ui/multi-select";
+import { SchemaForm } from "@/components/jumia/SchemaForm";
+import {
+  columnFor,
+  fieldChangeToUpdate,
+  type MappedColumn,
+} from "@/lib/jumia/attribute-mapping";
 
 // ─── Auto-SKU helper ──────────────────────────────────────────────────────────
 
@@ -1412,6 +1418,66 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
   const [fromManufacturer, setFromManufacturer] = useState(dynAttrs["from_the_manufacturer"] ?? "");
   const [whatsInTheBox,    setWhatsInTheBox]    = useState(dynAttrs["whats_in_the_box"] ?? "");
 
+  // ── Schema-driven form: column overrides ──────────────────────────────────
+  //
+  // When the schema-driven SchemaForm edits a field that maps to a
+  // first-class column (e.g. "color" → listing.color), we store the override
+  // here so the form shows the latest value WITHOUT round-tripping to the
+  // DB. Save merges these into the listing update.
+  const [columnOverrides, setColumnOverrides] = useState<Record<string, string>>({});
+
+  // Single entry point for ALL field changes from the schema-driven form.
+  // Routes to the correct local state based on attribute-mapping rules.
+  const handleSchemaFieldChange = useCallback((attributeName: string, value: string) => {
+    const col = columnFor(attributeName);
+
+    // Mirror to existing controlled state so the static UI widgets reflect
+    // the same value. Columns without controlled state (main_material,
+    // model, etc.) are handled via columnOverrides + the save merger.
+    switch (col) {
+      case "title":              setTitleValue(value); break;
+      case "description":        setDescriptionValue(value); break;
+      case "highlights":         setHighlightsValue(value); break;
+      case "brand":              setBrandValue(value); break;
+      case "color_family":       setColorFamily(value); break;
+      case "material_family":    setMaterialFamily(value); break;
+      case "production_country": setProductionCountry(value); break;
+      case "warranty_duration":  setWarrantyDuration(value); break;
+      case "warranty_type":      setWarrantyType(value); break;
+      case "certifications":     setCertification(value); break;
+      default: /* no controlled mirror — handled via columnOverrides */
+    }
+
+    if (col) {
+      // Column-backed: cache the latest override so SchemaForm reads it
+      // back, AND save merges it into the listings update payload.
+      setColumnOverrides((prev) => ({ ...prev, [attributeName]: value }));
+    } else {
+      // Dynamic attribute: update the JSON blob.
+      setDynAttrs((prev) => ({ ...prev, [attributeName]: value }));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Combined overrides map fed to SchemaForm — wraps current controlled state
+  // so re-renders pick it up instantly.
+  const schemaFormOverrides: Record<string, string> = {
+    ...columnOverrides,
+    // Static controlled fields → re-broadcast to the schema renderer
+    name:                 titleValue,
+    title:                titleValue,
+    description:          descriptionValue,
+    product_description:  descriptionValue,
+    highlights:           highlightsValue,
+    brand:                brandValue,
+    color_family:         colorFamily,
+    material_family:      materialFamily,
+    production_country:   productionCountry,
+    warranty_duration:    warrantyDuration,
+    warranty_type:        warrantyType,
+    certifications:       certification,
+  };
+
   // ── Variant matrix state ──────────────────────────────────────────────────
   const commissionRate    = listing.commission_rate ?? 0.1;
   const commissionPercent = Math.round(commissionRate * 100);
@@ -1672,6 +1738,15 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
       ? parseFloat(variants[0].globalPrice)
       : (listing.selling_price ?? 0);
 
+    // Schema-driven form edits cached in columnOverrides override anything
+    // typed into the static UI. Walks each override → routes via
+    // attribute-mapping → merges into the listing update payload.
+    const overrideColumnUpdates: Record<string, unknown> = {};
+    for (const [attr, val] of Object.entries(columnOverrides)) {
+      const { columnUpdate } = fieldChangeToUpdate(attr, val);
+      if (columnUpdate) Object.assign(overrideColumnUpdates, columnUpdate);
+    }
+
     try {
       await updateListing(listing.id, {
         title:              titleValue.trim() || null,
@@ -1703,6 +1778,8 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
         ...(axesDef.length === 0 ? {
           quantity: Math.max(0, parseInt(variants[0]?.quantity ?? "1") || 1),
         } : {}),
+        // Schema-driven overrides last → they win over the static UI values.
+        ...overrideColumnUpdates,
       });
 
       if (!publish) {
@@ -2270,8 +2347,49 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
               </p>
             </section>
 
-            {/* ────────────── Section 3: Product Specification ──────────── */}
+            {/* ────────────── Section 3: Product Specification ──────────────
+                Now 100% driven by Jumia's category schema. The SchemaForm
+                component fetches GET /api/jumia/categories/{code}/attributes
+                and renders every field with the correct type (text, number,
+                date, multi-select, etc.). Backing store is decided per-field
+                by lib/jumia/attribute-mapping — most universal fields land
+                in their first-class column; truly category-specific ones
+                land in dynamic_attributes.
+
+                The legacy static layout is preserved below (kept hidden for
+                now) so the existing FormData-based save still works.
+            */}
             <section ref={specRef} className="bg-white rounded-md border border-zinc-200 p-6 space-y-5 scroll-mt-6">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-lg font-bold text-zinc-900">Product Specification</h2>
+                <span className="text-[10px] uppercase tracking-wider text-zinc-400">
+                  Live from Jumia
+                </span>
+              </div>
+
+              <SchemaForm
+                categoryCode={categoryCode}
+                listing={listing}
+                overrideValues={schemaFormOverrides}
+                onFieldChange={handleSchemaFieldChange}
+                fieldSources={listing.field_sources ?? undefined}
+                fieldConfidence={listing.field_confidence ?? undefined}
+                renderConfidenceDot={({ source, confidence }) =>
+                  source ? (
+                    <ConfidenceDot
+                      source={source as "image" | "ocr" | "inferred" | "seller-required"}
+                      confidence={confidence}
+                    />
+                  ) : null
+                }
+              />
+            </section>
+
+            {/* ────────────── Legacy static spec section (HIDDEN) ──────────
+                Kept in the DOM so the form still works during transition.
+                Will be deleted in a follow-up once the schema-driven form
+                is verified end-to-end. */}
+            <section style={{ display: "none" }} className="bg-white rounded-md border border-zinc-200 p-6 space-y-5 scroll-mt-6">
               <h2 className="text-lg font-bold text-zinc-900">Product Specification</h2>
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
