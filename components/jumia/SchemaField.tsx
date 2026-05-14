@@ -20,7 +20,6 @@
  */
 
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -30,6 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { MultiSelectDropdown } from "@/components/ui/multi-select";
+import { RichTextField } from "./RichTextField";
 import { cn } from "@/lib/utils";
 
 export type JumiaAttrType =
@@ -78,8 +78,13 @@ const LONG_TEXT_FIELD_NAMES = new Set<string>([
 ]);
 
 function effectiveType(attr: JumiaAttributeDef): JumiaAttrType {
-  // Upgrade TEXT → TEXTAREA for known long-text fields. We never downgrade.
-  if (attr.type === "string" && LONG_TEXT_FIELD_NAMES.has(attr.name.toLowerCase())) {
+  // Force-promote known long-text field names to TEXTAREA regardless of
+  // what Jumia's schema reports. Some categories return TEXT (single line)
+  // or even NUMBER for these fields, which would silently break input —
+  // the user typed text into a `<input type="number">` and the browser
+  // rejected anything non-numeric. Match Jumia VC's behaviour where these
+  // ALWAYS render as multi-line rich-text editors.
+  if (LONG_TEXT_FIELD_NAMES.has(attr.name.toLowerCase())) {
     return "textarea";
   }
   return attr.type;
@@ -188,15 +193,16 @@ function renderInput(attr: JumiaAttributeDef, value: string, onChange: (v: strin
     );
   }
 
-  // TEXT_AREA
+  // TEXT_AREA — render with the rich-text toolbar wrapper to match Jumia
+  // Vendor Center. Toolbar buttons are visual-only (no rich formatting
+  // executed) since Jumia strips formatting on save anyway.
   if (attr.type === "textarea") {
     return (
-      <Textarea
+      <RichTextField
         value={value}
-        rows={4}
+        onChange={onChange}
         placeholder={`Ex: [${attr.label}]`}
-        onChange={(e) => onChange(e.target.value)}
-        className="text-sm"
+        rows={4}
       />
     );
   }

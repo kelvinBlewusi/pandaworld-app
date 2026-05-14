@@ -2203,6 +2203,7 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                   includeNames={PRODUCT_INFO_FIELDS}
                   excludeNames={STATIC_FIELDS}
                   extraFields={universalInfoFields()}
+                  excludeVariants
                   hideGroupHeadings
                   renderConfidenceDot={({ source, confidence }) =>
                     source ? (
@@ -2490,6 +2491,7 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                 fieldConfidence={listing.field_confidence ?? undefined}
                 excludeNames={[...PRODUCT_INFO_FIELDS, ...STATIC_FIELDS]}
                 extraFields={universalSpecFields()}
+                excludeVariants
                 renderConfidenceDot={({ source, confidence }) =>
                   source ? (
                     <ConfidenceDot

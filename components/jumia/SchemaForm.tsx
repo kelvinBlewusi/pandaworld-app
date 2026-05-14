@@ -53,6 +53,12 @@ interface SchemaFormProps {
    * needs them regardless. Live Jumia attributes win on name collision.
    */
   extraFields?:    JumiaAttributeDef[];
+  /**
+   * Skip attributes flagged `is_variant: true`. Set true when this form
+   * renders alongside a dedicated Variants section that already consumes
+   * those axes — prevents the variation field from rendering twice.
+   */
+  excludeVariants?: boolean;
 }
 
 export function SchemaForm({
@@ -67,6 +73,7 @@ export function SchemaForm({
   excludeNames,
   hideGroupHeadings,
   extraFields,
+  excludeVariants,
 }: SchemaFormProps) {
   const [schema,    setSchema]    = useState<JumiaAttributeDef[]>([]);
   const [loading,   setLoading]   = useState(true);
@@ -194,6 +201,7 @@ export function SchemaForm({
     const n = a.name.toLowerCase();
     if (includeSet && !includeSet.has(n)) return false;
     if (excludeSet && excludeSet.has(n))  return false;
+    if (excludeVariants && a.is_variant)  return false;
     return true;
   });
 
