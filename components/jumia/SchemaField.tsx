@@ -30,7 +30,13 @@ import {
 } from "@/components/ui/select";
 import { MultiSelectDropdown } from "@/components/ui/multi-select";
 import { RichTextField } from "./RichTextField";
+import { BrandCombobox } from "./BrandCombobox";
 import { cn } from "@/lib/utils";
+
+// Attribute names that should render as a Jumia-brand-catalogue lookup
+// instead of a free-text input or generic select. Jumia rejects listings
+// whose brand isn't an exact match against their catalogue.
+const BRAND_FIELD_NAMES = new Set<string>(["brand", "manufacturer", "make"]);
 
 export type JumiaAttrType =
   | "boolean"
@@ -138,6 +144,19 @@ export function SchemaField({ attr, value, onChange, confidenceDot, source }: Sc
 // ─── Type-specific renderers ────────────────────────────────────────────────
 
 function renderInput(attr: JumiaAttributeDef, value: string, onChange: (v: string) => void) {
+  // BRAND — render as type-ahead against Jumia's brand catalogue regardless
+  // of what type Jumia reports. Free-text input here causes downstream
+  // rejection when Jumia's validator doesn't recognise the typed value.
+  if (BRAND_FIELD_NAMES.has(attr.name.toLowerCase())) {
+    return (
+      <BrandCombobox
+        value={value}
+        onChange={onChange}
+        placeholder={`Ex: ${attr.label}`}
+      />
+    );
+  }
+
   // BOOLEAN
   if (attr.type === "boolean") {
     return (

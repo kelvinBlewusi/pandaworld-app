@@ -27,6 +27,7 @@ import { ArrowLeft, ChevronRight, Plus, X, Loader2, Sparkles } from "lucide-reac
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { CategoryDrawer } from "@/components/ui/category-drawer";
 import { cn } from "@/lib/utils";
 
@@ -51,6 +52,13 @@ interface ProductDraft {
   categoryName: string | null;
   categoryPath: string | null;
   images:       ImageSlot[];
+  /**
+   * Free-form instruction the seller can give the AI BEFORE it analyses
+   * the images. Things like "this is a pack of 6", "the colour is teal not
+   * blue", "specify it's wireless". Sent through to /auto-analyze as
+   * `userPrompt` and woven into Pass A/B prompts.
+   */
+  aiInstruction: string;
 }
 
 function emptyDraft(): ProductDraft {
@@ -62,6 +70,7 @@ function emptyDraft(): ProductDraft {
     images:       Array.from({ length: IMAGE_SLOTS }, () => ({
       file: null, preview: null, error: null,
     })),
+    aiInstruction: "",
   };
 }
 
@@ -282,6 +291,10 @@ export default function BatchAddProductsPage() {
         );
         const analyzeRes = await fetch(`/api/listings/${listingId}/auto-analyze`, {
           method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: d.aiInstruction.trim()
+            ? JSON.stringify({ userPrompt: d.aiInstruction.trim() })
+            : undefined,
         });
         if (!analyzeRes.ok) {
           // Non-fatal — listing is created, AI just couldn't run. The user
@@ -390,17 +403,30 @@ export default function BatchAddProductsPage() {
               />
 
               {/* AI promise banner — explains that the rest is automatic */}
-              <div className="rounded-md border border-orange-200 bg-gradient-to-r from-orange-50 to-amber-50 px-4 py-3 flex items-start gap-3">
-                <Sparkles className="h-4 w-4 text-orange-500 mt-0.5 shrink-0" />
-                <div className="text-xs text-orange-900">
-                  <p className="font-semibold">
-                    AI will pick the right Jumia category and fill the category-specific fields automatically.
-                  </p>
-                  <p className="text-orange-700 mt-0.5">
-                    Just upload your images and click <span className="font-semibold">Submit &amp; Analyze with AI</span>.
-                    Name and Category below are optional — if you leave them blank, the AI fills them.
-                  </p>
+              <div className="rounded-md border border-orange-200 bg-gradient-to-r from-orange-50 to-amber-50 px-4 py-3 space-y-2">
+                <div className="flex items-start gap-3">
+                  <Sparkles className="h-4 w-4 text-orange-500 mt-0.5 shrink-0" />
+                  <div className="text-xs text-orange-900">
+                    <p className="font-semibold">
+                      AI will pick the right Jumia category and fill the category-specific fields automatically.
+                    </p>
+                    <p className="text-orange-700 mt-0.5">
+                      Just upload your images and click <span className="font-semibold">Submit &amp; Analyze with AI</span>.
+                      Name and Category below are optional — if you leave them blank, the AI fills them.
+                    </p>
+                  </div>
                 </div>
+                <Textarea
+                  value={active.aiInstruction}
+                  onChange={(e) => updateActive({ aiInstruction: e.target.value })}
+                  rows={2}
+                  maxLength={1000}
+                  placeholder="Optional: tell the AI anything the images don't show. E.g. 'this is a pack of 6', 'the colour is teal not blue', 'specify it's wireless'."
+                  className="text-xs bg-white border-orange-200 focus-visible:ring-orange-200"
+                />
+                <p className="text-[10px] text-orange-700/80 leading-relaxed">
+                  The AI is forbidden from using Jumia-restricted words like &quot;original&quot;, &quot;brand new&quot;, &quot;imported&quot;, etc.
+                </p>
               </div>
 
               {/* Name + Category — BOTH OPTIONAL (AI fills if blank) */}

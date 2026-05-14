@@ -59,6 +59,14 @@ interface SchemaFormProps {
    * those axes — prevents the variation field from rendering twice.
    */
   excludeVariants?: boolean;
+  /**
+   * Grid density at the large breakpoint. 3-col is the default and works
+   * well for the wide Product Specification (lots of small fields). 4-col
+   * is right for the more compact Product Information row (Brand / Color /
+   * Color family / Weight on one line). Sub-lg breakpoints always render
+   * 1- or 2-col regardless of this prop.
+   */
+  cols?: 3 | 4;
 }
 
 export function SchemaForm({
@@ -74,6 +82,7 @@ export function SchemaForm({
   hideGroupHeadings,
   extraFields,
   excludeVariants,
+  cols = 3,
 }: SchemaFormProps) {
   const [schema,    setSchema]    = useState<JumiaAttributeDef[]>([]);
   const [loading,   setLoading]   = useState(true);
@@ -160,15 +169,31 @@ export function SchemaForm({
     );
   }
 
-  // Merge Jumia's live schema with caller-supplied extraFields. Live
-  // attributes win on name collision (case-insensitive) so Jumia's exact
-  // validation rules / allowed_values trump our defaults whenever Jumia
-  // returns the field. Otherwise the extraField fills the gap.
-  const liveNames = new Set(schema.map((a) => a.name.toLowerCase()));
-  const merged: JumiaAttributeDef[] = [
-    ...schema,
-    ...(extraFields ?? []).filter((x) => !liveNames.has(x.name.toLowerCase())),
-  ];
+  // Merge Jumia's live schema with caller-supplied extraFields, deduped by
+  // BOTH attribute name AND backing column. Jumia sometimes returns
+  // aliases for the same logical field (e.g. "weight" + "weight_kg",
+  // "highlights" + "short_description") which all map to the same column
+  // — rendering both creates ghost duplicates. We keep the first one we
+  // see and drop subsequent aliases.
+  //
+  // Live attributes win on collision so Jumia's exact validation rules /
+  // allowed_values trump our defaults whenever Jumia returns the field.
+  const seenColumns = new Set<string>();
+  const seenNames   = new Set<string>();
+  const merged:     JumiaAttributeDef[] = [];
+
+  const tryAccept = (attr: JumiaAttributeDef) => {
+    const n = attr.name.toLowerCase();
+    if (seenNames.has(n)) return;
+    const col = columnFor(attr.name);
+    if (col && seenColumns.has(col)) return;
+    seenNames.add(n);
+    if (col) seenColumns.add(col);
+    merged.push(attr);
+  };
+
+  for (const a of schema)               tryAccept(a);
+  for (const a of extraFields ?? [])    tryAccept(a);
 
   if (merged.length === 0) {
     // No attributes for this category and no extras — correct for some
@@ -209,52 +234,58 @@ export function SchemaForm({
     return null;   // nothing to render in this slice — caller can skip the section header
   }
 
+  // Required fields lead the order so the seller scans them first, but we
+  // render everything in ONE continuous grid (matches Jumia VC's layout).
+  // Headings only appear when hideGroupHeadings is false AND there are
+  // both required AND optional fields to label.
   const required = visible.filter((a) => a.required);
   const optional = visible.filter((a) => !a.required);
+  const ordered: JumiaAttributeDef[] = [...required, ...optional];
 
-  const renderGroup = (attrs: JumiaAttributeDef[], heading: string, headingColor: string) => {
-    if (attrs.length === 0) return null;
+  const gridClass = cn(
+    "grid grid-cols-1 gap-4 sm:grid-cols-2",
+    cols === 4 ? "lg:grid-cols-4" : "lg:grid-cols-3",
+  );
+  const wideSpanClass = cols === 4
+    ? "sm:col-span-2 lg:col-span-4"
+    : "sm:col-span-2 lg:col-span-3";
+
+  const renderField = (attr: JumiaAttributeDef) => {
+    const key        = `dynamic_attributes.${attr.name}`;
+    const colKey     = columnFor(attr.name);
+    const sourceKey  = colKey ?? key;
+    const source     = fieldConfidence?.[sourceKey]?.source     ?? fieldConfidence?.[attr.name]?.source;
+    const confidence = fieldConfidence?.[sourceKey]?.confidence ?? fieldConfidence?.[attr.name]?.confidence;
+    const isText     = attr.type === "string" || attr.type === "textarea" || attr.type === "number";
+    const wideSpan   = attr.type === "textarea";
     return (
-      <div className="space-y-3">
-        {!hideGroupHeadings && (
-          <p className={cn("text-[11px] font-semibold uppercase tracking-widest", headingColor)}>
-            {heading}
-          </p>
-        )}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {attrs.map((attr) => {
-            const key       = `dynamic_attributes.${attr.name}`;
-            const colKey    = columnFor(attr.name);
-            const sourceKey = colKey ?? key;
-            const source    = fieldConfidence?.[sourceKey]?.source ?? fieldConfidence?.[attr.name]?.source;
-            const confidence = fieldConfidence?.[sourceKey]?.confidence ?? fieldConfidence?.[attr.name]?.confidence;
-            const isText    = attr.type === "string" || attr.type === "textarea" || attr.type === "number";
-            const wideSpan  = attr.type === "textarea";
-            return (
-              <div key={attr.name} className={wideSpan ? "sm:col-span-2 lg:col-span-3" : ""}>
-                <SchemaField
-                  attr={attr}
-                  value={getValue(attr.name)}
-                  onChange={(v) => onFieldChange(attr.name, v)}
-                  source={fieldSources?.[sourceKey] === "user" ? "user" : source as ("image" | "ocr" | "inferred" | "seller-required" | undefined)}
-                  confidenceDot={
-                    renderConfidenceDot && isText
-                      ? renderConfidenceDot({ source, confidence })
-                      : null
-                  }
-                />
-              </div>
-            );
-          })}
-        </div>
+      <div key={attr.name} className={wideSpan ? wideSpanClass : ""}>
+        <SchemaField
+          attr={attr}
+          value={getValue(attr.name)}
+          onChange={(v) => onFieldChange(attr.name, v)}
+          source={fieldSources?.[sourceKey] === "user" ? "user" : source as ("image" | "ocr" | "inferred" | "seller-required" | undefined)}
+          confidenceDot={
+            renderConfidenceDot && isText
+              ? renderConfidenceDot({ source, confidence })
+              : null
+          }
+        />
       </div>
     );
   };
 
   return (
-    <div className="space-y-6">
-      {renderGroup(required, `Required (${required.length})`,        "text-red-500")}
-      {renderGroup(optional, `Optional (${optional.length})`,        "text-zinc-400")}
+    <div className="space-y-3">
+      {!hideGroupHeadings && required.length > 0 && optional.length > 0 && (
+        <p className="text-[11px] font-semibold uppercase tracking-widest text-red-500">
+          Required ({required.length}) <span className="text-zinc-300">·</span>{" "}
+          <span className="text-zinc-400">Optional ({optional.length})</span>
+        </p>
+      )}
+      <div className={gridClass}>
+        {ordered.map(renderField)}
+      </div>
     </div>
   );
 }

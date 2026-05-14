@@ -2205,6 +2205,7 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                   extraFields={universalInfoFields()}
                   excludeVariants
                   hideGroupHeadings
+                  cols={4}
                   renderConfidenceDot={({ source, confidence }) =>
                     source ? (
                       <ConfidenceDot
