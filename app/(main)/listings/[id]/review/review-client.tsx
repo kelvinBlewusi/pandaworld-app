@@ -70,6 +70,7 @@ import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import { CategoryDrawer } from "@/components/ui/category-drawer";
 import { MultiSelectDropdown } from "@/components/ui/multi-select";
 import { SchemaForm } from "@/components/jumia/SchemaForm";
+import type { JumiaAttributeDef } from "@/components/jumia/SchemaField";
 import {
   columnFor,
   fieldChangeToUpdate,
@@ -1297,6 +1298,9 @@ const PUBLISH_THRESHOLD = typeof process !== "undefined"
  *
  * Aliases (color / colour, weight / weight_kg) are included so the case-
  * insensitive matcher in SchemaForm picks up either form Jumia uses.
+ *
+ * Material fields live in Product Specification (matches Jumia VC's layout)
+ * — do NOT add them here.
  */
 const PRODUCT_INFO_FIELDS = [
   "brand",
@@ -1305,8 +1309,6 @@ const PRODUCT_INFO_FIELDS = [
   "weight", "weight_kg", "product_weight",
   "description", "product_description",
   "highlights", "short_description",
-  "main_material", "material",
-  "material_family",
 ];
 
 /**
@@ -1315,6 +1317,52 @@ const PRODUCT_INFO_FIELDS = [
  * sections so the dedicated Product Name input isn't duplicated.
  */
 const STATIC_FIELDS = ["name", "title", "product_name"];
+
+/**
+ * Universal Product Information fields — injected into the schema-driven
+ * form when Jumia's per-category schema doesn't include them. Some
+ * categories (e.g. Vinyl Cleaners) have minimal schemas and would otherwise
+ * hide brand / description / highlights entirely.
+ *
+ * When Jumia DOES return one of these names for the chosen category, the
+ * live attribute wins — Jumia's validation rules and allowed values trump
+ * these defaults.
+ *
+ * Defined as a getter (function) so it can reference module-level option
+ * lists (colorFamilies etc.) lazily.
+ */
+function universalInfoFields(): JumiaAttributeDef[] {
+  return [
+    { name: "brand",        label: "Brand",                type: "string",  allowed_values: [],                       required: true,  is_variant: false, min_length: null, max_length: null },
+    { name: "color",        label: "Color",                type: "string",  allowed_values: [],                       required: false, is_variant: false, min_length: null, max_length: null },
+    { name: "color_family", label: "Color family",         type: "multi",   allowed_values: [...colorFamilies],       required: false, is_variant: false, min_length: null, max_length: null },
+    { name: "weight_kg",    label: "Weight (kg)",          type: "number",  allowed_values: [],                       required: true,  is_variant: false, min_length: null, max_length: null },
+    { name: "description",  label: "Product description",  type: "textarea",allowed_values: [],                       required: true,  is_variant: false, min_length: 50,   max_length: 9000 },
+    { name: "highlights",   label: "Highlights",           type: "textarea",allowed_values: [],                       required: false, is_variant: false, min_length: null, max_length: null },
+  ];
+}
+
+/**
+ * Universal Product Specification fields — injected when Jumia doesn't
+ * include them. Covers the seller-facing rich-text fields (warranty,
+ * what's-in-box, manufacturer copy) that Jumia stores as listing-level
+ * data but rarely exposes through the per-category attribute API.
+ */
+function universalSpecFields(): JumiaAttributeDef[] {
+  return [
+    { name: "main_material",         label: "Main material",          type: "string",  allowed_values: [],                          required: false, is_variant: false, min_length: null, max_length: null },
+    { name: "material_family",       label: "Material family",        type: "enum",    allowed_values: [...materialFamilies],       required: false, is_variant: false, min_length: null, max_length: null },
+    { name: "production_country",    label: "Production country",     type: "enum",    allowed_values: [...productionCountries],    required: false, is_variant: false, min_length: null, max_length: null },
+    { name: "certifications",        label: "Certifications",         type: "multi",   allowed_values: [...certifications],         required: false, is_variant: false, min_length: null, max_length: null },
+    { name: "warranty_duration",     label: "Warranty duration",      type: "enum",    allowed_values: [...warrantyDurations],      required: false, is_variant: false, min_length: null, max_length: null },
+    { name: "warranty_type",         label: "Warranty type",          type: "enum",    allowed_values: [...warrantyTypes],          required: false, is_variant: false, min_length: null, max_length: null },
+    { name: "model",                 label: "Model",                  type: "string",  allowed_values: [],                          required: false, is_variant: false, min_length: null, max_length: null },
+    { name: "from_the_manufacturer", label: "From the Manufacturer",  type: "textarea",allowed_values: [],                          required: false, is_variant: false, min_length: null, max_length: null },
+    { name: "whats_in_the_box",      label: "What's in the box",      type: "textarea",allowed_values: [],                          required: false, is_variant: false, min_length: null, max_length: null },
+    { name: "product_warranty",      label: "Product warranty",       type: "textarea",allowed_values: [],                          required: false, is_variant: false, min_length: null, max_length: null },
+    { name: "warranty_address",      label: "Warranty Address",       type: "textarea",allowed_values: [],                          required: false, is_variant: false, min_length: null, max_length: null },
+  ];
+}
 
 export function ReviewClient({ listing }: { listing: ListingRow }) {
   const router       = useRouter();
@@ -2154,6 +2202,7 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                   fieldConfidence={listing.field_confidence ?? undefined}
                   includeNames={PRODUCT_INFO_FIELDS}
                   excludeNames={STATIC_FIELDS}
+                  extraFields={universalInfoFields()}
                   hideGroupHeadings
                   renderConfidenceDot={({ source, confidence }) =>
                     source ? (
@@ -2440,6 +2489,7 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                 fieldSources={listing.field_sources ?? undefined}
                 fieldConfidence={listing.field_confidence ?? undefined}
                 excludeNames={[...PRODUCT_INFO_FIELDS, ...STATIC_FIELDS]}
+                extraFields={universalSpecFields()}
                 renderConfidenceDot={({ source, confidence }) =>
                   source ? (
                     <ConfidenceDot

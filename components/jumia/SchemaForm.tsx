@@ -45,6 +45,14 @@ interface SchemaFormProps {
   excludeNames?:   string[];
   /** Hide the "Required (N) / Optional (N)" group headings */
   hideGroupHeadings?: boolean;
+  /**
+   * Universal fields injected into the schema if Jumia didn't include them
+   * for this category. Brand / description / highlights / warranty fields
+   * etc. live here so the form is consistent across all categories — Jumia
+   * doesn't always return these in their per-category schema, but our UI
+   * needs them regardless. Live Jumia attributes win on name collision.
+   */
+  extraFields?:    JumiaAttributeDef[];
 }
 
 export function SchemaForm({
@@ -58,6 +66,7 @@ export function SchemaForm({
   includeNames,
   excludeNames,
   hideGroupHeadings,
+  extraFields,
 }: SchemaFormProps) {
   const [schema,    setSchema]    = useState<JumiaAttributeDef[]>([]);
   const [loading,   setLoading]   = useState(true);
@@ -144,10 +153,20 @@ export function SchemaForm({
     );
   }
 
-  if (schema.length === 0) {
-    // No attributes for this category — this is actually correct behaviour
-    // for some catch-all Jumia categories. Render nothing rather than a
-    // confusing empty-state.
+  // Merge Jumia's live schema with caller-supplied extraFields. Live
+  // attributes win on name collision (case-insensitive) so Jumia's exact
+  // validation rules / allowed_values trump our defaults whenever Jumia
+  // returns the field. Otherwise the extraField fills the gap.
+  const liveNames = new Set(schema.map((a) => a.name.toLowerCase()));
+  const merged: JumiaAttributeDef[] = [
+    ...schema,
+    ...(extraFields ?? []).filter((x) => !liveNames.has(x.name.toLowerCase())),
+  ];
+
+  if (merged.length === 0) {
+    // No attributes for this category and no extras — correct for some
+    // catch-all Jumia categories. Render nothing rather than a confusing
+    // empty-state.
     return null;
   }
 
@@ -171,7 +190,7 @@ export function SchemaForm({
   const excludeSet = excludeNames
     ? new Set(excludeNames.map((n) => n.toLowerCase()))
     : null;
-  const visible = schema.filter((a) => {
+  const visible = merged.filter((a) => {
     const n = a.name.toLowerCase();
     if (includeSet && !includeSet.has(n)) return false;
     if (excludeSet && excludeSet.has(n))  return false;
