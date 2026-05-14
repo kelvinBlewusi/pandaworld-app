@@ -11,8 +11,7 @@
  */
 
 import { useEffect, useState, useCallback } from "react";
-import { Loader2, RefreshCw, Tag } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Loader2, Tag, AlertCircle } from "lucide-react";
 import { SchemaField, type JumiaAttributeDef } from "./SchemaField";
 import { columnFor, readAttributeValue } from "@/lib/jumia/attribute-mapping";
 import type { ListingRow } from "@/lib/supabase/types";
@@ -62,9 +61,11 @@ export function SchemaForm({
 }: SchemaFormProps) {
   const [schema,    setSchema]    = useState<JumiaAttributeDef[]>([]);
   const [loading,   setLoading]   = useState(true);
-  const [syncing,   setSyncing]   = useState(false);
-  const [syncError, setSyncError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
+  // Single fetch — the server transparently syncs from Jumia on cache miss,
+  // so by the time this promise resolves we have a fully-populated schema
+  // (or a clear error if the seller needs to reconnect).
   const loadSchema = useCallback(async () => {
     if (!categoryCode || isNaN(Number(categoryCode)) || Number(categoryCode) === 0) {
       setSchema([]);
@@ -72,11 +73,24 @@ export function SchemaForm({
       return;
     }
     setLoading(true);
+    setLoadError(null);
     try {
       const r = await fetch(`/api/jumia/categories/${categoryCode}/attributes`);
       const d = await r.json();
-      setSchema(d.attributes ?? []);
-    } catch {
+      if (!r.ok) {
+        // 401 from this endpoint means the Jumia OAuth app is dead — the
+        // global ReconnectBanner handles the redirect; we just stop loading.
+        if (r.status === 401) {
+          setLoadError("RECONNECT");
+        } else {
+          setLoadError(d.error ?? `Failed to load schema (${r.status})`);
+        }
+        setSchema([]);
+      } else {
+        setSchema(d.attributes ?? []);
+      }
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "Network error");
       setSchema([]);
     } finally {
       setLoading(false);
@@ -84,22 +98,6 @@ export function SchemaForm({
   }, [categoryCode]);
 
   useEffect(() => { loadSchema(); }, [loadSchema]);
-
-  const handleSyncNow = async () => {
-    setSyncing(true);
-    setSyncError(null);
-    try {
-      const r = await fetch("/api/jumia/sync-categories", { method: "POST" });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error ?? "Sync failed");
-      await new Promise((res) => setTimeout(res, 600));
-      await loadSchema();
-    } catch (e) {
-      setSyncError(e instanceof Error ? e.message : "Sync failed");
-    } finally {
-      setSyncing(false);
-    }
-  };
 
   if (!categoryCode) {
     return (
@@ -114,33 +112,43 @@ export function SchemaForm({
     return (
       <div className="flex items-center justify-center gap-2 py-10 text-sm text-zinc-400">
         <Loader2 className="h-4 w-4 animate-spin" />
-        Loading category fields from Jumia…
+        Pulling live fields from Jumia…
+      </div>
+    );
+  }
+
+  // Error path: schema fetch failed (network blip, reconnect needed, etc.).
+  // Reconnect errors are handled globally by the ReconnectBanner — here we
+  // just show a minimal inline notice so the page isn't blocked.
+  if (loadError) {
+    return (
+      <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 flex items-start gap-2">
+        <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-amber-500" />
+        <div className="space-y-1">
+          <p className="font-medium">
+            {loadError === "RECONNECT"
+              ? "Reconnect your Jumia account to load category fields."
+              : "Couldn't load category fields from Jumia."}
+          </p>
+          {loadError !== "RECONNECT" && (
+            <button
+              type="button"
+              onClick={loadSchema}
+              className="text-xs underline hover:text-amber-700"
+            >
+              Try again
+            </button>
+          )}
+        </div>
       </div>
     );
   }
 
   if (schema.length === 0) {
-    return (
-      <div className="rounded-md border border-dashed border-zinc-300 bg-zinc-50/50 p-6 text-center space-y-3">
-        <p className="text-sm text-zinc-600">No fields cached for this category.</p>
-        <p className="text-[11px] text-zinc-400">
-          Click below to pull Jumia&apos;s schema for this category — usually takes 1–2 seconds.
-        </p>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={handleSyncNow}
-          disabled={syncing}
-          className="gap-1.5"
-        >
-          {syncing
-            ? <><Loader2 className="h-3 w-3 animate-spin" /> Fetching…</>
-            : <><RefreshCw className="h-3 w-3" /> Fetch fields from Jumia</>}
-        </Button>
-        {syncError && <p className="text-xs text-red-500">{syncError}</p>}
-      </div>
-    );
+    // No attributes for this category — this is actually correct behaviour
+    // for some catch-all Jumia categories. Render nothing rather than a
+    // confusing empty-state.
+    return null;
   }
 
   // Build the current value for each attribute: prefer override (live form
