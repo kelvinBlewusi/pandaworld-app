@@ -52,7 +52,8 @@ export async function POST(req: NextRequest) {
   const errors: string[] = [];
   if (!row.title)          errors.push("title is required");
   else if (row.title.length < 15) errors.push(`title must be at least 15 characters (you have ${row.title.length})`);
-  else if (row.title.length > 70) errors.push(`title must be 70 characters or fewer (you have ${row.title.length})`);
+  // Removed hard max-70 — Jumia's official spec doesn't enforce a max
+  // on name.value. We only block below the empirical min of 15.
 
   if (!row.description)    errors.push("description is required");
   else if (row.description.length < 50) errors.push(`description must be at least 50 characters (you have ${row.description.length}) — Jumia hard limit`);

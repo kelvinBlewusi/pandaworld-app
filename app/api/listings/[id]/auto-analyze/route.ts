@@ -42,11 +42,22 @@ import { getValidJumiaCredentials } from "@/lib/jumia/api";
 // to the listing row so the review form re-renders with all fields filled.
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { id: string } }
 ) {
   const { userId } = await auth();
   if (!userId) return new NextResponse("Unauthorized", { status: 401 });
+
+  // Optional free-text hint from the seller — gets passed to Pass A as
+  // "SELLER CONTEXT" so the AI honours things the images don't show
+  // (e.g. "this is a pack of 6 not single unit", "the colour is teal").
+  let userContext: string | null = null;
+  try {
+    const body = await req.json();
+    if (typeof body?.userPrompt === "string" && body.userPrompt.trim()) {
+      userContext = body.userPrompt.trim().slice(0, 1000); // hard cap
+    }
+  } catch { /* no body / non-JSON — fine */ }
 
   const db = createServerClient();
 
@@ -75,7 +86,7 @@ export async function POST(
   // ── 1. Pass A: describe the product ───────────────────────────────────────
   let description: Awaited<ReturnType<typeof aiPassA_describeProduct>>;
   try {
-    description = await aiPassA_describeProduct(images);
+    description = await aiPassA_describeProduct(images, userContext);
     timings.describe_ms = Date.now() - t0;
   } catch (e) {
     return NextResponse.json(

@@ -9,6 +9,11 @@ import {
   SELLER_REQUIRED_ATTR_KEYS,
   BRAND_CONFIDENCE_THRESHOLD,
 } from "@/lib/ai/policy";
+import {
+  buildRestrictedWordsInstruction,
+  stripRestrictedWords,
+  findRestrictedWords,
+} from "@/lib/ai/restricted-words";
 
 // ─── Output types ─────────────────────────────────────────────────────────────
 
@@ -639,7 +644,8 @@ export interface ProductDescription {
 }
 
 export async function aiPassA_describeProduct(
-  imageUrls: string[]
+  imageUrls: string[],
+  userContext?: string | null   // free-text from the seller, e.g. "this is a pack of 6, teal not blue"
 ): Promise<ProductDescription> {
   if (!imageUrls.length) throw new Error("No images provided");
   if (USE_MOCK_AI) {
@@ -651,10 +657,15 @@ export async function aiPassA_describeProduct(
   }
   if (!process.env.GOOGLE_API_KEY) throw new Error("GOOGLE_API_KEY is not set.");
 
-  const prompt = `You are a product-listing assistant. Look at the product images and return a JSON object that fills every visible product attribute.
+  const restrictedInstr = buildRestrictedWordsInstruction();
+  const ctxSection = userContext && userContext.trim()
+    ? `\n\nSELLER CONTEXT (treat this as authoritative for anything the images don't show):\n"${userContext.trim()}"\n`
+    : "";
+
+  const prompt = `You are a product-listing assistant for Jumia. Look at the product images and return a JSON object that fills every visible product attribute.
 
 Rules:
-- title: Concise product name (e.g. "Sony WH-1000XM5 Wireless Noise-Cancelling Headphones"). 5-12 words. NO category names like "headphones for sale".
+- title: Concise product name (e.g. "Sony WH-1000XM5 Wireless Noise-Cancelling Headphones"). 5-12 words ideal but length is flexible. NO category names like "headphones for sale".
 - brand: ONLY fill if a brand logo or wordmark is clearly visible AND you are confident. Otherwise null.
 - keywords: 5-10 single-word lower-case keywords (no quotes, no underscores). Think of what a buyer would search for.
 - summary: One sentence describing what the product is and its key visible features.
@@ -665,6 +676,8 @@ Rules:
 - weight_kg: Only fill if you can see the weight printed on packaging or the product itself. Numeric kilograms (e.g. 1.2). Null otherwise.
 - main_material: e.g. "Plastic", "Stainless Steel", "Cotton". Null if uncertain.
 - material_family: e.g. "Plastic", "Metal", "Fabric", "Wood", "Glass". Null if uncertain.
+
+${restrictedInstr}${ctxSection}
 
 Return ONLY valid JSON. No markdown, no commentary:
 {
@@ -693,20 +706,38 @@ Return ONLY valid JSON. No markdown, no commentary:
     ? (parsed.keywords as unknown[]).map((k) => String(k).toLowerCase().trim()).filter(Boolean)
     : [];
 
+  // Post-filter: strip any Jumia-restricted words the model snuck through
+  // despite the prompt. Belt-and-braces — safer than trusting the prompt.
+  const clean = (s: string | null): string => stripRestrictedWords(s ?? "");
+  const cleanOrNull = (s: string | null): string | null => {
+    const v = clean(s);
+    return v ? v : null;
+  };
+
+  // Logging helps catch model drift / new restricted-word patterns
+  const stripped = [
+    findRestrictedWords(String(parsed.title ?? "")),
+    findRestrictedWords(String(parsed.description ?? "")),
+    findRestrictedWords(String(parsed.highlights ?? "")),
+  ].flat();
+  if (stripped.length > 0) {
+    console.warn(`[AI Pass A] stripped restricted words: ${stripped.join(", ")}`);
+  }
+
   return {
-    title:           String(parsed.title ?? "").trim() || "Unknown product",
-    brand:           strOrNull(parsed.brand),
+    title:           clean(String(parsed.title ?? "").trim()) || "Unknown product",
+    brand:           cleanOrNull(strOrNull(parsed.brand)),
     keywords:        keywords.slice(0, 10),
-    summary:         String(parsed.summary ?? "").trim(),
-    description:     String(parsed.description ?? "").trim(),
-    highlights:      String(parsed.highlights ?? "").trim(),
-    color:           strOrNull(parsed.color),
-    color_family:    strOrNull(parsed.color_family),
+    summary:         clean(String(parsed.summary ?? "").trim()),
+    description:     clean(String(parsed.description ?? "").trim()),
+    highlights:      clean(String(parsed.highlights ?? "").trim()),
+    color:           cleanOrNull(strOrNull(parsed.color)),
+    color_family:    cleanOrNull(strOrNull(parsed.color_family)),
     weight_kg:       parsed.weight_kg != null && parsed.weight_kg !== "null"
                        ? Number(parsed.weight_kg) || null
                        : null,
-    main_material:   strOrNull(parsed.main_material),
-    material_family: strOrNull(parsed.material_family),
+    main_material:   cleanOrNull(strOrNull(parsed.main_material)),
+    material_family: cleanOrNull(strOrNull(parsed.material_family)),
   };
 }
 

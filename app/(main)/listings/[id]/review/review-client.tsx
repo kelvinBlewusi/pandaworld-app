@@ -1143,11 +1143,15 @@ function AnalyzeWithAICard({
   step,
   error,
   result,
+  prompt,
+  onPromptChange,
   onStart,
 }: {
   step:    AnalyzeStep;
   error:   string | null;
   result:  { title?: string; categoryPath?: string; confidence?: number; attributesFilled?: number; totalMs?: number } | null;
+  prompt:  string;
+  onPromptChange: (v: string) => void;
   onStart: () => void;
 }) {
   const running = step !== "idle" && step !== "done" && step !== "error";
@@ -1221,32 +1225,51 @@ function AnalyzeWithAICard({
     );
   }
 
-  // Idle / error state — show the CTA button
+  // Idle / error state — show the prompt textarea + CTA button
   return (
-    <div className="rounded-md border border-orange-200 bg-gradient-to-r from-orange-50 to-amber-50 px-4 py-3 flex items-center justify-between gap-3">
-      <div className="min-w-0">
-        <div className="flex items-center gap-2 text-sm font-semibold text-orange-900">
-          <Sparkles className="h-4 w-4 text-orange-500" />
-          Analyze with AI
-        </div>
-        <p className="text-[11px] text-orange-700 mt-0.5">
-          One click: AI picks the right Jumia category and fills the category-specific fields from your images.
-        </p>
-        {error && (
-          <p className="text-[11px] text-red-600 mt-1 flex items-start gap-1">
-            <AlertCircle className="h-3 w-3 mt-0.5 shrink-0" /> {error}
+    <div className="rounded-md border border-orange-200 bg-gradient-to-r from-orange-50 to-amber-50 px-4 py-3 space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-sm font-semibold text-orange-900">
+            <Sparkles className="h-4 w-4 text-orange-500" />
+            Analyze with AI
+          </div>
+          <p className="text-[11px] text-orange-700 mt-0.5">
+            One click: AI picks the right Jumia category and fills the category-specific fields from your images.
           </p>
-        )}
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          onClick={onStart}
+          className="shrink-0 bg-orange-500 hover:bg-orange-600 text-white gap-1.5"
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          {error ? "Try again" : "Analyze"}
+        </Button>
       </div>
-      <Button
-        type="button"
-        size="sm"
-        onClick={onStart}
-        className="shrink-0 bg-orange-500 hover:bg-orange-600 text-white gap-1.5"
-      >
-        <Sparkles className="h-3.5 w-3.5" />
-        {error ? "Try again" : "Analyze"}
-      </Button>
+
+      {/* Optional context for the AI — anything the images don't show */}
+      <div className="space-y-1">
+        <textarea
+          value={prompt}
+          onChange={(e) => onPromptChange(e.target.value)}
+          rows={2}
+          maxLength={1000}
+          placeholder="Optional: tell the AI anything the images don't show. E.g. 'this is a pack of 6', 'the colour is teal not blue', 'specify it's wireless'."
+          className="w-full rounded-md border border-orange-200 bg-white/70 px-2.5 py-1.5 text-xs text-zinc-700 placeholder:text-zinc-400 focus:outline-none focus:ring-1 focus:ring-orange-300 resize-none"
+        />
+        <p className="text-[10px] text-orange-600">
+          {prompt.length > 0 && `${prompt.length}/1000 · `}
+          The AI is forbidden from using Jumia-restricted words like &quot;original&quot;, &quot;brand new&quot;, &quot;imported&quot;, etc.
+        </p>
+      </div>
+
+      {error && (
+        <p className="text-[11px] text-red-600 flex items-start gap-1">
+          <AlertCircle className="h-3 w-3 mt-0.5 shrink-0" /> {error}
+        </p>
+      )}
     </div>
   );
 }
@@ -1462,6 +1485,7 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
   type AnalyzeStep = "idle" | "describing" | "retrieving" | "ranking" | "filling" | "done" | "error";
   const [analyzeStep,   setAnalyzeStep]   = useState<AnalyzeStep>("idle");
   const [analyzeError,  setAnalyzeError]  = useState<string | null>(null);
+  const [analyzePrompt, setAnalyzePrompt] = useState<string>("");
   const [analyzeResult, setAnalyzeResult] = useState<{
     title?:               string;
     categoryPath?:        string;
@@ -1489,7 +1513,9 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
 
     try {
       const res = await fetch(`/api/listings/${listing.id}/auto-analyze`, {
-        method: "POST",
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ userPrompt: analyzePrompt.trim() || undefined }),
       });
       const data = await res.json();
       stepTimers.forEach(clearTimeout);
@@ -1602,7 +1628,8 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
   // instead of getting a 400 back from /feeds/products/create.
   const validationErrors: string[] = [];
   if (titleValue.length < 15)        validationErrors.push("Name must be at least 15 characters.");
-  if (titleValue.length > 70)        validationErrors.push("Name must be 70 characters or fewer.");
+  // Removed hard max — Jumia's spec doesn't enforce one and we don't want
+  // to artificially gate Submit. Seller can write long descriptive names.
   if (descriptionValue.length < 50)  validationErrors.push("Description must be at least 50 characters (Jumia hard limit).");
   if (descriptionValue.length > 9000) validationErrors.push("Description must be 9,000 characters or fewer.");
   if (!categoryCode)                 validationErrors.push("Pick a category.");
@@ -1910,6 +1937,8 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                   step={analyzeStep}
                   error={analyzeError}
                   result={analyzeResult}
+                  prompt={analyzePrompt}
+                  onPromptChange={setAnalyzePrompt}
                   onStart={handleAutoAnalyze}
                 />
               )}
@@ -1957,16 +1986,14 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                       "h-10 text-sm",
                       titleValue.length > 0 && titleValue.length < 15 && "border-red-300 focus-visible:ring-red-300"
                     )}
-                    maxLength={70}
                   />
                   <p className={cn(
                     "text-[11px]",
                     titleValue.length === 0 ? "text-zinc-400" :
                     titleValue.length < 15  ? "text-red-500"  :
-                    titleValue.length > 70  ? "text-red-500"  :
                                               "text-emerald-600"
                   )}>
-                    {titleValue.length}/70 characters · min 15
+                    {titleValue.length} characters · min 15
                   </p>
                 </div>
                 <div className="space-y-1.5">

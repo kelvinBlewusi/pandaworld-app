@@ -416,16 +416,14 @@ export default function BatchAddProductsPage() {
                     onChange={(e) => updateActive({ name: e.target.value })}
                     placeholder="Leave blank to let AI generate the name"
                     className="h-10 text-sm"
-                    maxLength={70}
                   />
                   {active.name.length > 0 && (
                     <p className={cn(
                       "text-[11px]",
                       active.name.length < 15  ? "text-amber-600"   :
-                      active.name.length > 70  ? "text-red-500"     :
                                                  "text-emerald-600"
                     )}>
-                      {active.name.length}/70 characters
+                      {active.name.length} characters
                       {active.name.length < 15 && " · min 15 for Jumia (or let AI rewrite)"}
                     </p>
                   )}
