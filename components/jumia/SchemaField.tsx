@@ -63,13 +63,36 @@ interface SchemaFieldProps {
   source?:        "image" | "ocr" | "inferred" | "seller-required" | "user";
 }
 
+// Attribute names that should always render as a multi-line textarea even
+// if Jumia returns type=TEXT for them. Matches Jumia VC behaviour where
+// these fields appear with a rich-text editor.
+const LONG_TEXT_FIELD_NAMES = new Set<string>([
+  "description", "product_description",
+  "highlights", "short_description",
+  "from_the_manufacturer", "manufacturer",
+  "whats_in_the_box", "box_contents", "in_the_box",
+  "product_warranty", "warranty_text", "warranty",
+  "warranty_address",
+  "note", "notes",
+  "additional_info", "additional_information",
+]);
+
+function effectiveType(attr: JumiaAttributeDef): JumiaAttrType {
+  // Upgrade TEXT → TEXTAREA for known long-text fields. We never downgrade.
+  if (attr.type === "string" && LONG_TEXT_FIELD_NAMES.has(attr.name.toLowerCase())) {
+    return "textarea";
+  }
+  return attr.type;
+}
+
 export function SchemaField({ attr, value, onChange, confidenceDot, source }: SchemaFieldProps) {
+  const renderType = effectiveType(attr);
   const hasMin = typeof attr.min_length === "number" && attr.min_length! > 0;
   const hasMax = typeof attr.max_length === "number" && attr.max_length! > 0;
   const len = value.length;
   const tooShort = hasMin && len > 0 && len < (attr.min_length ?? 0);
   const tooLong  = hasMax && len > (attr.max_length ?? Infinity);
-  const isText   = attr.type === "string" || attr.type === "textarea" || attr.type === "number";
+  const isText   = renderType === "string" || renderType === "textarea" || renderType === "number";
 
   return (
     <div className="space-y-1.5">
@@ -82,7 +105,7 @@ export function SchemaField({ attr, value, onChange, confidenceDot, source }: Sc
         {confidenceDot}
       </Label>
 
-      {renderInput(attr, value, onChange)}
+      {renderInput({ ...attr, type: renderType }, value, onChange)}
 
       {isText && (hasMin || hasMax) && (
         <p className={cn(

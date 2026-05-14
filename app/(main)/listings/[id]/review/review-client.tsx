@@ -1286,6 +1286,36 @@ const PUBLISH_THRESHOLD = typeof process !== "undefined"
   ? parseInt(process.env.NEXT_PUBLIC_QUALITY_THRESHOLD ?? String(DEFAULT_THRESHOLD), 10)
   : DEFAULT_THRESHOLD;
 
+/**
+ * Attribute names that belong in the Product Information section (top of the
+ * page — brand, colour, basic description, etc.) rather than the Product
+ * Specification section (technical details, dimensions, materials).
+ *
+ * Both sections render via the same schema-driven SchemaForm. We split the
+ * Jumia schema between them using includeNames here and excludeNames in the
+ * Product Specification slot, so a field never renders twice.
+ *
+ * Aliases (color / colour, weight / weight_kg) are included so the case-
+ * insensitive matcher in SchemaForm picks up either form Jumia uses.
+ */
+const PRODUCT_INFO_FIELDS = [
+  "brand",
+  "color", "colour",
+  "color_family", "colour_family",
+  "weight", "weight_kg", "product_weight",
+  "description", "product_description",
+  "highlights", "short_description",
+  "main_material", "material",
+  "material_family",
+];
+
+/**
+ * Names of fields rendered as static (non-schema-driven) UI at the top of the
+ * page — primarily `name` / `title`. We exclude these from BOTH SchemaForm
+ * sections so the dedicated Product Name input isn't duplicated.
+ */
+const STATIC_FIELDS = ["name", "title", "product_name"];
+
 export function ReviewClient({ listing }: { listing: ListingRow }) {
   const router       = useRouter();
   const searchParams = useSearchParams();
@@ -1459,16 +1489,21 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Combined overrides map fed to SchemaForm — wraps current controlled state
-  // so re-renders pick it up instantly.
+  // Combined overrides map fed to SchemaForm — wraps current controlled
+  // state AND live dynAttrs so re-renders pick up edits instantly.
+  // Without dynAttrs here, typing into a dynamic-attribute field would
+  // appear "frozen" because SchemaForm falls back to listing.dynamic_attributes
+  // (the stale server snapshot) for any key not in overrideValues.
   const schemaFormOverrides: Record<string, string> = {
-    ...columnOverrides,
+    ...dynAttrs,           // live dynamic-attribute edits (e.g. voltage, battery_capacity)
+    ...columnOverrides,    // live column-mapped edits (e.g. main_material, model)
     // Static controlled fields → re-broadcast to the schema renderer
     name:                 titleValue,
     title:                titleValue,
     description:          descriptionValue,
     product_description:  descriptionValue,
     highlights:           highlightsValue,
+    short_description:    highlightsValue,
     brand:                brandValue,
     color_family:         colorFamily,
     material_family:      materialFamily,
@@ -2104,9 +2139,39 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                 </div>
               </div>
 
-              {/* Conditional fields — only after category is picked */}
+              {/* Schema-driven Product Information body (Brand / Color /
+                  Color family / Weight / Description / Highlights / Material).
+                  Falls through to whatever Jumia's schema returns for this
+                  category. The legacy static layout below stays as a
+                  display:none fallback during transition. */}
               {categoryCode && (
-                <>
+                <SchemaForm
+                  categoryCode={categoryCode}
+                  listing={listing}
+                  overrideValues={schemaFormOverrides}
+                  onFieldChange={handleSchemaFieldChange}
+                  fieldSources={listing.field_sources ?? undefined}
+                  fieldConfidence={listing.field_confidence ?? undefined}
+                  includeNames={PRODUCT_INFO_FIELDS}
+                  excludeNames={STATIC_FIELDS}
+                  hideGroupHeadings
+                  renderConfidenceDot={({ source, confidence }) =>
+                    source ? (
+                      <ConfidenceDot
+                        source={source as "image" | "ocr" | "inferred" | "seller-required"}
+                        confidence={confidence}
+                      />
+                    ) : null
+                  }
+                />
+              )}
+
+              {/* Legacy static Product Information fields — HIDDEN.
+                  Preserved in the DOM so the existing controlled state
+                  (brandValue, descriptionValue, etc.) keeps working until
+                  we delete the legacy layout in a follow-up. */}
+              {categoryCode && (
+                <div style={{ display: "none" }}>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <div className="space-y-1.5">
                       <Label className="text-xs font-semibold text-zinc-700 flex items-center">
@@ -2214,7 +2279,7 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                       Specification section below, NOT here — matching Jumia
                       VC's structure where Product Information ends at
                       Highlights and Specification starts at Certifications. */}
-                </>
+                </div>
               )}
             </section>
 
@@ -2374,6 +2439,7 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                 onFieldChange={handleSchemaFieldChange}
                 fieldSources={listing.field_sources ?? undefined}
                 fieldConfidence={listing.field_confidence ?? undefined}
+                excludeNames={[...PRODUCT_INFO_FIELDS, ...STATIC_FIELDS]}
                 renderConfidenceDot={({ source, confidence }) =>
                   source ? (
                     <ConfidenceDot

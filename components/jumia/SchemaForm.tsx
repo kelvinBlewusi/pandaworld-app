@@ -36,6 +36,16 @@ interface SchemaFormProps {
   }>;
   /** Tiny pill renderer for confidence — caller injects to avoid coupling */
   renderConfidenceDot?: (info: { source?: string; confidence?: number }) => React.ReactNode;
+  /**
+   * Whitelist: only render attributes whose name is in this list (case-insensitive).
+   * Used to split the schema into Product Information vs Product Specification
+   * sections without duplicating fields.
+   */
+  includeNames?:   string[];
+  /** Blacklist: never render attributes whose name is in this list */
+  excludeNames?:   string[];
+  /** Hide the "Required (N) / Optional (N)" group headings */
+  hideGroupHeadings?: boolean;
 }
 
 export function SchemaForm({
@@ -46,6 +56,9 @@ export function SchemaForm({
   fieldSources,
   fieldConfidence,
   renderConfidenceDot,
+  includeNames,
+  excludeNames,
+  hideGroupHeadings,
 }: SchemaFormProps) {
   const [schema,    setSchema]    = useState<JumiaAttributeDef[]>([]);
   const [loading,   setLoading]   = useState(true);
@@ -141,16 +154,38 @@ export function SchemaForm({
 
   // Group: required first (so seller knows what blocks publish), then
   // optional. Within each group preserve Jumia's natural ordering.
-  const required = schema.filter((a) => a.required);
-  const optional = schema.filter((a) => !a.required);
+  // Apply caller-supplied whitelist/blacklist filters (case-insensitive).
+  // Used to split the schema into "Product Information" vs "Product
+  // Specification" sections without duplicating fields.
+  const includeSet = includeNames
+    ? new Set(includeNames.map((n) => n.toLowerCase()))
+    : null;
+  const excludeSet = excludeNames
+    ? new Set(excludeNames.map((n) => n.toLowerCase()))
+    : null;
+  const visible = schema.filter((a) => {
+    const n = a.name.toLowerCase();
+    if (includeSet && !includeSet.has(n)) return false;
+    if (excludeSet && excludeSet.has(n))  return false;
+    return true;
+  });
+
+  if (visible.length === 0) {
+    return null;   // nothing to render in this slice — caller can skip the section header
+  }
+
+  const required = visible.filter((a) => a.required);
+  const optional = visible.filter((a) => !a.required);
 
   const renderGroup = (attrs: JumiaAttributeDef[], heading: string, headingColor: string) => {
     if (attrs.length === 0) return null;
     return (
       <div className="space-y-3">
-        <p className={cn("text-[11px] font-semibold uppercase tracking-widest", headingColor)}>
-          {heading}
-        </p>
+        {!hideGroupHeadings && (
+          <p className={cn("text-[11px] font-semibold uppercase tracking-widest", headingColor)}>
+            {heading}
+          </p>
+        )}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {attrs.map((attr) => {
             const key       = `dynamic_attributes.${attr.name}`;
