@@ -1011,6 +1011,151 @@ function CategoryDynamicFields({
 //   2. If the model wasn't confident about the category, offers the top-2
 //      alternates as quick-switch buttons (per PDF spec: needs_user_confirmation).
 
+// ─────────────────────────────────────────────────────────────────────────
+// Rejection resolver banner — shown when the listing was pushed to Jumia
+// and rejected by QC. Offers a one-click "Resolve with AI" action that
+// passes the rejection reason + current fields to Gemini, applies the
+// suggested fixes, and resets the listing to draft so the seller can
+// review and re-push.
+// ─────────────────────────────────────────────────────────────────────────
+
+function RejectionResolverBanner({
+  listing,
+  router,
+}: {
+  listing: ListingRow;
+  router:  ReturnType<typeof useRouter>;
+}) {
+  const [working,    setWorking]    = useState(false);
+  const [error,      setError]      = useState<string | null>(null);
+  const [resolution, setResolution] = useState<{
+    summary:   string;
+    reasoning: string;
+    updates:   Record<string, unknown>;
+  } | null>(null);
+
+  // Only render when the listing actually failed AND has a rejection reason
+  // recorded. listing.status='failed' alone isn't enough — could be a
+  // transient network failure on push with no Jumia QC text to feed the AI.
+  if (listing.status !== "failed" || !listing.jumia_error) return null;
+
+  // Parse the rejection — Supabase stores it as a JSON-stringified Jumia
+  // error object. Display the human-readable message; fall back to raw.
+  const rejectionText = (() => {
+    try {
+      const parsed = JSON.parse(listing.jumia_error as string);
+      if (typeof parsed === "string") return parsed;
+      const candidates = [
+        parsed?.message,
+        parsed?.errorMessage,
+        parsed?.error,
+        Array.isArray(parsed?.errors) && parsed.errors[0],
+      ].filter((x) => typeof x === "string" || typeof x === "object");
+      if (typeof candidates[0] === "string") return candidates[0] as string;
+      return JSON.stringify(parsed);
+    } catch {
+      return listing.jumia_error as string;
+    }
+  })();
+
+  const resolveWithAI = async () => {
+    setWorking(true);
+    setError(null);
+    setResolution(null);
+    try {
+      const res = await fetch(`/api/listings/${listing.id}/resolve-rejection`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Resolve failed");
+      setResolution({
+        summary:   String(data.summary   ?? ""),
+        reasoning: String(data.reasoning ?? ""),
+        updates:   (data.updates as Record<string, unknown>) ?? {},
+      });
+      // Refresh server data so the form picks up the new field values.
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "AI resolve failed");
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  // Success state: the AI fixed the listing. Show the diff + a hint to
+  // push again. The seller still has to click the regular Submit button
+  // (we don't auto-push — gives them a chance to verify the AI's work).
+  if (resolution) {
+    const changedKeys = Object.keys(resolution.updates);
+    return (
+      <div className="rounded-md border border-emerald-200 bg-emerald-50 p-4 space-y-2">
+        <div className="flex items-center gap-2">
+          <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+          <p className="text-sm font-semibold text-emerald-900">
+            AI updated {changedKeys.length} field{changedKeys.length === 1 ? "" : "s"}.
+          </p>
+        </div>
+        <p className="text-xs text-emerald-800">{resolution.summary}</p>
+        {resolution.reasoning && (
+          <p className="text-[11px] text-emerald-700/80">{resolution.reasoning}</p>
+        )}
+        {changedKeys.length > 0 && (
+          <div className="flex flex-wrap gap-1 pt-1">
+            {changedKeys.map((k) => (
+              <span
+                key={k}
+                className="rounded-full bg-white border border-emerald-200 px-2 py-0.5 text-[10px] font-medium text-emerald-700"
+              >
+                {k}
+              </span>
+            ))}
+          </div>
+        )}
+        <p className="text-[11px] text-emerald-700 pt-1">
+          Review the changes, then click <span className="font-semibold">Submit to Jumia</span> below to re-push.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-md border border-red-200 bg-red-50 p-4 space-y-3">
+      <div className="flex items-start gap-3">
+        <AlertCircle className="h-5 w-5 text-red-500 mt-0.5 shrink-0" />
+        <div className="flex-1 space-y-1">
+          <p className="text-sm font-semibold text-red-900">
+            Jumia rejected this listing
+          </p>
+          <p className="text-xs text-red-800 break-words">{rejectionText}</p>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 pl-8">
+        <button
+          type="button"
+          onClick={resolveWithAI}
+          disabled={working}
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors",
+            working
+              ? "bg-red-300 cursor-not-allowed"
+              : "bg-red-600 hover:bg-red-700"
+          )}
+        >
+          {working
+            ? <><Loader2 className="h-3 w-3 animate-spin" /> Resolving with AI…</>
+            : <><Sparkles className="h-3 w-3" /> Resolve with AI</>}
+        </button>
+        <span className="text-[11px] text-red-700/80">
+          AI reads the rejection, updates the fields, and resets the listing to draft.
+        </span>
+      </div>
+      {error && (
+        <p className="pl-8 text-[11px] text-red-700">⚠ {error}</p>
+      )}
+    </div>
+  );
+}
+
 function AIConfidenceBanner({
   listing,
   currentCategoryCode,
@@ -2059,6 +2204,7 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
             </div>
 
             {/* Banners */}
+            <RejectionResolverBanner listing={listing} router={router} />
             {publishedRef && (
               <div className="flex items-center gap-3 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
                 <CheckCircle2 className="h-4 w-4 shrink-0" />

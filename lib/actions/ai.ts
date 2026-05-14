@@ -1041,3 +1041,158 @@ function buildMockAnalysis(): AIProductAnalysis {
     field_confidence: {},
   };
 }
+
+// ─── Rejection resolver ──────────────────────────────────────────────────────
+//
+// Given a Jumia rejection reason + current listing fields, asks the AI to
+// propose specific field changes that address the rejection. Returns the
+// updates as a plain object so the caller can merge them into the listing
+// via updateListing.
+//
+// The resolver is single-shot — one AI pass per call. The UI exposes a
+// "Resolve with AI" button that triggers this, then shows the changes for
+// the seller to verify before re-pushing. We intentionally do NOT auto-loop
+// (AI → push → AI → push …) because (a) it can burn quota on a bad
+// rejection reason and (b) the seller deserves to see what changed.
+
+export interface RejectionResolution {
+  /** Field changes — keys match ListingRow columns or dynamic_attributes keys */
+  updates:   Record<string, unknown>;
+  /** One-sentence human summary, shown to the seller */
+  summary:   string;
+  /** Longer reasoning explaining how each change addresses the rejection */
+  reasoning: string;
+}
+
+export async function resolveRejection(
+  listing: {
+    title?:              string | null;
+    description?:        string | null;
+    highlights?:         string | null;
+    brand?:              string | null;
+    color?:              string | null;
+    color_family?:       string | null;
+    weight_kg?:          number | null;
+    main_material?:      string | null;
+    material_family?:    string | null;
+    production_country?: string | null;
+    selling_price?:      number | null;
+    category_path?:      string | null;
+    warranty_text?:      string | null;
+    warranty_address?:   string | null;
+    dynamic_attributes?: Record<string, string> | null;
+    images?:             string[] | null;
+  },
+  rejectionReason: string,
+): Promise<RejectionResolution> {
+  if (USE_MOCK_AI) {
+    return {
+      updates: { description: (listing.description ?? "") + " — refined." },
+      summary: "(mock) Lengthened description",
+      reasoning: "USE_MOCK_AI=true; returning a stub fix.",
+    };
+  }
+
+  if (!process.env.GOOGLE_API_KEY) {
+    throw new Error("GOOGLE_API_KEY is not set");
+  }
+
+  const restrictedInstruction = buildRestrictedWordsInstruction();
+
+  const currentFields = {
+    title:              listing.title              ?? "",
+    description:        listing.description        ?? "",
+    highlights:         listing.highlights         ?? "",
+    brand:              listing.brand              ?? "",
+    color:              listing.color              ?? "",
+    color_family:       listing.color_family       ?? "",
+    weight_kg:          listing.weight_kg          ?? null,
+    main_material:      listing.main_material      ?? "",
+    material_family:    listing.material_family    ?? "",
+    production_country: listing.production_country ?? "",
+    selling_price:      listing.selling_price      ?? null,
+    category_path:      listing.category_path      ?? "",
+    warranty_text:      listing.warranty_text      ?? "",
+    warranty_address:   listing.warranty_address   ?? "",
+    dynamic_attributes: listing.dynamic_attributes ?? {},
+  };
+
+  const prompt = `
+You are an expert Jumia vendor assistant. A listing was REJECTED by Jumia's quality check. Your job is to propose specific, concrete field changes that will pass on the next submission.
+
+REJECTION REASON FROM JUMIA:
+${rejectionReason}
+
+CURRENT LISTING DATA (JSON):
+${JSON.stringify(currentFields, null, 2)}
+
+YOUR TASK:
+1. Identify which fields are likely causing the rejection.
+2. Propose specific corrected values for ONLY those fields. Don't echo unchanged fields.
+3. Keep changes minimal and concrete. Sellers can fine-tune after.
+4. For "brand": if the rejection suggests the brand isn't recognised, suggest the closest well-known equivalent (e.g. "Generic" if you can't identify a brand).
+5. For "description": Jumia requires 50–9,000 characters, focusing on product features only. No testimonials, no promotional language.
+6. For "highlights": 4+ bullets is ideal.
+
+${restrictedInstruction}
+
+OUTPUT STRICTLY THIS JSON SHAPE (no prose before or after):
+{
+  "updates": {
+    "<field_name>": "<new value>",
+    ...
+  },
+  "summary": "<one-sentence description of what changed>",
+  "reasoning": "<2-3 sentences explaining how the changes address the rejection>"
+}
+
+Valid field names:
+  title | description | highlights | brand | color | color_family |
+  weight_kg | main_material | material_family | production_country |
+  selling_price | warranty_text | warranty_address |
+  dynamic_attributes.<any_key>  (for category-specific attributes)
+
+Examples:
+- If Jumia says "brand not recognised", set "brand" to a known equivalent.
+- If Jumia says "description too short", expand the description (50+ chars).
+- If Jumia says "weight missing", set "weight_kg" to a numeric estimate.
+- If Jumia complains about a dynamic attribute, set "dynamic_attributes.<key>".
+`.trim();
+
+  // Use first image only — context for "image quality" rejections.
+  // No image is also fine; rejection text alone is usually enough.
+  const imageUrls = (listing.images ?? []).slice(0, 1);
+  const raw = await callGemini(prompt, imageUrls);
+  const parsed = parseAIResponse(raw) as Partial<RejectionResolution>;
+
+  if (!parsed.updates || typeof parsed.updates !== "object") {
+    throw new Error("AI response did not include an 'updates' object");
+  }
+
+  // Sanitise text fields through the restricted-words filter before returning.
+  const cleaned: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(parsed.updates)) {
+    if (typeof v === "string") {
+      cleaned[k] = stripRestrictedWords(v);
+    } else {
+      cleaned[k] = v;
+    }
+  }
+
+  // Surface any restricted words we caught so the seller knows the AI tried
+  // (and we caught) something dodgy.
+  const flagged: string[] = [];
+  for (const v of Object.values(parsed.updates)) {
+    if (typeof v === "string") {
+      flagged.push(...findRestrictedWords(v));
+    }
+  }
+
+  return {
+    updates:   cleaned,
+    summary:   String(parsed.summary   ?? "Updated fields to address the rejection."),
+    reasoning: String(parsed.reasoning ?? "") + (
+      flagged.length ? ` (Filtered restricted words: ${Array.from(new Set(flagged)).join(", ")}.)` : ""
+    ),
+  };
+}
