@@ -5,27 +5,26 @@ import { resolveRejection } from "@/lib/actions/ai";
 
 // ─── POST /api/listings/[id]/resolve-rejection ────────────────────────────────
 //
-// Single-shot AI repair pass for a rejected listing.
+// Single-shot AI repair pass.
 //
-// Flow:
-//   1. Load the listing, verify it's actually in a failed state with a
-//      Jumia rejection reason recorded.
-//   2. Hand the rejection + current listing fields to the AI; ask for
-//      targeted updates (NOT a full rewrite).
-//   3. Apply the updates to the listings row (column + dynamic_attributes
-//      patches both supported).
-//   4. Reset status to 'draft' so the seller can review the AI's changes
-//      and re-push manually.
+// Two trigger modes:
+//   (a) Body { mode: "jumia_rejection" } — default. Reads listing.jumia_error
+//       as the "rejection reason". Resets status to 'draft' on success so
+//       the seller can re-push.
+//   (b) Body { mode: "quality_score", reason: "..." } — used for the
+//       Quality Score gate below the Submit button. The seller is gated
+//       from pushing because qualityResult.score < threshold; this lets
+//       them ask the AI to address the listed issues.
 //
-// We deliberately do NOT auto-push after the AI suggests fixes. The seller
-// inspects the diff and decides whether to retry — preserves trust, and
-// prevents quota blowouts on cases where the AI repeatedly mis-fixes.
+// Flow (both modes):
+//   1. Load the listing, validate the trigger condition.
+//   2. Hand the reason + current fields to resolveRejection() in lib/actions/ai.
+//   3. Apply the AI's targeted updates (column + dynamic_attributes both).
+//   4. (jumia_rejection only) reset status to 'draft'.
 //
-// Response: {
-//   updates:   Record<string, unknown>,
-//   summary:   string,
-//   reasoning: string,
-// }
+// We never auto-push. The seller verifies the AI's changes and re-submits.
+//
+// Response: { updates, summary, reasoning, mode }
 
 interface ListingForResolve {
   id:                  string;
@@ -52,11 +51,24 @@ interface ListingForResolve {
 }
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { id: string } }
 ) {
   const { userId } = await auth();
   if (!userId) return new NextResponse("Unauthorized", { status: 401 });
+
+  // Parse trigger mode + optional caller-provided reason. Default mode is
+  // jumia_rejection so existing callers (the RejectionResolverBanner)
+  // continue to work without sending a body.
+  let mode: "jumia_rejection" | "quality_score" = "jumia_rejection";
+  let callerReason: string | null = null;
+  try {
+    const body = await req.json();
+    if (body?.mode === "quality_score") mode = "quality_score";
+    if (typeof body?.reason === "string" && body.reason.trim()) {
+      callerReason = body.reason.trim().slice(0, 2000);
+    }
+  } catch { /* no body — fine, defaults apply */ }
 
   const db = createServerClient();
 
@@ -79,26 +91,37 @@ export async function POST(
   }
   const listing = data as unknown as ListingForResolve;
 
-  // ── 2. Verify there's actually a rejection to fix ────────────────────────
-  if (!listing.jumia_error) {
-    return NextResponse.json(
-      { error: "Listing has no recorded rejection reason" },
-      { status: 400 }
-    );
-  }
-
-  // Parse jumia_error if it's stringified JSON; otherwise treat as plain text.
-  let rejectionReason = listing.jumia_error;
-  try {
-    const parsed = JSON.parse(listing.jumia_error);
-    rejectionReason =
-      typeof parsed === "string"
-        ? parsed
-        : (parsed?.message as string) ??
-          (parsed?.errorMessage as string) ??
-          JSON.stringify(parsed);
-  } catch {
-    // Plain string, keep as-is.
+  // ── 2. Derive the reason text the AI should fix ──────────────────────────
+  let rejectionReason: string;
+  if (mode === "quality_score") {
+    if (!callerReason) {
+      return NextResponse.json(
+        { error: "Quality-score mode requires a 'reason' in the body" },
+        { status: 400 }
+      );
+    }
+    rejectionReason = callerReason;
+  } else {
+    if (!listing.jumia_error) {
+      return NextResponse.json(
+        { error: "Listing has no recorded rejection reason" },
+        { status: 400 }
+      );
+    }
+    // Parse jumia_error: it's a JSON-stringified Jumia error object most of
+    // the time, but plain text is also possible.
+    rejectionReason = listing.jumia_error;
+    try {
+      const parsed = JSON.parse(listing.jumia_error);
+      rejectionReason =
+        typeof parsed === "string"
+          ? parsed
+          : (parsed?.message as string) ??
+            (parsed?.errorMessage as string) ??
+            JSON.stringify(parsed);
+    } catch {
+      // Plain string, keep as-is.
+    }
   }
 
   // ── 3. Call the AI resolver ──────────────────────────────────────────────
@@ -155,13 +178,18 @@ export async function POST(
     newSources[k] = "ai";
   }
 
-  // ── 5. Apply update + reset status ───────────────────────────────────────
+  // ── 5. Apply update + (jumia_rejection only) reset status ────────────────
   const patch: Record<string, unknown> = {
     ...columnUpdate,
-    status:             "draft",  // ready for the seller to re-push
-    field_sources:      newSources,
-    updated_at:         new Date().toISOString(),
+    field_sources: newSources,
+    updated_at:    new Date().toISOString(),
   };
+  // Jumia-rejection mode resets to draft so the seller can re-push. Quality-
+  // score mode keeps the existing status (already draft anyway) — the AI
+  // just shores up fields before the seller hits Submit.
+  if (mode === "jumia_rejection") {
+    patch.status = "draft";
+  }
   if (Object.keys(dynamicMergedKeys).length > 0) {
     patch.dynamic_attributes = mergedDynamic;
   }
@@ -184,5 +212,6 @@ export async function POST(
     updates:   resolution.updates,
     summary:   resolution.summary,
     reasoning: resolution.reasoning,
+    mode,
   });
 }

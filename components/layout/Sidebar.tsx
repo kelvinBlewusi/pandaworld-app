@@ -13,14 +13,10 @@ import {
   CheckCircle,
   AlertCircle,
   ChevronDown,
-  ChevronRight,
   Settings,
   CreditCard,
   Plug,
   Zap,
-  ImageIcon,
-  Wand2,
-  Link2,
   LogOut,
   X,
 } from "lucide-react";
@@ -53,47 +49,6 @@ const settingsNav = [
   { href: "/settings/account",      label: "Account",          icon: Settings  },
   { href: "/settings/billing",      label: "Plans & billing",  icon: CreditCard },
   { href: "/settings/integrations", label: "Integrations",     icon: Plug      },
-];
-
-// ─── New Listing modes ────────────────────────────────────────────────────────
-
-interface ListingMode {
-  mode:      "own" | "url" | "rough";
-  icon:      React.ElementType;
-  iconColor: string;
-  bg:        string;
-  label:     string;
-  sub:       string;
-  disabled?: boolean;
-}
-
-const listingModes: ListingMode[] = [
-  {
-    mode:      "own",
-    icon:      ImageIcon,
-    iconColor: "text-blue-500",
-    bg:        "bg-blue-50",
-    label:     "Upload product from your own images",
-    sub:       "Up to 8 photos per product",
-  },
-  {
-    mode:      "url",
-    icon:      Link2,
-    iconColor: "text-emerald-500",
-    bg:        "bg-emerald-50",
-    label:     "Copy and Upload product from a URL",
-    sub:       "Not responsive yet",
-    disabled:  true,
-  },
-  {
-    mode:      "rough",
-    icon:      Wand2,
-    iconColor: "text-violet-500",
-    bg:        "bg-violet-50",
-    label:     "Upload product from rough images",
-    sub:       "Not responsive yet",
-    disabled:  true,
-  },
 ];
 
 // ─── Standard nav item ────────────────────────────────────────────────────────
@@ -138,84 +93,25 @@ function NavItem({ href, label, icon: Icon, count }: NavItemProps) {
   );
 }
 
-// ─── New Listing dropdown trigger ────────────────────────────────────────────
+// ─── New Listing link (single-flow batch upload) ────────────────────────────
 
-function NewListingDropdown() {
+function NewListingLink() {
   const pathname = usePathname();
-  const router = useRouter();
   const isActive = pathname.startsWith("/listings/new");
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          className={cn(
-            "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-all duration-150",
-            isActive
-              ? "bg-zinc-900 text-white font-medium"
-              : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
-          )}
-        >
-          <Plus className="h-4 w-4 shrink-0" />
-          <span className="flex-1 text-left">New listing</span>
-          <ChevronRight
-            className={cn(
-              "h-3 w-3 shrink-0 opacity-40",
-              isActive && "opacity-60"
-            )}
-          />
-        </button>
-      </DropdownMenuTrigger>
-
-      <DropdownMenuContent
-        side="right"
-        align="start"
-        sideOffset={10}
-        className="w-64 p-2 space-y-0.5"
-      >
-        {/* Header */}
-        <p className="px-3 pb-1.5 pt-1 text-[10px] font-semibold uppercase tracking-widest text-zinc-400">
-          Choose listing method
-        </p>
-
-        {listingModes.map(({ mode, icon: Icon, iconColor, bg, label, sub, disabled }) => (
-          <button
-            key={mode}
-            disabled={disabled}
-            onClick={() => {
-              if (disabled) return;
-              // Own-images now goes through a "how many products?" prompt first
-              if (mode === "own") {
-                router.push("/listings/new?mode=own&step=count");
-              } else {
-                router.push(`/listings/new?mode=${mode}`);
-              }
-            }}
-            className={cn(
-              "flex w-full items-center gap-3 rounded-xl p-2.5 text-left transition-colors",
-              disabled
-                ? "opacity-50 cursor-not-allowed"
-                : "hover:bg-zinc-50 active:bg-zinc-100"
-            )}
-          >
-            <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", bg, disabled && "grayscale")}>
-              <Icon className={cn("h-4 w-4", iconColor)} />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className={cn("text-sm font-medium leading-snug", disabled ? "text-zinc-400" : "text-zinc-800")}>
-                {label}
-              </p>
-              <p className="text-[11px] text-zinc-400 leading-snug">{sub}</p>
-            </div>
-            {disabled && (
-              <span className="shrink-0 rounded-full bg-zinc-100 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-zinc-500">
-                Soon
-              </span>
-            )}
-          </button>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <Link
+      href="/listings/new/batch?count=1"
+      className={cn(
+        "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-all duration-150",
+        isActive
+          ? "bg-zinc-900 text-white font-medium"
+          : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
+      )}
+    >
+      <Plus className="h-4 w-4 shrink-0" />
+      <span className="flex-1 text-left">Add Products</span>
+    </Link>
   );
 }
 
@@ -335,7 +231,7 @@ export function Sidebar({
         ))}
 
         {/* New listing with dropdown */}
-        <NewListingDropdown />
+        <NewListingLink />
 
         <div className="pb-1 pt-3">
           <Separator className="mb-3" />

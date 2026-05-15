@@ -133,7 +133,10 @@ export function SchemaForm({
     );
   }
 
-  if (loading) {
+  // Cold start: no schema yet AND still loading → centred spinner.
+  // (Category-change reloads keep the previous schema visible with a pill
+  // on top — see below — so the page doesn't flash blank.)
+  if (loading && schema.length === 0) {
     return (
       <div className="flex items-center justify-center gap-2 py-10 text-sm text-zinc-400">
         <Loader2 className="h-4 w-4 animate-spin" />
@@ -145,7 +148,7 @@ export function SchemaForm({
   // Error path: schema fetch failed (network blip, reconnect needed, etc.).
   // Reconnect errors are handled globally by the ReconnectBanner — here we
   // just show a minimal inline notice so the page isn't blocked.
-  if (loadError) {
+  if (loadError && schema.length === 0) {
     return (
       <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 flex items-start gap-2">
         <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-amber-500" />
@@ -300,14 +303,22 @@ export function SchemaForm({
   };
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 relative">
+      {/* Pill banner during a category-switch reload — old fields stay
+          visible (slightly dimmed) so the form doesn't flash blank. */}
+      {loading && schema.length > 0 && (
+        <div className="absolute -top-2 right-0 z-10 inline-flex items-center gap-1.5 rounded-full bg-orange-50 border border-orange-200 px-3 py-1 text-[11px] font-medium text-orange-700 shadow-sm">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Updating fields from Jumia…
+        </div>
+      )}
       {!hideGroupHeadings && required.length > 0 && optional.length > 0 && (
         <p className="text-[11px] font-semibold uppercase tracking-widest text-red-500">
           Required ({required.length}) <span className="text-zinc-300">·</span>{" "}
           <span className="text-zinc-400">Optional ({optional.length})</span>
         </p>
       )}
-      <div className={gridClass}>
+      <div className={cn(gridClass, loading && schema.length > 0 && "opacity-60 pointer-events-none transition-opacity")}>
         {ordered.map(renderField)}
       </div>
     </div>

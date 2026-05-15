@@ -178,6 +178,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success:   true,
       jumia_ref: result.jumia_ref,
+      sku:       row.sku,
+      sku_changed: isRetry,
       message:   "Listing submitted to Jumia. It will appear as Pending Approval.",
     });
   } else {

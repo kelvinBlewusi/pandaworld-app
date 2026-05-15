@@ -51,16 +51,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  mockCategories,
-  colorFamilies,
-  warrantyTypes,
-  warrantyDurations,
-  materialFamilies,
-  certifications,
-  productionCountries,
-  calcNetPayout,
-} from "@/lib/mock/categories";
+import { calcNetPayout } from "@/lib/mock/categories";
 import { formatGHS, cn } from "@/lib/utils";
 import type { ListingRow } from "@/lib/supabase/types";
 import { updateListing } from "@/lib/actions/listings";
@@ -1012,6 +1003,70 @@ function CategoryDynamicFields({
 //      alternates as quick-switch buttons (per PDF spec: needs_user_confirmation).
 
 // ─────────────────────────────────────────────────────────────────────────
+// Quality-score fix button — small inline CTA next to the Submit footer
+// that turns the Quality-Score gate into a self-service AI repair flow.
+// Closes the loop on the gate: instead of "Score 62/100, fix the issues
+// listed above", the seller can ask the AI to address them in one click.
+//
+// Reuses the same /resolve-rejection endpoint as RejectionResolverBanner,
+// just with mode='quality_score' and the listed issues as the reason.
+// ─────────────────────────────────────────────────────────────────────────
+
+function QualityFixButton({
+  listingId,
+  issues,
+  onApplied,
+}: {
+  listingId: string;
+  issues:    string[];
+  onApplied: () => void;
+}) {
+  const [working, setWorking] = useState(false);
+  const [error,   setError]   = useState<string | null>(null);
+
+  const fix = async () => {
+    setWorking(true);
+    setError(null);
+    try {
+      const reason = `The seller's quality score is below the publish threshold. Issues flagged by our checker:\n${issues.map((i) => `- ${i}`).join("\n")}\n\nPropose specific field changes that address these issues directly.`;
+      const res = await fetch(`/api/listings/${listingId}/resolve-rejection`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ mode: "quality_score", reason }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "AI fix failed");
+      onApplied();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "AI fix failed");
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-end gap-0.5">
+      <button
+        type="button"
+        onClick={fix}
+        disabled={working || issues.length === 0}
+        className={cn(
+          "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-colors",
+          working
+            ? "bg-violet-300 cursor-not-allowed"
+            : "bg-violet-600 hover:bg-violet-700"
+        )}
+      >
+        {working
+          ? <><Loader2 className="h-3 w-3 animate-spin" /> Fixing…</>
+          : <><Sparkles className="h-3 w-3" /> Fix with AI</>}
+      </button>
+      {error && <p className="text-[10px] text-red-600">{error}</p>}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Rejection resolver banner — shown when the listing was pushed to Jumia
 // and rejected by QC. Offers a one-click "Resolve with AI" action that
 // passes the rejection reason + current fields to Gemini, applies the
@@ -1464,48 +1519,24 @@ const PRODUCT_INFO_FIELDS = [
 const STATIC_FIELDS = ["name", "title", "product_name"];
 
 /**
- * Universal Product Information fields — injected into the schema-driven
- * form when Jumia's per-category schema doesn't include them. Some
- * categories (e.g. Vinyl Cleaners) have minimal schemas and would otherwise
- * hide brand / description / highlights entirely.
+ * Universal Product Information fields — guaranteed fallback injections
+ * for fields Jumia *requires* even when its per-category schema omits
+ * them (some legacy categories return minimal schemas). Brand is the
+ * canonical example: Jumia rejects pushes without it but doesn't always
+ * list it in /catalog/attribute-sets.
+ *
+ * EVERYTHING ELSE comes from Jumia's live schema. If Jumia doesn't ask
+ * for it in this category, we don't show it — matches Vendor Center
+ * exactly.
  *
  * When Jumia DOES return one of these names for the chosen category, the
- * live attribute wins — Jumia's validation rules and allowed values trump
- * these defaults.
- *
- * Defined as a getter (function) so it can reference module-level option
- * lists (colorFamilies etc.) lazily.
+ * live attribute wins via the canonicalKey dedup in SchemaForm.
  */
 function universalInfoFields(): JumiaAttributeDef[] {
   return [
-    { name: "brand",        label: "Brand",                type: "string",  allowed_values: [],                       required: true,  is_variant: false, min_length: null, max_length: null },
-    { name: "color",        label: "Color",                type: "string",  allowed_values: [],                       required: false, is_variant: false, min_length: null, max_length: null },
-    { name: "color_family", label: "Color family",         type: "multi",   allowed_values: [...colorFamilies],       required: false, is_variant: false, min_length: null, max_length: null },
-    { name: "weight_kg",    label: "Weight (kg)",          type: "number",  allowed_values: [],                       required: true,  is_variant: false, min_length: null, max_length: null },
-    { name: "description",  label: "Product description",  type: "textarea",allowed_values: [],                       required: true,  is_variant: false, min_length: 50,   max_length: 9000 },
-    { name: "highlights",   label: "Highlights",           type: "textarea",allowed_values: [],                       required: false, is_variant: false, min_length: null, max_length: null },
-  ];
-}
-
-/**
- * Universal Product Specification fields — injected when Jumia doesn't
- * include them. Covers the seller-facing rich-text fields (warranty,
- * what's-in-box, manufacturer copy) that Jumia stores as listing-level
- * data but rarely exposes through the per-category attribute API.
- */
-function universalSpecFields(): JumiaAttributeDef[] {
-  return [
-    { name: "main_material",         label: "Main material",          type: "string",  allowed_values: [],                          required: false, is_variant: false, min_length: null, max_length: null },
-    { name: "material_family",       label: "Material family",        type: "enum",    allowed_values: [...materialFamilies],       required: false, is_variant: false, min_length: null, max_length: null },
-    { name: "production_country",    label: "Production country",     type: "enum",    allowed_values: [...productionCountries],    required: false, is_variant: false, min_length: null, max_length: null },
-    { name: "certifications",        label: "Certifications",         type: "multi",   allowed_values: [...certifications],         required: false, is_variant: false, min_length: null, max_length: null },
-    { name: "warranty_duration",     label: "Warranty duration",      type: "enum",    allowed_values: [...warrantyDurations],      required: false, is_variant: false, min_length: null, max_length: null },
-    { name: "warranty_type",         label: "Warranty type",          type: "enum",    allowed_values: [...warrantyTypes],          required: false, is_variant: false, min_length: null, max_length: null },
-    { name: "model",                 label: "Model",                  type: "string",  allowed_values: [],                          required: false, is_variant: false, min_length: null, max_length: null },
-    { name: "from_the_manufacturer", label: "From the Manufacturer",  type: "textarea",allowed_values: [],                          required: false, is_variant: false, min_length: null, max_length: null },
-    { name: "whats_in_the_box",      label: "What's in the box",      type: "textarea",allowed_values: [],                          required: false, is_variant: false, min_length: null, max_length: null },
-    { name: "product_warranty",      label: "Product warranty",       type: "textarea",allowed_values: [],                          required: false, is_variant: false, min_length: null, max_length: null },
-    { name: "warranty_address",      label: "Warranty Address",       type: "textarea",allowed_values: [],                          required: false, is_variant: false, min_length: null, max_length: null },
+    { name: "brand",       label: "Brand",                type: "string",   allowed_values: [], required: true,  is_variant: false, min_length: null, max_length: null },
+    { name: "description", label: "Product description",  type: "textarea", allowed_values: [], required: true,  is_variant: false, min_length: 50,   max_length: 9000 },
+    { name: "highlights",  label: "Highlights",           type: "textarea", allowed_values: [], required: false, is_variant: false, min_length: null, max_length: null },
   ];
 }
 
@@ -1551,27 +1582,20 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
   const specRef     = useRef<HTMLDivElement>(null);
   const [activeStep, setActiveStep] = useState<StepId>("info");
 
-  // ── Controlled state ──────────────────────────────────────────────────────
-  const [colorFamily,       setColorFamily]       = useState(listing.color_family ?? "");
-  // Certifications is stored as string[] in the DB but rendered as a
-  // multi-select with comma-separated state for the UI.
-  const [certification,     setCertification]     = useState(
-    Array.isArray(listing.certifications) ? listing.certifications.join(", ") : ""
-  );
-  const [materialFamily,    setMaterialFamily]    = useState(listing.material_family ?? "");
-  const [productionCountry, setProductionCountry] = useState(listing.production_country ?? "");
-  const [warrantyDuration,  setWarrantyDuration]  = useState(listing.warranty_duration ?? "");
-  const [warrantyType,      setWarrantyType]      = useState(listing.warranty_type ?? "");
-  const [brandValue,        setBrandValue]        = useState(listing.brand ?? "");
-
-  // ── Controlled text fields with validation ────────────────────────────────
-  // Jumia enforces strict min/max lengths and rejects feeds that violate them.
-  // We mirror those limits here so Submit is disabled until everything is
-  // valid. The listing also auto-saves to DB on every keystroke (via FormData
-  // capture in handleSave) so the AI suggestion is preserved.
+  // ── Top-level controlled state ────────────────────────────────────────────
+  //
+  // Only fields that need character-count validation in the header UI or
+  // that drive the Quality Score get their own controlled state. Everything
+  // else flows through columnOverrides + dynAttrs (single source of truth,
+  // populated by the schema-driven SchemaForm via handleSchemaFieldChange).
+  //
+  // Jumia enforces strict min/max lengths and rejects feeds that violate
+  // them — we mirror those limits in the input components below so Submit
+  // is gated until everything is valid.
   const [titleValue,       setTitleValue]       = useState(listing.title ?? "");
   const [descriptionValue, setDescriptionValue] = useState(listing.description ?? "");
   const [highlightsValue,  setHighlightsValue]  = useState(listing.highlights ?? "");
+  const [brandValue,       setBrandValue]       = useState(listing.brand ?? "");
 
   // ── Category ──────────────────────────────────────────────────────────────
   const [categoryCode, setCategoryCode] = useState<string | null>(listing.category_code);
@@ -1585,7 +1609,11 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
   // appear pre-filled per the PDF spec ("when selected, its attributes
   // should show up for filling by the AI").
   const [refillingAttributes, setRefillingAttributes] = useState(false);
-  const [refillMsg,           setRefillMsg]           = useState<string | null>(null);
+  // Success messages clear when a fresh refill starts. Errors PERSIST until
+  // explicitly dismissed or a subsequent refill succeeds — sellers must see
+  // when the AI fill failed silently.
+  const [refillSuccess, setRefillSuccess] = useState<string | null>(null);
+  const [refillError,   setRefillError]   = useState<string | null>(null);
 
   const handleCategoryChange = async (cat: { code: number; name: string; path: string }) => {
     const previousCode = categoryCode;
@@ -1600,7 +1628,8 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
     if (String(cat.code) === previousCode) return;
 
     setRefillingAttributes(true);
-    setRefillMsg(null);
+    setRefillSuccess(null);
+    setRefillError(null);
     try {
       const res = await fetch(`/api/listings/${listing.id}/refill-attributes`, {
         method:  "POST",
@@ -1609,7 +1638,7 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
       });
       const data = await res.json();
       if (!res.ok) {
-        setRefillMsg(data.error ?? "Couldn't fetch category fields from Jumia.");
+        setRefillError(data.error ?? "Couldn't fetch category fields from Jumia.");
         return;
       }
       // Merge the new attributes back into local state — no full page reload
@@ -1617,93 +1646,82 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
       if (data.dynamic_attributes) {
         setDynAttrs(data.dynamic_attributes as Record<string, string>);
       }
-      setRefillMsg(
+      // Clear stale column overrides from the PREVIOUS category. Old values
+      // for e.g. color / main_material would otherwise shadow whatever the
+      // AI just filled for the new category.
+      setColumnOverrides({});
+      setRefillSuccess(
         `${data.attributesSchema} field${data.attributesSchema === 1 ? "" : "s"} from Jumia · AI filled ${data.aiFilled}.`
       );
       // Trigger a server refresh so listing.field_confidence + field_sources
       // are fresh next render (for the confidence dots).
       router.refresh();
     } catch (e) {
-      setRefillMsg(e instanceof Error ? e.message : "AI fill failed.");
+      setRefillError(e instanceof Error ? e.message : "AI fill failed.");
     } finally {
       setRefillingAttributes(false);
     }
   };
 
-  // ── Dynamic attributes (category-specific + extra spec fields) ─────────────
+  // ── Schema-form state model ───────────────────────────────────────────────
+  //
+  // The schema-driven SchemaForm is the SOLE editor for every field on the
+  // page except the four top-level controlled inputs above (title, brand,
+  // description, highlights — which need character-count UI and feed the
+  // Quality Score).
+  //
+  // Two state containers carry edits:
+  //   - dynAttrs:        for fields stored in listing.dynamic_attributes
+  //                      (anything Jumia returns that doesn't map to a
+  //                      first-class column)
+  //   - columnOverrides: for fields that DO map to a first-class column
+  //                      (color, weight_kg, main_material, warranty_*, etc.)
+  //
+  // No mirror states, no FormData reads, no display:none fallbacks. Every
+  // edit from SchemaForm lands in exactly one of these two stores; save
+  // reads from both. What the seller types is what gets pushed.
   const [dynAttrs, setDynAttrs] = useState<Record<string, string>>(
     (listing.dynamic_attributes ?? {}) as Record<string, string>
   );
-
-  // Spec rich-text fields stored under reserved dynamic_attributes keys
-  const [note,             setNote]             = useState(dynAttrs["note"] ?? "");
-  const [fda,              setFda]              = useState(dynAttrs["fda"] ?? "");
-  const [fromManufacturer, setFromManufacturer] = useState(dynAttrs["from_the_manufacturer"] ?? "");
-  const [whatsInTheBox,    setWhatsInTheBox]    = useState(dynAttrs["whats_in_the_box"] ?? "");
-
-  // ── Schema-driven form: column overrides ──────────────────────────────────
-  //
-  // When the schema-driven SchemaForm edits a field that maps to a
-  // first-class column (e.g. "color" → listing.color), we store the override
-  // here so the form shows the latest value WITHOUT round-tripping to the
-  // DB. Save merges these into the listing update.
   const [columnOverrides, setColumnOverrides] = useState<Record<string, string>>({});
 
-  // Single entry point for ALL field changes from the schema-driven form.
-  // Routes to the correct local state based on attribute-mapping rules.
+  // Routes every SchemaForm edit to the correct store. The four top-level
+  // controlled fields mirror via a small switch so their character-count
+  // UI stays in sync; everything else is pure columnOverrides / dynAttrs.
   const handleSchemaFieldChange = useCallback((attributeName: string, value: string) => {
     const col = columnFor(attributeName);
 
-    // Mirror to existing controlled state so the static UI widgets reflect
-    // the same value. Columns without controlled state (main_material,
-    // model, etc.) are handled via columnOverrides + the save merger.
+    // Mirror the four header-driven fields to their controlled state.
     switch (col) {
-      case "title":              setTitleValue(value); break;
-      case "description":        setDescriptionValue(value); break;
-      case "highlights":         setHighlightsValue(value); break;
-      case "brand":              setBrandValue(value); break;
-      case "color_family":       setColorFamily(value); break;
-      case "material_family":    setMaterialFamily(value); break;
-      case "production_country": setProductionCountry(value); break;
-      case "warranty_duration":  setWarrantyDuration(value); break;
-      case "warranty_type":      setWarrantyType(value); break;
-      case "certifications":     setCertification(value); break;
-      default: /* no controlled mirror — handled via columnOverrides */
+      case "title":       setTitleValue(value);       break;
+      case "description": setDescriptionValue(value); break;
+      case "highlights":  setHighlightsValue(value);  break;
+      case "brand":       setBrandValue(value);       break;
+      default: /* SchemaForm + columnOverrides/dynAttrs handles the rest */
     }
 
     if (col) {
-      // Column-backed: cache the latest override so SchemaForm reads it
-      // back, AND save merges it into the listings update payload.
       setColumnOverrides((prev) => ({ ...prev, [attributeName]: value }));
     } else {
-      // Dynamic attribute: update the JSON blob.
       setDynAttrs((prev) => ({ ...prev, [attributeName]: value }));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Combined overrides map fed to SchemaForm — wraps current controlled
-  // state AND live dynAttrs so re-renders pick up edits instantly.
-  // Without dynAttrs here, typing into a dynamic-attribute field would
-  // appear "frozen" because SchemaForm falls back to listing.dynamic_attributes
-  // (the stale server snapshot) for any key not in overrideValues.
+  // Overrides map fed to SchemaForm. Order matters: dynAttrs first
+  // (live dyn edits), then columnOverrides (live column edits), then the
+  // four controlled mirrors so character-count edits in the header take
+  // precedence over a stale schema render of the same field.
   const schemaFormOverrides: Record<string, string> = {
-    ...dynAttrs,           // live dynamic-attribute edits (e.g. voltage, battery_capacity)
-    ...columnOverrides,    // live column-mapped edits (e.g. main_material, model)
-    // Static controlled fields → re-broadcast to the schema renderer
-    name:                 titleValue,
-    title:                titleValue,
-    description:          descriptionValue,
-    product_description:  descriptionValue,
-    highlights:           highlightsValue,
-    short_description:    highlightsValue,
-    brand:                brandValue,
-    color_family:         colorFamily,
-    material_family:      materialFamily,
-    production_country:   productionCountry,
-    warranty_duration:    warrantyDuration,
-    warranty_type:        warrantyType,
-    certifications:       certification,
+    ...dynAttrs,
+    ...columnOverrides,
+    name:                titleValue,
+    title:               titleValue,
+    description:         descriptionValue,
+    product_description: descriptionValue,
+    highlights:          highlightsValue,
+    short_description:   highlightsValue,
+    brand:               brandValue,
   };
 
   // ── Variant matrix state ──────────────────────────────────────────────────
@@ -1773,6 +1791,10 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
   const [saveError,   setSaveError]   = useState<string | null>(null);
   const [jumiaNotConnected, setJumiaNotConnected] = useState(false);
   const [publishedRef, setPublishedRef] = useState<string | null>(null);
+  // Tracks the SKU Jumia actually accepted — on retry pushes the server
+  // auto-appends a -RXXXX suffix to dodge duplicate-SKU rejections, so the
+  // seller's UI may now show a different value than what they typed.
+  const [publishedSku, setPublishedSku] = useState<{ sku: string; changed: boolean } | null>(null);
   const [syncStatus, setSyncStatus]   = useState<"idle" | "saving" | "done" | "error">("idle");
 
   // ── Auto-analyze state (one-click category detection + attribute fill) ────
@@ -1793,6 +1815,16 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
       setAnalyzeError("Upload at least one image first.");
       return;
     }
+    // Debounce concurrent runs. Without this, a second click while the
+    // first run is in flight kicks off a parallel AI pipeline and the
+    // results race each other (second often wins, clobbering the first).
+    const inFlight =
+      analyzeStep === "describing" ||
+      analyzeStep === "retrieving" ||
+      analyzeStep === "ranking" ||
+      analyzeStep === "filling";
+    if (inFlight) return;
+
     setAnalyzeError(null);
     setAnalyzeResult(null);
 
@@ -1946,32 +1978,24 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
     setSaveError(null);
     setJumiaNotConnected(false);
 
-    const fd  = new FormData(formRef.current);
-    const str = (key: string) => (fd.get(key) as string | null)?.trim() || null;
-    const num = (key: string) => {
-      const v = (fd.get(key) as string | null)?.trim();
-      return v ? parseFloat(v) : null;
-    };
-
-    // Merge dynamic attributes. dynAttrs is the single source of truth —
-    // schema-driven edits write directly into it via handleSchemaFieldChange.
-    // The legacy controlled states (note / fda / fromManufacturer /
-    // whatsInTheBox) are only used as a fallback if dynAttrs is empty for
-    // that key, so we never overwrite a fresh schema edit with a stale
-    // load-time snapshot.
+    // Single source of truth for the save payload:
+    //   1. Four header-controlled fields (title / description / highlights / brand)
+    //      → read directly from their useState values above.
+    //   2. dynAttrs                  → fields stored in dynamic_attributes JSON.
+    //   3. columnOverrides           → fields that map to first-class columns,
+    //                                  routed through fieldChangeToUpdate() to
+    //                                  pick up type coercion (numbers, arrays).
+    // No FormData reads, no legacy mirror states. What the seller typed via
+    // SchemaForm is exactly what gets persisted.
     const mergedDyn: Record<string, string> = { ...dynAttrs };
-    if (!mergedDyn.note             && note)             mergedDyn.note                    = note;
-    if (!mergedDyn.fda              && fda)              mergedDyn.fda                     = fda;
-    if (!mergedDyn.from_the_manufacturer && fromManufacturer) mergedDyn.from_the_manufacturer = fromManufacturer;
-    if (!mergedDyn.whats_in_the_box && whatsInTheBox)    mergedDyn.whats_in_the_box        = whatsInTheBox;
 
     const sellingPrice = variants[0]?.globalPrice
       ? parseFloat(variants[0].globalPrice)
       : (listing.selling_price ?? 0);
 
-    // Schema-driven form edits cached in columnOverrides override anything
-    // typed into the static UI. Walks each override → routes via
-    // attribute-mapping → merges into the listing update payload.
+    // Walk every columnOverride through fieldChangeToUpdate so the column
+    // gets the correct coerced value (e.g. weight_kg as number, not string;
+    // certifications as string[] not "a, b").
     const overrideColumnUpdates: Record<string, unknown> = {};
     for (const [attr, val] of Object.entries(columnOverrides)) {
       const { columnUpdate } = fieldChangeToUpdate(attr, val);
@@ -1980,36 +2004,27 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
 
     try {
       await updateListing(listing.id, {
+        // Header-controlled (always set from controlled state)
         title:              titleValue.trim() || null,
         description:        descriptionValue.trim() || null,
         highlights:         highlightsValue.trim() || null,
         brand:              brandValue || null,
-        color:              str("color"),
-        color_family:       colorFamily || null,
-        weight_kg:          num("weight"),
-        selling_price:      sellingPrice > 0 ? sellingPrice : null,
-        main_material:      str("main_material"),
-        material_family:    materialFamily || null,
-        model:              str("model"),
-        product_line:       str("product_line"),
-        production_country: productionCountry || null,
-        certifications:     certification
-                              ? certification.split(",").map((s) => s.trim()).filter(Boolean)
-                              : [],
-        warranty_duration:  warrantyDuration || null,
-        warranty_type:      warrantyType || null,
-        warranty_text:      str("product_warranty"),
-        warranty_address:   str("warranty_address"),
-        youtube_id:         str("youtube_id"),
+        // Category metadata
         category_code:      categoryCode,
         category_path:      categoryPath,
-        dynamic_attributes: mergedDyn,
-        quality_score:      qualityResult.score,
-        status:             listing.status === "live" ? "live" : "draft",
+        // Variants-derived
+        selling_price:      sellingPrice > 0 ? sellingPrice : null,
         ...(axesDef.length === 0 ? {
           quantity: Math.max(0, parseInt(variants[0]?.quantity ?? "1") || 1),
         } : {}),
-        // Schema-driven overrides last → they win over the static UI values.
+        // Dynamic attributes (everything not column-mapped)
+        dynamic_attributes: mergedDyn,
+        // Quality + status
+        quality_score:      qualityResult.score,
+        status:             listing.status === "live" ? "live" : "draft",
+        // Column-backed schema edits (winning spread — applies to color,
+        // weight_kg, main_material, material_family, production_country,
+        // warranty_*, model, product_line, certifications, youtube_id, etc.)
         ...overrideColumnUpdates,
       });
 
@@ -2023,10 +2038,19 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ listingId: listing.id }),
       });
-      const pushData = await pushRes.json() as { success?: boolean; error?: string; jumia_ref?: string };
+      const pushData = await pushRes.json() as {
+        success?:     boolean;
+        error?:       string;
+        jumia_ref?:   string;
+        sku?:         string;
+        sku_changed?: boolean;
+      };
 
       if (pushRes.ok && pushData.success) {
         setPublishedRef(pushData.jumia_ref ?? null);
+        if (pushData.sku) {
+          setPublishedSku({ sku: pushData.sku, changed: Boolean(pushData.sku_changed) });
+        }
         router.push("/listings");
       } else if (pushData.error?.includes("not connected") || pushRes.status === 403) {
         setJumiaNotConnected(true);
@@ -2209,9 +2233,18 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
             {/* Banners */}
             <RejectionResolverBanner listing={listing} router={router} />
             {publishedRef && (
-              <div className="flex items-center gap-3 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-                <CheckCircle2 className="h-4 w-4 shrink-0" />
-                Submitted to Jumia (feed ID: <code className="font-mono text-xs">{publishedRef}</code>).
+              <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 space-y-1">
+                <div className="flex items-center gap-3">
+                  <CheckCircle2 className="h-4 w-4 shrink-0" />
+                  Submitted to Jumia (feed ID: <code className="font-mono text-xs">{publishedRef}</code>).
+                </div>
+                {publishedSku?.changed && (
+                  <p className="pl-7 text-[11px] text-emerald-700/80">
+                    Note: this push was a retry, so we auto-bumped the seller SKU to{" "}
+                    <code className="font-mono text-emerald-800">{publishedSku.sku}</code>{" "}
+                    to avoid Jumia&apos;s duplicate-SKU check. This is the SKU Jumia knows.
+                  </p>
+                )}
               </div>
             )}
             {jumiaNotConnected && (
@@ -2330,17 +2363,33 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                     <span className="truncate">{categoryName || "Category"}</span>
                     <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />
                   </button>
-                  {refillMsg && !refillingAttributes && (
-                    <p className="text-[11px] text-emerald-600">{refillMsg}</p>
+                  {refillSuccess && !refillingAttributes && !refillError && (
+                    <p className="text-[11px] text-emerald-600">{refillSuccess}</p>
+                  )}
+                  {refillError && (
+                    <div className="flex items-start gap-1.5 rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-[11px] text-red-700">
+                      <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                      <div className="flex-1 break-words">
+                        <span className="font-medium">AI fill failed:</span> {refillError}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setRefillError(null)}
+                        className="text-red-500 hover:text-red-700 font-bold leading-none"
+                        aria-label="Dismiss"
+                      >
+                        ×
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
 
-              {/* Schema-driven Product Information body (Brand / Color /
-                  Color family / Weight / Description / Highlights / Material).
-                  Falls through to whatever Jumia's schema returns for this
-                  category. The legacy static layout below stays as a
-                  display:none fallback during transition. */}
+              {/* Schema-driven Product Information body. Renders the exact
+                  fields Jumia's schema returns for the chosen category,
+                  plus three guaranteed-universal fallbacks (brand,
+                  description, highlights) for categories whose schemas
+                  omit them. Matches Vendor Center 1:1. */}
               {categoryCode && (
                 <SchemaForm
                   categoryCode={categoryCode}
@@ -2366,121 +2415,6 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                 />
               )}
 
-              {/* Legacy static Product Information fields — HIDDEN.
-                  Preserved in the DOM so the existing controlled state
-                  (brandValue, descriptionValue, etc.) keeps working until
-                  we delete the legacy layout in a follow-up. */}
-              {categoryCode && (
-                <div style={{ display: "none" }}>
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-semibold text-zinc-700 flex items-center">
-                        Brand<Required />
-                        <ConfidenceDot
-                          source={listing.field_confidence?.["brand"]?.source}
-                          confidence={listing.field_confidence?.["brand"]?.confidence}
-                        />
-                      </Label>
-                      <BrandCombobox value={brandValue} onChange={setBrandValue} />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="color" className="text-xs font-semibold text-zinc-700 flex items-center">
-                        Color
-                        <ConfidenceDot
-                          source={listing.field_confidence?.["color"]?.source}
-                          confidence={listing.field_confidence?.["color"]?.confidence}
-                        />
-                      </Label>
-                      <Input
-                        id="color" name="color"
-                        defaultValue={listing.color ?? ""}
-                        placeholder="Ex: Midnight Black, Navy Blue"
-                        className="h-10 text-sm"
-                      />
-                      <p className="text-[11px] text-zinc-500">
-                        Separate multiple colors with commas.
-                        <span className="text-orange-600"> Required to increase listing quality.</span>
-                      </p>
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-semibold text-zinc-700 flex items-center">
-                        Color family
-                        <ConfidenceDot
-                          source={listing.field_confidence?.["color_family"]?.source}
-                          confidence={listing.field_confidence?.["color_family"]?.confidence}
-                        />
-                      </Label>
-                      <MultiSelectDropdown
-                        options={[...colorFamilies]}
-                        value={colorFamily}
-                        onChange={setColorFamily}
-                        placeholder="Ex: Black, Blue [pick one or more]"
-                      />
-                      <p className="text-[11px] text-orange-600">Required to increase listing quality · select multiple</p>
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="weight" className="text-xs font-semibold text-zinc-700">
-                        Weight (kg)<Required />
-                      </Label>
-                      <Input
-                        id="weight" name="weight" type="number" step="0.01" min="0"
-                        defaultValue={listing.weight_kg?.toString() ?? ""}
-                        placeholder="Ex: 1.2 kg [Weight of the product]"
-                        className="h-10 text-sm"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-semibold text-zinc-700">
-                      Product description<Required />
-                    </Label>
-                    <RichTextField
-                      id="description"
-                      value={descriptionValue}
-                      onChange={setDescriptionValue}
-                      rows={4}
-                      placeholder="- Include only product - related information.- Write clearly and concisely.- Make sure the description matches your product images.- Testimonials or quotes of any kind are not allowed - No promotional messages or promoting other products except the product itself."
-                    />
-                    <p className={cn(
-                      "text-[11px]",
-                      descriptionValue.length === 0    ? "text-zinc-400" :
-                      descriptionValue.length < 50     ? "text-red-500"  :
-                      descriptionValue.length < 80     ? "text-amber-600" :
-                      descriptionValue.length > 9000   ? "text-red-500"  :
-                                                         "text-emerald-600"
-                    )}>
-                      {descriptionValue.length} characters · Jumia requires 50–9,000 · aim for 200+ for a good quality score
-                    </p>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-semibold text-zinc-700">
-                      Highlights<Required />
-                    </Label>
-                    <RichTextField
-                      id="highlights"
-                      value={highlightsValue}
-                      onChange={setHighlightsValue}
-                      rows={3}
-                      placeholder="[Key features in bullet points, minimum of 4 for a good content score] Ex: - Lightweight design - Noise cancellation - 20 - hour battery life - Wireless connectivity"
-                    />
-                    <p className={cn(
-                      "text-[11px]",
-                      highlightsValue.length === 0 ? "text-zinc-400" :
-                      highlightsValue.length < 50  ? "text-amber-600" :
-                                                     "text-emerald-600"
-                    )}>
-                      {highlightsValue.length} characters · 4+ bullets starting with • recommended
-                    </p>
-                  </div>
-
-                  {/* Note: Category-specific attributes render in the Product
-                      Specification section below, NOT here — matching Jumia
-                      VC's structure where Product Information ends at
-                      Highlights and Specification starts at Certifications. */}
-                </div>
-              )}
             </section>
 
             {/* ────────────── Section 2: Variants ────────────────────────── */}
@@ -2613,16 +2547,13 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
             </section>
 
             {/* ────────────── Section 3: Product Specification ──────────────
-                Now 100% driven by Jumia's category schema. The SchemaForm
+                100% driven by Jumia's category schema. The SchemaForm
                 component fetches GET /api/jumia/categories/{code}/attributes
                 and renders every field with the correct type (text, number,
                 date, multi-select, etc.). Backing store is decided per-field
-                by lib/jumia/attribute-mapping — most universal fields land
-                in their first-class column; truly category-specific ones
-                land in dynamic_attributes.
-
-                The legacy static layout is preserved below (kept hidden for
-                now) so the existing FormData-based save still works.
+                by lib/jumia/attribute-mapping — universal fields land in
+                their first-class column; category-specific ones go into
+                dynamic_attributes.
             */}
             <section ref={specRef} className="bg-white rounded-md border border-zinc-200 p-6 space-y-5 scroll-mt-6">
               <div className="flex items-center justify-between gap-2">
@@ -2640,7 +2571,6 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
                 fieldSources={listing.field_sources ?? undefined}
                 fieldConfidence={listing.field_confidence ?? undefined}
                 excludeNames={[...PRODUCT_INFO_FIELDS, ...STATIC_FIELDS]}
-                extraFields={universalSpecFields()}
                 excludeVariants
                 renderConfidenceDot={({ source, confidence }) =>
                   source ? (
@@ -2653,204 +2583,6 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
               />
             </section>
 
-            {/* ────────────── Legacy static spec section (HIDDEN) ──────────
-                Kept in the DOM so the form still works during transition.
-                Will be deleted in a follow-up once the schema-driven form
-                is verified end-to-end. */}
-            <section style={{ display: "none" }} className="bg-white rounded-md border border-zinc-200 p-6 space-y-5 scroll-mt-6">
-              <h2 className="text-lg font-bold text-zinc-900">Product Specification</h2>
-
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold text-zinc-700">Certifications</Label>
-                  <MultiSelectDropdown
-                    options={[...certifications]}
-                    value={certification}
-                    onChange={setCertification}
-                    placeholder="Ex: ISO 9001, CE [pick one or more]"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="main_material" className="text-xs font-semibold text-zinc-700">Main material</Label>
-                  <Input
-                    id="main_material" name="main_material"
-                    defaultValue={listing.main_material ?? ""}
-                    placeholder="Ex: Stainless Steel [Main material used in the pr..."
-                    className="h-10 text-sm"
-                  />
-                  <p className="text-[11px] text-orange-600">Required to increase listing quality</p>
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold text-zinc-700">Material family</Label>
-                  <Select value={materialFamily} onValueChange={setMaterialFamily}>
-                    <SelectTrigger className="h-10 text-sm">
-                      <SelectValue placeholder="Ex: Metal [Broad category of materials that the..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {materialFamilies.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-[11px] text-orange-600">Required to increase listing quality</p>
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label htmlFor="model" className="text-xs font-semibold text-zinc-700">Model</Label>
-                  <Input
-                    id="model" name="model"
-                    defaultValue={listing.model ?? ""}
-                    placeholder="Ex: MD-1234 [Model ID or manufacturer part nu..."
-                    className="h-10 text-sm"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="note_field" className="text-xs font-semibold text-zinc-700">Note</Label>
-                  <Input
-                    id="note_field"
-                    value={note}
-                    onChange={(e) => setNote(e.target.value)}
-                    placeholder="Ex: Limited availability during holiday season [C..."
-                    className="h-10 text-sm"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold text-zinc-700">Production country</Label>
-                  <Select value={productionCountry} onValueChange={setProductionCountry}>
-                    <SelectTrigger className="h-10 text-sm">
-                      <SelectValue placeholder="Ex: China [Country where the product is manuf..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {productionCountries.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label htmlFor="product_line" className="text-xs font-semibold text-zinc-700">Product Line</Label>
-                  <Input
-                    id="product_line" name="product_line"
-                    defaultValue={listing.product_line ?? ""}
-                    placeholder="Ex: Alpha Series [Line, range, or sub-brand und..."
-                    className="h-10 text-sm"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="size_field" className="text-xs font-semibold text-zinc-700">Size (L x W x H cm)</Label>
-                  <Input
-                    id="size_field" name="size_field"
-                    defaultValue={
-                      listing.size_l && listing.size_w && listing.size_h
-                        ? `${listing.size_l} × ${listing.size_w} × ${listing.size_h}`
-                        : ""
-                    }
-                    placeholder="Ex: 10 × 8 × 5 cm [Dimensions of the product; C..."
-                    className="h-10 text-sm"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold text-zinc-700">Warranty Duration</Label>
-                  <Select value={warrantyDuration} onValueChange={setWarrantyDuration}>
-                    <SelectTrigger className="h-10 text-sm">
-                      <SelectValue placeholder="Ex: 2 years [Length of warranty coverage for t..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {warrantyDurations.map((w) => <SelectItem key={w} value={w}>{w}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-[11px] text-orange-600">Required to increase listing quality</p>
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold text-zinc-700">Warranty Type</Label>
-                  <Select value={warrantyType} onValueChange={setWarrantyType}>
-                    <SelectTrigger className="h-10 text-sm">
-                      <SelectValue placeholder="Ex: Service center - Lagos [Type of warranty of..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {warrantyTypes.map((w) => <SelectItem key={w} value={w}>{w}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="youtube_id" className="text-xs font-semibold text-zinc-700">Youtube ID</Label>
-                  <Input
-                    id="youtube_id" name="youtube_id"
-                    defaultValue={listing.youtube_id ?? ""}
-                    placeholder="Ex: a1b2c3d4 [ID for an associated YouTube vid..."
-                    className="h-10 text-sm"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="fda_field" className="text-xs font-semibold text-zinc-700">FDA</Label>
-                  <Input
-                    id="fda_field"
-                    value={fda}
-                    onChange={(e) => setFda(e.target.value)}
-                    placeholder="Ex: E1452773G [Indicates FOOD And Drug Agen..."
-                    className="h-10 text-sm"
-                  />
-                </div>
-              </div>
-
-              {/* Category-specific dynamic fields — these change PER category.
-                  Empty for categories with no extras beyond the static ones
-                  above. Auto-loads schema from Jumia when category changes. */}
-              {categoryCode && (
-                <div className="border-t pt-5">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 mb-3">
-                    Category-specific fields
-                  </p>
-                  <CategoryDynamicFields
-                    categoryCode={categoryCode}
-                    values={dynAttrs}
-                    onChange={(k, v) => setDynAttrs((p) => ({ ...p, [k]: v }))}
-                  />
-                </div>
-              )}
-
-              {/* Rich text spec fields */}
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-zinc-700">From the Manufacturer</Label>
-                <RichTextField
-                  id="from_manufacturer"
-                  value={fromManufacturer}
-                  onChange={setFromManufacturer}
-                  rows={3}
-                  placeholder="Ex: Made with high - quality materials for durability and performance.[Text from the manufacturer describing the product]"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-zinc-700">What&apos;s in the box</Label>
-                <RichTextField
-                  id="whats_in_the_box"
-                  value={whatsInTheBox}
-                  onChange={setWhatsInTheBox}
-                  rows={3}
-                  placeholder="Ex: 1x Headphone, 1x Charging Cable, 1x User Manual [Contents included with the product in the package]"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-zinc-700">Product warranty</Label>
-                <RichTextField
-                  id="product_warranty"
-                  defaultValue={listing.warranty_text ?? ""}
-                  rows={3}
-                  placeholder="Ex: 1 year limited warranty [Warranty terms covering the product]"
-                />
-                <p className="text-[11px] text-orange-600">Required to increase listing quality</p>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-zinc-700">Warranty Address</Label>
-                <RichTextField
-                  id="warranty_address"
-                  defaultValue={listing.warranty_address ?? ""}
-                  rows={3}
-                  placeholder="Ex: 123 Service St, City [Address for warranty-related services]"
-                />
-              </div>
-            </section>
 
             {/* Inline error */}
             {saveError && !jumiaNotConnected && (
@@ -2885,9 +2617,16 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
         <div className="flex items-center gap-2">
           {syncStatus === "done"  && <span className="rounded-md bg-white border px-3 py-1 text-xs text-emerald-600 shadow-sm">✓ Submitted</span>}
           {canPublish && qualityResult.score < PUBLISH_THRESHOLD && (
-            <span className="rounded-md bg-white border border-amber-200 px-3 py-1.5 text-[11px] text-amber-700 shadow-sm">
-              Quality {qualityResult.score}/{PUBLISH_THRESHOLD}
-            </span>
+            <>
+              <span className="rounded-md bg-white border border-amber-200 px-3 py-1.5 text-[11px] text-amber-700 shadow-sm">
+                Quality {qualityResult.score}/{PUBLISH_THRESHOLD}
+              </span>
+              <QualityFixButton
+                listingId={listing.id}
+                issues={qualityResult.issues}
+                onApplied={() => router.refresh()}
+              />
+            </>
           )}
           <Button
             type="button"
