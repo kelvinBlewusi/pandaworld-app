@@ -139,7 +139,7 @@ export async function POST(
   const tRank = Date.now();
   let ranked: Awaited<ReturnType<typeof aiPassB_rankCategory>>;
   try {
-    ranked = await aiPassB_rankCategory(images, candidates);
+    ranked = await aiPassB_rankCategory(images, candidates, userContext);
     timings.rank_ms = Date.now() - tRank;
   } catch (e) {
     return NextResponse.json(
@@ -188,7 +188,7 @@ export async function POST(
     field_confidence:   {},
   };
   try {
-    filled = await extractAttributesForCategory(images, chosen.code);
+    filled = await extractAttributesForCategory(images, chosen.code, userContext);
     timings.fill_ms = Date.now() - tFill;
   } catch (e) {
     console.warn(`[auto-analyze] attribute fill failed: ${(e as Error).message}`);

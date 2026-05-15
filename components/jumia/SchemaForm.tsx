@@ -13,7 +13,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { Loader2, Tag, AlertCircle } from "lucide-react";
 import { SchemaField, type JumiaAttributeDef } from "./SchemaField";
-import { columnFor, readAttributeValue } from "@/lib/jumia/attribute-mapping";
+import { canonicalKey, columnFor, readAttributeValue } from "@/lib/jumia/attribute-mapping";
 import type { ListingRow } from "@/lib/supabase/types";
 
 interface SchemaFormProps {
@@ -170,30 +170,54 @@ export function SchemaForm({
   }
 
   // Merge Jumia's live schema with caller-supplied extraFields, deduped by
-  // BOTH attribute name AND backing column. Jumia sometimes returns
-  // aliases for the same logical field (e.g. "weight" + "weight_kg",
-  // "highlights" + "short_description") which all map to the same column
-  // — rendering both creates ghost duplicates. We keep the first one we
-  // see and drop subsequent aliases.
+  // canonical key (collapses column aliases like weight/weight_kg AND
+  // dynamic-attribute aliases like whats_in_the_box/what_is_in_the_box).
   //
-  // Live attributes win on collision so Jumia's exact validation rules /
-  // allowed_values trump our defaults whenever Jumia returns the field.
-  const seenColumns = new Set<string>();
-  const seenNames   = new Set<string>();
-  const merged:     JumiaAttributeDef[] = [];
+  // Jumia's live attribute wins on collision so its exact validation rules
+  // trump our defaults — BUT we enrich the live attr in place if it's
+  // missing critical info our extraField has (e.g. Jumia returned the
+  // field as TEXT/NUMBER with no allowed_values, but we know it should
+  // be a SELECTION with a fixed option list).
+  const merged:    JumiaAttributeDef[]                  = [];
+  const byKey:     Map<string, JumiaAttributeDef>       = new Map();
 
-  const tryAccept = (attr: JumiaAttributeDef) => {
-    const n = attr.name.toLowerCase();
-    if (seenNames.has(n)) return;
-    const col = columnFor(attr.name);
-    if (col && seenColumns.has(col)) return;
-    seenNames.add(n);
-    if (col) seenColumns.add(col);
-    merged.push(attr);
+  const consume = (attr: JumiaAttributeDef, isExtra: boolean) => {
+    const key = canonicalKey(attr.name);
+    const existing = byKey.get(key);
+    if (!existing) {
+      // First time we see this canonical key — accept it. Spread so the
+      // map and array share the same object reference; we mutate later
+      // during enrichment.
+      const copy: JumiaAttributeDef = { ...attr, allowed_values: [...attr.allowed_values] };
+      byKey.set(key, copy);
+      merged.push(copy);
+      return;
+    }
+    // Duplicate canonical key — try to enrich the existing attr with
+    // anything the second one has but the first lacks. Only enrich FROM
+    // extras (we never let an extraField overwrite live Jumia data).
+    if (!isExtra) return;
+
+    // Fill in missing allowed_values from extras.
+    if (existing.allowed_values.length === 0 && attr.allowed_values.length > 0) {
+      existing.allowed_values = [...attr.allowed_values];
+    }
+    // Promote type from string/number to enum/multi when the extras have
+    // a more specific type with a populated option list. Prevents
+    // "Material family" rendering as a free-text input just because
+    // Jumia's per-category schema reported it as TEXT.
+    if (
+      (existing.type === "string" || existing.type === "number") &&
+      (attr.type === "enum" || attr.type === "multi") &&
+      attr.allowed_values.length > 0
+    ) {
+      existing.type           = attr.type;
+      existing.allowed_values = [...attr.allowed_values];
+    }
   };
 
-  for (const a of schema)               tryAccept(a);
-  for (const a of extraFields ?? [])    tryAccept(a);
+  for (const a of schema)            consume(a, false);
+  for (const a of extraFields ?? []) consume(a, true);
 
   if (merged.length === 0) {
     // No attributes for this category and no extras — correct for some

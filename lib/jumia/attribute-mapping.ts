@@ -115,6 +115,59 @@ export function columnFor(attributeName: string): MappedColumn | null {
 }
 
 /**
+ * Alias groups for dynamic-attribute keys. Jumia uses different spellings
+ * across categories for the same logical seller field — without these
+ * groups, the SchemaForm would render the same field twice (once for
+ * each spelling), often with the second copy stuck as a NUMBER input
+ * because Jumia's schema reported a weird type for the alias.
+ *
+ * Keys are the variants Jumia may use; values are the single canonical
+ * key we use throughout the app. Add new aliases here whenever a
+ * duplicate field appears in the UI.
+ */
+const DYNAMIC_ALIAS_GROUPS: Record<string, string> = {
+  // ── What's in the box ──────────────────────────────────────────────────
+  whats_in_the_box:         "whats_in_the_box",
+  what_is_in_the_box:       "whats_in_the_box",
+  what_in_box:              "whats_in_the_box",
+  whats_in_box:             "whats_in_the_box",
+  box_contents:             "whats_in_the_box",
+  in_the_box:               "whats_in_the_box",
+  package_contents:         "whats_in_the_box",
+  contents_of_the_box:      "whats_in_the_box",
+  // ── From the manufacturer (descriptive text, not the brand value) ─────
+  from_the_manufacturer:    "from_the_manufacturer",
+  from_manufacturer:        "from_the_manufacturer",
+  manufacturer_description: "from_the_manufacturer",
+  manufacturer_text:        "from_the_manufacturer",
+  manufacturer_info:        "from_the_manufacturer",
+  manufacturer_notes:       "from_the_manufacturer",
+  // ── Notes ─────────────────────────────────────────────────────────────
+  note:                     "note",
+  notes:                    "note",
+  // ── Additional information ────────────────────────────────────────────
+  additional_info:          "additional_info",
+  additional_information:   "additional_info",
+};
+
+/**
+ * Returns a stable key that collapses ALL aliases for the same logical
+ * field. Two attribute names with the same canonical key should render
+ * as ONE field — SchemaForm uses this for dedup.
+ *
+ * Resolution order:
+ *  1. If the attribute maps to a first-class column → "col:<column>"
+ *  2. If the attribute is in an alias group → the canonical name
+ *  3. Otherwise → the lowercased attribute name (no transformation)
+ */
+export function canonicalKey(attributeName: string): string {
+  const lc = attributeName.toLowerCase();
+  const col = ATTRIBUTE_TO_COLUMN[lc];
+  if (col) return `col:${col}`;
+  return DYNAMIC_ALIAS_GROUPS[lc] ?? lc;
+}
+
+/**
  * Read the current value of an attribute from a listing row.
  * Handles both column-backed and dynamic_attributes-backed fields.
  * Always returns a string — type coercion is done at render time.

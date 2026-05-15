@@ -70,15 +70,29 @@ interface SchemaFieldProps {
 }
 
 // Attribute names that should always render as a multi-line textarea even
-// if Jumia returns type=TEXT for them. Matches Jumia VC behaviour where
-// these fields appear with a rich-text editor.
+// if Jumia returns type=TEXT or type=NUMBER for them. Matches Jumia VC
+// behaviour where these fields appear with a rich-text editor.
+//
+// IMPORTANT: "manufacturer" intentionally LEFT OUT — Jumia uses that name
+// for the BRAND value (autocomplete from brand catalogue), not for the
+// descriptive "From the Manufacturer" textarea. The descriptive field is
+// "from_the_manufacturer" (and its aliases in attribute-mapping).
 const LONG_TEXT_FIELD_NAMES = new Set<string>([
+  // ── Long product copy ────────────────────────────────────────────────
   "description", "product_description",
   "highlights", "short_description",
-  "from_the_manufacturer", "manufacturer",
-  "whats_in_the_box", "box_contents", "in_the_box",
+  // ── From the manufacturer (descriptive text) ─────────────────────────
+  "from_the_manufacturer", "from_manufacturer",
+  "manufacturer_description", "manufacturer_text",
+  "manufacturer_info", "manufacturer_notes",
+  // ── What's in the box ────────────────────────────────────────────────
+  "whats_in_the_box", "what_is_in_the_box", "what_in_box",
+  "whats_in_box", "box_contents", "in_the_box",
+  "package_contents", "contents_of_the_box",
+  // ── Warranty copy ────────────────────────────────────────────────────
   "product_warranty", "warranty_text", "warranty",
-  "warranty_address",
+  "warranty_address", "warranty_info",
+  // ── Notes ────────────────────────────────────────────────────────────
   "note", "notes",
   "additional_info", "additional_information",
 ]);

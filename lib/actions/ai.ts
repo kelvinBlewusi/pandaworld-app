@@ -763,7 +763,8 @@ export interface RankingResult {
 
 export async function aiPassB_rankCategory(
   imageUrls:  string[],
-  candidates: Array<{ code: number; name: string; path: string }>
+  candidates: Array<{ code: number; name: string; path: string }>,
+  userContext?: string | null,
 ): Promise<RankingResult> {
   if (candidates.length === 0) {
     return { primary: null, alternates: [], needsUserConfirmation: true };
@@ -791,6 +792,10 @@ export async function aiPassB_rankCategory(
     .map((c, i) => `${i + 1}. ${c.code} — ${c.path}`)
     .join("\n");
 
+  const ctxSection = userContext && userContext.trim()
+    ? `\n\nSELLER CONTEXT (treat as authoritative for what the images don't show — may bias the category choice):\n"${userContext.trim()}"\n`
+    : "";
+
   const prompt = `You are a Jumia category classification expert. Look at the product images and pick the single best Jumia leaf category for them from the candidates below.
 
 CANDIDATES:
@@ -801,7 +806,7 @@ Rules:
 2. List up to 2 alternates in case the primary is wrong.
 3. Confidence is 0..1. Be honest — use 0.5 or below if you're unsure.
 4. You MUST choose from the candidates above. Do not invent new codes.
-
+${ctxSection}
 Return ONLY valid JSON, no markdown:
 {
   "primary_code":       <number from the list>,
@@ -847,7 +852,8 @@ Return ONLY valid JSON, no markdown:
 
 export async function extractAttributesForCategory(
   imageUrls:    string[],
-  categoryCode: number
+  categoryCode: number,
+  userContext?: string | null,
 ): Promise<{
   dynamic_attributes: Record<string, string>;
   field_sources:      Record<string, "ai">;
@@ -879,6 +885,10 @@ export async function extractAttributesForCategory(
     return `  - ${a.name}: ${a.label}${valStr}${a.required ? " [REQUIRED]" : ""}`;
   }).join("\n");
 
+  const ctxSection = userContext && userContext.trim()
+    ? `\n\nSELLER CONTEXT (treat as authoritative — these are things the seller knows that the images don't show, e.g. pack size, variant, exact spec):\n"${userContext.trim()}"\n`
+    : "";
+
   const prompt = `You are a Jumia product-listing assistant. Look at the product images and fill ONLY the attributes listed below for the category. Return a SINGLE JSON object.
 
 CATEGORY ATTRIBUTES TO FILL (use the exact attribute names as keys):
@@ -889,7 +899,7 @@ RULES:
 2. For attributes with allowed values, pick exactly one value from the list (or null if unsure).
 3. Skip / set null for fields you can't determine from the images. NEVER guess price, model, brand (unless logo clearly visible), or warranty terms.
 4. Return only attributes you could fill — omit ones you're not sure about.
-
+${ctxSection}
 Return ONLY valid JSON, no markdown:
 {
   "attributes": {

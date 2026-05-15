@@ -1953,14 +1953,17 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
       return v ? parseFloat(v) : null;
     };
 
-    // Merge spec rich-text fields into dynamic_attributes
-    const mergedDyn = {
-      ...dynAttrs,
-      ...(note             ? { note }                             : {}),
-      ...(fda              ? { fda }                              : {}),
-      ...(fromManufacturer ? { from_the_manufacturer: fromManufacturer } : {}),
-      ...(whatsInTheBox    ? { whats_in_the_box: whatsInTheBox } : {}),
-    };
+    // Merge dynamic attributes. dynAttrs is the single source of truth —
+    // schema-driven edits write directly into it via handleSchemaFieldChange.
+    // The legacy controlled states (note / fda / fromManufacturer /
+    // whatsInTheBox) are only used as a fallback if dynAttrs is empty for
+    // that key, so we never overwrite a fresh schema edit with a stale
+    // load-time snapshot.
+    const mergedDyn: Record<string, string> = { ...dynAttrs };
+    if (!mergedDyn.note             && note)             mergedDyn.note                    = note;
+    if (!mergedDyn.fda              && fda)              mergedDyn.fda                     = fda;
+    if (!mergedDyn.from_the_manufacturer && fromManufacturer) mergedDyn.from_the_manufacturer = fromManufacturer;
+    if (!mergedDyn.whats_in_the_box && whatsInTheBox)    mergedDyn.whats_in_the_box        = whatsInTheBox;
 
     const sellingPrice = variants[0]?.globalPrice
       ? parseFloat(variants[0].globalPrice)

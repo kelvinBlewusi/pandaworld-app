@@ -31,7 +31,7 @@ export async function POST(
   const { userId } = await auth();
   if (!userId) return new NextResponse("Unauthorized", { status: 401 });
 
-  let body: { categoryCode?: number; categoryPath?: string };
+  let body: { categoryCode?: number; categoryPath?: string; userPrompt?: string };
   try {
     body = await req.json();
   } catch {
@@ -42,6 +42,13 @@ export async function POST(
   if (!categoryCode || isNaN(categoryCode)) {
     return NextResponse.json({ error: "categoryCode is required" }, { status: 400 });
   }
+
+  // Optional free-text seller hint — flows to Pass C so the AI honours
+  // things the images don't show (pack size, exact variant, etc.).
+  const userContext: string | null =
+    typeof body.userPrompt === "string" && body.userPrompt.trim()
+      ? body.userPrompt.trim().slice(0, 1000)
+      : null;
 
   const db = createServerClient();
 
@@ -97,7 +104,7 @@ export async function POST(
   }
 
   // ── 4. Ask Gemini to fill the attributes for this category ───────────────
-  const extracted = await extractAttributesForCategory(images, categoryCode);
+  const extracted = await extractAttributesForCategory(images, categoryCode, userContext);
 
   // ── 5. Merge with existing values: AI fills empty slots, user-edited
   //      values are preserved. The replaced-category-attrs scenario: when
