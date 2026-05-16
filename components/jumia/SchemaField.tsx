@@ -97,15 +97,43 @@ const LONG_TEXT_FIELD_NAMES = new Set<string>([
   "additional_info", "additional_information",
 ]);
 
+// Label patterns that ALWAYS render as textarea regardless of Jumia's
+// reported type. Jumia uses varied internal attribute names per category
+// (e.g. one category may call the field "whats_in_box", another
+// "package_contents") but the human-readable label stays consistent.
+// Matching on label catches cases the name-set misses.
+//
+// Pattern matches are case-insensitive and partial — "Product description"
+// in a label hits /description/i. Keep the list tight: only labels we
+// know with high confidence are descriptive free-text fields.
+const LONG_TEXT_LABEL_PATTERNS: RegExp[] = [
+  /what.?s in (the )?box/i,         // "What's in the box", "Whats in box", etc.
+  /(box|package) contents?/i,        // "Box contents", "Package content"
+  /from the manufacturer/i,
+  /manufacturer (description|text|info|notes?)/i,
+  /product description/i,
+  /short description/i,
+  /(product )?highlights?/i,
+  /additional information?/i,
+  /(product )?warranty (text|address|info|description|terms?)/i,
+];
+
 function effectiveType(attr: JumiaAttributeDef): JumiaAttrType {
-  // Force-promote known long-text field names to TEXTAREA regardless of
-  // what Jumia's schema reports. Some categories return TEXT (single line)
-  // or even NUMBER for these fields, which would silently break input —
-  // the user typed text into a `<input type="number">` and the browser
-  // rejected anything non-numeric. Match Jumia VC's behaviour where these
-  // ALWAYS render as multi-line rich-text editors.
+  // Force-promote known long-text fields to TEXTAREA regardless of what
+  // Jumia's schema reports. Some categories return TEXT (single line) or
+  // even NUMBER for these fields, which would silently break input — the
+  // seller typed text into an `<input type="number">` and the browser
+  // rejected anything non-numeric, or the AI-filled value didn't display
+  // at all because it wasn't a parseable number.
+  //
+  // Two-layer match: first try the internal attribute name (snake_case),
+  // then fall through to the human-readable label (since Jumia's names
+  // vary per category but the labels are consistent).
   if (LONG_TEXT_FIELD_NAMES.has(attr.name.toLowerCase())) {
     return "textarea";
+  }
+  for (const pattern of LONG_TEXT_LABEL_PATTERNS) {
+    if (pattern.test(attr.label)) return "textarea";
   }
   return attr.type;
 }
