@@ -410,30 +410,69 @@ export function mapListingToJumiaProducts(
 ): JumiaProduct[] {
   const base = buildBaseProduct(listing, brand, currency);
 
-  if (!variants.length) return [base];
+  if (!variants.length) {
+    // No persisted variants → one product entry using the listing's own
+    // SKU. base.variation uses the colour fallback (see buildBaseProduct).
+    // Log so we can tell when this path fires unexpectedly (e.g. when the
+    // seller TYPED a variation but it didn't make it into the variants
+    // table for some reason).
+    console.info(
+      `[Jumia mapping] No variant rows — sending 1 product, ` +
+      `parentSku=${base.parentSku}, variation=${JSON.stringify(base.variation)} (from base fallback)`,
+    );
+    return [base];
+  }
 
-  // With variants: one entry per variant; all share the same parentSku.
-  // `variation` must be a non-empty descriptive string (e.g. "Red / 64GB").
-  // Fall back to the base default if a variant row is missing it.
-  return variants.map((v) => ({
-    ...base,
-    sellerSku:  v.seller_sku ?? `${listing.sku}-${v.id.slice(0, 4)}`,
-    parentSku:  listing.sku,
-    variation:  v.variation?.trim() || base.variation,
-    barcodeEan: v.gtin ?? "",
-    price: {
-      value:     v.global_price ?? listing.selling_price ?? 0,
-      currency,
-      ...(v.sale_price != null ? {
-        salePrice: {
-          value:   v.sale_price,
-          startAt: v.sale_start_date ?? undefined,
-          endAt:   v.sale_end_date   ?? undefined,
-        },
-      } : {}),
-    },
-    stock: v.quantity ?? 1,
+  // With variants: one entry per variant; ALL share the same parentSku so
+  // Jumia treats them as variants of a single parent product (not separate
+  // listings). `variation` must be a non-empty descriptive string. We use
+  // whatever the seller typed (v.variation) and only fall back to
+  // base.variation if a row was somehow saved with an empty variation.
+  const products = variants.map((v) => {
+    const variation = v.variation?.trim() || base.variation;
+    if (!v.variation?.trim()) {
+      console.warn(
+        `[Jumia mapping] Variant ${v.id} has no variation — falling back to ` +
+        `base.variation=${JSON.stringify(base.variation)}. ` +
+        `This shouldn't happen if the seller typed a value — investigate the save path.`,
+      );
+    }
+    return {
+      ...base,
+      sellerSku:  v.seller_sku ?? `${listing.sku}-${v.id.slice(0, 4)}`,
+      parentSku:  listing.sku,
+      variation,
+      barcodeEan: v.gtin ?? "",
+      price: {
+        value:     v.global_price ?? listing.selling_price ?? 0,
+        currency,
+        ...(v.sale_price != null ? {
+          salePrice: {
+            value:   v.sale_price,
+            startAt: v.sale_start_date ?? undefined,
+            endAt:   v.sale_end_date   ?? undefined,
+          },
+        } : {}),
+      },
+      stock: v.quantity ?? 1,
+    };
+  });
+
+  // Summary log: confirms what Jumia receives so we can diff against what
+  // the seller saw on screen.
+  const summary = products.map((p) => ({
+    parentSku: p.parentSku,
+    sellerSku: p.sellerSku,
+    variation: p.variation,
+    stock:     p.stock,
+    price:     p.price.value,
   }));
+  console.info(
+    `[Jumia mapping] Sending ${products.length} variant(s) under parentSku=${listing.sku}:`,
+    JSON.stringify(summary),
+  );
+
+  return products;
 }
 
 // ─── Jumia API call ───────────────────────────────────────────────────────────

@@ -138,15 +138,54 @@ export async function POST(req: NextRequest) {
   // even though our DB shows "failed". Append a short suffix so every push
   // gets a guaranteed-unique parentSku.
   //
-  // We MUTATE the row.sku on the in-memory object so buildBaseProduct picks
-  // it up, then persist the new SKU back so the user sees a consistent SKU in
-  // their UI matching what Jumia has.
+  // CRITICAL: when we rename the parentSku, we MUST also rewrite every
+  // variant's seller_sku to use the new prefix. Otherwise the variant
+  // sellerSkus stay tied to the OLD parentSku (which Jumia may have already
+  // committed) and Jumia treats the retry as a brand-new product whose
+  // variants are orphaned from the parent — exactly the "2 different
+  // products" the seller complained about. The variation label they typed
+  // gets stuck on the orphan record while the new product takes whatever
+  // base.variation fallback evaluates to.
   const isRetry = row.status === "failed" || (row.jumia_synced_at != null);
   if (isRetry) {
-    const suffix = Date.now().toString(36).slice(-4).toUpperCase();
-    const baseSku = row.sku.replace(/-R[A-Z0-9]{4}$/i, "");  // strip any prior -RXXXX suffix
-    row.sku = `${baseSku}-R${suffix}`;
-    console.info(`[push] Retry detected — using fresh SKU ${row.sku} (was ${baseSku})`);
+    const suffix    = Date.now().toString(36).slice(-4).toUpperCase();
+    const oldPrefix = row.sku.replace(/-R[A-Z0-9]{4}$/i, "");  // strip any prior -RXXXX suffix
+    const newSku    = `${oldPrefix}-R${suffix}`;
+    row.sku = newSku;
+
+    // Realign each variant's seller_sku to the new parentSku prefix and
+    // persist the change back so a subsequent re-read (e.g. update flow)
+    // stays consistent. Variants whose seller_sku didn't start with the
+    // old prefix get a synthesised one to guarantee uniqueness within
+    // this parent.
+    if (variants.length > 0) {
+      const skuPatches: { id: string; seller_sku: string }[] = [];
+      for (let i = 0; i < variants.length; i++) {
+        const v = variants[i];
+        const existing = v.seller_sku ?? "";
+        const tag      =
+          existing.startsWith(oldPrefix)
+            ? existing.slice(oldPrefix.length).replace(/^-/, "")  // "BLK1" from "PA-MP82-BLK1"
+            : `V${i + 1}`;
+        const realigned = `${newSku}-${tag}`;
+        variants[i] = { ...v, seller_sku: realigned };
+        skuPatches.push({ id: v.id, seller_sku: realigned });
+      }
+      // Fire-and-forget batch update — failure here doesn't block the push.
+      // The variants array we pass to mapListingToJumiaProducts already has
+      // the realigned values; the DB update is just to keep state coherent
+      // for the next operation.
+      await Promise.all(
+        skuPatches.map((p) =>
+          db.from("variants").update({ seller_sku: p.seller_sku }).eq("id", p.id),
+        ),
+      );
+    }
+
+    console.info(
+      `[push] Retry detected — parentSku ${oldPrefix} → ${newSku}, ` +
+      `realigned ${variants.length} variant SKU(s)`,
+    );
   }
 
   // Mark as processing while we wait for Jumia (also persist any new SKU)
