@@ -53,8 +53,8 @@ import {
 } from "@/components/ui/select";
 import { calcNetPayout } from "@/lib/mock/categories";
 import { formatGHS, cn } from "@/lib/utils";
-import type { ListingRow } from "@/lib/supabase/types";
-import { updateListing } from "@/lib/actions/listings";
+import type { ListingRow, VariantRow as VariantRowDB } from "@/lib/supabase/types";
+import { updateListing, replaceVariantsForListing } from "@/lib/actions/listings";
 import { calculateQualityScore, scoreLabel, scoreColor, DEFAULT_THRESHOLD } from "@/lib/quality-score";
 import { isValidGTIN } from "@/lib/utils/gtin";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
@@ -1543,7 +1543,13 @@ function universalInfoFields(): JumiaAttributeDef[] {
   ];
 }
 
-export function ReviewClient({ listing }: { listing: ListingRow }) {
+export function ReviewClient({
+  listing,
+  initialVariants = [],
+}: {
+  listing:          ListingRow;
+  initialVariants?: VariantRowDB[];
+}) {
   const router       = useRouter();
   const searchParams = useSearchParams();
 
@@ -1743,12 +1749,32 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
     listing.color_family?.trim() ||
     "";
 
-  const [variants, setVariants] = useState<VariantRow[]>([{
-    id: "v1", axes: {}, variation: defaultVariationLabel, sellerSku: listing.sku,
-    gtin: "", quantity: "1",
-    globalPrice: listing.selling_price ? String(listing.selling_price) : "",
-    salePrice: "", saleStartDate: "", saleEndDate: "",
-  }]);
+  // Hydrate from persisted variant rows when present (preserves the
+  // seller's typed variation / SKU / price across page refreshes). When
+  // the listing has no saved variants yet — first review pass — fall
+  // back to a single synthetic row with the colour-derived variation.
+  const [variants, setVariants] = useState<VariantRow[]>(() => {
+    if (initialVariants.length > 0) {
+      return initialVariants.map((v, i) => ({
+        id:            `v-db-${i}`,
+        axes:          {},
+        variation:     v.variation        ?? defaultVariationLabel,
+        sellerSku:     v.seller_sku       ?? listing.sku,
+        gtin:          v.gtin             ?? "",
+        quantity:      String(v.quantity ?? 1),
+        globalPrice:   v.global_price != null ? String(v.global_price) : "",
+        salePrice:     v.sale_price   != null ? String(v.sale_price)   : "",
+        saleStartDate: v.sale_start_date  ?? "",
+        saleEndDate:   v.sale_end_date    ?? "",
+      }));
+    }
+    return [{
+      id: "v1", axes: {}, variation: defaultVariationLabel, sellerSku: listing.sku,
+      gtin: "", quantity: "1",
+      globalPrice: listing.selling_price ? String(listing.selling_price) : "",
+      salePrice: "", saleStartDate: "", saleEndDate: "",
+    }];
+  });
   const [axesDef, setAxesDef] = useState<AxisDef[]>([]);
   const [selectedVariants, setSelectedVariants] = useState<Set<string>>(new Set());
   const [collapsedVariants, setCollapsedVariants] = useState<Set<string>>(new Set());
@@ -2083,6 +2109,32 @@ export function ReviewClient({ listing }: { listing: ListingRow }) {
         // warranty_*, model, product_line, certifications, youtube_id, etc.)
         ...overrideColumnUpdates,
       });
+
+      // Persist the variants table from the UI's variant state. We mirror
+      // EVERY case (single simple product OR multi-axis matrix) so the
+      // push route reads the seller's typed variation instead of falling
+      // back to listing.color in buildBaseProduct. A row with empty
+      // variation is harmless — push will still substitute the colour
+      // fallback at the API layer.
+      try {
+        await replaceVariantsForListing(
+          listing.id,
+          variants.map((v) => ({
+            variation:       v.variation?.trim() || null,
+            seller_sku:      v.sellerSku?.trim()  || null,
+            gtin:            v.gtin?.trim()       || null,
+            quantity:        Math.max(0, parseInt(v.quantity || "1") || 1),
+            global_price:    v.globalPrice ? parseFloat(v.globalPrice) : null,
+            sale_price:      v.salePrice   ? parseFloat(v.salePrice)   : null,
+            sale_start_date: v.saleStartDate || null,
+            sale_end_date:   v.saleEndDate   || null,
+          })),
+        );
+      } catch (e) {
+        // Non-fatal: the listing row was updated; we just couldn't mirror
+        // variants. Push will fall back to the colour-derived variation.
+        console.warn("[review] variants mirror failed:", (e as Error).message);
+      }
 
       if (!publish) {
         if (!opts?.skipRedirect) router.push("/listings");
