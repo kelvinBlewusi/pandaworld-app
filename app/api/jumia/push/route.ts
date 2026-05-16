@@ -9,25 +9,63 @@ import {
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
 
 // ─── POST /api/jumia/push ─────────────────────────────────────────────────────
-// Body: { listingId: string }
+//
+// Body: {
+//   listingId: string,
+//   variants?: Array<{                ← preferred path: UI sends current state
+//     variation:       string,         (non-empty required)
+//     sellerSku:       string,
+//     gtin?:           string | null,
+//     quantity?:       number,
+//     globalPrice?:    number | null,
+//     salePrice?:      number | null,
+//     saleStartDate?:  string | null,
+//     saleEndDate?:    string | null,
+//   }>,
+// }
+//
+// When variants are provided in the body, push uses THOSE directly — the
+// variants table is just persistence, not the source of truth for this
+// push. This guarantees that whatever the seller saw on screen at click
+// time is what reaches Jumia, even if a previous save failed to persist
+// for any reason.
+//
+// When variants aren't provided (legacy callers), falls back to reading
+// the variants table.
 //
 // 1. Validates the listing belongs to the requesting user
 // 2. Checks required fields (title, price, category)
-// 3. Gets a valid Jumia access token (auto-refreshes if needed)
-// 4. Maps listing + variants → Jumia API payload
-// 5. Pushes to Jumia Vendor Center API
-// 6. Updates listing status + jumia_ref/jumia_error in DB
-// 7. Returns { success, jumia_ref?, error? }
+// 3. Validates variants: each variation non-empty, all variations unique
+// 4. Gets a valid Jumia access token (auto-refreshes if needed)
+// 5. Maps listing + variants → Jumia API payload
+// 6. Pushes to Jumia Vendor Center API
+// 7. Updates listing status + jumia_ref/jumia_error in DB
+// 8. Returns { success, jumia_ref?, error? }
+
+interface BodyVariant {
+  variation:      string;
+  sellerSku:      string;
+  gtin?:          string | null;
+  quantity?:      number;
+  globalPrice?:   number | null;
+  salePrice?:     number | null;
+  saleStartDate?: string | null;
+  saleEndDate?:   string | null;
+}
 
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return new NextResponse("Unauthorized", { status: 401 });
 
   let listingId: string;
+  let bodyVariants: BodyVariant[] | null = null;
   try {
     const body = await req.json();
     listingId = body.listingId;
     if (!listingId) throw new Error("missing listingId");
+    if (Array.isArray(body.variants)) {
+      bodyVariants = body.variants as BodyVariant[];
+    }
   } catch {
     return NextResponse.json({ error: "listingId is required" }, { status: 400 });
   }
@@ -82,13 +120,67 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ── Fetch variants ────────────────────────────────────────────────────────
-  const { data: variantsData } = await db
-    .from("variants")
-    .select("*")
-    .eq("listing_id", listingId);
+  // ── Resolve variants: prefer body (live UI state), fall back to DB ───────
+  //
+  // The UI state is the source of truth for what the seller actually saw
+  // at click time. Reading from the variants table introduces a window
+  // where a silent save failure leaves stale rows that get pushed instead
+  // of the typed values.
+  let variants: VariantRow[];
+  if (bodyVariants && bodyVariants.length > 0) {
+    variants = bodyVariants.map((v, i) => ({
+      id:              `body-${i}`,
+      listing_id:      listingId,
+      variation:       v.variation,
+      seller_sku:      v.sellerSku,
+      gtin:            v.gtin            ?? null,
+      quantity:        v.quantity        ?? 1,
+      global_price:    v.globalPrice     ?? null,
+      sale_price:      v.salePrice       ?? null,
+      sale_start_date: v.saleStartDate   ?? null,
+      sale_end_date:   v.saleEndDate     ?? null,
+      created_at:      new Date().toISOString(),
+    }));
+  } else {
+    const { data: variantsData } = await db
+      .from("variants")
+      .select("*")
+      .eq("listing_id", listingId);
+    variants = (variantsData ?? []) as VariantRow[];
+  }
 
-  const variants = (variantsData ?? []) as VariantRow[];
+  // ── Validate variants: variation non-empty + unique within the listing ──
+  //
+  // Empty variation triggers the colour fallback in buildBaseProduct,
+  // which silently substitutes listing.color. Duplicate variations cause
+  // Jumia to dedup-reject all but one. Catching both here means the
+  // seller sees a clear error instead of a confused Jumia response.
+  if (variants.length > 0) {
+    const variationErrors: string[] = [];
+    const seenVariations = new Set<string>();
+    for (let i = 0; i < variants.length; i++) {
+      const v       = variants[i];
+      const trimmed = (v.variation ?? "").trim();
+      if (!trimmed) {
+        variationErrors.push(`Variant ${i + 1} has no Variation label — type one before submitting.`);
+        continue;
+      }
+      const lower = trimmed.toLowerCase();
+      if (seenVariations.has(lower)) {
+        variationErrors.push(
+          `Two variants share the same Variation label "${trimmed}". ` +
+          `Jumia treats them as duplicates — rename one (e.g. add a suffix).`,
+        );
+      }
+      seenVariations.add(lower);
+    }
+    if (variationErrors.length > 0) {
+      return NextResponse.json(
+        { error: variationErrors.join(" ") },
+        { status: 422 }
+      );
+    }
+  }
 
   // ── Get valid Jumia token + shopId ───────────────────────────────────────
   let accessToken: string;

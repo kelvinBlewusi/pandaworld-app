@@ -1739,15 +1739,18 @@ export function ReviewClient({
   const commissionPercent = Math.round(commissionRate * 100);
 
   // Hydrate from persisted variant rows (set by auto-analyze when the AI
-  // detected variations, or by the seller's previous save). Falls back to
-  // a single empty-variation row only when no rows are persisted yet —
-  // the placeholder text invites the seller to type a label.
+  // detected variations, or by the seller's previous save). When no rows
+  // are persisted yet — first review pass of a simple product the AI
+  // didn't split into variants — seed a single synthetic row with
+  // variation = "Default". Jumia requires a non-empty variation even for
+  // simple products, and "Default" is the boring-but-correct value that
+  // ships immediately if the seller doesn't override it.
   //
   // Variation is NOT pre-derived from colour. The user's actual listings
   // on Jumia have variations like "3 Set (Trowel, Fork & Cultivator)",
   // "Hoe only", "Pack of 6" — anything that distinguishes one variant
   // from another. The AI fills these during analyse if it sees them;
-  // otherwise the seller types them in.
+  // otherwise the seller types them in, or "Default" stays.
   const [variants, setVariants] = useState<VariantRow[]>(() => {
     if (initialVariants.length > 0) {
       return initialVariants.map((v, i) => ({
@@ -1764,7 +1767,7 @@ export function ReviewClient({
       }));
     }
     return [{
-      id: "v1", axes: {}, variation: "", sellerSku: listing.sku,
+      id: "v1", axes: {}, variation: "Default", sellerSku: listing.sku,
       gtin: "", quantity: "1",
       globalPrice: listing.selling_price ? String(listing.selling_price) : "",
       salePrice: "", saleStartDate: "", saleEndDate: "",
@@ -2061,12 +2064,10 @@ export function ReviewClient({
         ...overrideColumnUpdates,
       });
 
-      // Persist the variants table from the UI's variant state. We mirror
-      // EVERY case (single simple product OR multi-axis matrix) so the
-      // push route reads the seller's typed variation instead of falling
-      // back to listing.color in buildBaseProduct. A row with empty
-      // variation is harmless — push will still substitute the colour
-      // fallback at the API layer.
+      // Persist the variants table from the UI's variant state. Surface
+      // any failure to the seller instead of silently swallowing it — a
+      // partial save here used to mean stale rows would get pushed to
+      // Jumia in place of what was typed.
       try {
         await replaceVariantsForListing(
           listing.id,
@@ -2082,9 +2083,9 @@ export function ReviewClient({
           })),
         );
       } catch (e) {
-        // Non-fatal: the listing row was updated; we just couldn't mirror
-        // variants. Push will fall back to the colour-derived variation.
-        console.warn("[review] variants mirror failed:", (e as Error).message);
+        const msg = e instanceof Error ? e.message : "Variant save failed";
+        setSaveError(`Couldn't save variants: ${msg}. Please try again.`);
+        return;
       }
 
       if (!publish) {
@@ -2092,10 +2093,34 @@ export function ReviewClient({
         return;
       }
 
+      // Send variants in the push body FROM LOCAL UI STATE. The push API
+      // uses these directly, bypassing the variants table — so whatever
+      // the seller sees on screen at click time is literally what reaches
+      // Jumia, regardless of any DB persistence timing. This is the core
+      // guarantee: "what you see is what gets pushed."
+      //
+      // No filtering of empty rows here — the push API validates and
+      // returns a clear "Variant N has no Variation label" error that
+      // we surface verbatim in setSaveError below. That's better than
+      // silently dropping rows the seller can see on screen.
+      const pushVariants = variants.map((v) => ({
+        variation:     v.variation?.trim()  || "",
+        sellerSku:     v.sellerSku?.trim()  || `${listing.sku}-${v.id.slice(0, 4)}`,
+        gtin:          v.gtin?.trim()       || null,
+        quantity:      Math.max(0, parseInt(v.quantity || "1") || 1),
+        globalPrice:   v.globalPrice ? parseFloat(v.globalPrice) : null,
+        salePrice:     v.salePrice   ? parseFloat(v.salePrice)   : null,
+        saleStartDate: v.saleStartDate || null,
+        saleEndDate:   v.saleEndDate   || null,
+      }));
+
       const pushRes = await fetch("/api/jumia/push", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ listingId: listing.id }),
+        body:    JSON.stringify({
+          listingId: listing.id,
+          variants:  pushVariants,
+        }),
       });
       const pushData = await pushRes.json() as {
         success?:     boolean;

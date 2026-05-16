@@ -353,15 +353,21 @@ function buildBaseProduct(listing: ListingRow, brand: { code: number; name: stri
     .map((url, i) => ({ url, primary: i === 0 }));
 
   // Jumia requires `variation` to be non-empty even for products without
-  // variants. Their error: "The variation 'variation' value has to be filled
-  // in order to create a Product."
+  // variants. Their error: "The variation 'variation' value has to be
+  // filled in order to create a Product."
   //
-  // For simple (no-variant) products, use the most distinctive single-axis
-  // value we have: color first, otherwise fall back to "Default".
-  const defaultVariation =
-    listing.color?.trim() ||
-    listing.color_family?.trim() ||
-    "Default";
+  // We DELIBERATELY do NOT fall back to listing.color here. That fallback
+  // used to mask seller mistakes (variation field saved as null → Jumia
+  // received the colour instead of what was typed) and could swap several
+  // variants to the SAME string when colour was a combined value like
+  // "black and green", which Jumia then dedup-rejected.
+  //
+  // The push route now validates upstream: empty variation → 422 with a
+  // clear error. The seller is told to type a label. This "Default"
+  // string only ever ships for genuinely simple products that arrive
+  // here with zero variants AND no caller-supplied placeholder — and
+  // even then it's a literal "Default", never the colour.
+  const defaultVariation = "Default";
 
   // Match Jumia Postman spec exactly:
   //   POST /feeds/products/create
