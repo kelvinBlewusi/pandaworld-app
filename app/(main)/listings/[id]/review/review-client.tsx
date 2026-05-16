@@ -1523,6 +1523,18 @@ const PRODUCT_INFO_FIELDS = [
 const STATIC_FIELDS = ["name", "title", "product_name"];
 
 /**
+ * Schema-attribute names that the Variants tab handles instead. We hide
+ * these from both Product Information and Product Specification grids
+ * so the seller doesn't see a duplicate "Variation" input that competes
+ * with the per-variant labels in the Variants tab.
+ *
+ * On push, the variation value is injected into each product's attributes
+ * array from the matching variant row (see lib/jumia/api.ts:
+ * PER_VARIANT_ATTRIBUTE_NAMES + mapListingToJumiaProducts).
+ */
+const VARIANT_ATTRIBUTE_FIELDS = ["variation"];
+
+/**
  * Universal Product Information fields — guaranteed fallback injections
  * for fields Jumia *requires* even when its per-category schema omits
  * them (some legacy categories return minimal schemas). Brand is the
@@ -2483,7 +2495,7 @@ export function ReviewClient({
                   fieldSources={listing.field_sources ?? undefined}
                   fieldConfidence={listing.field_confidence ?? undefined}
                   includeNames={PRODUCT_INFO_FIELDS}
-                  excludeNames={STATIC_FIELDS}
+                  excludeNames={[...STATIC_FIELDS, ...VARIANT_ATTRIBUTE_FIELDS]}
                   extraFields={universalInfoFields()}
                   excludeVariants
                   hideGroupHeadings
@@ -2654,7 +2666,7 @@ export function ReviewClient({
                 onFieldChange={handleSchemaFieldChange}
                 fieldSources={listing.field_sources ?? undefined}
                 fieldConfidence={listing.field_confidence ?? undefined}
-                excludeNames={[...PRODUCT_INFO_FIELDS, ...STATIC_FIELDS]}
+                excludeNames={[...PRODUCT_INFO_FIELDS, ...STATIC_FIELDS, ...VARIANT_ATTRIBUTE_FIELDS]}
                 excludeVariants
                 renderConfidenceDot={({ source, confidence }) =>
                   source ? (

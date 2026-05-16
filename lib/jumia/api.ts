@@ -283,6 +283,17 @@ interface JumiaAttribute {
   translations: never[];
 }
 
+// Attribute names that Jumia treats as PER-VARIANT axes, NOT listing-level
+// metadata. When the seller fills these in the Product Specification form
+// (because they appear in the per-category schema), we must NOT spray the
+// listing-level value across every variant — that produces duplicates and
+// Jumia rejects the feed with "Product with variation [X] already exists
+// in parent sku [Y]".
+//
+// Each per-variant attribute is injected from variant.variation in
+// mapListingToJumiaProducts, so each product carries its own unique value.
+const PER_VARIANT_ATTRIBUTE_NAMES = new Set<string>(["variation"]);
+
 function buildAttributes(listing: ListingRow): JumiaAttribute[] {
   const attrs: JumiaAttribute[] = [];
 
@@ -326,6 +337,9 @@ function buildAttributes(listing: ListingRow): JumiaAttribute[] {
   if (dynAttrs) {
     for (const [name, value] of Object.entries(dynAttrs)) {
       if (value != null && String(value).trim() !== "") {
+        // Skip per-variant attribute names — those get injected per-product
+        // in mapListingToJumiaProducts using each variant's own value.
+        if (PER_VARIANT_ATTRIBUTE_NAMES.has(name.toLowerCase())) continue;
         // Don't duplicate attributes already set above
         if (!attrs.find((a) => a.name === name)) {
           attrs.push({ name, value: String(value), translations: [] });
@@ -431,9 +445,21 @@ export function mapListingToJumiaProducts(
 
   // With variants: one entry per variant; ALL share the same parentSku so
   // Jumia treats them as variants of a single parent product (not separate
-  // listings). `variation` must be a non-empty descriptive string. We use
-  // whatever the seller typed (v.variation) and only fall back to
-  // base.variation if a row was somehow saved with an empty variation.
+  // listings). `variation` must be a non-empty descriptive string AND
+  // unique within the parent. Two layers carry it:
+  //
+  //   1. The top-level `variation` field on the product object.
+  //   2. The `variation` entry inside the `attributes` array — Jumia's
+  //      uniqueness check on (parentSku, variation) actually reads from
+  //      THIS, not the top-level field. So when listing.dynamic_attributes
+  //      contains a single shared "variation" value (e.g. seller filled
+  //      the schema's required "Variation" field with the overall name),
+  //      Jumia sees every variant carrying the SAME attribute value and
+  //      dedup-rejects all but one.
+  //
+  // We strip the shared "variation" out of buildAttributes (above) and
+  // inject the per-variant value here, so each product's attributes
+  // array carries its own unique label.
   const products = variants.map((v) => {
     const variation = v.variation?.trim() || base.variation;
     if (!v.variation?.trim()) {
@@ -461,6 +487,13 @@ export function mapListingToJumiaProducts(
         } : {}),
       },
       stock: v.quantity ?? 1,
+      // Per-variant attributes: clone the listing-level attributes and
+      // prepend a unique `variation` entry. Listing-level attributes
+      // already had "variation" stripped in buildAttributes.
+      attributes: [
+        { name: "variation", value: variation, translations: [] as never[] },
+        ...base.attributes,
+      ],
     };
   });
 
