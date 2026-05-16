@@ -641,6 +641,15 @@ export interface ProductDescription {
   weight_kg:       number | null;       // only if visible on packaging
   main_material:   string | null;       // e.g. "Plastic", "Aluminium"
   material_family: string | null;       // e.g. "Plastic", "Metal", "Fabric"
+  /**
+   * Distinct variants visible in the images. Empty when the listing
+   * shows a single product; populated when the images show e.g. a
+   * garden-tool set ("3 Set", "Hoe only", "Trowel only") or a
+   * multi-pack ("Pack of 6", "Pack of 12"). Auto-analyze writes these
+   * into the variants table so the seller sees each as its own card
+   * on the review page and can edit/add more.
+   */
+  variations:      Array<{ label: string; sku_suffix: string }>;
 }
 
 export async function aiPassA_describeProduct(
@@ -653,6 +662,7 @@ export async function aiPassA_describeProduct(
       title: "Mock Product", brand: null, keywords: ["mock"], summary: "Mock product.",
       description: "Mock description filler text for development.", highlights: "• mock\n• mock\n• mock\n• mock",
       color: null, color_family: null, weight_kg: null, main_material: null, material_family: null,
+      variations: [],
     };
   }
   if (!process.env.GOOGLE_API_KEY) throw new Error("GOOGLE_API_KEY is not set.");
@@ -676,6 +686,17 @@ Rules:
 - weight_kg: Only fill if you can see the weight printed on packaging or the product itself. Numeric kilograms (e.g. 1.2). Null otherwise.
 - main_material: e.g. "Plastic", "Stainless Steel", "Cotton". Null if uncertain.
 - material_family: e.g. "Plastic", "Metal", "Fabric", "Wood", "Glass". Null if uncertain.
+- variations: Distinct product variants visible in the images. Be CONSERVATIVE — only populate when the images clearly show multiple choices the buyer can pick between.
+    Examples of when to populate:
+      * Garden tool set with separate pieces shown: ["3 Set (Trowel, Fork & Cultivator)", "Hoe only", "Trowel only", "Fork only"]
+      * Spice multipack: ["Pack of 3", "Pack of 6", "Pack of 12"]
+      * Phone case in multiple colours laid out: ["Black", "Navy Blue", "Rose Gold"]
+      * Apparel in sizes: ["Small", "Medium", "Large"]
+    Leave EMPTY ([]) when:
+      * One product shown from multiple angles
+      * Product has one colour / one size / one configuration
+      * Unsure
+    Each variation needs: label (what the buyer sees, e.g. "Pack of 6") and sku_suffix (short uppercase alphanumeric, e.g. "P6", "HOE", "3SET" — used as a unique tag appended to the parent SKU).
 
 ${restrictedInstr}${ctxSection}
 
@@ -691,7 +712,8 @@ Return ONLY valid JSON. No markdown, no commentary:
   "color_family": null,
   "weight_kg": null,
   "main_material": null,
-  "material_family": null
+  "material_family": null,
+  "variations": []
 }`;
 
   let parsed: Record<string, unknown>;
@@ -724,6 +746,23 @@ Return ONLY valid JSON. No markdown, no commentary:
     console.warn(`[AI Pass A] stripped restricted words: ${stripped.join(", ")}`);
   }
 
+  // Parse + sanitise variations. Each entry needs a non-empty label;
+  // sku_suffix defaults to a short slug of the label if the model omits
+  // it. Cap at 20 entries to defend against runaway hallucination.
+  const rawVariations = Array.isArray(parsed.variations) ? parsed.variations : [];
+  const variations = (rawVariations as Array<Record<string, unknown>>)
+    .slice(0, 20)
+    .map((v) => {
+      const label = clean(String(v?.label ?? "").trim());
+      if (!label) return null;
+      const rawSuffix = String(v?.sku_suffix ?? "").trim();
+      const sku_suffix = rawSuffix
+        ? rawSuffix.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8) || "V"
+        : label.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6) || "V";
+      return { label, sku_suffix };
+    })
+    .filter((v): v is { label: string; sku_suffix: string } => v !== null);
+
   return {
     title:           clean(String(parsed.title ?? "").trim()) || "Unknown product",
     brand:           cleanOrNull(strOrNull(parsed.brand)),
@@ -738,6 +777,7 @@ Return ONLY valid JSON. No markdown, no commentary:
                        : null,
     main_material:   cleanOrNull(strOrNull(parsed.main_material)),
     material_family: cleanOrNull(strOrNull(parsed.material_family)),
+    variations,
   };
 }
 

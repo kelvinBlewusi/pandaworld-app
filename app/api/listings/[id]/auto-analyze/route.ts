@@ -64,7 +64,7 @@ export async function POST(
   // ── Load listing + verify ownership ───────────────────────────────────────
   const { data: listing } = await db
     .from("listings")
-    .select("id, user_id, images, title, brand, dynamic_attributes, field_sources, field_confidence")
+    .select("id, user_id, sku, images, title, brand, selling_price, quantity, dynamic_attributes, field_sources, field_confidence")
     .eq("id", params.id)
     .eq("user_id", userId)
     .maybeSingle();
@@ -280,6 +280,48 @@ export async function POST(
     updated_at:          new Date().toISOString(),
   }).eq("id", params.id);
 
+  // ── Persist AI-detected variations into the variants table ───────────────
+  //
+  // The seller's review page hydrates from this table. When Pass A spots
+  // distinct variants in the images (bundle types, pack sizes, colour
+  // options, etc.) the seller lands on the review page with each as its
+  // own variant card — no manual typing needed.
+  //
+  // We replace the variants list rather than append, so re-running
+  // Analyze with fresh images doesn't pile up duplicates. The seller's
+  // edits between Analyze runs are not preserved by this path; that's
+  // a deliberate tradeoff — Analyze is the "AI proposes, seller refines"
+  // step. If the seller wants to keep their custom variants, they
+  // shouldn't re-run Analyze.
+  //
+  // Wrapped in try/catch — if the variants insert fails, the listing
+  // update above is still useful, so we surface a warning rather than
+  // failing the whole pipeline.
+  if (description.variations.length > 0) {
+    try {
+      const baseSku    = (listing.sku as string | undefined) ?? params.id.slice(0, 8).toUpperCase();
+      const basePrice  = (listing.selling_price as number | undefined) ?? null;
+      const baseStock  = (listing.quantity as number | undefined) ?? 1;
+      const rows = description.variations.map((v) => ({
+        listing_id:      params.id,
+        variation:       v.label,
+        seller_sku:      `${baseSku}-${v.sku_suffix}`,
+        gtin:            null,
+        quantity:        baseStock,
+        global_price:    basePrice,
+        sale_price:      null,
+        sale_start_date: null,
+        sale_end_date:   null,
+      }));
+      // Clear-then-insert. RLS still enforces ownership via the listings
+      // ownership check above.
+      await db.from("variants").delete().eq("listing_id", params.id);
+      await db.from("variants").insert(rows);
+    } catch (e) {
+      console.warn(`[auto-analyze] variant persist failed: ${(e as Error).message}`);
+    }
+  }
+
   // ── 7. Return everything the UI needs to refresh in place ───────────────
   return NextResponse.json({
     success: true,
@@ -299,6 +341,7 @@ export async function POST(
     candidates_considered: candidates.length,
     attributes_in_schema:  attrs.length,
     attributes_filled:     Object.keys(filled.dynamic_attributes).length,
+    variations_detected:   description.variations.length,
     title:                 (updates.title as string | undefined) ?? listing.title,
     brand:                 (updates.brand as string | undefined) ?? listing.brand,
   });

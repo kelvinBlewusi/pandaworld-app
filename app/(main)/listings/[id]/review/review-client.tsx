@@ -592,13 +592,14 @@ function VariantCard({
                 Variation<Required />
               </Label>
               <Input
-                placeholder={Object.values(variant.axes ?? {}).filter(Boolean).join(" / ") || "Ex: Black, Large, Pack of 6…"}
+                placeholder={Object.values(variant.axes ?? {}).filter(Boolean).join(" / ") || "..."}
                 value={variant.variation}
                 onChange={(e) => onUpdate("variation", e.target.value)}
                 className="h-10 text-sm"
               />
               <p className="text-[10px] text-zinc-400">
-                This is what Jumia shows next to your product as the variant label. Synced from Colour by default — edit to override.
+                Label that distinguishes this variant — e.g. &quot;3 Set (Trowel, Fork &amp; Cultivator)&quot;,
+                &quot;Hoe only&quot;, &quot;Pack of 6&quot;, &quot;Large&quot;, &quot;Red&quot;.
               </p>
             </div>
             <div className="space-y-1.5">
@@ -1737,29 +1738,23 @@ export function ReviewClient({
   const commissionRate    = listing.commission_rate ?? 0.1;
   const commissionPercent = Math.round(commissionRate * 100);
 
-  // For simple (non-variant) listings, Jumia still requires a non-empty
-  // `variation` value when pushing. The push route (lib/jumia/api.ts:361)
-  // falls back to listing.color → color_family → "Default" if the seller
-  // left it blank — but pre-rethink that fallback was INVISIBLE to the
-  // seller (field showed empty in UI, Jumia got the colour silently).
-  // Pre-populating here makes "what you see is what gets pushed" true:
-  // the seller sees the value upfront and can edit it before Submit.
-  const defaultVariationLabel =
-    listing.color?.trim() ||
-    listing.color_family?.trim() ||
-    "";
-
-  // Hydrate from persisted variant rows when present (preserves the
-  // seller's typed variation / SKU / price across page refreshes). When
-  // the listing has no saved variants yet — first review pass — fall
-  // back to a single synthetic row with the colour-derived variation.
+  // Hydrate from persisted variant rows (set by auto-analyze when the AI
+  // detected variations, or by the seller's previous save). Falls back to
+  // a single empty-variation row only when no rows are persisted yet —
+  // the placeholder text invites the seller to type a label.
+  //
+  // Variation is NOT pre-derived from colour. The user's actual listings
+  // on Jumia have variations like "3 Set (Trowel, Fork & Cultivator)",
+  // "Hoe only", "Pack of 6" — anything that distinguishes one variant
+  // from another. The AI fills these during analyse if it sees them;
+  // otherwise the seller types them in.
   const [variants, setVariants] = useState<VariantRow[]>(() => {
     if (initialVariants.length > 0) {
       return initialVariants.map((v, i) => ({
         id:            `v-db-${i}`,
         axes:          {},
-        variation:     v.variation        ?? defaultVariationLabel,
-        sellerSku:     v.seller_sku       ?? listing.sku,
+        variation:     v.variation        ?? "",
+        sellerSku:     v.seller_sku       ?? `${listing.sku}-${i + 1}`,
         gtin:          v.gtin             ?? "",
         quantity:      String(v.quantity ?? 1),
         globalPrice:   v.global_price != null ? String(v.global_price) : "",
@@ -1769,7 +1764,7 @@ export function ReviewClient({
       }));
     }
     return [{
-      id: "v1", axes: {}, variation: defaultVariationLabel, sellerSku: listing.sku,
+      id: "v1", axes: {}, variation: "", sellerSku: listing.sku,
       gtin: "", quantity: "1",
       globalPrice: listing.selling_price ? String(listing.selling_price) : "",
       salePrice: "", saleStartDate: "", saleEndDate: "",
@@ -1778,38 +1773,6 @@ export function ReviewClient({
   const [axesDef, setAxesDef] = useState<AxisDef[]>([]);
   const [selectedVariants, setSelectedVariants] = useState<Set<string>>(new Set());
   const [collapsedVariants, setCollapsedVariants] = useState<Set<string>>(new Set());
-
-  // Tracks what the auto-derived variation value WAS the last time we
-  // synced it from listing.color / color_family. If the current variant's
-  // variation still matches this, the seller hasn't manually overridden,
-  // so we can safely re-sync when colour changes. Once they type something
-  // different, this stops matching and we leave their text alone.
-  const lastAutoVariation = useRef<string>(defaultVariationLabel);
-
-  // Keep the simple-product (no axes) variation in sync with the live
-  // colour the seller is editing via the SchemaForm. Without this, the
-  // sequence "load page (variation='Purple') → change colour to 'Red' →
-  // submit" silently pushes 'Red' to Jumia (server-side fallback) while
-  // the UI was still showing 'Purple' — a hidden-field violation.
-  useEffect(() => {
-    if (axesDef.length > 0) return;
-    const liveColor =
-      (columnOverrides.color as string | undefined)?.trim() ||
-      listing.color?.trim() ||
-      (columnOverrides.color_family as string | undefined)?.trim() ||
-      listing.color_family?.trim() ||
-      "";
-    if (!liveColor) return;
-    setVariants((prev) => {
-      const current = prev[0]?.variation?.trim() ?? "";
-      // Only auto-sync if the field is empty OR still matches the last
-      // value we auto-set. Preserves any custom text the seller typed.
-      if (current && current !== lastAutoVariation.current) return prev;
-      if (current === liveColor) return prev;     // already in sync
-      lastAutoVariation.current = liveColor;
-      return prev.map((p, i) => (i === 0 ? { ...p, variation: liveColor } : p));
-    });
-  }, [columnOverrides.color, columnOverrides.color_family, listing.color, listing.color_family, axesDef.length]);
 
   const [schemaAxes, setSchemaAxes] = useState<JumiaCategoryAttribute[]>([]);
   useEffect(() => {
@@ -1823,26 +1786,14 @@ export function ReviewClient({
       .catch(() => setSchemaAxes([]));
   }, [categoryCode]);
 
-  // Rebuild variant rows from axes
+  // Rebuild variant rows from variant axes (Color, Size, etc.).
+  // When axesDef is empty we LEAVE variants alone — they were either
+  // hydrated from persisted DB rows (AI-detected variations or previous
+  // saves) or the seller is editing them manually. Auto-collapsing to
+  // a single row here would silently destroy multi-variant lists the
+  // AI just detected (e.g. "Hoe only / Fork only / Trowel only").
   useEffect(() => {
-    if (axesDef.length === 0) {
-      setVariants((prev) => {
-        // Preserve the seller's typed variation if they entered one. Only
-        // fall back to the live colour-derived default when the field is
-        // genuinely empty — matches the server-side fallback so the seller
-        // sees exactly what Jumia will receive.
-        const userTyped = prev[0]?.variation?.trim();
-        return [{
-          id: "v1", axes: {},
-          variation: userTyped || defaultVariationLabel,
-          sellerSku: listing.sku,
-          gtin: "", quantity: "1",
-          globalPrice: listing.selling_price ? String(listing.selling_price) : "",
-          salePrice: "", saleStartDate: "", saleEndDate: "",
-        }];
-      });
-      return;
-    }
+    if (axesDef.length === 0) return;
     const combos = axesDef.reduce<Record<string, string>[]>(
       (acc, axis) => {
         if (!axis.values.length) return acc;
