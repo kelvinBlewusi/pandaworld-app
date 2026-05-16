@@ -62,6 +62,43 @@ export async function getLeafCategories(): Promise<JumiaCategoryRow[]> {
   return (data ?? []) as JumiaCategoryRow[];
 }
 
+/**
+ * Returns every category Jumia has marked as listable — i.e. every row
+ * whose attribute_set_sid is non-null. This matches what Vendor Center
+ * shows in its category picker.
+ *
+ * Why not just leaves? Jumia treats "having children" and "being
+ * listable" as orthogonal. A parent category like "Watches" can have an
+ * attributeSet AND children (Men's Watches / Women's Watches) — VC lets
+ * sellers list directly into "Watches" too. The old getLeafCategories()
+ * filter was hiding those intermediate listables.
+ */
+export async function getListableCategories(): Promise<JumiaCategoryRow[]> {
+  const db = createServerClient();
+  const { data } = await db
+    .from("jumia_categories")
+    .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name")
+    .not("attribute_set_sid", "is", null)
+    .order("name");
+  return (data ?? []) as JumiaCategoryRow[];
+}
+
+/**
+ * Most-recent `synced_at` across the categories table. Used by the
+ * picker to decide whether to fire a background refresh (>24h ⇒ stale).
+ * Returns null if the table is empty.
+ */
+export async function getCategoriesLastSyncedAt(): Promise<string | null> {
+  const db = createServerClient();
+  const { data } = await db
+    .from("jumia_categories")
+    .select("synced_at")
+    .order("synced_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return (data?.synced_at as string | undefined) ?? null;
+}
+
 export async function getCategoryByCode(code: number): Promise<JumiaCategoryRow | null> {
   const db = createServerClient();
   const { data } = await db
@@ -165,7 +202,18 @@ export async function fetchCategoriesFromJumia(accessToken: string): Promise<Jum
     await new Promise((r) => setTimeout(r, 260));
   }
 
-  console.info(`[Jumia categories] Fetched ${all.length} categories across ${page - 1} page(s)`);
+  // Quick breakdown so logs show how many are listable vs tree-only
+  // straight after the walk. Tree-only nodes are categories Jumia
+  // returns without an attributeSet — they're for navigation hierarchy
+  // but can't accept product listings.
+  const withAttrSet = all.filter((c) => {
+    const attrSet = c.attributeSet as Record<string, unknown> | undefined;
+    return Boolean(attrSet?.sid);
+  }).length;
+  console.info(
+    `[Jumia categories] Fetched ${all.length} categories across ${page - 1} page(s) ` +
+    `— ${withAttrSet} listable (attributeSet present), ${all.length - withAttrSet} tree-only.`,
+  );
 
   // Normalise + collect all completePaths so we can compute is_leaf
   const normalised = all.map((c) => {
@@ -352,8 +400,14 @@ export async function fetchAndCacheCategoryTree(
     return { categories: categories.length, attributes: 0 };
   }
 
-  // 2. Fetch attribute schemas for each category (one call per category)
-  let attrTotal = 0;
+  // 2. Fetch attribute schemas for each category (one call per category).
+  //    Doubles as a listability confirmation: a category with
+  //    `attribute_set_sid` set but a zero-row schema is functionally
+  //    non-listable — downgrade it by nulling the sid in the DB so the
+  //    picker stops offering it.
+  let attrTotal       = 0;
+  const downgrades:   number[] = [];
+  const db            = createServerClient();
   for (const cat of categories) {
     if (!cat.attribute_set_sid) continue;
     try {
@@ -361,9 +415,28 @@ export async function fetchAndCacheCategoryTree(
       if (attrs.length > 0) {
         await upsertAttributes(cat.code, attrs);
         attrTotal += attrs.length;
+      } else {
+        downgrades.push(cat.code);
       }
     } catch (e) {
       console.warn(`[categories] Attribute fetch failed for ${cat.name}:`, e);
+      // Soft-fail: don't downgrade on transient errors. The next sync
+      // gets another chance. Only confirmed-empty schemas downgrade.
+    }
+  }
+
+  if (downgrades.length > 0) {
+    console.info(
+      `[Jumia categories] Downgrading ${downgrades.length} category/categories ` +
+      `whose attributeSet returned an empty schema (not actually listable).`,
+    );
+    // Batch-update in chunks of 100 to stay within Supabase limits.
+    for (let i = 0; i < downgrades.length; i += 100) {
+      const chunk = downgrades.slice(i, i + 100);
+      await db
+        .from("jumia_categories")
+        .update({ attribute_set_sid: null, synced_at: new Date().toISOString() })
+        .in("code", chunk);
     }
   }
 

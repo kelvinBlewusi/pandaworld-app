@@ -1,35 +1,61 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
-import { getLeafCategories } from "@/lib/jumia/categories";
+import {
+  getListableCategories,
+  getLeafCategories,
+  getCategoriesLastSyncedAt,
+} from "@/lib/jumia/categories";
 
 // ─── GET /api/jumia/categories ────────────────────────────────────────────────
 //
 // Returns synced categories from Supabase for the category drawer.
 //
 // Query params:
-//   ?all=1 — return every category (leaves + parents) with is_leaf flag, so
-//            the drill-down drawer can render the full tree.
-//   (no param) — return only leaf categories (legacy behaviour used by the
-//            old flat picker and by the AI's category-resolution pipeline).
+//   ?all=1       — every category (leaves + parents) with is_leaf flag, for
+//                  drill-down rendering.
+//   ?leafOnly=1  — only categories where is_leaf=true (path-heuristic). Kept
+//                  for legacy callers that need a tighter list.
+//   (no param)   — every LISTABLE category (attribute_set_sid IS NOT NULL).
+//                  This matches Vendor Center's picker: Jumia tags a category
+//                  as listable iff it returned an attributeSet for it, and
+//                  some intermediate parents are listable alongside their
+//                  children.
 //
-// Falls back to [] if the category table is empty (not yet synced).
+// The response always includes an `X-Last-Synced-At` header (ISO timestamp
+// or empty if the table is empty). The category drawer reads this to decide
+// whether to fire a background refresh — >24h old triggers a fresh sync,
+// non-blocking, so the next picker open sees up-to-date data.
 
 export async function GET(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return new NextResponse("Unauthorized", { status: 401 });
 
-  const wantAll = req.nextUrl.searchParams.get("all") === "1";
+  const wantAll      = req.nextUrl.searchParams.get("all") === "1";
+  const wantLeafOnly = req.nextUrl.searchParams.get("leafOnly") === "1";
 
+  let categoriesPayload: unknown;
   if (wantAll) {
     const db = createServerClient();
     const { data } = await db
       .from("jumia_categories")
       .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid")
       .order("path");
-    return NextResponse.json({ categories: data ?? [] });
+    categoriesPayload = data ?? [];
+  } else if (wantLeafOnly) {
+    categoriesPayload = await getLeafCategories();
+  } else {
+    categoriesPayload = await getListableCategories();
   }
 
-  const categories = await getLeafCategories();
-  return NextResponse.json({ categories });
+  const lastSyncedAt = await getCategoriesLastSyncedAt();
+
+  return NextResponse.json(
+    { categories: categoriesPayload },
+    {
+      headers: {
+        "X-Last-Synced-At": lastSyncedAt ?? "",
+      },
+    },
+  );
 }

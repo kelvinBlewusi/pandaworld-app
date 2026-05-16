@@ -7,7 +7,7 @@ import {
   extractAttributesForCategory,
 } from "@/lib/actions/ai";
 import {
-  getLeafCategories,
+  getListableCategories,
   getCategoryAttributes,
   fetchAttributesFromJumia,
   upsertAttributes,
@@ -99,10 +99,14 @@ export async function POST(
   const retrievalQuery = [description.title, ...description.keywords].join(" ");
 
   // ── 2. RETRIEVAL: fuzzy local + Jumia catalog lookup ──────────────────────
+  //
+  // Pool = every category Jumia marked as listable (matches what the
+  // picker shows the seller). Intermediate-but-listable parents like
+  // "Watches" are now candidates the AI can suggest, not just leaves.
   const tRet = Date.now();
-  const leafCategories = await getLeafCategories();
+  const listableCategories = await getListableCategories();
 
-  if (leafCategories.length === 0) {
+  if (listableCategories.length === 0) {
     return NextResponse.json(
       {
         error: "No categories synced yet. Open Settings → Integrations → Sync categories first.",
@@ -111,7 +115,7 @@ export async function POST(
     );
   }
 
-  const fuzzyHits = searchCategoriesByText(retrievalQuery, leafCategories, 6);
+  const fuzzyHits = searchCategoriesByText(retrievalQuery, listableCategories, 6);
 
   // Best-effort Jumia catalog lookup (silently returns [] on failure)
   let jumiaHits: typeof fuzzyHits = [];
@@ -165,7 +169,7 @@ export async function POST(
   let attrs = await getCategoryAttributes(chosen.code);
   if (attrs.length === 0) {
     // Need to find the category row to get attribute_set_sid
-    const catRow = leafCategories.find((c) => c.code === chosen.code);
+    const catRow = listableCategories.find((c) => c.code === chosen.code);
     if (catRow?.attribute_set_sid) {
       try {
         const { accessToken } = await getValidJumiaCredentials(userId);

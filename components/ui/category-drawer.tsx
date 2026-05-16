@@ -107,13 +107,30 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
   const [stack,       setStack]       = useState<TreeNode[]>([]);     // breadcrumb of drill-down
   const [chosen,      setChosen]      = useState<FlatCategory | null>(null);
 
-  const loadFromCache = useCallback(() => {
+  const loadFromCache = useCallback(async () => {
     setLoading(true);
-    return fetch("/api/jumia/categories?all=1")
-      .then((r) => r.json())
-      .then((d: { categories?: FlatCategory[] }) => setRawCategories(d.categories ?? []))
-      .catch(() => setRawCategories([]))
-      .finally(() => setLoading(false));
+    try {
+      const res  = await fetch("/api/jumia/categories?all=1");
+      const data = await res.json() as { categories?: FlatCategory[] };
+      setRawCategories(data.categories ?? []);
+
+      // Auto-refresh in the background if the cached data is more than
+      // 24 hours old. The cached list renders immediately; the next time
+      // the drawer opens it'll have fresh data. Non-blocking — failures
+      // are silent (the existing manual refresh button is still available).
+      const lastSyncedAt = res.headers.get("X-Last-Synced-At");
+      if (lastSyncedAt) {
+        const ageMs = Date.now() - new Date(lastSyncedAt).getTime();
+        const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+        if (Number.isFinite(ageMs) && ageMs > TWENTY_FOUR_HOURS) {
+          fetch("/api/jumia/sync-categories", { method: "POST" }).catch(() => {});
+        }
+      }
+    } catch {
+      setRawCategories([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   // Fetch all categories once when the drawer opens for the first time
