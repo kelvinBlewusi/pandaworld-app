@@ -402,19 +402,13 @@ export default function BatchAddProductsPage() {
                 onRemove={handleRemoveImage}
               />
 
-              {/* AI promise banner — explains that the rest is automatic */}
+              {/* AI prompt block — seller tells the AI what they want */}
               <div className="rounded-md border border-orange-200 bg-gradient-to-r from-orange-50 to-amber-50 px-4 py-3 space-y-2">
                 <div className="flex items-start gap-3">
                   <Sparkles className="h-4 w-4 text-orange-500 mt-0.5 shrink-0" />
-                  <div className="text-xs text-orange-900">
-                    <p className="font-semibold">
-                      AI will pick the right Jumia category and fill the category-specific fields automatically.
-                    </p>
-                    <p className="text-orange-700 mt-0.5">
-                      Just upload your images and click <span className="font-semibold">Submit &amp; Analyze with AI</span>.
-                      Name and Category below are optional — if you leave them blank, the AI fills them.
-                    </p>
-                  </div>
+                  <p className="text-xs font-semibold text-orange-900">
+                    What do you want in the listing
+                  </p>
                 </div>
                 <Textarea
                   value={active.aiInstruction}
@@ -425,7 +419,7 @@ export default function BatchAddProductsPage() {
                   className="text-xs bg-white border-orange-200 focus-visible:ring-orange-200"
                 />
                 <p className="text-[10px] text-orange-700/80 leading-relaxed">
-                  The AI is forbidden from using Jumia-restricted words like &quot;original&quot;, &quot;brand new&quot;, &quot;imported&quot;, etc.
+                  AI can make mistakes, Please double check.
                 </p>
               </div>
 
@@ -538,7 +532,7 @@ export default function BatchAddProductsPage() {
         >
           {submitting
             ? <><Loader2 className="h-4 w-4 animate-spin" /> Working…</>
-            : <><Sparkles className="h-4 w-4" /> Submit & Analyze with AI</>}
+            : <><Sparkles className="h-4 w-4" /> Generate listing</>}
         </Button>
       </div>
 

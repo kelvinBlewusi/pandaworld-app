@@ -115,7 +115,7 @@ export async function GET(
     humanMessage = `Jumia is still processing the feed (${feedStatus.status}). Check back in 1–2 minutes.`;
   } else if ((s === "DONE" || s === "COMPLETED") && feedStatus.failed === 0 && feedStatus.success > 0) {
     diagnosis    = "ACCEPTED";
-    humanMessage = `Jumia accepted ${feedStatus.success} product(s). They should appear in Vendor Center now (may take 5–10 min for the UI to refresh).`;
+    humanMessage = `Jumia accepted ${feedStatus.success} product(s). They should appear in Vendor Center now.`;
   } else if (feedStatus.failed > 0 && feedStatus.errors.length > 0) {
     // Use the FIRST real error message as the human-readable explanation
     diagnosis    = "PRODUCTS_REJECTED";

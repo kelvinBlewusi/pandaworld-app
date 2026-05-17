@@ -99,7 +99,7 @@ export default function ConnectPage() {
         setTestMessage(data.message ?? "Credentials verified.");
       } else {
         setTestStatus("error");
-        setTestMessage(data.error ?? "Credentials could not be verified. Double-check your App ID and Secret Key.");
+        setTestMessage(data.error ?? "Credentials could not be verified. Double-check your Client ID and Client Secret.");
       }
     } catch {
       setTestStatus("error");
@@ -184,12 +184,12 @@ export default function ConnectPage() {
             <p className="ml-10 text-sm text-zinc-500">
               Go to{" "}
               <a
-                href={`https://${selectedCountry.url}`}
+                href="https://vendorcenter.jumia.com"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="font-medium text-orange-600 hover:underline"
               >
-                {selectedCountry.url}
+                vendorcenter.jumia.com
               </a>{" "}
               and sign in to your seller account.
             </p>
@@ -237,8 +237,8 @@ export default function ConnectPage() {
             <div className="ml-10 text-sm text-zinc-500">
               <p>After creating the app, copy your:</p>
               <ul className="mt-2 space-y-1 pl-4 list-disc text-zinc-600">
-                <li><span className="font-medium">Application ID</span></li>
-                <li><span className="font-medium">Secret Key</span></li>
+                <li><span className="font-medium">Client ID</span></li>
+                <li><span className="font-medium">Client Secret</span></li>
               </ul>
             </div>
           </div>
@@ -266,24 +266,24 @@ export default function ConnectPage() {
                 </Select>
               </div>
 
-              {/* App ID */}
+              {/* Client ID */}
               <div className="space-y-1.5">
-                <Label className="text-xs font-medium text-zinc-600">Application ID</Label>
+                <Label className="text-xs font-medium text-zinc-600">Client ID</Label>
                 <Input
-                  placeholder="e.g. pandaworld_gh_12345"
+                  placeholder="e.g. ed0b5856-3612-5829-b8de-d95774bfcf17"
                   value={appId}
                   onChange={(e) => { setAppId(e.target.value); setTestStatus("idle"); }}
                   className="h-9 text-sm font-mono"
                 />
               </div>
 
-              {/* Secret Key */}
+              {/* Client Secret */}
               <div className="space-y-1.5">
-                <Label className="text-xs font-medium text-zinc-600">Secret Key</Label>
+                <Label className="text-xs font-medium text-zinc-600">Client Secret</Label>
                 <div className="relative">
                   <Input
                     type={showSecret ? "text" : "password"}
-                    placeholder="Your Jumia app secret"
+                    placeholder="e.g. mXTNC33WFlKak2XfLFwmihiOOrZ5O1itDQ7djAStTwc="
                     value={secretKey}
                     onChange={(e) => { setSecretKey(e.target.value); setTestStatus("idle"); }}
                     className="h-9 pr-10 text-sm font-mono"

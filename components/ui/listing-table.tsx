@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useTransition, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   MoreHorizontal,
   ExternalLink,
@@ -138,6 +138,19 @@ export function ListingTable({ listings, compact = false }: ListingTableProps) {
     }
   }
 
+  // Auto-open the diagnose modal when redirected here from the review
+  // page after a successful push (?diagnose=<listingId>). Saves the
+  // seller from having to click a separate "Check Jumia status" item.
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const diagnose = searchParams.get("diagnose");
+    if (!diagnose) return;
+    handleDiagnose(diagnose);
+    // Clean the URL so a page refresh doesn't re-open the modal
+    router.replace("/listings", { scroll: false });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function handlePushToJumia(id: string, title: string) {
     setPushingIds((s) => new Set(s).add(id));
     try {
@@ -151,6 +164,9 @@ export function ListingTable({ listings, compact = false }: ListingTableProps) {
       if (res.ok && data.success) {
         addToast("success", `"${title}" submitted to Jumia — now Pending Approval.`);
         router.refresh();
+        // Auto-open the Jumia status modal so the seller sees the
+        // diagnosis result without having to click an extra menu item.
+        handleDiagnose(id);
       } else {
         addToast("error", data.error ?? "Push to Jumia failed. Try again.");
         router.refresh(); // refresh so status badge updates (might show "failed")

@@ -1250,8 +1250,7 @@ function AIConfidenceBanner({
         <div className="flex-1 min-w-0 space-y-1">
           {aiFieldCount > 0 && (
             <p className="text-violet-900">
-              <span className="font-semibold">AI pre-filled {aiFieldCount} field{aiFieldCount === 1 ? "" : "s"}.</span>{" "}
-              <span className="text-violet-700">Review each — yellow = AI inferred, gray = you fill in.</span>
+              <span className="font-semibold">Complete kindle review and submit to Jumia.</span>
               {sellerRequiredCount > 0 && (
                 <span className="text-violet-600"> ({sellerRequiredCount} need your input.)</span>
               )}
@@ -2147,7 +2146,9 @@ export function ReviewClient({
         if (pushData.sku) {
           setPublishedSku({ sku: pushData.sku, changed: Boolean(pushData.sku_changed) });
         }
-        router.push("/listings");
+        // Auto-open the Jumia status modal on the listings page so the
+        // seller sees the diagnosis result without an extra click.
+        router.push(`/listings?diagnose=${listing.id}`);
       } else if (pushData.error?.includes("not connected") || pushRes.status === 403) {
         setJumiaNotConnected(true);
         setSaveError(pushData.error ?? "Jumia not connected");
@@ -2633,13 +2634,6 @@ export function ReviewClient({
                 <Plus className="h-3.5 w-3.5" /> ADD VARIATION
               </button>
 
-              <p className="text-xs text-zinc-400 flex items-start gap-1">
-                <Info className="h-3 w-3 shrink-0 mt-0.5" />
-                Commission shown at {commissionPercent}% (incl. VAT). Net payout per unit:{" "}
-                <span className="font-semibold text-emerald-600">
-                  {sellingPrice > 0 ? formatGHS(netPayout) : "—"}
-                </span>
-              </p>
             </section>
 
             {/* ────────────── Section 3: Product Specification ──────────────

@@ -265,12 +265,12 @@ function IntegrationsPageInner() {
               <p className="text-xs text-zinc-400">
                 Vendor Center ·{" "}
                 <a
-                  href="https://vendorcenter.jumia.com.gh"
+                  href="https://vendorcenter.jumia.com"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="hover:underline text-zinc-500"
                 >
-                  vendorcenter.jumia.com.gh
+                  vendorcenter.jumia.com
                   <ExternalLink className="inline ml-0.5 h-2.5 w-2.5" />
                 </a>
               </p>
@@ -346,26 +346,6 @@ function IntegrationsPageInner() {
                   </div>
                 )}
               </div>
-            </div>
-
-            {/* What's enabled */}
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-widest text-zinc-400 mb-2">
-                What PandaWorld can do
-              </p>
-              <ul className="space-y-1.5 text-sm text-zinc-600">
-                {[
-                  "Push product listings directly to Jumia",
-                  "Read product status and approval feedback",
-                  "Sync order data (coming in Phase 4C)",
-                  "Update inventory & pricing (coming in Phase 4D)",
-                ].map((feat, i) => (
-                  <li key={i} className="flex items-center gap-2">
-                    <CheckCircle2 className={cn("h-3.5 w-3.5 shrink-0", i < 2 ? "text-emerald-500" : "text-zinc-300")} />
-                    <span className={i >= 2 ? "text-zinc-400" : ""}>{feat}</span>
-                  </li>
-                ))}
-              </ul>
             </div>
 
             {/* Category sync */}

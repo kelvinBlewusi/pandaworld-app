@@ -102,7 +102,7 @@ export default function PriceCalculatorPage() {
       <div>
         <h1 className="text-2xl font-bold text-zinc-900">Price calculator</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          Calculate your Jumia listing price or estimate your net payout — using real commission &amp; shipping data.
+          Calculate the price to show on Jumia or estimate the amount you will receive.
         </p>
       </div>
 
@@ -119,7 +119,7 @@ export default function PriceCalculatorPage() {
         >
           <span className="flex items-center justify-center gap-2">
             <TrendingUp className="h-4 w-4" />
-            Set my listing price
+            Set price to show on Jumia
           </span>
           <p className="mt-0.5 text-xs font-normal text-zinc-400">
             I know what I want to earn
@@ -136,7 +136,7 @@ export default function PriceCalculatorPage() {
         >
           <span className="flex items-center justify-center gap-2">
             <TrendingDown className="h-4 w-4" />
-            Check my earnings
+            Check how much I will be paid
           </span>
           <p className="mt-0.5 text-xs font-normal text-zinc-400">
             I know my listing price
