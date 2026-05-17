@@ -54,11 +54,16 @@ export interface JumiaCategoryAttribute {
 
 export async function getLeafCategories(): Promise<JumiaCategoryRow[]> {
   const db = createServerClient();
+  // Explicit .range() — Supabase silently caps SELECT at 1000 rows by
+  // default. The full Jumia catalogue runs to ~30k rows for sellers with
+  // deep trees. Without the range, the drawer / AI candidate pool sees
+  // only the first 1000 alphabetically.
   const { data } = await db
     .from("jumia_categories")
     .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name")
     .eq("is_leaf", true)
-    .order("name");
+    .order("name")
+    .range(0, 99_999);
   return (data ?? []) as JumiaCategoryRow[];
 }
 
@@ -80,11 +85,15 @@ export async function getLeafCategories(): Promise<JumiaCategoryRow[]> {
  */
 export async function getListableCategories(): Promise<JumiaCategoryRow[]> {
   const db = createServerClient();
+  // Explicit .range() raises Supabase's 1000-row default cap. Without it,
+  // the AI's candidate pool sees only the first 1000 listable rows
+  // alphabetically — useless when the catalogue is ~30k.
   const query = () => db
     .from("jumia_categories")
     .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name")
     .not("attribute_set_sid", "is", null)
-    .order("name");
+    .order("name")
+    .range(0, 99_999);
 
   let { data } = await query();
   if (data && data.length > 0) {
@@ -654,9 +663,14 @@ export async function recomputeIsLeafForAllCategories(): Promise<{
   total:   number;
 }> {
   const db = createServerClient();
+  // Supabase silently caps SELECT at 1000 rows by default. With Jumia's
+  // full GH tree we see ~25-30k rows; without an explicit range the
+  // recompute would only see the first 1000 alphabetically and mark
+  // everything past that as a leaf.
   const { data: rows } = await db
     .from("jumia_categories")
-    .select("code, path, is_leaf");
+    .select("code, path, is_leaf")
+    .range(0, 99_999);
 
   const all = (rows ?? []) as Array<{ code: number; path: string; is_leaf: boolean | null }>;
   if (all.length === 0) return { updated: 0, total: 0 };

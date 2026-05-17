@@ -37,10 +37,16 @@ export async function GET(req: NextRequest) {
   let categoriesPayload: unknown;
   if (wantAll) {
     const db = createServerClient();
+    // Supabase silently caps SELECT at 1000 rows by default. With Jumia's
+    // full GH tree we see ~25-30k rows. Explicit .range() raises the cap
+    // so the drawer renders every top-level node, not just the first
+    // 1000 alphabetically (which are typically dominated by a single
+    // top-level category's sub-tree).
     const { data } = await db
       .from("jumia_categories")
       .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid")
-      .order("path");
+      .order("path")
+      .range(0, 99_999);
     categoriesPayload = data ?? [];
   } else if (wantLeafOnly) {
     categoriesPayload = await getLeafCategories();

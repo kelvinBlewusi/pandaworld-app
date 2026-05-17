@@ -54,12 +54,16 @@ async function main() {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  // Supabase silently caps SELECT at 1000 rows by default. With Jumia's
+  // full GH tree we see ~25-30k rows; an unranged query would silently
+  // produce a tiny snapshot that's useless as a day-1 safety net.
   const { data, error } = await db
     .from("jumia_categories")
     .select(
       "code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name",
     )
-    .order("code");
+    .order("code")
+    .range(0, 99_999);
 
   if (error) {
     console.error("✗ Supabase query failed:", error.message);

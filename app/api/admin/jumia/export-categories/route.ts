@@ -63,10 +63,13 @@ export async function GET(req: NextRequest) {
 
   // ── Read every category from cache, sorted by full path ───────────────────
   const db = createServerClient();
+  // Supabase silently caps SELECT at 1000 rows by default; the full GH tree
+  // is ~25-30k rows. Raise the cap so the export reflects the whole table.
   const { data, error } = await db
     .from("jumia_categories")
     .select("code, name, path, attribute_set_sid, attribute_set_name, is_leaf, synced_at")
-    .order("path");
+    .order("path")
+    .range(0, 99_999);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
