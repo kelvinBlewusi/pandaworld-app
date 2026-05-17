@@ -7,6 +7,10 @@
     {
       "path": "/api/cron/jumia-feeds",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/sync-categories",
+      "schedule": "0 2 * * *"
     }
   ]
 }

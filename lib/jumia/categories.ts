@@ -168,38 +168,84 @@ export async function getVariantAxes(categoryCode: number): Promise<JumiaCategor
  */
 export async function fetchCategoriesFromJumia(accessToken: string): Promise<JumiaCategoryRow[]> {
   const all: Record<string, unknown>[] = [];
-  // Jumia's category tree typically has ~200-500 leaf categories. With the
-  // default Jumia page size we expect at most ~10 pages. We allow 100 as
-  // a wide safety margin so we never silently miss new categories.
-  const MAX_PAGES = 100;
+  // Jumia's category tree typically has ~200-500 leaf categories with their
+  // default page size; ~10 pages total. MAX_PAGES is the safety ceiling.
+  const MAX_PAGES = 30;
+  // OVERALL_BUDGET_MS is the wall-clock budget for the entire walk. The
+  // Vercel function maxDuration is 60s; we leave 10s headroom for the
+  // upsert + response writing so we bail out gracefully before being
+  // killed. Without this, a single slow Jumia page can sink the whole
+  // function and the seller gets a 504 with zero data.
+  const OVERALL_BUDGET_MS = 50_000;
+  // PER_PAGE_TIMEOUT_MS bounds any single Jumia API call so one slow
+  // page doesn't eat the entire budget.
+  const PER_PAGE_TIMEOUT_MS = 10_000;
+
+  const startedAt = Date.now();
   let page = 1;
+  let timedOut = false;
 
   while (page <= MAX_PAGES) {
-    const url = `${JUMIA_API_BASE}/catalog/categories?page=${page}`;
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
-    });
+    if (Date.now() - startedAt > OVERALL_BUDGET_MS) {
+      console.warn(
+        `[Jumia categories] Overall budget (${OVERALL_BUDGET_MS}ms) exceeded after page ${page - 1}. ` +
+        `Returning ${all.length} categories collected so far.`,
+      );
+      timedOut = true;
+      break;
+    }
+
+    const url   = `${JUMIA_API_BASE}/catalog/categories?page=${page}`;
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), PER_PAGE_TIMEOUT_MS);
+
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+        signal:  ctrl.signal,
+      });
+    } catch (e) {
+      clearTimeout(timer);
+      const err = e as Error;
+      if (err.name === "AbortError") {
+        console.warn(`[Jumia categories] Page ${page} timed out after ${PER_PAGE_TIMEOUT_MS}ms. Stopping with ${all.length} collected.`);
+        timedOut = true;
+        break;
+      }
+      // Network-level failure — surface as auth failure if first page,
+      // otherwise treat as end-of-walk so we keep whatever we have.
+      if (page === 1) throw new Error(`GET /catalog/categories failed: ${err.message}`);
+      console.warn(`[Jumia categories] Page ${page} fetch failed: ${err.message}. Stopping with ${all.length} collected.`);
+      break;
+    }
+    clearTimeout(timer);
+
     if (!res.ok) {
-      // Surface auth failures distinctly so callers (sync route) can mark
-      // the connection as needs_reconnect rather than treating it as a
-      // generic network blip.
+      // Auth failures bubble up so the sync route can mark the connection
+      // as needs_reconnect. Non-auth failures past page 1 just stop the
+      // walk with whatever we already have.
       if (res.status === 401 || res.status === 403) {
         throw new Error(`JUMIA_AUTH_FAILED: GET /catalog/categories returned ${res.status}`);
       }
       if (page === 1) throw new Error(`GET /catalog/categories failed: ${res.status}`);
+      console.warn(`[Jumia categories] Page ${page} returned ${res.status}. Stopping with ${all.length} collected.`);
       break;
     }
-    const raw = await res.json() as Record<string, unknown>;
+
+    const raw  = await res.json() as Record<string, unknown>;
     const list = (Array.isArray(raw) ? raw : (raw.categories ?? [])) as Record<string, unknown>[];
     if (list.length === 0) break;
     all.push(...list);
 
-    // If this is a fresh-style response without a "next page" hint, infer
-    // whether more pages exist from list size. We'll keep going until empty.
     page += 1;
 
     // Respect Jumia rate limit (max 4 req/sec)
     await new Promise((r) => setTimeout(r, 260));
+  }
+
+  if (timedOut && all.length === 0) {
+    throw new Error("JUMIA_TIMEOUT: First page timed out — Jumia API is unreachable or unusually slow.");
   }
 
   // Quick breakdown so logs show how many are listable vs tree-only
