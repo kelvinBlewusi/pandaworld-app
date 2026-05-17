@@ -174,16 +174,16 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
   // Current view = root if stack is empty, else last node on stack
   const currentNode = stack.length === 0 ? tree : stack[stack.length - 1];
 
-  // Search across the whole flat list. Returns every LISTABLE category
-  // matching the query — including intermediate-listable parents — so the
-  // seller can find (e.g.) "Watches" without having to drill into a
-  // specific sub-type. Non-listable tree nodes are excluded since they
-  // can't be picked anyway.
+  // Search across the whole flat list. Returns true LEAVES with a
+  // schema — categories the seller can actually SELECT. VC's behaviour:
+  // parents must be drilled into, so showing them in search would be
+  // misleading. is_leaf is computed at sync time from breadcrumb paths;
+  // attribute_set_sid != null confirms Jumia accepts listings here.
   const searchResults = useMemo(() => {
     if (!query.trim()) return null;
     const q = query.toLowerCase();
     return rawCategories
-      .filter((c) => c.attribute_set_sid != null)
+      .filter((c) => c.is_leaf && c.attribute_set_sid != null)
       .filter((c) => c.name.toLowerCase().includes(q) || c.path.toLowerCase().includes(q))
       .slice(0, 50);
   }, [query, rawCategories]);
@@ -438,9 +438,12 @@ function TreeView({
       )}
       <ul className="divide-y divide-zinc-100">
         {visibleChildren.map((child) => {
-          const isListable  = child.category?.attribute_set_sid != null;
           const hasChildren = child.children.length > 0;
-          const isSelected  =
+          // VC rule: parents are NEVER directly selectable. Leaves are
+          // selectable iff Jumia returned an attributeSet for them
+          // (their schema is real and a listing can actually go there).
+          const isSelectable = !hasChildren && child.category?.attribute_set_sid != null;
+          const isSelected   =
             (chosen != null && child.category != null && chosen.code === child.category.code) ||
             (chosen == null && initialPath != null && child.fullPath === initialPath);
           return (
@@ -448,7 +451,7 @@ function TreeView({
               key={child.fullPath}
               label={child.segment}
               hasChildren={hasChildren}
-              isListable={isListable}
+              isSelectable={isSelectable}
               isSelected={isSelected}
               onDrillIn={() => onDrillIn(child)}
               onSelect={() => onSelect(child)}
@@ -499,9 +502,9 @@ function SearchResults({
             label={cat.name}
             subLabel={cat.path}
             hasChildren={false}
-            isListable={true}
+            isSelectable={true}
             isSelected={isSelected}
-            onDrillIn={() => onSelect(cat)}  // No-op for search; body click selects via the !hasChildren path in CategoryRow
+            onDrillIn={() => onSelect(cat)}  // No-op for search; body click selects via !hasChildren path
             onSelect={() => onSelect(cat)}
           />
         );
