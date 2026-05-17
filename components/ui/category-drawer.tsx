@@ -22,9 +22,10 @@
  */
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { ChevronRight, ChevronLeft, X, Search, Loader2, Check, RefreshCw } from "lucide-react";
+import { ChevronLeft, X, Search, Loader2, RefreshCw, AlertCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { CategoryRow } from "@/components/ui/category-row";
 import { cn } from "@/lib/utils";
 
 interface FlatCategory {
@@ -173,27 +174,31 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
   // Current view = root if stack is empty, else last node on stack
   const currentNode = stack.length === 0 ? tree : stack[stack.length - 1];
 
-  // Search across the whole flat list (returns leaves matching the query)
+  // Search across the whole flat list. Returns every LISTABLE category
+  // matching the query — including intermediate-listable parents — so the
+  // seller can find (e.g.) "Watches" without having to drill into a
+  // specific sub-type. Non-listable tree nodes are excluded since they
+  // can't be picked anyway.
   const searchResults = useMemo(() => {
     if (!query.trim()) return null;
     const q = query.toLowerCase();
     return rawCategories
-      .filter((c) => c.is_leaf)
+      .filter((c) => c.attribute_set_sid != null)
       .filter((c) => c.name.toLowerCase().includes(q) || c.path.toLowerCase().includes(q))
       .slice(0, 50);
   }, [query, rawCategories]);
 
+  // Drill INTO a node (body click + chevron). Always allowed when the
+  // node has children, regardless of whether the node itself is listable.
+  const handleDrillIn = (node: TreeNode) => {
+    setStack((s) => [...s, node]);
+    setChosen(null);
+  };
+
+  // SELECT a node (radio click). The CategoryRow only fires this when
+  // the row is listable — so we just trust the signal here.
   const handleSelectNode = (node: TreeNode) => {
-    // If it has children, drill down
-    if (node.children.length > 0) {
-      setStack((s) => [...s, node]);
-      setChosen(null);
-      return;
-    }
-    // Leaf: mark as selected (orange radio + enables the footer button)
-    if (node.category && node.category.is_leaf) {
-      setChosen(node.category);
-    }
+    if (node.category) setChosen(node.category);
   };
 
   const handleSearchSelect = (cat: FlatCategory) => {
@@ -204,6 +209,44 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
     setStack((s) => s.slice(0, -1));
     setChosen(null);
   };
+
+  // Keyboard support — Esc closes the drawer, Backspace pops one level
+  // (when focus is inside the drawer, NOT inside the search input where
+  // Backspace is used to delete characters).
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+        return;
+      }
+      if (e.key === "Backspace") {
+        const target = e.target as HTMLElement | null;
+        const isTyping =
+          target?.tagName === "INPUT" ||
+          target?.tagName === "TEXTAREA" ||
+          target?.isContentEditable;
+        if (!isTyping && stack.length > 0) {
+          e.preventDefault();
+          handleBack();
+        }
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open, stack.length, onClose]);
+
+  // Stale-rehydrate detection: if the seller previously saved a category
+  // whose listability has since flipped (Jumia removed the attributeSet),
+  // we need to surface that. Computed once data is loaded.
+  const rehydrateWarning = useMemo(() => {
+    if (!initialPath || rawCategories.length === 0) return null;
+    const match = rawCategories.find((c) => c.path === initialPath);
+    if (!match) return null;
+    if (match.attribute_set_sid != null) return null;
+    return `"${match.name}" is no longer accepting listings on Jumia — please pick another category.`;
+  }, [initialPath, rawCategories]);
 
   const handleConfirm = () => {
     if (!chosen) return;
@@ -286,6 +329,16 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
           </div>
         </div>
 
+        {/* Stale-rehydrate warning: the previously-saved category lost
+            its attributeSet on Jumia's side (no longer accepting
+            listings). Surface this so the seller picks another. */}
+        {rehydrateWarning && (
+          <div className="flex items-start gap-2 px-5 py-2 border-b bg-amber-50 text-[11px] text-amber-800 shrink-0">
+            <AlertCircle className="h-3 w-3 shrink-0 mt-0.5 text-amber-500" />
+            <span className="break-words">{rehydrateWarning}</span>
+          </div>
+        )}
+
         {/* Breadcrumb path under search when drilled down */}
         {stack.length > 0 && !query && (
           <div className="px-5 py-2 border-b text-[11px] text-zinc-500 shrink-0 truncate">
@@ -318,6 +371,7 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
             <TreeView
               node={currentNode}
               chosen={chosen}
+              onDrillIn={handleDrillIn}
               onSelect={handleSelectNode}
               showHeader={stack.length === 0}
               initialPath={initialPath}
@@ -354,16 +408,27 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
 function TreeView({
   node,
   chosen,
+  onDrillIn,
   onSelect,
   showHeader,
   initialPath,
 }: {
   node:         TreeNode;
   chosen:       FlatCategory | null;
+  onDrillIn:    (n: TreeNode) => void;
   onSelect:     (n: TreeNode) => void;
   showHeader:   boolean;
   initialPath?: string;
 }) {
+  // Visible children: hide pure tree-only nodes that have no children
+  // either (downgrade-pass leftovers). A non-listable node with children
+  // is still useful for navigation; we keep those.
+  const visibleChildren = node.children.filter((c) => {
+    const isListable  = c.category?.attribute_set_sid != null;
+    const hasChildren = c.children.length > 0;
+    return isListable || hasChildren;
+  });
+
   return (
     <div>
       {showHeader && (
@@ -372,40 +437,25 @@ function TreeView({
         </p>
       )}
       <ul className="divide-y divide-zinc-100">
-        {node.children.map((child) => {
-          const isLeaf = child.children.length === 0 && child.category?.is_leaf;
-          const selected =
-            (chosen && child.category && chosen.code === child.category.code) ||
-            (!chosen && initialPath && child.fullPath === initialPath);
+        {visibleChildren.map((child) => {
+          const isListable  = child.category?.attribute_set_sid != null;
+          const hasChildren = child.children.length > 0;
+          const isSelected  =
+            (chosen != null && child.category != null && chosen.code === child.category.code) ||
+            (chosen == null && initialPath != null && child.fullPath === initialPath);
           return (
-            <li key={child.fullPath}>
-              <button
-                type="button"
-                onClick={() => onSelect(child)}
-                className="flex w-full items-center gap-3 px-5 py-3 text-left transition-colors hover:bg-orange-50"
-              >
-                {/* Radio circle */}
-                <span className={cn(
-                  "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 transition-colors",
-                  selected
-                    ? "border-orange-500 bg-orange-500"
-                    : "border-zinc-300"
-                )}>
-                  {selected && <Check className="h-2.5 w-2.5 text-white" />}
-                </span>
-
-                <span className="flex-1 truncate text-sm text-zinc-800">
-                  {child.segment}
-                </span>
-
-                {!isLeaf && (
-                  <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />
-                )}
-              </button>
-            </li>
+            <CategoryRow
+              key={child.fullPath}
+              label={child.segment}
+              hasChildren={hasChildren}
+              isListable={isListable}
+              isSelected={isSelected}
+              onDrillIn={() => onDrillIn(child)}
+              onSelect={() => onSelect(child)}
+            />
           );
         })}
-        {node.children.length === 0 && (
+        {visibleChildren.length === 0 && (
           <li className="px-5 py-10 text-center text-sm text-zinc-400">
             No subcategories.
           </li>
@@ -438,30 +488,22 @@ function SearchResults({
   return (
     <ul className="divide-y divide-zinc-100">
       {results.map((cat) => {
-        const selected =
-          (chosen && chosen.code === cat.code) ||
-          (!chosen && initialPath === cat.path);
+        // All search results are listable (filtered upstream by
+        // attribute_set_sid). Search is a flat list — no drill-in.
+        const isSelected =
+          (chosen != null && chosen.code === cat.code) ||
+          (chosen == null && initialPath === cat.path);
         return (
-          <li key={cat.code}>
-            <button
-              type="button"
-              onClick={() => onSelect(cat)}
-              className="flex w-full items-start gap-3 px-5 py-3 text-left transition-colors hover:bg-orange-50"
-            >
-              <span className={cn(
-                "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 transition-colors",
-                selected
-                  ? "border-orange-500 bg-orange-500"
-                  : "border-zinc-300"
-              )}>
-                {selected && <Check className="h-2.5 w-2.5 text-white" />}
-              </span>
-              <span className="min-w-0 flex-1">
-                <p className="text-sm text-zinc-800">{cat.name}</p>
-                <p className="text-[11px] text-zinc-400 truncate">{cat.path}</p>
-              </span>
-            </button>
-          </li>
+          <CategoryRow
+            key={cat.code}
+            label={cat.name}
+            subLabel={cat.path}
+            hasChildren={false}
+            isListable={true}
+            isSelected={isSelected}
+            onDrillIn={() => onSelect(cat)}  // No-op for search; body click selects via the !hasChildren path in CategoryRow
+            onSelect={() => onSelect(cat)}
+          />
         );
       })}
     </ul>
