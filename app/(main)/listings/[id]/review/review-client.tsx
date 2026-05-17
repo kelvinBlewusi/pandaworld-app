@@ -1250,7 +1250,7 @@ function AIConfidenceBanner({
         <div className="flex-1 min-w-0 space-y-1">
           {aiFieldCount > 0 && (
             <p className="text-violet-900">
-              <span className="font-semibold">Complete kindle review and submit to Jumia.</span>
+              <span className="font-semibold">Complete! Review and submit to Jumia.</span>
               {sellerRequiredCount > 0 && (
                 <span className="text-violet-600"> ({sellerRequiredCount} need your input.)</span>
               )}
