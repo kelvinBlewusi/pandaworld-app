@@ -4,6 +4,11 @@ import { createServerClient } from "@/lib/supabase/server";
 import { fetchAndCacheCategoryTree } from "@/lib/jumia/categories";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 
+// Category-list-only sync walks ~10 pages with 260ms rate-limit delays
+// between them — typically 5-10s. We allow 60s as the Hobby-tier ceiling
+// for safety margin on slow Jumia API responses.
+export const maxDuration = 60;
+
 // ─── POST /api/jumia/sync-categories ─────────────────────────────────────────
 // User-facing category sync endpoint (non-admin).
 // Requires an active Jumia connection with a real access token (not credential_auth).

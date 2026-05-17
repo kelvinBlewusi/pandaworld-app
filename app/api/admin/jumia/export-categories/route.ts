@@ -4,6 +4,13 @@ import { createServerClient } from "@/lib/supabase/server";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { fetchAndCacheCategoryTree } from "@/lib/jumia/categories";
 
+// Vercel serverless function timeout. The category-list walk takes
+// ~5-10s; we set 60s as a comfortable Hobby-tier-compatible ceiling.
+// If you upgrade to Pro you can raise this up to 300; Enterprise up to
+// 900. This export DOES NOT walk attribute schemas (those land on demand
+// via /api/jumia/categories/[code]/attributes), so 60s is plenty.
+export const maxDuration = 60;
+
 // ─── GET /api/admin/jumia/export-categories ───────────────────────────────────
 //
 // Dumps the full Jumia category tree from Supabase as a CSV file. Designed
@@ -35,15 +42,19 @@ export async function GET(req: NextRequest) {
   const live   = req.nextUrl.searchParams.get("live")   === "1";
   const format = req.nextUrl.searchParams.get("format") === "tsv" ? "tsv" : "csv";
 
-  // Optional: re-sync from Jumia before dumping. Slow path (~30-60s) but
-  // ensures the export reflects what VC currently shows. Soft-fails — if
-  // sync errors out, we fall through to whatever's already cached.
+  // Optional: re-sync the category LIST from Jumia before dumping. The
+  // category list alone walks ~10 pages in ~5-10s; we deliberately SKIP
+  // the per-category attribute walk here (~80-100s, would time out the
+  // Vercel function and produces data not even used in the CSV anyway).
+  // Attribute schemas are fetched on demand by the picker via
+  // /api/jumia/categories/[code]/attributes when a seller actually needs
+  // them. Soft-fails — if sync errors out, we fall through to cache.
   if (live) {
     try {
       const { accessToken } = await getValidJumiaCredentials(userId);
-      const result = await fetchAndCacheCategoryTree(accessToken, { syncAttributes: true });
+      const result = await fetchAndCacheCategoryTree(accessToken, { syncAttributes: false });
       console.info(
-        `[export-categories] Live sync complete — ${result.categories} categories, ${result.attributes} attributes`,
+        `[export-categories] Live sync complete — ${result.categories} categories refreshed`,
       );
     } catch (e) {
       console.warn(`[export-categories] Live sync failed (${(e as Error).message}); using cached data`);

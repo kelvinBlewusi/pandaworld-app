@@ -8,16 +8,31 @@ import {
   upsertAttributes,
 } from "@/lib/jumia/categories";
 
+// Bump the serverless function timeout. With syncAttributes=false the
+// route returns in ~5-10s. With syncAttributes=true it walks ~300
+// attribute fetches at the 4-req/sec rate-limit ceiling — that's ~80s
+// and will time out on Hobby (60s max). Pro can raise this to 300.
+//
+// If you're on Hobby and need full attribute sync, prefer calling this
+// route with syncAttributes=false here and relying on the lazy
+// per-category attribute fetch (/api/jumia/categories/[code]/attributes)
+// which loads schemas on demand when the seller picks a category.
+export const maxDuration = 60;
+
 // ─── POST /api/admin/jumia/sync-categories ────────────────────────────────────
 //
-// Syncs the full Jumia category list + per-category attribute schemas into Supabase.
+// Syncs the full Jumia category list + (optionally) per-category attribute
+// schemas into Supabase.
 //
 // How it works (based on API exploration):
 //  1. GET /catalog/categories            → flat list of ~50 categories, each with attributeSet.sid
 //  2. For each category with a sid:
 //     GET /catalog/attribute-sets/{sid}  → full attribute schema for that category
 //
-// Body: { syncAttributes?: boolean }  (default true)
+// Body: { syncAttributes?: boolean }
+//   - false (recommended for serverless): only the category list, ~5-10s
+//   - true: full attribute walk, ~80-100s, REQUIRES Pro plan with
+//     maxDuration raised to 300+. Use sparingly.
 
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
