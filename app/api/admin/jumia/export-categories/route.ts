@@ -106,9 +106,12 @@ export async function GET(req: NextRequest) {
   const lines = [header.map(escape).join(sep)];
 
   for (const row of rows) {
-    const parts = row.path.split(/\s*>\s*/);   // split on " > " breadcrumb separator
+    // Handle both " > " and " / " separators since older synced rows may
+    // still use Jumia's legacy " / " form (fresh syncs normalise to " > ").
+    const normalisedPath = row.path.replace(/\s*[>/]\s*/g, " > ").trim();
+    const parts = normalisedPath.split(" > ");
     const levels = [0, 1, 2, 3, 4].map((i) => parts[i] ?? "");
-    const fullPath = row.path;
+    const fullPath = normalisedPath;
     const listable = row.attribute_set_sid != null ? "YES" : "NO";
     const isLeaf   = row.is_leaf ? "YES" : "NO";
 

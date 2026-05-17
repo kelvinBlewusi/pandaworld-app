@@ -51,18 +51,30 @@ interface TreeNode {
   children:     TreeNode[];
 }
 
+// Jumia's category breadcrumb separator is inconsistent across responses:
+// some endpoints return " > " (the official spec), some return " / ".
+// Treat them as equivalent — normalise to " > " for any internal storage
+// and tree-building so downstream code only has to worry about one form.
+export const CATEGORY_PATH_SEPARATOR_REGEX = /\s*[>/]\s*/g;
+
+function normaliseCategoryPath(p: string): string {
+  return p.replace(CATEGORY_PATH_SEPARATOR_REGEX, " > ").trim();
+}
+
 // Build a path-based tree from a flat category list. Each segment in a
-// completePath becomes a node. A node is "selectable" only when its path
-// matches a category row AND that row is a leaf.
+// completePath becomes a node. A node has its own `category` record iff
+// some row's path matches its normalised full path; intermediate
+// synthesised nodes (just for tree structure) have `category: null`.
 function buildTree(categories: FlatCategory[]): TreeNode {
   const root: TreeNode = { segment: "", fullPath: "", category: null, children: [] };
 
-  // Index categories by path for quick lookup
+  // Index categories by NORMALISED path for quick lookup. Categories may
+  // be stored with either separator depending on when they were synced.
   const byPath = new Map<string, FlatCategory>();
-  for (const c of categories) byPath.set(c.path, c);
+  for (const c of categories) byPath.set(normaliseCategoryPath(c.path), c);
 
   for (const cat of categories) {
-    const segments = cat.path.split(/\s*>\s*/).filter(Boolean);
+    const segments = normaliseCategoryPath(cat.path).split(" > ").filter(Boolean);
     let cursor = root;
     let pathSoFar = "";
     for (let i = 0; i < segments.length; i++) {
@@ -237,16 +249,25 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [open, stack.length, onClose]);
 
+  // Normalise initialPath so saved paths with the old "/" separator
+  // still match the tree built from normalised " > " paths.
+  const normalisedInitialPath = useMemo(
+    () => (initialPath ? normaliseCategoryPath(initialPath) : undefined),
+    [initialPath],
+  );
+
   // Stale-rehydrate detection: if the seller previously saved a category
   // whose listability has since flipped (Jumia removed the attributeSet),
   // we need to surface that. Computed once data is loaded.
   const rehydrateWarning = useMemo(() => {
-    if (!initialPath || rawCategories.length === 0) return null;
-    const match = rawCategories.find((c) => c.path === initialPath);
+    if (!normalisedInitialPath || rawCategories.length === 0) return null;
+    const match = rawCategories.find(
+      (c) => normaliseCategoryPath(c.path) === normalisedInitialPath,
+    );
     if (!match) return null;
     if (match.attribute_set_sid != null) return null;
     return `"${match.name}" is no longer accepting listings on Jumia — please pick another category.`;
-  }, [initialPath, rawCategories]);
+  }, [normalisedInitialPath, rawCategories]);
 
   const handleConfirm = () => {
     if (!chosen) return;
@@ -364,7 +385,7 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
               results={searchResults ?? []}
               chosen={chosen}
               onSelect={handleSearchSelect}
-              initialPath={initialPath}
+              initialPath={normalisedInitialPath}
             />
           ) : (
             // Drill-down tree view
@@ -374,7 +395,7 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
               onDrillIn={handleDrillIn}
               onSelect={handleSelectNode}
               showHeader={stack.length === 0}
-              initialPath={initialPath}
+              initialPath={normalisedInitialPath}
             />
           )}
         </div>
@@ -491,16 +512,17 @@ function SearchResults({
   return (
     <ul className="divide-y divide-zinc-100">
       {results.map((cat) => {
-        // All search results are listable (filtered upstream by
-        // attribute_set_sid). Search is a flat list — no drill-in.
+        // All search results are listable. initialPath has already been
+        // normalised to " > " separators by the caller; normalise cat.path
+        // the same way to match.
         const isSelected =
           (chosen != null && chosen.code === cat.code) ||
-          (chosen == null && initialPath === cat.path);
+          (chosen == null && initialPath === normaliseCategoryPath(cat.path));
         return (
           <CategoryRow
             key={cat.code}
             label={cat.name}
-            subLabel={cat.path}
+            subLabel={normaliseCategoryPath(cat.path)}
             hasChildren={false}
             isSelectable={true}
             isSelected={isSelected}

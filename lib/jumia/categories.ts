@@ -215,13 +215,22 @@ export async function fetchCategoriesFromJumia(accessToken: string): Promise<Jum
     `— ${withAttrSet} listable (attributeSet present), ${all.length - withAttrSet} tree-only.`,
   );
 
-  // Normalise + collect all completePaths so we can compute is_leaf
+  // Normalise + collect all completePaths so we can compute is_leaf.
+  //
+  // CRITICAL: Jumia's `completePath` field uses inconsistent separators
+  // depending on the endpoint version — sometimes " > ", sometimes " / ".
+  // We canonicalise to " > " on the way in so downstream code (tree
+  // builder, leaf detection, CSV export, deep-link rehydrate) only has
+  // to deal with one form. Without this, the picker's tree builder
+  // splits paths into ["Automobile / Car Care / ..."] as a single
+  // segment and renders the whole category list flat at the root.
   const normalised = all.map((c) => {
     const attrSet = c.attributeSet as Record<string, unknown> | undefined;
     const code    = Number(c.code);
     const name    = String(c.name ?? "");
-    const path    = String(c.completePath ?? name);
-    const level   = Math.max(1, path.split(/\s*[>/]\s*/).length);
+    const rawPath = String(c.completePath ?? name);
+    const path    = rawPath.replace(/\s*[>/]\s*/g, " > ").trim();
+    const level   = Math.max(1, path.split(" > ").length);
     return {
       code,
       name,
@@ -232,14 +241,15 @@ export async function fetchCategoriesFromJumia(accessToken: string): Promise<Jum
     };
   });
 
-  // A category is a leaf if no other category's path starts with "this path > "
-  // (case insensitive, tolerant of various separators)
+  // A category is a leaf if no other category's path starts with "this
+  // path > " (paths are already normalised, so we only need to check
+  // " > " — no separator variants to worry about).
   const allPaths = normalised.map((n) => n.path.toLowerCase());
 
   return normalised.map((n) => {
     const myPath = n.path.toLowerCase();
     const isLeaf = !allPaths.some(
-      (p) => p !== myPath && (p.startsWith(myPath + " > ") || p.startsWith(myPath + ">"))
+      (p) => p !== myPath && p.startsWith(myPath + " > ")
     );
     return {
       code:               n.code,
