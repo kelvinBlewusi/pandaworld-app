@@ -35,17 +35,26 @@ export const maxDuration = 60;
 //     maxDuration raised to 300+. Use sparingly.
 
 export async function POST(req: NextRequest) {
+  const t0 = Date.now();
+  console.info("[Sync] ▶ POST /api/admin/jumia/sync-categories — function start");
+
   const { userId } = await auth();
-  if (!userId) return new NextResponse("Unauthorized", { status: 401 });
+  if (!userId) {
+    console.info("[Sync] ✕ Unauthorized (no userId)");
+    return new NextResponse("Unauthorized", { status: 401 });
+  }
 
   const body = await req.json().catch(() => ({})) as { syncAttributes?: boolean };
   const syncAttributes = body.syncAttributes !== false;
+  console.info(`[Sync] userId=${userId.slice(0, 12)}… syncAttributes=${syncAttributes}`);
 
   // ── Get a valid Jumia token ───────────────────────────────────────────────
   let accessToken: string;
   try {
     ({ accessToken } = await getValidJumiaCredentials(userId));
+    console.info(`[Sync] Got Jumia access token (${(Date.now() - t0)}ms in)`);
   } catch (e) {
+    console.error("[Sync] ✕ Token resolve failed:", (e as Error).message);
     return NextResponse.json(
       { error: `Jumia not connected: ${(e as Error).message}` },
       { status: 403 }
@@ -58,16 +67,27 @@ export async function POST(req: NextRequest) {
   try {
     categories = await fetchCategoriesFromJumia(accessToken);
   } catch (e) {
+    console.error("[Sync] ✕ Category fetch failed:", (e as Error).message);
     return NextResponse.json(
       { error: `Category fetch failed: ${(e as Error).message}` },
       { status: 502 }
     );
   }
 
-  console.info(`[Sync] Fetched ${categories.length} categories`);
-  await upsertCategories(categories);
+  console.info(`[Sync] Fetched ${categories.length} categories (${(Date.now() - t0)}ms in)`);
+  try {
+    await upsertCategories(categories);
+    console.info(`[Sync] Upserted ${categories.length} rows (${(Date.now() - t0)}ms in)`);
+  } catch (e) {
+    console.error("[Sync] ✕ Upsert failed:", (e as Error).message);
+    return NextResponse.json(
+      { error: `Database write failed: ${(e as Error).message}` },
+      { status: 500 }
+    );
+  }
 
   if (!syncAttributes) {
+    console.info(`[Sync] ✓ Done in ${Date.now() - t0}ms — ${categories.length} categories, attributes skipped`);
     return NextResponse.json({
       success: true,
       categories: categories.length,

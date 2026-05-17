@@ -91,23 +91,54 @@ function IntegrationsPageInner() {
   async function handleSyncCategories() {
     setSyncing(true);
     setSyncResult(null);
+
+    // 90-second client-side timeout — bails out fast if the server is
+    // hung instead of waiting for the browser's default ~5min.
+    const ctrl = new AbortController();
+    const timeoutId = setTimeout(() => ctrl.abort(), 90_000);
+
     try {
       const res = await fetch("/api/admin/jumia/sync-categories", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ syncAttributes: false }),
+        signal:  ctrl.signal,
       });
-      const data = await res.json();
+      clearTimeout(timeoutId);
+
+      // Robust response parsing — Vercel function timeouts return HTML
+      // error pages, not JSON. We read as text first, then try to parse
+      // so we can surface a useful error when parsing fails.
+      const rawText = await res.text();
+      let data: { success?: boolean; error?: string; categories?: number } = {};
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch (parseErr) {
+        console.error("[Sync Categories] Non-JSON response:", res.status, rawText.slice(0, 300), parseErr);
+        showToast(
+          "error",
+          `Sync got an invalid response (HTTP ${res.status}). Check Vercel function logs for /api/admin/jumia/sync-categories.`,
+        );
+        return;
+      }
+
       if (res.ok && data.success) {
-        setSyncResult({ categories: data.categories, attributes: 0 });
+        setSyncResult({ categories: data.categories ?? 0, attributes: 0 });
         showToast("success", `✅ Synced ${data.categories} categories. Attribute fields load automatically when you pick a category in a listing.`);
-        // Refresh the persistent count + timestamp
         loadCategoryStats();
       } else {
-        showToast("error", data.error ?? "Sync failed — please try again.");
+        console.error("[Sync Categories] Server error:", res.status, data);
+        showToast("error", data.error ?? `Sync failed (HTTP ${res.status}).`);
       }
-    } catch {
-      showToast("error", "Network error during sync.");
+    } catch (e) {
+      clearTimeout(timeoutId);
+      const err = e as Error;
+      console.error("[Sync Categories] Client-side error:", err);
+      if (err.name === "AbortError") {
+        showToast("error", "Sync timed out after 90s. Try Settings → Integrations again, or check Vercel logs.");
+      } else {
+        showToast("error", `Sync failed: ${err.message}`);
+      }
     } finally {
       setSyncing(false);
     }
@@ -117,17 +148,36 @@ function IntegrationsPageInner() {
   async function handleSyncBrands() {
     setSyncingBrands(true);
     setBrandSyncResult(null);
+    const ctrl = new AbortController();
+    const timeoutId = setTimeout(() => ctrl.abort(), 90_000);
     try {
-      const res  = await fetch("/api/admin/jumia/sync-brands", { method: "POST" });
-      const data = await res.json();
+      const res  = await fetch("/api/admin/jumia/sync-brands", { method: "POST", signal: ctrl.signal });
+      clearTimeout(timeoutId);
+      const rawText = await res.text();
+      let data: { success?: boolean; error?: string; brands?: number } = {};
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch (parseErr) {
+        console.error("[Sync Brands] Non-JSON response:", res.status, rawText.slice(0, 300), parseErr);
+        showToast("error", `Brand sync got an invalid response (HTTP ${res.status}). Check Vercel logs.`);
+        return;
+      }
       if (res.ok && data.success) {
-        setBrandSyncResult({ brands: data.brands });
+        setBrandSyncResult({ brands: data.brands ?? 0 });
         showToast("success", `✅ Synced ${data.brands} brands from Jumia.`);
       } else {
-        showToast("error", data.error ?? "Brand sync failed — please try again.");
+        console.error("[Sync Brands] Server error:", res.status, data);
+        showToast("error", data.error ?? `Brand sync failed (HTTP ${res.status}).`);
       }
-    } catch {
-      showToast("error", "Network error during brand sync.");
+    } catch (e) {
+      clearTimeout(timeoutId);
+      const err = e as Error;
+      console.error("[Sync Brands] Client-side error:", err);
+      if (err.name === "AbortError") {
+        showToast("error", "Brand sync timed out after 90s.");
+      } else {
+        showToast("error", `Brand sync failed: ${err.message}`);
+      }
     } finally {
       setSyncingBrands(false);
     }
