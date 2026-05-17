@@ -17,9 +17,11 @@ interface WorkflowCounts {
 export function MainShell({
   children,
   workflowCounts,
+  isAdmin = false,
 }: {
   children: React.ReactNode;
   workflowCounts?: WorkflowCounts;
+  isAdmin?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
@@ -44,7 +46,7 @@ export function MainShell({
 
       {/* ── Desktop sidebar (always visible ≥ lg) ── */}
       <div className="hidden lg:flex">
-        <Sidebar workflowCounts={workflowCounts} />
+        <Sidebar workflowCounts={workflowCounts} isAdmin={isAdmin} />
       </div>
 
       {/* ── Mobile drawer ── */}
@@ -65,7 +67,7 @@ export function MainShell({
           open ? "translate-x-0" : "-translate-x-full",
         ].join(" ")}
       >
-        <Sidebar workflowCounts={workflowCounts} onClose={() => setOpen(false)} />
+        <Sidebar workflowCounts={workflowCounts} isAdmin={isAdmin} onClose={() => setOpen(false)} />
       </div>
 
       {/* ── Main content area ── */}

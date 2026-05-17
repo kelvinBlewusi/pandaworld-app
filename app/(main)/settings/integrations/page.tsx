@@ -32,8 +32,6 @@ function IntegrationsPageInner() {
   const [disconnecting,setDisconnecting]= useState(false);
   const [showConfirm,  setShowConfirm]  = useState(false);
   const [toast,        setToast]        = useState<{ type: "success"|"error"; msg: string } | null>(null);
-  const [syncing,         setSyncing]         = useState(false);
-  const [syncResult,      setSyncResult]      = useState<{ categories: number; attributes: number } | null>(null);
   const [syncingBrands,   setSyncingBrands]   = useState(false);
   const [brandSyncResult, setBrandSyncResult] = useState<{ brands: number } | null>(null);
 
@@ -83,66 +81,8 @@ function IntegrationsPageInner() {
     setTimeout(() => setToast(null), 6000);
   }
 
-  // ── Sync Jumia categories ─────────────────────────────────────────────────
-  // FAST path: just the category list (no attributes). Attribute schemas load
-  // lazily when a seller actually opens a listing in that category. Full attr
-  // sync took 50+ seconds for ~200 categories due to Jumia's rate limit; this
-  // version completes in 2-3 seconds.
-  async function handleSyncCategories() {
-    setSyncing(true);
-    setSyncResult(null);
-
-    // 90-second client-side timeout — bails out fast if the server is
-    // hung instead of waiting for the browser's default ~5min.
-    const ctrl = new AbortController();
-    const timeoutId = setTimeout(() => ctrl.abort(), 90_000);
-
-    try {
-      const res = await fetch("/api/admin/jumia/sync-categories", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ syncAttributes: false }),
-        signal:  ctrl.signal,
-      });
-      clearTimeout(timeoutId);
-
-      // Robust response parsing — Vercel function timeouts return HTML
-      // error pages, not JSON. We read as text first, then try to parse
-      // so we can surface a useful error when parsing fails.
-      const rawText = await res.text();
-      let data: { success?: boolean; error?: string; categories?: number } = {};
-      try {
-        data = rawText ? JSON.parse(rawText) : {};
-      } catch (parseErr) {
-        console.error("[Sync Categories] Non-JSON response:", res.status, rawText.slice(0, 300), parseErr);
-        showToast(
-          "error",
-          `Sync got an invalid response (HTTP ${res.status}). Check Vercel function logs for /api/admin/jumia/sync-categories.`,
-        );
-        return;
-      }
-
-      if (res.ok && data.success) {
-        setSyncResult({ categories: data.categories ?? 0, attributes: 0 });
-        showToast("success", `✅ Synced ${data.categories} categories. Attribute fields load automatically when you pick a category in a listing.`);
-        loadCategoryStats();
-      } else {
-        console.error("[Sync Categories] Server error:", res.status, data);
-        showToast("error", data.error ?? `Sync failed (HTTP ${res.status}).`);
-      }
-    } catch (e) {
-      clearTimeout(timeoutId);
-      const err = e as Error;
-      console.error("[Sync Categories] Client-side error:", err);
-      if (err.name === "AbortError") {
-        showToast("error", "Sync timed out after 90s. Try Settings → Integrations again, or check Vercel logs.");
-      } else {
-        showToast("error", `Sync failed: ${err.message}`);
-      }
-    } finally {
-      setSyncing(false);
-    }
-  }
+  // Category sync moved to the admin-only /admin/categories page —
+  // sellers see a read-only status card now.
 
   // ── Sync Jumia brand catalog ──────────────────────────────────────────────
   async function handleSyncBrands() {
@@ -348,61 +288,33 @@ function IntegrationsPageInner() {
               </div>
             </div>
 
-            {/* Category sync */}
+            {/* Category status — read-only. The catalog is curated by
+                an admin and refreshed centrally; sellers never trigger
+                syncs. Card shows freshness info for transparency. */}
             <div className="rounded-xl border bg-zinc-50 p-4 space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-zinc-800">Jumia category database</p>
-                  <p className="text-xs text-zinc-500 mt-0.5">
-                    The AI picks from these categories when analysing a listing. Keep them fresh.
-                  </p>
-                </div>
-                <div className="flex flex-col items-end gap-2 shrink-0">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="gap-2"
-                    onClick={handleSyncCategories}
-                    disabled={syncing}
-                  >
-                    <RefreshCw className={cn("h-3.5 w-3.5", syncing && "animate-spin")} />
-                    {syncing ? "Syncing…" : "Sync now"}
-                  </Button>
-                  <a
-                    href="/api/admin/jumia/export-categories"
-                    className="inline-flex items-center gap-1.5 rounded-md border bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
-                    title="Downloads a CSV of every cached category. Open in Google Sheets via File → Import → Upload."
-                  >
-                    <Download className="h-3 w-3" /> Export CSV
-                  </a>
-                  <a
-                    href="/api/admin/jumia/export-categories?live=1"
-                    className="text-[10px] text-zinc-500 hover:text-zinc-700 hover:underline"
-                    title="Re-syncs from Jumia first, then downloads. Slower (30-60s)."
-                  >
-                    Export fresh from Jumia →
-                  </a>
-                </div>
+              <div>
+                <p className="text-sm font-semibold text-zinc-800">Jumia category catalog</p>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  Maintained centrally so you don&apos;t have to. New categories appear here
+                  automatically whenever Jumia adds them.
+                </p>
               </div>
 
-              {/* Always-visible status bar */}
               {categoryStats != null && (
                 <div className="rounded-lg border bg-white px-3 py-2 flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-xs text-zinc-500">Categories the AI knows about</p>
+                    <p className="text-xs text-zinc-500">Categories available</p>
                     <p className="text-lg font-bold text-zinc-900">
                       {categoryStats.count.toLocaleString()}
                       <span className="ml-2 text-xs font-normal text-zinc-400">
                         {categoryStats.count === 0
-                          ? "— nothing synced yet"
-                          : categoryStats.count < 50
-                          ? "— looks low, click Sync now"
-                          : "leaf categories"}
+                          ? "— catalog being prepared"
+                          : "available for listings"}
                       </span>
                     </p>
                   </div>
                   <div className="text-right shrink-0">
-                    <p className="text-[10px] uppercase tracking-wider text-zinc-400">Last sync</p>
+                    <p className="text-[10px] uppercase tracking-wider text-zinc-400">Last refresh</p>
                     <p className="text-xs text-zinc-700">
                       {categoryStats.lastSynced
                         ? new Date(categoryStats.lastSynced).toLocaleString("en-GB", {
@@ -411,24 +323,10 @@ function IntegrationsPageInner() {
                             hour:  "2-digit",
                             minute:"2-digit",
                           })
-                        : "Never"}
+                        : "—"}
                     </p>
                   </div>
                 </div>
-              )}
-
-              {syncing && (
-                <p className="text-xs text-zinc-400 flex items-center gap-1.5">
-                  <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-                  Walking every page of /catalog/categories from Jumia…
-                </p>
-              )}
-              {syncResult && !syncing && (
-                <p className="text-xs text-emerald-700 flex items-center gap-1.5">
-                  <CheckCircle2 className="h-3 w-3 shrink-0" />
-                  {syncResult.categories} categories synced from Jumia.
-                  Attribute schemas load on demand when you pick a category in a listing.
-                </p>
               )}
             </div>
 

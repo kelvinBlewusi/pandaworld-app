@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { exchangeCodeForTokens, fetchJumiaSellerProfile } from "@/lib/jumia/oauth";
-import { fetchAndCacheCategoryTree } from "@/lib/jumia/categories";
 
 // ─── GET /api/jumia/callback ──────────────────────────────────────────────────
 // Jumia redirects here after the user authorises PandaWorld.
@@ -127,13 +126,12 @@ export async function GET(req: NextRequest) {
     `[Jumia OAuth] Connected seller=${profile.seller_name ?? "unknown"} for user=${userId}`
   );
 
-  // ── Auto-sync categories + attribute schemas in the background ─────────────
-  // This populates jumia_category_attributes so the review form shows real
-  // Jumia fields instead of empty placeholders. We don't await — a fresh OAuth
-  // token is valid for ~1 hour, plenty of time for the sync to finish.
-  fetchAndCacheCategoryTree(tokens.access_token, { syncAttributes: true })
-    .then((r) => console.info(`[Jumia OAuth] Auto-synced ${r.categories} categories, ${r.attributes ?? 0} attributes`))
-    .catch((e) => console.warn("[Jumia OAuth] Auto-sync failed:", (e as Error).message));
+  // NOTE: category sync used to fire here as a fire-and-forget background
+  // task. That's been replaced by the admin-controlled batched sync at
+  // /admin/categories. Categories are pre-seeded from the bundled JSON
+  // snapshot, so by the time this seller reaches the listing flow the
+  // picker is already populated. Per-category attribute schemas still
+  // load on demand via /api/jumia/categories/[code]/attributes.
 
   // Redirect to done page (onboarding flow) with store name
   const successUrl = `${origin}/onboarding/done?store=${encodeURIComponent(resolvedStoreName)}`;

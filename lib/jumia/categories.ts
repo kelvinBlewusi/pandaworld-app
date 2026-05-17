@@ -67,19 +67,37 @@ export async function getLeafCategories(): Promise<JumiaCategoryRow[]> {
  * whose attribute_set_sid is non-null. This matches what Vendor Center
  * shows in its category picker.
  *
+ * Self-healing: if the table is empty (fresh deploy, accidental wipe,
+ * dev environment), we lazily seed from the bundled JSON snapshot and
+ * retry. Guarantees the picker is never blank — sellers always have a
+ * tree to drill into, even before the admin has run their first sync.
+ *
  * Why not just leaves? Jumia treats "having children" and "being
  * listable" as orthogonal. A parent category like "Watches" can have an
- * attributeSet AND children (Men's Watches / Women's Watches) — VC lets
- * sellers list directly into "Watches" too. The old getLeafCategories()
- * filter was hiding those intermediate listables.
+ * attributeSet AND children — VC's picker still shows it. We let the
+ * UI layer decide selectability (CategoryRow.isSelectable based on
+ * hasChildren) but include intermediate-listable parents in the tree.
  */
 export async function getListableCategories(): Promise<JumiaCategoryRow[]> {
   const db = createServerClient();
-  const { data } = await db
+  const query = () => db
     .from("jumia_categories")
     .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name")
     .not("attribute_set_sid", "is", null)
     .order("name");
+
+  let { data } = await query();
+  if (data && data.length > 0) {
+    return data as JumiaCategoryRow[];
+  }
+
+  // Empty table — try to seed from the bundled snapshot. If the seed
+  // also yields nothing (snapshot is empty), return [] — the picker
+  // shows its empty-state copy and the admin needs to run a sync.
+  const { inserted } = await seedFromBundledSnapshot();
+  if (inserted === 0) return [];
+
+  ({ data } = await query());
   return (data ?? []) as JumiaCategoryRow[];
 }
 
@@ -535,4 +553,168 @@ export async function upsertAttributes(
   await db
     .from("jumia_category_attributes")
     .upsert(rows, { onConflict: "category_code,name" });
+}
+
+// ─── Batched sync helpers ─────────────────────────────────────────────────────
+//
+// The admin UI calls `fetchCategoriesPage(token, n)` once per Jumia page,
+// then `recomputeIsLeafForAllCategories()` once at the end. Each per-page
+// call returns in ~1-2s — far below any function timeout. The client
+// orchestrates the loop and renders a progress bar.
+
+export interface FetchPageResult {
+  /** Categories returned by Jumia for this page, already normalised + upserted. */
+  rows:        JumiaCategoryRow[];
+  /** True when Jumia returned a non-empty list — caller knows to try page+1. */
+  hasMore:     boolean;
+}
+
+/**
+ * Fetch a single Jumia category page and upsert it. is_leaf is left as
+ * `false` for every row in this call — it can't be computed page-by-page
+ * because a category in page 1 might gain children only in page 5. Call
+ * `recomputeIsLeafForAllCategories()` once at the end of the batch loop
+ * to fix is_leaf for the full set.
+ */
+export async function fetchCategoriesPage(
+  accessToken: string,
+  page:        number,
+): Promise<FetchPageResult> {
+  const PER_PAGE_TIMEOUT_MS = 10_000;
+
+  const url   = `${JUMIA_API_BASE}/catalog/categories?page=${page}`;
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), PER_PAGE_TIMEOUT_MS);
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+      signal:  ctrl.signal,
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    const err = e as Error;
+    if (err.name === "AbortError") {
+      throw new Error(`JUMIA_TIMEOUT: page ${page} timed out after ${PER_PAGE_TIMEOUT_MS}ms`);
+    }
+    throw new Error(`Page ${page} fetch failed: ${err.message}`);
+  }
+  clearTimeout(timer);
+
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(`JUMIA_AUTH_FAILED: page ${page} returned ${res.status}`);
+    }
+    throw new Error(`Page ${page} returned HTTP ${res.status}`);
+  }
+
+  const raw  = await res.json() as Record<string, unknown>;
+  const list = (Array.isArray(raw) ? raw : (raw.categories ?? [])) as Record<string, unknown>[];
+  if (list.length === 0) {
+    return { rows: [], hasMore: false };
+  }
+
+  // Normalise + provisional is_leaf=false. Final value is recomputed in
+  // recomputeIsLeafForAllCategories() after the full walk.
+  const rows: JumiaCategoryRow[] = list.map((c) => {
+    const attrSet = c.attributeSet as Record<string, unknown> | undefined;
+    const code    = Number(c.code);
+    const name    = String(c.name ?? "");
+    const rawPath = String(c.completePath ?? name);
+    const path    = rawPath.replace(/\s*[>/]\s*/g, " > ").trim();
+    const level   = Math.max(1, path.split(" > ").length);
+    return {
+      code,
+      name,
+      path,
+      parent_code:        null,
+      level,
+      is_leaf:            false,  // recomputed in finalize step
+      attribute_set_sid:  attrSet?.sid ? String(attrSet.sid) : null,
+      attribute_set_name: attrSet?.name ? String(attrSet.name) : null,
+    };
+  });
+
+  await upsertCategories(rows);
+  return { rows, hasMore: true };
+}
+
+/**
+ * Read every category's path from Supabase, compute is_leaf for each
+ * (a row is a leaf iff no other row's path starts with this row's path
+ * followed by " > "), and batch-update. Single DB read + ~5 batch updates
+ * — typically <1s.
+ *
+ * Called once at the end of a batched sync, AFTER the last page is in.
+ * Safe to call ad-hoc to repair stale is_leaf values.
+ */
+export async function recomputeIsLeafForAllCategories(): Promise<{
+  updated: number;
+  total:   number;
+}> {
+  const db = createServerClient();
+  const { data: rows } = await db
+    .from("jumia_categories")
+    .select("code, path, is_leaf");
+
+  const all = (rows ?? []) as Array<{ code: number; path: string; is_leaf: boolean | null }>;
+  if (all.length === 0) return { updated: 0, total: 0 };
+
+  const lowerPaths = all.map((r) => r.path.toLowerCase());
+
+  // Compute is_leaf for each row. Only write back if it changed.
+  const updates: Array<{ code: number; is_leaf: boolean }> = [];
+  for (let i = 0; i < all.length; i++) {
+    const myPath = lowerPaths[i];
+    const isLeaf = !lowerPaths.some(
+      (p, j) => j !== i && p.startsWith(myPath + " > ")
+    );
+    if (Boolean(all[i].is_leaf) !== isLeaf) {
+      updates.push({ code: all[i].code, is_leaf: isLeaf });
+    }
+  }
+
+  // Batch the updates in chunks of 200 to stay under Supabase limits.
+  for (let i = 0; i < updates.length; i += 200) {
+    const chunk = updates.slice(i, i + 200);
+    // Supabase upsert with onConflict performs the update.
+    await db.from("jumia_categories").upsert(
+      chunk.map((u) => ({ code: u.code, is_leaf: u.is_leaf })),
+      { onConflict: "code" },
+    );
+  }
+
+  return { updated: updates.length, total: all.length };
+}
+
+/**
+ * Bootstrap an empty `jumia_categories` table from the bundled JSON
+ * snapshot at `supabase/seed/jumia-categories.json`. Lazy / on-demand —
+ * called only when a read returns zero rows.
+ *
+ * If the snapshot is itself empty (e.g. on a brand-new project before
+ * the maintainer has run `npm run snapshot-categories`), this is a no-op
+ * and the table stays empty. The admin sync still works to populate.
+ */
+export async function seedFromBundledSnapshot(): Promise<{ inserted: number }> {
+  let snapshot: JumiaCategoryRow[];
+  try {
+    // Dynamic import so the JSON is bundled into the route's serverless
+    // function only when needed (small but saves cold-start overhead).
+    const mod = await import("../../supabase/seed/jumia-categories.json");
+    snapshot = (mod.default ?? mod) as JumiaCategoryRow[];
+  } catch (e) {
+    console.warn("[seed] Snapshot JSON missing or unreadable:", (e as Error).message);
+    return { inserted: 0 };
+  }
+
+  if (!Array.isArray(snapshot) || snapshot.length === 0) {
+    console.info("[seed] Snapshot is empty — nothing to seed. Admin needs to run a sync.");
+    return { inserted: 0 };
+  }
+
+  await upsertCategories(snapshot);
+  console.info(`[seed] Seeded ${snapshot.length} categories from bundled snapshot.`);
+  return { inserted: snapshot.length };
 }

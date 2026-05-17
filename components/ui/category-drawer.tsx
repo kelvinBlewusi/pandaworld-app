@@ -22,7 +22,7 @@
  */
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { ChevronLeft, X, Search, Loader2, RefreshCw, AlertCircle } from "lucide-react";
+import { ChevronLeft, X, Search, Loader2, AlertCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { CategoryRow } from "@/components/ui/category-row";
@@ -113,8 +113,6 @@ interface CategoryDrawerProps {
 
 export function CategoryDrawer({ open, onClose, onSelect, initialPath }: CategoryDrawerProps) {
   const [loading,     setLoading]     = useState(true);
-  const [refreshing,  setRefreshing]  = useState(false);
-  const [refreshMsg,  setRefreshMsg]  = useState<string | null>(null);
   const [rawCategories, setRawCategories] = useState<FlatCategory[]>([]);
   const [query,       setQuery]       = useState("");
   const [stack,       setStack]       = useState<TreeNode[]>([]);     // breadcrumb of drill-down
@@ -126,19 +124,9 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
       const res  = await fetch("/api/jumia/categories?all=1");
       const data = await res.json() as { categories?: FlatCategory[] };
       setRawCategories(data.categories ?? []);
-
-      // Auto-refresh in the background if the cached data is more than
-      // 24 hours old. The cached list renders immediately; the next time
-      // the drawer opens it'll have fresh data. Non-blocking — failures
-      // are silent (the existing manual refresh button is still available).
-      const lastSyncedAt = res.headers.get("X-Last-Synced-At");
-      if (lastSyncedAt) {
-        const ageMs = Date.now() - new Date(lastSyncedAt).getTime();
-        const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
-        if (Number.isFinite(ageMs) && ageMs > TWENTY_FOUR_HOURS) {
-          fetch("/api/jumia/sync-categories", { method: "POST" }).catch(() => {});
-        }
-      }
+      // Note: previously this loaded `X-Last-Synced-At` and kicked off a
+      // background sync if >24h old. Replaced by the admin-controlled
+      // batched sync at /admin/categories — sellers never trigger syncs.
     } catch {
       setRawCategories([]);
     } finally {
@@ -151,27 +139,6 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
     if (!open || rawCategories.length > 0) return;
     loadFromCache();
   }, [open, rawCategories.length, loadFromCache]);
-
-  // Manual refresh — pulls live from Jumia, repopulates Supabase, reloads cache
-  const handleRefresh = useCallback(async () => {
-    setRefreshing(true);
-    setRefreshMsg(null);
-    try {
-      const r = await fetch("/api/jumia/sync-categories", { method: "POST" });
-      const d = await r.json();
-      if (!r.ok) {
-        setRefreshMsg(d.error ?? "Refresh failed");
-        return;
-      }
-      await loadFromCache();
-      setRefreshMsg(`Updated · ${d.categories ?? "?"} categories from Jumia`);
-      setTimeout(() => setRefreshMsg(null), 3000);
-    } catch (e) {
-      setRefreshMsg(e instanceof Error ? e.message : "Refresh failed");
-    } finally {
-      setRefreshing(false);
-    }
-  }, [loadFromCache]);
 
   // Reset selection + drill state when drawer opens
   useEffect(() => {
@@ -312,16 +279,6 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
           <div className="flex items-center gap-1">
             <button
               type="button"
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700 disabled:opacity-50"
-              title="Refresh categories from Jumia"
-              aria-label="Refresh from Jumia"
-            >
-              <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
-            </button>
-            <button
-              type="button"
               onClick={onClose}
               className="rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
               aria-label="Close drawer"
@@ -330,11 +287,6 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
             </button>
           </div>
         </header>
-        {refreshMsg && (
-          <div className="px-5 py-1.5 bg-violet-50 text-[11px] text-violet-700 border-b border-violet-100 shrink-0">
-            {refreshMsg}
-          </div>
-        )}
 
         {/* Search */}
         <div className="border-b px-5 py-3 shrink-0">

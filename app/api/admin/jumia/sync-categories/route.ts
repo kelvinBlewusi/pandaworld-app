@@ -7,6 +7,7 @@ import {
   upsertCategories,
   upsertAttributes,
 } from "@/lib/jumia/categories";
+import { isAdmin } from "@/lib/auth/is-admin";
 
 // Bump the serverless function timeout. With syncAttributes=false the
 // route returns in ~5-10s. With syncAttributes=true it walks ~300
@@ -34,6 +35,10 @@ export const maxDuration = 60;
 //   - true: full attribute walk, ~80-100s, REQUIRES Pro plan with
 //     maxDuration raised to 300+. Use sparingly.
 
+// NOTE: prefer the batched endpoints `/sync-categories/page` and
+// `/sync-categories/finalize` for new code. This single-shot route is
+// kept for backward compatibility and ad-hoc debugging. The admin UI
+// uses the batched flow because it never times out and shows progress.
 export async function POST(req: NextRequest) {
   const t0 = Date.now();
   console.info("[Sync] ▶ POST /api/admin/jumia/sync-categories — function start");
@@ -42,6 +47,10 @@ export async function POST(req: NextRequest) {
   if (!userId) {
     console.info("[Sync] ✕ Unauthorized (no userId)");
     return new NextResponse("Unauthorized", { status: 401 });
+  }
+  if (!isAdmin(userId)) {
+    console.info(`[Sync] ✕ Non-admin user ${userId} blocked`);
+    return NextResponse.json({ error: "Admin only" }, { status: 403 });
   }
 
   const body = await req.json().catch(() => ({})) as { syncAttributes?: boolean };

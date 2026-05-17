@@ -3,6 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 import { MainShell } from "@/components/layout/MainShell";
 import { getDashboardStats } from "@/lib/actions/listings";
 import { createServerClient } from "@/lib/supabase/server";
+import { isAdmin } from "@/lib/auth/is-admin";
 
 export default async function MainLayout({
   children,
@@ -25,6 +26,7 @@ export default async function MainLayout({
   }
 
   const stats = await getDashboardStats();
+  const admin = isAdmin(userId);
 
-  return <MainShell workflowCounts={stats}>{children}</MainShell>;
+  return <MainShell workflowCounts={stats} isAdmin={admin}>{children}</MainShell>;
 }

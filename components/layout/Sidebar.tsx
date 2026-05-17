@@ -19,6 +19,7 @@ import {
   Zap,
   LogOut,
   X,
+  Database,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -151,9 +152,11 @@ interface WorkflowCounts {
 
 export function Sidebar({
   workflowCounts,
+  isAdmin = false,
   onClose,
 }: {
   workflowCounts?: WorkflowCounts;
+  isAdmin?: boolean;
   onClose?: () => void;
 }) {
   const counts = workflowCounts ?? { draft: 0, live: 0, pending_approval: 0, failed: 0 };
@@ -251,6 +254,20 @@ export function Sidebar({
         {settingsNav.map((item) => (
           <NavItem key={item.href} {...item} />
         ))}
+
+        {/* Admin tools — only visible when ADMIN_USER_IDS includes
+            the current Clerk user. Server-rendered flag passed via props. */}
+        {isAdmin && (
+          <>
+            <div className="pb-1 pt-3">
+              <Separator className="mb-3" />
+              <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                Admin
+              </p>
+            </div>
+            <NavItem href="/admin/categories" label="Categories" icon={Database} />
+          </>
+        )}
       </nav>
 
       {/* Upsell card */}
