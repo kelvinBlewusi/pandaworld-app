@@ -13,6 +13,7 @@ import {
   X,
   Info,
   Plug,
+  Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -326,16 +327,32 @@ function IntegrationsPageInner() {
                     The AI picks from these categories when analysing a listing. Keep them fresh.
                   </p>
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="gap-2 shrink-0"
-                  onClick={handleSyncCategories}
-                  disabled={syncing}
-                >
-                  <RefreshCw className={cn("h-3.5 w-3.5", syncing && "animate-spin")} />
-                  {syncing ? "Syncing…" : "Sync now"}
-                </Button>
+                <div className="flex flex-col items-end gap-2 shrink-0">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-2"
+                    onClick={handleSyncCategories}
+                    disabled={syncing}
+                  >
+                    <RefreshCw className={cn("h-3.5 w-3.5", syncing && "animate-spin")} />
+                    {syncing ? "Syncing…" : "Sync now"}
+                  </Button>
+                  <a
+                    href="/api/admin/jumia/export-categories"
+                    className="inline-flex items-center gap-1.5 rounded-md border bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
+                    title="Downloads a CSV of every cached category. Open in Google Sheets via File → Import → Upload."
+                  >
+                    <Download className="h-3 w-3" /> Export CSV
+                  </a>
+                  <a
+                    href="/api/admin/jumia/export-categories?live=1"
+                    className="text-[10px] text-zinc-500 hover:text-zinc-700 hover:underline"
+                    title="Re-syncs from Jumia first, then downloads. Slower (30-60s)."
+                  >
+                    Export fresh from Jumia →
+                  </a>
+                </div>
               </div>
 
               {/* Always-visible status bar */}
