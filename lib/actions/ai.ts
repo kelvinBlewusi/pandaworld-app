@@ -2,6 +2,8 @@
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getListableCategories, getCategoryAttributes } from "@/lib/jumia/categories";
+import { getAllBrands } from "@/lib/jumia/brands";
+import type { JumiaBrand } from "@/lib/jumia/brands";
 import { mockCategories } from "@/lib/mock/categories";
 import type { JumiaCategoryRow, JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import {
@@ -75,11 +77,29 @@ export interface AIProductAnalysis {
 function buildPrompt(
   categories: JumiaCategoryRow[],
   attributes: JumiaCategoryAttribute[],
-  categoryContext: string
+  categoryContext: string,
+  brands: JumiaBrand[] = [],
 ): string {
   const categoryList = categories
     .map((c) => `${c.code}|${c.path}`)
     .join("\n");
+
+  // Brand grounding. Jumia rejects any brand that isn't in their
+  // catalogue, so passing the AI the exact set of valid names means it
+  // either picks one that resolves cleanly or returns null. This avoids
+  // the "AI guessed a brand that doesn't exist in Jumia" failure mode
+  // we used to lean on resolveBrand() to repair.
+  //
+  // We pass NAMES ONLY (not codes) — code lookup happens server-side
+  // after the call via lib/jumia/brands#findBrandExact. Token cost is
+  // ~1 token per brand name; even 10k brands is well within Gemini's
+  // 1M-token input budget.
+  const brandList = brands.length > 0
+    ? brands.map((b) => b.name).join("\n")
+    : "";
+  const brandSection = brands.length > 0
+    ? `\nJUMIA BRAND LIST (exact names — pick one of these or return null):\n${brandList}\n`
+    : "";
 
   const attributeSection = attributes.length > 0
     ? `\nFor the detected category, fill these EXACT attribute fields:\n${
@@ -92,6 +112,12 @@ function buildPrompt(
       }`
     : "";
 
+  // Brand rule is stricter when we passed a catalogue — must match
+  // verbatim, otherwise the push will fail at brand resolution time.
+  const brandRule = brands.length > 0
+    ? `8. Brand: pick the EXACT name from the JUMIA BRAND LIST above (copy/paste, character-perfect). Only fill this if a brand logo or wordmark is clearly visible AND confidence ≥ 0.9 AND the brand appears in the list. If none of those conditions hold, set brand to null. A brand outside the list will be rejected by Jumia.`
+    : `8. Brand: leave NULL unless you can clearly see a brand logo or wordmark in the image AND your confidence is above 0.9. A guessed brand causes legal/commercial issues.`;
+
   return `You are an expert Jumia Ghana product listing assistant.
 Analyse the product image(s) and/or description, then return a SINGLE valid JSON object.
 
@@ -99,7 +125,7 @@ ${categoryContext}
 
 JUMIA CATEGORY LIST (code|path):
 ${categoryList}
-
+${brandSection}
 STRICT RULES — violations will cause the submission to be rejected:
 1. Pick the single most specific matching category from the list. Use the exact numeric code.
 2. Provide the top 3 best-matching category codes from the list above, in descending confidence order.
@@ -108,7 +134,7 @@ STRICT RULES — violations will cause the submission to be rejected:
 5. Description MUST be between 80 and 500 characters — Jumia rejects anything under 50. Write 2–3 full sentences.
 6. Title MUST be 15–70 characters. Include the brand, model and 1–2 key specs.
 7. Highlights MUST be at least 4 bullet points starting with "•" (the bullet character). Each on its own line.
-8. Brand: leave NULL unless you can clearly see a brand logo or wordmark in the image AND your confidence is above 0.9. A guessed brand causes legal/commercial issues.
+${brandRule}
 9. NEVER fill: model, selling_price, warranty fields, production_country, certifications, GTIN, SKU. The seller fills those manually.${attributeSection}
 
 Return ONLY valid JSON. No markdown fences, no explanation, no trailing text:
@@ -519,7 +545,14 @@ export async function analyzeProductImages(
   // selected directly even though "Watches > Smartwatches" also exists).
   // Limiting the AI to leaves only would force every listing one level
   // deeper than Jumia actually requires.
-  const categories = await getListableCategories();
+  //
+  // Brands are pulled in parallel — passing them to the prompt means
+  // Gemini either picks a valid Jumia brand or returns null, instead of
+  // inventing names we'd have to fuzzy-match at push time.
+  const [categories, brands] = await Promise.all([
+    getListableCategories(),
+    getAllBrands(),
+  ]);
 
   // If no real categories synced yet, fall back gracefully
   const categoryContext = categories.length > 0
@@ -527,7 +560,7 @@ export async function analyzeProductImages(
     : "Use your best knowledge of Jumia Ghana categories.";
 
   // First pass: category detection without attributes (fast)
-  const firstPassPrompt = buildPrompt(categories, [], categoryContext);
+  const firstPassPrompt = buildPrompt(categories, [], categoryContext, brands);
 
   let parsed: Record<string, unknown>;
   try {
@@ -552,7 +585,7 @@ export async function analyzeProductImages(
     const attrs = await getCategoryAttributes(cat.code);
     if (attrs.length > 0) {
       try {
-        const secondPrompt = buildPrompt(categories, attrs, categoryContext);
+        const secondPrompt = buildPrompt(categories, attrs, categoryContext, brands);
         const raw2 = await callGemini(secondPrompt, imageUrls);
         const parsed2 = parseAIResponse(raw2);
         dynamicAttributes = (parsed2.dynamic_attributes ?? {}) as Record<string, string>;
@@ -996,13 +1029,17 @@ export async function analyzeProductDescription(
     );
   }
 
-  // Same pool as the image path — listable parents too, not just leaves.
-  const categories = await getListableCategories();
+  // Same pool as the image path — listable parents too, not just
+  // leaves — plus the brand catalogue so the AI binds to real names.
+  const [categories, brands] = await Promise.all([
+    getListableCategories(),
+    getAllBrands(),
+  ]);
   const categoryContext = categories.length > 0
     ? `Choose from the ${categories.length} Jumia GH listable categories listed below.`
     : "Use your best knowledge of Jumia Ghana categories.";
 
-  const prompt = buildPrompt(categories, [], categoryContext) +
+  const prompt = buildPrompt(categories, [], categoryContext, brands) +
     `\n\nProduct description to analyse:\n"${description}"`;
 
   let parsed: Record<string, unknown>;
@@ -1023,7 +1060,7 @@ export async function analyzeProductDescription(
     const attrs = await getCategoryAttributes(cat.code);
     if (attrs.length > 0) {
       try {
-        const secondPrompt = buildPrompt(categories, attrs, categoryContext) +
+        const secondPrompt = buildPrompt(categories, attrs, categoryContext, brands) +
           `\n\nProduct description: "${description}"`;
         const raw2 = await callGemini(secondPrompt, []);
         const parsed2 = parseAIResponse(raw2);
