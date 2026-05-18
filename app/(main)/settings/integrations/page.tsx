@@ -532,7 +532,7 @@ function IntegrationsPageInner() {
               </div>
             </div>
             <p className="text-sm text-zinc-600">
-              Your existing listings and data will remain in PandaWorld, but you won't be able
+              Your existing listings and data will remain in PandaWorld, but you won&apos;t be able
               to push new listings to Jumia until you reconnect.
             </p>
             <div className="flex gap-3">
