@@ -39,12 +39,14 @@ interface AdminCategoriesClientProps {
   initialTotal:        number;
   initialListable:     number;
   initialLastSyncedAt: string | null;
+  topLevelDistribution: Array<{ name: string; count: number }>;
 }
 
 export function AdminCategoriesClient({
   initialTotal,
   initialListable,
   initialLastSyncedAt,
+  topLevelDistribution,
 }: AdminCategoriesClientProps) {
   // Steady-state stats
   const [stats, setStats] = useState({
@@ -263,6 +265,41 @@ export function AdminCategoriesClient({
           </div>
         )}
       </div>
+
+      {/* Top-level distribution diagnostic — shows what's actually in the DB.
+          If only one row appears here, the sync only fetched one subtree.
+          If many appear but the drawer still shows one, the bug is in the
+          drawer/route, not the data. */}
+      {topLevelDistribution.length > 0 && (
+        <div className="rounded-xl border bg-white p-5 shadow-sm space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-zinc-900">
+              Top-level distribution
+            </h2>
+            <span className="text-[10px] uppercase tracking-wider text-zinc-400">
+              {topLevelDistribution.length} root{topLevelDistribution.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <p className="text-xs text-zinc-500">
+            Categories grouped by their first path segment. Should match Jumia
+            Vendor Center&apos;s top-level categories (Fashion, Electronics,
+            Home &amp; Office, etc.).
+          </p>
+          <div className="max-h-64 overflow-y-auto rounded-lg border bg-zinc-50 divide-y divide-zinc-100">
+            {topLevelDistribution.map((d) => (
+              <div
+                key={d.name}
+                className="flex items-center justify-between px-3 py-1.5 text-xs"
+              >
+                <span className="truncate text-zinc-700">{d.name}</span>
+                <span className="ml-3 shrink-0 font-mono text-zinc-500">
+                  {d.count.toLocaleString()}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Help card */}
       <div className="rounded-xl border bg-zinc-50 p-4 text-xs text-zinc-600 space-y-2">

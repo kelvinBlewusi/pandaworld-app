@@ -30,11 +30,33 @@ export default async function AdminCategoriesPage() {
     .not("attribute_set_sid", "is", null);
   const lastSyncedAt = await getCategoriesLastSyncedAt();
 
+  // Diagnostic: distribution of top-level paths. Helps confirm whether
+  // the synced data is genuinely diverse or accidentally one-rooted
+  // (e.g. only "Automobile" if pagination went wrong). Cheap — single
+  // SELECT of just the path column with the 1000-row cap raised.
+  const { data: pathRows } = await db
+    .from("jumia_categories")
+    .select("path")
+    .range(0, 99_999);
+
+  const topLevelCounts: Record<string, number> = {};
+  for (const r of pathRows ?? []) {
+    const raw = String((r as { path: string }).path ?? "");
+    // Same normalisation as the drawer: collapse " / " or " > " to " > "
+    const normalised = raw.replace(/\s*[>/]\s*/g, " > ").trim();
+    const top = normalised.split(" > ")[0] || "(empty)";
+    topLevelCounts[top] = (topLevelCounts[top] ?? 0) + 1;
+  }
+  const topLevelDistribution = Object.entries(topLevelCounts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, count]) => ({ name, count }));
+
   return (
     <AdminCategoriesClient
       initialTotal={total ?? 0}
       initialListable={listable ?? 0}
       initialLastSyncedAt={lastSyncedAt}
+      topLevelDistribution={topLevelDistribution}
     />
   );
 }
