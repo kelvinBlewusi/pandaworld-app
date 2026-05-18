@@ -1,8 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
+import { selectAllPaginated } from "@/lib/supabase/paginate";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { fetchAndCacheCategoryTree } from "@/lib/jumia/categories";
+
+type ExportCategoryRow = {
+  code:               number;
+  name:               string;
+  path:               string;
+  attribute_set_sid:  string | null;
+  attribute_set_name: string | null;
+  is_leaf:            boolean | null;
+  synced_at:          string | null;
+};
 
 // Vercel serverless function timeout. The category-list walk takes
 // ~5-10s; we set 60s as a comfortable Hobby-tier-compatible ceiling.
@@ -63,27 +74,21 @@ export async function GET(req: NextRequest) {
 
   // ── Read every category from cache, sorted by full path ───────────────────
   const db = createServerClient();
-  // Supabase silently caps SELECT at 1000 rows by default; the full GH tree
-  // is ~25-30k rows. Raise the cap so the export reflects the whole table.
-  const { data, error } = await db
-    .from("jumia_categories")
-    .select("code, name, path, attribute_set_sid, attribute_set_name, is_leaf, synced_at")
-    .order("path")
-    .range(0, 99_999);
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  // Page through in 1000-row chunks — the full GH tree runs ~25-30k rows
+  // and Supabase enforces a hard server-side max_rows cap (default 1000)
+  // that .range(0, 99_999) cannot override. See lib/supabase/paginate.ts.
+  let rows: ExportCategoryRow[];
+  try {
+    rows = await selectAllPaginated<ExportCategoryRow>((from, to) =>
+      db
+        .from("jumia_categories")
+        .select("code, name, path, attribute_set_sid, attribute_set_name, is_leaf, synced_at")
+        .order("path")
+        .range(from, to),
+    );
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
-
-  const rows = (data ?? []) as Array<{
-    code:               number;
-    name:               string;
-    path:               string;
-    attribute_set_sid:  string | null;
-    attribute_set_name: string | null;
-    is_leaf:            boolean | null;
-    synced_at:          string | null;
-  }>;
 
   // ── Build CSV ─────────────────────────────────────────────────────────────
   const sep = format === "tsv" ? "\t" : ",";

@@ -54,22 +54,34 @@ async function main() {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // Supabase silently caps SELECT at 1000 rows by default. With Jumia's
-  // full GH tree we see ~25-30k rows; an unranged query would silently
-  // produce a tiny snapshot that's useless as a day-1 safety net.
-  const { data, error } = await db
-    .from("jumia_categories")
-    .select(
-      "code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name",
-    )
-    .order("code")
-    .range(0, 99_999);
-
-  if (error) {
-    console.error("✗ Supabase query failed:", error.message);
-    process.exit(2);
+  // Page through in 1000-row chunks. Supabase's hard server-side max_rows
+  // cap (default 1000) overrides any single-call .range() — we must call
+  // repeatedly until we get a short page. The full GH tree is ~25-30k
+  // rows, so a single un-paged call would produce a tiny snapshot that's
+  // useless as a day-1 safety net.
+  const PAGE = 1000;
+  const data: Array<Record<string, unknown>> = [];
+  let from = 0;
+  for (let i = 0; i < 200; i++) {
+    const to = from + PAGE - 1;
+    const { data: chunk, error } = await db
+      .from("jumia_categories")
+      .select(
+        "code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name",
+      )
+      .order("code")
+      .range(from, to);
+    if (error) {
+      console.error("✗ Supabase query failed:", error.message);
+      process.exit(2);
+    }
+    if (!chunk || chunk.length === 0) break;
+    data.push(...chunk);
+    if (chunk.length < PAGE) break;
+    from = to + 1;
   }
-  if (!data || data.length === 0) {
+
+  if (data.length === 0) {
     console.warn(
       "⚠ No categories in jumia_categories. Run the admin sync first " +
       "(/admin/categories → Refresh from Jumia), then re-run this script.",

@@ -1,11 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
+import { selectAllPaginated } from "@/lib/supabase/paginate";
 import {
   getListableCategories,
   getLeafCategories,
   getCategoriesLastSyncedAt,
 } from "@/lib/jumia/categories";
+
+type DrawerCategoryRow = {
+  code:               number;
+  name:               string;
+  path:               string;
+  parent_code:        number | null;
+  level:              number;
+  is_leaf:            boolean | null;
+  attribute_set_sid:  string | null;
+};
 
 // ─── GET /api/jumia/categories ────────────────────────────────────────────────
 //
@@ -37,17 +48,18 @@ export async function GET(req: NextRequest) {
   let categoriesPayload: unknown;
   if (wantAll) {
     const db = createServerClient();
-    // Supabase silently caps SELECT at 1000 rows by default. With Jumia's
-    // full GH tree we see ~25-30k rows. Explicit .range() raises the cap
-    // so the drawer renders every top-level node, not just the first
-    // 1000 alphabetically (which are typically dominated by a single
-    // top-level category's sub-tree).
-    const { data } = await db
-      .from("jumia_categories")
-      .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid")
-      .order("path")
-      .range(0, 99_999);
-    categoriesPayload = data ?? [];
+    // Page through in 1000-row chunks. Supabase's hard server-side max_rows
+    // cap (default 1000) overrides any explicit .range(0, 99_999) — we'd
+    // still get only 1000 rows, alphabetically dominated by a single
+    // top-level (e.g. all "Automobile / ..." paths). Paging is the only
+    // reliable way to actually pull the whole tree.
+    categoriesPayload = await selectAllPaginated<DrawerCategoryRow>((from, to) =>
+      db
+        .from("jumia_categories")
+        .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid")
+        .order("path")
+        .range(from, to),
+    );
   } else if (wantLeafOnly) {
     categoriesPayload = await getLeafCategories();
   } else {

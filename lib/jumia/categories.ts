@@ -10,6 +10,7 @@
  */
 
 import { createServerClient } from "@/lib/supabase/server";
+import { selectAllPaginated } from "@/lib/supabase/paginate";
 import { JUMIA_API_BASE } from "@/lib/jumia/oauth";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -54,17 +55,19 @@ export interface JumiaCategoryAttribute {
 
 export async function getLeafCategories(): Promise<JumiaCategoryRow[]> {
   const db = createServerClient();
-  // Explicit .range() — Supabase silently caps SELECT at 1000 rows by
-  // default. The full Jumia catalogue runs to ~30k rows for sellers with
-  // deep trees. Without the range, the drawer / AI candidate pool sees
-  // only the first 1000 alphabetically.
-  const { data } = await db
-    .from("jumia_categories")
-    .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name")
-    .eq("is_leaf", true)
-    .order("name")
-    .range(0, 99_999);
-  return (data ?? []) as JumiaCategoryRow[];
+  // Page through in 1000-row chunks — Supabase enforces a hard server-side
+  // `max_rows` cap (default 1000) that .range() can't override. The full
+  // GH catalogue runs to ~30k rows; an un-paginated read would see only
+  // the first 1000 alphabetically. See lib/supabase/paginate.ts.
+  const rows = await selectAllPaginated<JumiaCategoryRow>((from, to) =>
+    db
+      .from("jumia_categories")
+      .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name")
+      .eq("is_leaf", true)
+      .order("name")
+      .range(from, to),
+  );
+  return rows;
 }
 
 /**
@@ -85,19 +88,22 @@ export async function getLeafCategories(): Promise<JumiaCategoryRow[]> {
  */
 export async function getListableCategories(): Promise<JumiaCategoryRow[]> {
   const db = createServerClient();
-  // Explicit .range() raises Supabase's 1000-row default cap. Without it,
-  // the AI's candidate pool sees only the first 1000 listable rows
-  // alphabetically — useless when the catalogue is ~30k.
-  const query = () => db
-    .from("jumia_categories")
-    .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name")
-    .not("attribute_set_sid", "is", null)
-    .order("name")
-    .range(0, 99_999);
+  // Page through in 1000-row chunks — see getLeafCategories for the cap
+  // rationale. The AI's candidate pool and Vendor-Center picker both
+  // depend on getting the FULL listable set, not just the first 1000.
+  const query = () =>
+    selectAllPaginated<JumiaCategoryRow>((from, to) =>
+      db
+        .from("jumia_categories")
+        .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name")
+        .not("attribute_set_sid", "is", null)
+        .order("name")
+        .range(from, to),
+    );
 
-  let { data } = await query();
-  if (data && data.length > 0) {
-    return data as JumiaCategoryRow[];
+  let rows = await query();
+  if (rows.length > 0) {
+    return rows;
   }
 
   // Empty table — try to seed from the bundled snapshot. If the seed
@@ -106,8 +112,8 @@ export async function getListableCategories(): Promise<JumiaCategoryRow[]> {
   const { inserted } = await seedFromBundledSnapshot();
   if (inserted === 0) return [];
 
-  ({ data } = await query());
-  return (data ?? []) as JumiaCategoryRow[];
+  rows = await query();
+  return rows;
 }
 
 /**
@@ -663,16 +669,17 @@ export async function recomputeIsLeafForAllCategories(): Promise<{
   total:   number;
 }> {
   const db = createServerClient();
-  // Supabase silently caps SELECT at 1000 rows by default. With Jumia's
-  // full GH tree we see ~25-30k rows; without an explicit range the
-  // recompute would only see the first 1000 alphabetically and mark
-  // everything past that as a leaf.
-  const { data: rows } = await db
-    .from("jumia_categories")
-    .select("code, path, is_leaf")
-    .range(0, 99_999);
-
-  const all = (rows ?? []) as Array<{ code: number; path: string; is_leaf: boolean | null }>;
+  // Page through in 1000-row chunks — Supabase's hard server-side max_rows
+  // (default 1000) means a single .range(0, 99_999) call would still cap
+  // at 1000 rows. Without paging, recompute would only see the first 1000
+  // alphabetical rows and mark everything past that as a leaf.
+  const all = await selectAllPaginated<{ code: number; path: string; is_leaf: boolean | null }>(
+    (from, to) =>
+      db
+        .from("jumia_categories")
+        .select("code, path, is_leaf")
+        .range(from, to),
+  );
   if (all.length === 0) return { updated: 0, total: 0 };
 
   const lowerPaths = all.map((r) => r.path.toLowerCase());

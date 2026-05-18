@@ -2,6 +2,7 @@ import { auth } from "@clerk/nextjs/server";
 import { redirect, notFound } from "next/navigation";
 import { isAdmin } from "@/lib/auth/is-admin";
 import { createServerClient } from "@/lib/supabase/server";
+import { selectAllPaginated } from "@/lib/supabase/paginate";
 import { getCategoriesLastSyncedAt } from "@/lib/jumia/categories";
 import { AdminCategoriesClient } from "./client";
 
@@ -32,16 +33,16 @@ export default async function AdminCategoriesPage() {
 
   // Diagnostic: distribution of top-level paths. Helps confirm whether
   // the synced data is genuinely diverse or accidentally one-rooted
-  // (e.g. only "Automobile" if pagination went wrong). Cheap — single
-  // SELECT of just the path column with the 1000-row cap raised.
-  const { data: pathRows } = await db
-    .from("jumia_categories")
-    .select("path")
-    .range(0, 99_999);
+  // (e.g. only "Automobile" if pagination went wrong). Pages through
+  // 1000-row chunks because Supabase's hard server-side max_rows cap
+  // (default 1000) overrides any single-call .range() request.
+  const pathRows = await selectAllPaginated<{ path: string }>((from, to) =>
+    db.from("jumia_categories").select("path").range(from, to),
+  );
 
   const topLevelCounts: Record<string, number> = {};
-  for (const r of pathRows ?? []) {
-    const raw = String((r as { path: string }).path ?? "");
+  for (const r of pathRows) {
+    const raw = String(r.path ?? "");
     // Same normalisation as the drawer: collapse " / " or " > " to " > "
     const normalised = raw.replace(/\s*[>/]\s*/g, " > ").trim();
     const top = normalised.split(" > ")[0] || "(empty)";
