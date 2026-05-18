@@ -32,6 +32,7 @@ import { MultiSelectDropdown } from "@/components/ui/multi-select";
 import { RichTextField } from "./RichTextField";
 import { BrandCombobox } from "./BrandCombobox";
 import { cn } from "@/lib/utils";
+import { stripHtml } from "@/lib/utils/strip-html";
 
 // Attribute names that should render as a Jumia-brand-catalogue lookup
 // instead of a free-text input or generic select. Jumia rejects listings
@@ -142,7 +143,10 @@ export function SchemaField({ attr, value, onChange, confidenceDot, source }: Sc
   const renderType = effectiveType(attr);
   const hasMin = typeof attr.min_length === "number" && attr.min_length! > 0;
   const hasMax = typeof attr.max_length === "number" && attr.max_length! > 0;
-  const len = value.length;
+  // Rich-text fields store HTML — count the visible body, not the markup,
+  // so wrapping a single short word in <p>…</p> doesn't artificially
+  // inflate the displayed character count and pass Jumia's minimums.
+  const len = renderType === "textarea" ? stripHtml(value).length : value.length;
   const tooShort = hasMin && len > 0 && len < (attr.min_length ?? 0);
   const tooLong  = hasMax && len > (attr.max_length ?? Infinity);
   const isText   = renderType === "string" || renderType === "textarea" || renderType === "number";

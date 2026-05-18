@@ -25,19 +25,6 @@ import {
   ListChecks,
   Pencil,
   Clock,
-  Bold,
-  Italic,
-  Link as LinkIcon,
-  List,
-  ListOrdered,
-  Image as ImageIcon,
-  Quote,
-  Table as TableIcon,
-  Video,
-  Undo2,
-  Redo2,
-  IndentIncrease,
-  IndentDecrease,
 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -57,6 +44,7 @@ import type { ListingRow, VariantRow as VariantRowDB } from "@/lib/supabase/type
 import { updateListing, replaceVariantsForListing } from "@/lib/actions/listings";
 import { calculateQualityScore, scoreLabel, scoreColor, DEFAULT_THRESHOLD } from "@/lib/quality-score";
 import { isValidGTIN } from "@/lib/utils/gtin";
+import { stripHtml } from "@/lib/utils/strip-html";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import { CategoryDrawer } from "@/components/ui/category-drawer";
 import { PublishingLoader } from "@/components/ui/publishing-loader";
@@ -213,68 +201,9 @@ function Required() {
   return <span className="ml-0.5 text-orange-500">*</span>;
 }
 
-// ─── Rich-text editor (Jumia-style toolbar, plain textarea underneath) ────────
-
-function RichTextField({
-  id,
-  defaultValue,
-  placeholder,
-  rows = 3,
-  onChange,
-  value,
-}: {
-  id: string;
-  defaultValue?: string;
-  value?: string;
-  placeholder?: string;
-  rows?: number;
-  onChange?: (v: string) => void;
-}) {
-  return (
-    <div className="rounded-md border border-zinc-200 bg-white overflow-hidden">
-      {/* Toolbar */}
-      <div className="flex items-center gap-0.5 border-b border-zinc-200 bg-zinc-50/50 px-2 py-1.5">
-        <select className="rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-600 focus:outline-none">
-          <option>Paragraph</option>
-        </select>
-        {[
-          { Icon: Bold,            title: "Bold" },
-          { Icon: Italic,          title: "Italic" },
-          { Icon: LinkIcon,        title: "Link" },
-          { Icon: List,            title: "Bulleted list" },
-          { Icon: ListOrdered,     title: "Numbered list" },
-          { Icon: IndentDecrease,  title: "Decrease indent" },
-          { Icon: IndentIncrease,  title: "Increase indent" },
-          { Icon: ImageIcon,       title: "Image" },
-          { Icon: Quote,           title: "Quote" },
-          { Icon: TableIcon,       title: "Table" },
-          { Icon: Video,           title: "Video" },
-          { Icon: Undo2,           title: "Undo" },
-          { Icon: Redo2,           title: "Redo" },
-        ].map(({ Icon, title }) => (
-          <button
-            key={title}
-            type="button"
-            title={title}
-            className="rounded p-1 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700"
-          >
-            <Icon className="h-3.5 w-3.5" />
-          </button>
-        ))}
-      </div>
-      <Textarea
-        id={id}
-        name={id}
-        rows={rows}
-        defaultValue={defaultValue}
-        value={value}
-        placeholder={placeholder}
-        onChange={(e) => onChange?.(e.target.value)}
-        className="border-0 rounded-none focus-visible:ring-0 text-sm"
-      />
-    </div>
-  );
-}
+// (The Jumia-style rich-text editor lives in components/jumia/RichTextField.tsx —
+// SchemaField uses it for every long-text attribute. The local cosmetic copy
+// that used to live here has been removed.)
 
 // ─── Brand combobox (Jumia API search) ────────────────────────────────────────
 
@@ -2009,8 +1938,12 @@ export function ReviewClient({
   if (titleValue.length < 15)        validationErrors.push("Name must be at least 15 characters.");
   // Removed hard max — Jumia's spec doesn't enforce one and we don't want
   // to artificially gate Submit. Seller can write long descriptive names.
-  if (descriptionValue.length < 50)  validationErrors.push("Description must be at least 50 characters (Jumia hard limit).");
-  if (descriptionValue.length > 9000) validationErrors.push("Description must be 9,000 characters or fewer.");
+  // Description is now rich text (HTML); validate against the visible
+  // body, not the markup, so wrapping a single short sentence in <p>…</p>
+  // doesn't pass the 50-char minimum just because of tag bytes.
+  const descriptionTextLength = stripHtml(descriptionValue).length;
+  if (descriptionTextLength < 50)  validationErrors.push("Description must be at least 50 characters (Jumia hard limit).");
+  if (descriptionTextLength > 9000) validationErrors.push("Description must be 9,000 characters or fewer.");
   if (!categoryCode)                 validationErrors.push("Pick a category.");
   if (!brandValue.trim())            validationErrors.push("Brand is required.");
   if ((listing.images ?? []).length === 0) validationErrors.push("At least 1 product image is required.");
