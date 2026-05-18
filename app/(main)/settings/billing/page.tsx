@@ -365,7 +365,7 @@ function BillingPageInner() {
           </div>
           {sub?.status === "cancelled" && (
             <div className="rounded-lg bg-amber-50 border border-amber-100 p-3 text-xs text-amber-700">
-              Your subscription is cancelled. You'll have Pro access until the period ends, then revert to Free.
+              Your subscription is cancelled. You&apos;ll have Pro access until the period ends, then revert to Free.
             </div>
           )}
         </section>
@@ -385,7 +385,7 @@ function BillingPageInner() {
               </div>
             </div>
             <p className="text-sm text-zinc-600">
-              You'll keep Pro access until your current period ends. After that, you'll be limited to 5 product uploads.
+              You&apos;ll keep Pro access until your current period ends. After that, you&apos;ll be limited to 5 product uploads.
             </p>
             {cancelError && (
               <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 
 export const dynamic = "force-dynamic";
@@ -25,7 +26,10 @@ export default function RootLayout({
   return (
     <ClerkProvider>
       <html lang="en" className={inter.variable}>
-        <body>{children}</body>
+        <body>
+          {children}
+          <SpeedInsights />
+        </body>
       </html>
     </ClerkProvider>
   );
