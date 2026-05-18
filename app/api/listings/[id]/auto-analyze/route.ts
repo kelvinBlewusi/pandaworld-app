@@ -126,13 +126,37 @@ export async function POST(
     // OK — catalog search is optional enrichment, not critical
   }
 
-  const candidates = mergeCandidates(fuzzyHits, jumiaHits, 8);
+  let candidates = mergeCandidates(fuzzyHits, jumiaHits, 8);
+
+  // Fallback: if the fuzzy + Jumia retrieval both came up empty, hand
+  // the rank-pass the full listable set (capped) instead of failing the
+  // analyze. Better an over-broad pool than blocking the seller. Gemini
+  // can absolutely scan ~200 candidates and pick the right one — the
+  // narrow retrieval is only an optimisation.
+  if (candidates.length === 0) {
+    console.warn(
+      `[auto-analyze] No fuzzy/Jumia retrieval hits for query="${retrievalQuery.slice(0, 100)}". ` +
+      `Falling back to the first ${Math.min(listableCategories.length, 200)} listable categories.`,
+    );
+    candidates = listableCategories.slice(0, 200).map((c) => ({
+      code:               c.code,
+      name:               c.name,
+      path:               c.path,
+      attribute_set_sid:  c.attribute_set_sid,
+      retrievalScore:     0,
+      source:             "fuzzy" as const,
+    }));
+  }
+
   timings.retrieval_ms = Date.now() - tRet;
 
   if (candidates.length === 0) {
+    // Reachable only if listableCategories itself is empty — i.e. the
+    // admin has never run a category sync. The seller can't fix that
+    // themselves; the error directs them to the right place.
     return NextResponse.json(
       {
-        error: "No candidate categories found. Try refreshing categories from Jumia (use the 🔄 icon in the category drawer).",
+        error: "The Jumia category catalog hasn't been synced yet. Please contact support — an admin needs to run the catalog sync at /admin/categories.",
         description,
       },
       { status: 422 }

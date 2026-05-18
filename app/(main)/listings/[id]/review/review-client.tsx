@@ -1372,10 +1372,10 @@ function AnalyzeWithAICard({
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-semibold text-orange-900">
             <Sparkles className="h-4 w-4 text-orange-500" />
-            Analyze with AI
+            What do you want in the listing
           </div>
           <p className="text-[11px] text-orange-700 mt-0.5">
-            One click: AI picks the right Jumia category and fills the category-specific fields from your images.
+            Optional: tell the AI anything the images don&apos;t show.
           </p>
         </div>
         <Button
@@ -1396,12 +1396,12 @@ function AnalyzeWithAICard({
           onChange={(e) => onPromptChange(e.target.value)}
           rows={2}
           maxLength={1000}
-          placeholder="Optional: tell the AI anything the images don't show. E.g. 'this is a pack of 6', 'the colour is teal not blue', 'specify it's wireless'."
+          placeholder="E.g. 'this is a pack of 6', 'the colour is teal not blue', 'specify it's wireless'."
           className="w-full rounded-md border border-orange-200 bg-white/70 px-2.5 py-1.5 text-xs text-zinc-700 placeholder:text-zinc-400 focus:outline-none focus:ring-1 focus:ring-orange-300 resize-none"
         />
         <p className="text-[10px] text-orange-600">
           {prompt.length > 0 && `${prompt.length}/1000 · `}
-          The AI is forbidden from using Jumia-restricted words like &quot;original&quot;, &quot;brand new&quot;, &quot;imported&quot;, etc.
+          AI can make mistakes, please double check.
         </p>
       </div>
 

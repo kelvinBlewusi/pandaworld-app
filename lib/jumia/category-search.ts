@@ -1,18 +1,28 @@
 /**
- * Fuzzy text search over the Jumia leaf-category cache.
+ * Fuzzy text search over the Jumia category cache.
  *
- * Used by the auto-analyze pipeline to narrow ~200-500 leaves down to ~6
- * strong candidates that the vision model can rank reliably. Pure local
- * computation — no network call, no AI tokens burned.
+ * Used by the auto-analyze pipeline to narrow Jumia's ~27k listable
+ * categories down to ~6 strong candidates that the vision model can
+ * rank reliably. Pure local computation — no network call, no AI
+ * tokens burned.
+ *
+ * Pool: callers pass the result of getListableCategories() — every row
+ * with a non-null attribute_set_sid, leaves AND listable parents (e.g.
+ * "Watches" can be selected directly even though "Watches > Smart
+ * Watches" also exists). The caller's filter is the source of truth;
+ * we don't re-filter by is_leaf here. (We used to, which silently
+ * returned zero candidates when the sync's finalize-pass hadn't run
+ * yet and every row still had is_leaf=false — that produced the
+ * "No candidate categories found" error in the analyze panel.)
  *
  * Scoring strategy (Fuse.js with weighted keys):
- *   - leaf name        weight 0.55  ← strongest signal (e.g. "Headphones")
- *   - last path segment 0.20         ← also "Headphones" when path ends there
- *   - full path         0.15         ← catches breadcrumbs like "Audio > Headphones"
- *   - attribute set name 0.10        ← weak but useful for category disambiguation
+ *   - category name        weight 0.55  ← strongest signal ("Headphones")
+ *   - last path segment    weight 0.20  ← also "Headphones" if path ends there
+ *   - full path            weight 0.15  ← catches "Audio > Headphones"
+ *   - attribute set name   weight 0.10  ← weak but useful for disambiguation
  *
  * Threshold is tuned generous (0.5) — we'd rather return a few false
- * positives that the AI ranks out than miss the right leaf entirely.
+ * positives that the AI ranks out than miss the right category entirely.
  */
 
 import Fuse from "fuse.js";
@@ -35,12 +45,10 @@ interface IndexedRow extends JumiaCategoryRow {
 }
 
 function prepareIndex(rows: JumiaCategoryRow[]): IndexedRow[] {
-  return rows
-    .filter((r) => r.is_leaf)
-    .map((r) => ({
-      ...r,
-      lastSegment: r.path.split(/\s*[>/]\s*/).filter(Boolean).pop() ?? r.name,
-    }));
+  return rows.map((r) => ({
+    ...r,
+    lastSegment: r.path.split(/\s*[>/]\s*/).filter(Boolean).pop() ?? r.name,
+  }));
 }
 
 /**
