@@ -227,6 +227,43 @@ export default function BatchAddProductsPage() {
     updateActive({ categoryCode: cat.code, categoryName: cat.name, categoryPath: cat.path });
   };
 
+  // ── Multi-product controls ────────────────────────────────────────────────
+  //
+  // The page already supports 1-N drafts via the `count` URL param. These
+  // handlers expose the "grow / shrink" actions inline so sellers don't
+  // have to go back to a count picker — they just keep adding.
+
+  const syncCountToUrl = (next: number) => {
+    // Use replace so back button doesn't accumulate intermediate counts.
+    // scroll:false keeps the seller in place; otherwise the page jumps to
+    // top each time they add or remove a product.
+    router.replace(`/listings/new/batch?count=${next}`, { scroll: false });
+  };
+
+  const addProduct = () => {
+    if (drafts.length >= MAX_PRODUCTS) return;
+    const newDrafts = [...drafts, emptyDraft()];
+    setDrafts(newDrafts);
+    setActiveIdx(newDrafts.length - 1);
+    syncCountToUrl(newDrafts.length);
+  };
+
+  const removeProduct = (idx: number) => {
+    if (drafts.length <= MIN_PRODUCTS) return;
+    // Revoke object URLs so we don't leak memory for the removed draft.
+    drafts[idx].images.forEach((img) => {
+      if (img.preview) URL.revokeObjectURL(img.preview);
+    });
+    const next = drafts.filter((_, i) => i !== idx);
+    setDrafts(next);
+    setActiveIdx((curr) => {
+      if (curr === idx) return Math.max(0, idx - 1);
+      if (curr > idx)   return curr - 1;
+      return curr;
+    });
+    syncCountToUrl(next.length);
+  };
+
   // Per-tab readiness summary (shown next to tab name).
   // Only the image is hard-required. Name + category are OPTIONAL because
   // the AI will fill them on Submit. If the user typed a name or picked a
@@ -325,7 +362,7 @@ export default function BatchAddProductsPage() {
       {/* ── Header ────────────────────────────────────────────────────────── */}
       <div className="bg-white border-b border-zinc-200 sticky top-0 z-20">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 py-3 space-y-2">
-          {/* Breadcrumb: own image > prdt1 > prdt2 > ... */}
+          {/* Breadcrumb: own image > prdt1 > prdt2 > … + Add product */}
           <div className="flex items-center gap-1.5 text-xs text-zinc-500 overflow-x-auto pb-1">
             <Link href="/listings" className="hover:text-zinc-700">own image</Link>
             {drafts.map((_, i) => (
@@ -345,6 +382,18 @@ export default function BatchAddProductsPage() {
                 </button>
               </div>
             ))}
+            {drafts.length < MAX_PRODUCTS && (
+              <button
+                type="button"
+                onClick={addProduct}
+                disabled={submitting}
+                className="ml-1 inline-flex items-center gap-1 rounded-md border border-dashed border-orange-300 px-2 py-0.5 text-[11px] font-medium text-orange-600 hover:bg-orange-50 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                title={`Add another product (max ${MAX_PRODUCTS})`}
+              >
+                <Plus className="h-3 w-3" />
+                Add product
+              </button>
+            )}
           </div>
           {/* Title row */}
           <div className="flex items-center gap-3">
@@ -469,26 +518,30 @@ export default function BatchAddProductsPage() {
                 </div>
               </div>
 
-              {/* Tab nav at bottom (mobile-friendly secondary switcher) */}
-              {drafts.length > 1 && (
-                <div className="border-t pt-4 flex flex-wrap gap-2">
-                  {drafts.map((d, i) => {
-                    const isActive = i === activeIdx;
-                    const status   = tabReady[i];
-                    const ready    = status.hasImage;   // images are the only hard requirement
-                    return (
+              {/* Tab nav at bottom: per-product switcher + add/remove pills.
+                  Always rendered (even at count===1) so the "+ Add product"
+                  pill is discoverable without scrolling to the breadcrumb. */}
+              <div className="border-t pt-4 flex flex-wrap gap-2 items-center">
+                {drafts.length > 1 && drafts.map((d, i) => {
+                  const isActive = i === activeIdx;
+                  const status   = tabReady[i];
+                  const ready    = status.hasImage;   // images are the only hard requirement
+                  return (
+                    <div
+                      key={i}
+                      className={cn(
+                        "rounded-full border transition-colors flex items-center pl-3 pr-1.5 py-0.5 text-xs font-medium",
+                        isActive
+                          ? "border-orange-500 bg-orange-50 text-orange-600"
+                          : ready
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          : "border-zinc-200 bg-white text-zinc-500 hover:border-zinc-300",
+                      )}
+                    >
                       <button
-                        key={i}
                         type="button"
                         onClick={() => setActiveIdx(i)}
-                        className={cn(
-                          "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors flex items-center gap-1.5",
-                          isActive
-                            ? "border-orange-500 bg-orange-50 text-orange-600"
-                            : ready
-                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                            : "border-zinc-200 bg-white text-zinc-500 hover:border-zinc-300",
-                        )}
+                        className="inline-flex items-center gap-1.5 py-1"
                       >
                         <span className={cn(
                           "h-1.5 w-1.5 rounded-full",
@@ -496,10 +549,36 @@ export default function BatchAddProductsPage() {
                         )} />
                         {d.name.trim() || `Product ${i + 1}`}
                       </button>
-                    );
-                  })}
-                </div>
-              )}
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); removeProduct(i); }}
+                        disabled={submitting}
+                        className="ml-1.5 flex h-5 w-5 items-center justify-center rounded-full text-zinc-400 hover:bg-red-50 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-50"
+                        aria-label={`Remove product ${i + 1}`}
+                        title="Remove this product from the batch"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  );
+                })}
+                {drafts.length < MAX_PRODUCTS && (
+                  <button
+                    type="button"
+                    onClick={addProduct}
+                    disabled={submitting}
+                    className="rounded-full border border-dashed border-orange-300 px-3 py-1.5 text-xs font-medium text-orange-600 hover:bg-orange-50 transition-colors flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Plus className="h-3 w-3" />
+                    Add another product
+                  </button>
+                )}
+                {drafts.length >= MAX_PRODUCTS && (
+                  <span className="text-[11px] text-zinc-400">
+                    Batch limit reached ({MAX_PRODUCTS} products).
+                  </span>
+                )}
+              </div>
             </section>
           </div>
         </div>
