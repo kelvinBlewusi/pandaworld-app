@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PandaWorld — Loader</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #f4f1ea;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .frame {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 28px;
+  }
+  .stage {
+    width: 200px;
+    height: 200px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .caption {
+    color: #1a1a1a;
+    font-size: 13px;
+    letter-spacing: 0.02em;
+    text-align: center;
+    max-width: 320px;
+    line-height: 1.5;
+    opacity: 0.85;
+  }
+  .caption .sub {
+    margin-top: 6px;
+    font-size: 11px;
+    opacity: 0.6;
+  }
+  svg { display: block; overflow: visible; }
+
+  /* Globe */
+  .ocean {
+    fill: #f4f1ea;
+    stroke: #1a1a1a;
+    stroke-width: 1.25;
+  }
+  .graticule {
+    fill: none;
+    stroke: #1a1a1a;
+    stroke-width: 0.4;
+    stroke-opacity: 0.28;
+  }
+  .country {
+    stroke: #f4f1ea;
+    stroke-width: 0.35;
+    stroke-linejoin: round;
+  }
+  .ocean-fill { fill: #eef0f3; }
+
+  /* Whirl ring */
+  .whirl-track {
+    fill: none;
+    stroke: #1a1a1a;
+    stroke-opacity: 0.18;
+    stroke-width: 1;
+  }
+  .whirl-arc {
+    fill: none;
+    stroke: #1a1a1a;
+    stroke-width: 1.4;
+    stroke-linecap: round;
+  }
+  .whirl-dot {
+    fill: #1a1a1a;
+  }
+
+  @keyframes spinCW { to { transform: rotate(360deg); } }
+  @keyframes spinCCW { to { transform: rotate(-360deg); } }
+
+  .whirl-outer { animation: spinCW 4.5s linear infinite; transform-origin: 100px 100px; }
+  .whirl-inner { animation: spinCCW 6s linear infinite; transform-origin: 100px 100px; }
+
+  /* Loading state fallback before JS draws map */
+  .placeholder {
+    fill: none;
+    stroke: #1a1a1a;
+    stroke-width: 1;
+    stroke-opacity: 0.3;
+  }
+</style>
+</head>
+<body>
+
+<div class="frame">
+<div class="stage">
+  <svg id="loader" width="200" height="200" viewBox="0 0 200 200">
+    <!-- Outer whirl ring: dashed faint -->
+    <g class="whirl-outer">
+      <circle class="whirl-track" cx="100" cy="100" r="96" stroke-dasharray="2 6" />
+      <!-- arc segment that "whirls" -->
+      <path class="whirl-arc" d="M 100 4 A 96 96 0 0 1 184.86 52" />
+      <circle class="whirl-dot" cx="184.86" cy="52" r="2.2" />
+    </g>
+
+    <!-- Inner whirl ring, counter-rotating -->
+    <g class="whirl-inner">
+      <circle class="whirl-track" cx="100" cy="100" r="88" stroke-dasharray="1 4" />
+      <path class="whirl-arc" d="M 100 12 A 88 88 0 0 0 22.18 64" stroke-width="1" stroke-opacity="0.55" />
+      <circle class="whirl-dot" cx="22.18" cy="64" r="1.6" fill-opacity="0.7" />
+    </g>
+
+    <!-- Globe -->
+    <g id="globe">
+      <!-- Ocean disc -->
+      <circle class="ocean ocean-fill" cx="100" cy="100" r="72" />
+      <!-- Placeholder graticule arcs while map loads -->
+      <g id="placeholder-arcs">
+        <ellipse class="placeholder" cx="100" cy="100" rx="72" ry="24" />
+        <ellipse class="placeholder" cx="100" cy="100" rx="72" ry="48" />
+        <ellipse class="placeholder" cx="100" cy="100" rx="24" ry="72" />
+        <ellipse class="placeholder" cx="100" cy="100" rx="48" ry="72" />
+      </g>
+      <!-- Graticule + countries injected here -->
+      <g id="graticule"></g>
+      <g id="countries"></g>
+    </g>
+
+    <!-- Clip-path so panda hides behind the globe limb -->
+    <defs>
+      <clipPath id="globeClip">
+        <circle cx="100" cy="100" r="72" />
+      </clipPath>
+    </defs>
+
+    <!-- Panda (composed of basic circles only) -->
+    <g id="panda" clip-path="url(#globeClip)"></g>
+  </svg>
+</div>
+  <div class="caption" id="caption">
+    <div id="caption-main">Sending your listing to Jumia&hellip;</div>
+    <div class="sub" id="caption-sub">Letting their feed warm up before we check the status.</div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/d3@7.9.0/dist/d3.min.js"></script>
+<script src="https://unpkg.com/d3-geo@3.1.1/dist/d3-geo.min.js"></script>
+<script src="https://unpkg.com/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+<script>
+  // The parent React app can override the caption mid-flight via
+  // postMessage({type:"caption", main, sub}) so we can transition from
+  // "Sending…" to "Almost there…" without reloading the iframe.
+  window.addEventListener("message", function (ev) {
+    var d = ev && ev.data;
+    if (!d || d.type !== "caption") return;
+    if (typeof d.main === "string") {
+      document.getElementById("caption-main").textContent = d.main;
+    }
+    if (typeof d.sub === "string") {
+      document.getElementById("caption-sub").textContent = d.sub;
+    }
+  });
+</script>
+<script>
+(async function () {
+  const cx = 100, cy = 100, R = 72;
+
+  const projection = d3.geoOrthographic()
+    .scale(R)
+    .translate([cx, cy])
+    .clipAngle(90);
+
+  const path = d3.geoPath(projection);
+
+  // Graticule
+  const graticule = d3.geoGraticule().step([20, 20])();
+
+  // Load world map
+  let countries = null;
+  try {
+    const world = await fetch("https://unpkg.com/world-atlas@2.0.2/countries-110m.json").then(r => r.json());
+    countries = topojson.feature(world, world.objects.countries);
+  } catch (e) {
+    console.warn("World atlas fetch failed", e);
+  }
+
+  const gGrat = document.getElementById("graticule");
+  const gCountries = document.getElementById("countries");
+  const gPanda = document.getElementById("panda");
+  const placeholder = document.getElementById("placeholder-arcs");
+
+  if (countries) placeholder.remove();
+
+  // ---- Sample 150 panda homes on land ----
+  const PANDA_HOMES = [];
+  if (countries) {
+    // d3.geoContains accepts a FeatureCollection
+    const fc = countries;
+    let tries = 0;
+    while (PANDA_HOMES.length < 150 && tries < 20000) {
+      tries++;
+      const lon = Math.random() * 360 - 180;
+      // bias slightly toward populated latitudes
+      const lat = (Math.random() + Math.random() - 1) * 75;
+      if (d3.geoContains(fc, [lon, lat])) {
+        PANDA_HOMES.push({
+          lon, lat,
+          size: 0.45 + Math.random() * 0.65,
+          hue: Math.floor(Math.random() * 360),
+          phase: Math.random() * Math.PI * 2,
+          driftLon: 4 + Math.random() * 6,
+          driftLat: 2 + Math.random() * 4,
+          speed: 0.3 + Math.random() * 0.6,
+        });
+      }
+    }
+  } else {
+    // Fallback: scatter without land test
+    for (let i = 0; i < 150; i++) {
+      PANDA_HOMES.push({
+        lon: Math.random() * 360 - 180,
+        lat: (Math.random() + Math.random() - 1) * 75,
+        size: 0.45 + Math.random() * 0.65,
+        hue: Math.floor(Math.random() * 360),
+        phase: Math.random() * Math.PI * 2,
+        driftLon: 4 + Math.random() * 6,
+        driftLat: 2 + Math.random() * 4,
+        speed: 0.3 + Math.random() * 0.6,
+      });
+    }
+  }
+
+  function draw(lambda) {
+    projection.rotate([lambda, -8, 0]);
+
+    // Graticule
+    const gratD = path(graticule);
+    gGrat.innerHTML = gratD ? `<path class="graticule" d="${gratD}"/>` : "";
+
+    // Countries (each gets its own hue, stable across frames)
+    if (countries) {
+      let html = "";
+      const feats = countries.features;
+      for (let i = 0; i < feats.length; i++) {
+        const f = feats[i];
+        const d = path(f);
+        if (!d) continue;
+        const hue = (i * 47) % 360;
+        const fill = `hsl(${hue}, 58%, 62%)`;
+        html += `<path class="country" d="${d}" fill="${fill}"/>`;
+      }
+      gCountries.innerHTML = html;
+    }
+  }
+
+  // ---- Pandas (geometric circles only) ----
+  // Each panda has a colored marking (ears, eye-patches, nose) so all 150
+  // are distinguishable. Heads remain off-white.
+
+  function pandaSVG(x, y, scale, op /*, hue */) {
+    const dark = "#0a0a0a";
+    const accent = "#0a0a0a";
+    const head = 7 * scale;
+    const ear = 3 * scale;
+    const eyePatch = 2.4 * scale;
+    const eye = 0.9 * scale;
+    const nose = 1.1 * scale;
+
+    const eOff = head * 0.78;
+    const eyeX = head * 0.42;
+    const eyeY = -head * 0.12;
+    const noseY = head * 0.35;
+
+    return `
+      <g opacity="${op.toFixed(2)}" transform="translate(${x.toFixed(2)} ${y.toFixed(2)})">
+        <circle cx="${(-eOff).toFixed(2)}" cy="${(-eOff * 0.75).toFixed(2)}" r="${ear.toFixed(2)}" fill="${dark}"/>
+        <circle cx="${eOff.toFixed(2)}"  cy="${(-eOff * 0.75).toFixed(2)}" r="${ear.toFixed(2)}" fill="${dark}"/>
+        <circle cx="0" cy="0" r="${head.toFixed(2)}" fill="#fbfaf6" stroke="${dark}" stroke-width="${(0.6 * scale).toFixed(2)}"/>
+        <ellipse cx="${(-eyeX).toFixed(2)}" cy="${eyeY.toFixed(2)}" rx="${eyePatch.toFixed(2)}" ry="${(eyePatch * 1.15).toFixed(2)}" fill="${accent}" transform="rotate(-18 ${(-eyeX).toFixed(2)} ${eyeY.toFixed(2)})"/>
+        <ellipse cx="${eyeX.toFixed(2)}"  cy="${eyeY.toFixed(2)}" rx="${eyePatch.toFixed(2)}" ry="${(eyePatch * 1.15).toFixed(2)}" fill="${accent}" transform="rotate(18 ${eyeX.toFixed(2)} ${eyeY.toFixed(2)})"/>
+        <circle cx="${(-eyeX).toFixed(2)}" cy="${eyeY.toFixed(2)}" r="${eye.toFixed(2)}" fill="#fbfaf6"/>
+        <circle cx="${eyeX.toFixed(2)}"  cy="${eyeY.toFixed(2)}" r="${eye.toFixed(2)}" fill="#fbfaf6"/>
+        <ellipse cx="0" cy="${noseY.toFixed(2)}" rx="${(nose * 0.9).toFixed(2)}" ry="${(nose * 0.7).toFixed(2)}" fill="${dark}"/>
+      </g>
+    `;
+  }
+
+  function drawPandas(t) {
+    const rot = projection.rotate();
+    const toRad = Math.PI / 180;
+    const lon0 = -rot[0], lat0 = -rot[1];
+
+    let html = "";
+    for (let i = 0; i < PANDA_HOMES.length; i++) {
+      const h = PANDA_HOMES[i];
+      // Local wander — small drift in lon/lat
+      const lon = h.lon + h.driftLon * Math.sin(t * h.speed + h.phase);
+      const lat = h.lat + h.driftLat * Math.cos(t * h.speed * 0.9 + h.phase * 1.3);
+
+      const p = projection([lon, lat]);
+      if (!p) continue;
+
+      // Cosine of angular distance from view center
+      const dLon = (lon - lon0) * toRad;
+      const cosC =
+        Math.sin(lat * toRad) * Math.sin(lat0 * toRad) +
+        Math.cos(lat * toRad) * Math.cos(lat0 * toRad) * Math.cos(dLon);
+      if (cosC < 0.15) continue;
+
+      // Scale shrinks toward the limb so they sit on the curved surface
+      const s = h.size * (0.45 + cosC * 0.55);
+      const op = Math.min(1, (cosC - 0.15) / 0.25);
+      html += pandaSVG(p[0], p[1], s, op, h.hue);
+    }
+    gPanda.innerHTML = html;
+  }
+
+  // Animation loop
+  let t0 = performance.now();
+  function tick(now) {
+    const t = (now - t0) / 1000;
+    const lambda = (t * 10) % 360;
+    draw(lambda);
+    drawPandas(t);
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

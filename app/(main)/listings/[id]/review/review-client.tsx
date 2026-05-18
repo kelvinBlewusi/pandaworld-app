@@ -59,6 +59,7 @@ import { calculateQualityScore, scoreLabel, scoreColor, DEFAULT_THRESHOLD } from
 import { isValidGTIN } from "@/lib/utils/gtin";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import { CategoryDrawer } from "@/components/ui/category-drawer";
+import { PublishingLoader } from "@/components/ui/publishing-loader";
 import { MultiSelectDropdown } from "@/components/ui/multi-select";
 import { SchemaForm } from "@/components/jumia/SchemaForm";
 import type { JumiaAttributeDef } from "@/components/jumia/SchemaField";
@@ -1835,6 +1836,11 @@ export function ReviewClient({
 
   // ── Save / publish state ──────────────────────────────────────────────────
   const [saving,      setSaving]      = useState(false);
+  // Phase of the publishing loader: "pushing" while POST /api/jumia/push
+  // is in flight, "settling" while we hold for Jumia's feed to digest
+  // before navigating to the diagnose modal, or null when not publishing.
+  const [publishingPhase, setPublishingPhase] =
+    useState<"pushing" | "settling" | null>(null);
   const [saveError,   setSaveError]   = useState<string | null>(null);
   const [jumiaNotConnected, setJumiaNotConnected] = useState(false);
   const [publishedRef, setPublishedRef] = useState<string | null>(null);
@@ -2024,6 +2030,9 @@ export function ReviewClient({
     setSaving(true);
     setSaveError(null);
     setJumiaNotConnected(false);
+    // Publish-only: show the fullscreen panda loader while the POST is in
+    // flight. Drafts save in the background — no overlay.
+    if (publish) setPublishingPhase("pushing");
 
     // Single source of truth for the save payload:
     //   1. Four header-controlled fields (title / description / highlights / brand)
@@ -2146,17 +2155,32 @@ export function ReviewClient({
         if (pushData.sku) {
           setPublishedSku({ sku: pushData.sku, changed: Boolean(pushData.sku_changed) });
         }
+        // Hold the panda loader for a few seconds before opening the
+        // diagnose modal. Jumia's /feeds/{id} endpoint returns "queued"
+        // for the first ~5-8s after a push — landing on the status modal
+        // any sooner means the seller sees a useless "still processing"
+        // panel, then has to click again to refresh. The settle phase
+        // bridges that gap with a friendlier caption while we wait.
+        setPublishingPhase("settling");
+        await new Promise((r) => setTimeout(r, 8_000));
         // Auto-open the Jumia status modal on the listings page so the
         // seller sees the diagnosis result without an extra click.
         router.push(`/listings?diagnose=${listing.id}`);
       } else if (pushData.error?.includes("not connected") || pushRes.status === 403) {
         setJumiaNotConnected(true);
         setSaveError(pushData.error ?? "Jumia not connected");
+        setPublishingPhase(null);
       } else {
         setSaveError(pushData.error ?? "Jumia submission failed.");
+        setPublishingPhase(null);
       }
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Save failed.");
+      // Errors during save/push: surface the message immediately, drop
+      // the panda loader so the seller can fix things. router.push is
+      // the only path that keeps the loader visible (it's about to
+      // unmount this component anyway).
+      setPublishingPhase(null);
     } finally {
       setSaving(false);
     }
@@ -2217,6 +2241,25 @@ export function ReviewClient({
 
   return (
     <div className="-m-4 sm:-m-6 lg:-m-8 min-h-[calc(100vh-3.5rem)] lg:min-h-screen bg-zinc-50 flex flex-col">
+      {/* Full-screen publishing overlay. Shown only on publish flows —
+          drafts save silently in the background. Two phases:
+          - "pushing":   POST /api/jumia/push is in flight
+          - "settling":  push succeeded, we're holding for Jumia's feed
+                         to digest before navigating to the diagnose modal */}
+      {publishingPhase && (
+        <PublishingLoader
+          caption={
+            publishingPhase === "pushing"
+              ? "Sending your listing to Jumia…"
+              : "Almost there…"
+          }
+          subCaption={
+            publishingPhase === "pushing"
+              ? "Packaging variants, prices and images for the feed."
+              : "Letting Jumia’s feed warm up before we check the status."
+          }
+        />
+      )}
       {/* ── Header ────────────────────────────────────────────────────────── */}
       <div className="bg-white border-b border-zinc-200 sticky top-0 z-20">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 py-3 space-y-2">
