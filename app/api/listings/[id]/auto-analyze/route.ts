@@ -95,8 +95,19 @@ export async function POST(
     );
   }
 
-  // Build a richer query string for retrieval — title plus keywords
-  const retrievalQuery = [description.title, ...description.keywords].join(" ");
+  // Build a retrieval query that includes the use case + environment from
+  // Pass A. Without them the query is just "Pump Sprayer" and Fuse can
+  // happily match that against "Carpet Cleaning Machine Accessories"
+  // somewhere else in the tree. With "agricultural pesticide spraying farm"
+  // tacked on, the environment-specific paths float to the top.
+  const retrievalQuery = [
+    description.title,
+    ...description.keywords,
+    description.intended_use_case,
+    description.environment && description.environment !== "unknown"
+      ? description.environment
+      : null,
+  ].filter(Boolean).join(" ");
 
   // ── 2. RETRIEVAL: fuzzy local + Jumia catalog lookup ──────────────────────
   //
@@ -167,7 +178,13 @@ export async function POST(
   const tRank = Date.now();
   let ranked: Awaited<ReturnType<typeof aiPassB_rankCategory>>;
   try {
-    ranked = await aiPassB_rankCategory(images, candidates, userContext);
+    ranked = await aiPassB_rankCategory(
+      images,
+      candidates,
+      userContext,
+      description.intended_use_case,
+      description.environment,
+    );
     timings.rank_ms = Date.now() - tRank;
   } catch (e) {
     return NextResponse.json(

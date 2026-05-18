@@ -78,11 +78,18 @@ export async function searchJumiaProductsByTitle(
 
   const maxCount = Math.max(...Array.from(codeCounts.values()));
 
-  // Resolve each code to a full category row (path, name, attribute_set_sid)
+  // Resolve each code to a full category row (path, name, attribute_set_sid).
+  //
+  // We deliberately DO NOT filter by row.is_leaf here. Jumia's own product
+  // catalog has products categorised under listable parents (e.g. "Watches"
+  // alongside "Watches > Smart Watches") — filtering to leaves only meant
+  // the live-catalog signal silently dropped those, biasing the candidate
+  // pool toward whatever leaf path happened to contain the AI's keywords.
+  // Same fix pattern as the earlier category-search.ts change.
   const rows: Array<{ row: JumiaCategoryRow; score: number }> = [];
   for (const [code, count] of Array.from(codeCounts.entries())) {
     const row = await getCategoryByCode(code);
-    if (row && row.is_leaf) {
+    if (row) {
       rows.push({ row, score: count / maxCount });
     }
   }

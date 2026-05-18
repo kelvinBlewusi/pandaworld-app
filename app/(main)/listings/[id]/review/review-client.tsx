@@ -1566,6 +1566,9 @@ export function ReviewClient({
   const [refillSuccess, setRefillSuccess] = useState<string | null>(null);
   const [refillError,   setRefillError]   = useState<string | null>(null);
 
+  // Drawer pick → schema-only mode. Empty input fields render immediately.
+  // No AI tokens spent until the seller hits "Fill empty fields with AI"
+  // on the schema form.
   const handleCategoryChange = async (cat: { code: number; name: string; path: string }) => {
     const previousCode = categoryCode;
 
@@ -1574,10 +1577,53 @@ export function ReviewClient({
     setCategoryPath(cat.path);
     setCategoryName(cat.name);
 
-    // If the category actually changed, fire the AI re-fill in the background.
-    // First-time picks (no previous category) ALSO trigger it.
+    // If the seller re-picked the same category, nothing to do.
     if (String(cat.code) === previousCode) return;
 
+    setRefillingAttributes(true);
+    setRefillSuccess(null);
+    setRefillError(null);
+    try {
+      const res = await fetch(
+        `/api/listings/${listing.id}/refill-attributes?mode=schema-only`,
+        {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ categoryCode: cat.code, categoryPath: cat.path }),
+        },
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setRefillError(data.error ?? "Couldn't fetch category fields from Jumia.");
+        return;
+      }
+      // Clear stale values from the previous category. Server-side merge
+      // already preserves user-edited keys that survive the new schema —
+      // pull those back from the response.
+      if (data.dynamic_attributes) {
+        setDynAttrs(data.dynamic_attributes as Record<string, string>);
+      } else {
+        setDynAttrs({});
+      }
+      setColumnOverrides({});
+      setRefillSuccess(
+        data.attributesSchema > 0
+          ? `${data.attributesSchema} field${data.attributesSchema === 1 ? "" : "s"} ready — fill them in or click “Fill with AI”.`
+          : `Category set. No category-specific fields needed.`
+      );
+      router.refresh();
+    } catch (e) {
+      setRefillError(e instanceof Error ? e.message : "Couldn't fetch category fields.");
+    } finally {
+      setRefillingAttributes(false);
+    }
+  };
+
+  // Opt-in AI fill — triggered by the "Fill empty fields with AI" button
+  // on the schema form. Same merge semantics as the auto-analyze pipeline:
+  // user-edited keys are preserved, AI only fills empty slots.
+  const handleFillWithAI = async () => {
+    if (!categoryCode) return;
     setRefillingAttributes(true);
     setRefillSuccess(null);
     setRefillError(null);
@@ -1585,27 +1631,22 @@ export function ReviewClient({
       const res = await fetch(`/api/listings/${listing.id}/refill-attributes`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ categoryCode: cat.code, categoryPath: cat.path }),
+        body:    JSON.stringify({
+          categoryCode: Number(categoryCode),
+          categoryPath: categoryPath,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
-        setRefillError(data.error ?? "Couldn't fetch category fields from Jumia.");
+        setRefillError(data.error ?? "AI fill failed.");
         return;
       }
-      // Merge the new attributes back into local state — no full page reload
-      // needed, the form will re-render with the fresh values.
       if (data.dynamic_attributes) {
         setDynAttrs(data.dynamic_attributes as Record<string, string>);
       }
-      // Clear stale column overrides from the PREVIOUS category. Old values
-      // for e.g. color / main_material would otherwise shadow whatever the
-      // AI just filled for the new category.
-      setColumnOverrides({});
       setRefillSuccess(
-        `${data.attributesSchema} field${data.attributesSchema === 1 ? "" : "s"} from Jumia · AI filled ${data.aiFilled}.`
+        `AI filled ${data.aiFilled} of ${data.attributesSchema} field${data.attributesSchema === 1 ? "" : "s"}.`
       );
-      // Trigger a server refresh so listing.field_confidence + field_sources
-      // are fresh next render (for the confidence dots).
       router.refresh();
     } catch (e) {
       setRefillError(e instanceof Error ? e.message : "AI fill failed.");
@@ -2638,6 +2679,8 @@ export function ReviewClient({
                 fieldConfidence={listing.field_confidence ?? undefined}
                 excludeNames={[...PRODUCT_INFO_FIELDS, ...STATIC_FIELDS, ...VARIANT_ATTRIBUTE_FIELDS]}
                 excludeVariants
+                onFillWithAI={handleFillWithAI}
+                fillWithAILoading={refillingAttributes}
                 renderConfidenceDot={({ source, confidence }) =>
                   source ? (
                     <ConfidenceDot

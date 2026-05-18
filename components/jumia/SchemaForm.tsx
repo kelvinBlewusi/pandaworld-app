@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useState, useCallback } from "react";
-import { Loader2, Tag, AlertCircle } from "lucide-react";
+import { Loader2, Tag, AlertCircle, Sparkles } from "lucide-react";
 import { SchemaField, type JumiaAttributeDef } from "./SchemaField";
 import { canonicalKey, columnFor, readAttributeValue } from "@/lib/jumia/attribute-mapping";
 import type { ListingRow } from "@/lib/supabase/types";
@@ -67,6 +67,16 @@ interface SchemaFormProps {
    * 1- or 2-col regardless of this prop.
    */
   cols?: 3 | 4;
+  /**
+   * When set, a "Fill empty fields with AI" button renders at the top of
+   * the form. Click → caller runs Gemini fill against the current category
+   * schema. Only one of the SchemaForm instances on a page should receive
+   * this prop (typically the Product Specification one) so we don't show
+   * two buttons.
+   */
+  onFillWithAI?: () => void | Promise<void>;
+  /** Disable/loading state for the Fill-with-AI button. */
+  fillWithAILoading?: boolean;
 }
 
 export function SchemaForm({
@@ -83,6 +93,8 @@ export function SchemaForm({
   extraFields,
   excludeVariants,
   cols = 3,
+  onFillWithAI,
+  fillWithAILoading = false,
 }: SchemaFormProps) {
   const [schema,    setSchema]    = useState<JumiaAttributeDef[]>([]);
   const [loading,   setLoading]   = useState(true);
@@ -269,6 +281,10 @@ export function SchemaForm({
   const optional = visible.filter((a) => !a.required);
   const ordered: JumiaAttributeDef[] = [...required, ...optional];
 
+  // Has at least one empty field that the AI could fill — drives the
+  // disabled state of the "Fill empty fields with AI" button.
+  const hasEmptyField = ordered.some((a) => !getValue(a.name)?.trim());
+
   const gridClass = cn(
     "grid grid-cols-1 gap-4 sm:grid-cols-2",
     cols === 4 ? "lg:grid-cols-4" : "lg:grid-cols-3",
@@ -312,11 +328,48 @@ export function SchemaForm({
           Updating fields from Jumia…
         </div>
       )}
-      {!hideGroupHeadings && required.length > 0 && optional.length > 0 && (
-        <p className="text-[11px] font-semibold uppercase tracking-widest text-red-500">
-          Required ({required.length}) <span className="text-zinc-300">·</span>{" "}
-          <span className="text-zinc-400">Optional ({optional.length})</span>
-        </p>
+      {/* Header row: required/optional summary + "Fill with AI" button. */}
+      {(onFillWithAI || (!hideGroupHeadings && required.length > 0 && optional.length > 0)) && (
+        <div className="flex items-center justify-between gap-3">
+          {!hideGroupHeadings && required.length > 0 && optional.length > 0 ? (
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-red-500">
+              Required ({required.length}) <span className="text-zinc-300">·</span>{" "}
+              <span className="text-zinc-400">Optional ({optional.length})</span>
+            </p>
+          ) : (
+            <span />
+          )}
+          {onFillWithAI && (
+            <button
+              type="button"
+              onClick={() => { void onFillWithAI(); }}
+              disabled={fillWithAILoading || !hasEmptyField}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                fillWithAILoading || !hasEmptyField
+                  ? "border-zinc-200 bg-zinc-50 text-zinc-400 cursor-not-allowed"
+                  : "border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100",
+              )}
+              title={
+                !hasEmptyField
+                  ? "All fields are filled. Clear a field to re-run the AI."
+                  : "Use Gemini to fill the empty category fields from your images."
+              }
+            >
+              {fillWithAILoading ? (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Filling…
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-3 w-3" />
+                  Fill empty fields with AI
+                </>
+              )}
+            </button>
+          )}
+        </div>
       )}
       <div className={cn(gridClass, loading && schema.length > 0 && "opacity-60 pointer-events-none transition-opacity")}>
         {ordered.map(renderField)}

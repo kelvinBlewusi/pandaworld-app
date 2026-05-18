@@ -680,6 +680,20 @@ export interface ProductDescription {
   main_material:   string | null;       // e.g. "Plastic", "Aluminium"
   material_family: string | null;       // e.g. "Plastic", "Metal", "Fabric"
   /**
+   * Short phrase describing what the product is FOR — e.g. "agricultural
+   * pesticide spraying", "household carpet cleaning", "office stationery".
+   * Threads into the retrieval query AND the rank prompt so we don't
+   * confuse visually-similar products (e.g. farm sprayer vs carpet
+   * cleaner pump — both have a tank + nozzle, very different categories).
+   */
+  intended_use_case: string | null;
+  /**
+   * Where the product is typically used. Constrained vocabulary so the
+   * downstream rank pass can match it cleanly against category paths
+   * like "Garden & Outdoors / Farm & Ranch".
+   */
+  environment: "home" | "farm" | "garden" | "office" | "workshop" | "industrial" | "outdoor" | "personal" | "unknown" | null;
+  /**
    * Distinct variants visible in the images. Empty when the listing
    * shows a single product; populated when the images show e.g. a
    * garden-tool set ("3 Set", "Hoe only", "Trowel only") or a
@@ -689,6 +703,12 @@ export interface ProductDescription {
    */
   variations:      Array<{ label: string; sku_suffix: string }>;
 }
+
+const VALID_ENVIRONMENTS = new Set([
+  "home", "farm", "garden", "office", "workshop",
+  "industrial", "outdoor", "personal", "unknown",
+] as const);
+type Environment = NonNullable<ProductDescription["environment"]>;
 
 export async function aiPassA_describeProduct(
   imageUrls: string[],
@@ -700,6 +720,7 @@ export async function aiPassA_describeProduct(
       title: "Mock Product", brand: null, keywords: ["mock"], summary: "Mock product.",
       description: "Mock description filler text for development.", highlights: "• mock\n• mock\n• mock\n• mock",
       color: null, color_family: null, weight_kg: null, main_material: null, material_family: null,
+      intended_use_case: null, environment: "unknown",
       variations: [],
     };
   }
@@ -711,6 +732,16 @@ export async function aiPassA_describeProduct(
     : "";
 
   const prompt = `You are a product-listing assistant for Jumia. Look at the product images and return a JSON object that fills every visible product attribute.
+
+CRITICAL — ENVIRONMENT & USE CASE:
+Pay special attention to ENVIRONMENT and PRIMARY USE CASE. A pump-and-tank
+that looks visually similar to a carpet cleaner is a *sprayer* if it's intended
+for outdoor/farm use. Look for spray nozzles vs cleaning brushes/heads, hose
+endings, container labels, and contextual clues in the images (background,
+accessories, packaging text). Use environment = "unknown" if you genuinely
+can't tell — don't guess between farm and home when both are plausible. The
+downstream category picker depends on these two fields to disambiguate
+visually-similar products that live in very different parts of the catalogue.
 
 Rules:
 - title: Concise product name (e.g. "Sony WH-1000XM5 Wireless Noise-Cancelling Headphones"). 5-12 words ideal but length is flexible. NO category names like "headphones for sale".
@@ -724,6 +755,8 @@ Rules:
 - weight_kg: Only fill if you can see the weight printed on packaging or the product itself. Numeric kilograms (e.g. 1.2). Null otherwise.
 - main_material: e.g. "Plastic", "Stainless Steel", "Cotton". Null if uncertain.
 - material_family: e.g. "Plastic", "Metal", "Fabric", "Wood", "Glass". Null if uncertain.
+- intended_use_case: Short phrase identifying what the product is FOR — e.g. "agricultural pesticide spraying", "household carpet cleaning", "office stationery", "outdoor camping". Null only if completely unclear.
+- environment: Exactly one of {home, farm, garden, office, workshop, industrial, outdoor, personal, unknown}. "home" = lived-in indoor spaces. "farm" = agriculture / ranch / crops. "garden" = backyard / lawn / small-scale outdoor plant care. "workshop" = handyman / DIY / hobby builds. "industrial" = factory / commercial scale. "outdoor" = recreation outside the home (camping, sports). "personal" = items worn or carried on the body (clothing, accessories). Use "unknown" instead of guessing.
 - variations: Distinct product variants visible in the images. Be CONSERVATIVE — only populate when the images clearly show multiple choices the buyer can pick between.
     Examples of when to populate:
       * Garden tool set with separate pieces shown: ["3 Set (Trowel, Fork & Cultivator)", "Hoe only", "Trowel only", "Fork only"]
@@ -751,6 +784,8 @@ Return ONLY valid JSON. No markdown, no commentary:
   "weight_kg": null,
   "main_material": null,
   "material_family": null,
+  "intended_use_case": null,
+  "environment": "unknown",
   "variations": []
 }`;
 
@@ -801,20 +836,29 @@ Return ONLY valid JSON. No markdown, no commentary:
     })
     .filter((v): v is { label: string; sku_suffix: string } => v !== null);
 
+  // Parse + validate the environment field — anything outside the
+  // controlled vocabulary collapses to null so the rank pass doesn't
+  // see junk like "garage" or "vehicle".
+  const rawEnv = String(parsed.environment ?? "").toLowerCase().trim() as Environment | "";
+  const environment: ProductDescription["environment"] =
+    rawEnv && VALID_ENVIRONMENTS.has(rawEnv as Environment) ? (rawEnv as Environment) : null;
+
   return {
-    title:           clean(String(parsed.title ?? "").trim()) || "Unknown product",
-    brand:           cleanOrNull(strOrNull(parsed.brand)),
-    keywords:        keywords.slice(0, 10),
-    summary:         clean(String(parsed.summary ?? "").trim()),
-    description:     clean(String(parsed.description ?? "").trim()),
-    highlights:      clean(String(parsed.highlights ?? "").trim()),
-    color:           cleanOrNull(strOrNull(parsed.color)),
-    color_family:    cleanOrNull(strOrNull(parsed.color_family)),
-    weight_kg:       parsed.weight_kg != null && parsed.weight_kg !== "null"
-                       ? Number(parsed.weight_kg) || null
-                       : null,
-    main_material:   cleanOrNull(strOrNull(parsed.main_material)),
-    material_family: cleanOrNull(strOrNull(parsed.material_family)),
+    title:             clean(String(parsed.title ?? "").trim()) || "Unknown product",
+    brand:             cleanOrNull(strOrNull(parsed.brand)),
+    keywords:          keywords.slice(0, 10),
+    summary:           clean(String(parsed.summary ?? "").trim()),
+    description:       clean(String(parsed.description ?? "").trim()),
+    highlights:        clean(String(parsed.highlights ?? "").trim()),
+    color:             cleanOrNull(strOrNull(parsed.color)),
+    color_family:      cleanOrNull(strOrNull(parsed.color_family)),
+    weight_kg:         parsed.weight_kg != null && parsed.weight_kg !== "null"
+                         ? Number(parsed.weight_kg) || null
+                         : null,
+    main_material:     cleanOrNull(strOrNull(parsed.main_material)),
+    material_family:   cleanOrNull(strOrNull(parsed.material_family)),
+    intended_use_case: cleanOrNull(strOrNull(parsed.intended_use_case)),
+    environment,
     variations,
   };
 }
@@ -843,6 +887,10 @@ export async function aiPassB_rankCategory(
   imageUrls:  string[],
   candidates: Array<{ code: number; name: string; path: string }>,
   userContext?: string | null,
+  // From Pass A — anchors the rank model so it disambiguates
+  // visually-similar candidates by what the product is actually FOR.
+  useCase?: string | null,
+  environment?: ProductDescription["environment"],
 ): Promise<RankingResult> {
   if (candidates.length === 0) {
     return { primary: null, alternates: [], needsUserConfirmation: true };
@@ -874,16 +922,25 @@ export async function aiPassB_rankCategory(
     ? `\n\nSELLER CONTEXT (treat as authoritative for what the images don't show — may bias the category choice):\n"${userContext.trim()}"\n`
     : "";
 
+  // Pass-A's use case + environment anchor the disambiguation rule below.
+  // Without these the rank pass falls back to pure visual similarity,
+  // which is how a farm sprayer gets filed under carpet cleaners.
+  const useCaseBlock =
+    useCase || (environment && environment !== "unknown")
+      ? `\nPRIMARY USE CASE: ${useCase ?? "(not specified)"}\nENVIRONMENT: ${environment ?? "unknown"}\n`
+      : "";
+
   const prompt = `You are a Jumia category classification expert. Look at the product images and pick the single best Jumia listable category for them from the candidates below. Candidates can be either leaves or listable parents — both are valid choices.
 
 CANDIDATES:
 ${candidateList}
-
+${useCaseBlock}
 Rules:
 1. Pick exactly one as the primary (the best match).
 2. List up to 2 alternates in case the primary is wrong.
 3. Confidence is 0..1. Be honest — use 0.5 or below if you're unsure.
 4. You MUST choose from the candidates above. Do not invent new codes.
+5. When two candidates look visually similar (e.g. carpet cleaner vs farm sprayer, yoga mat vs camping mat, kitchen knife vs hunting knife), pick the one whose path matches the PRIMARY USE CASE and ENVIRONMENT above. Visual similarity alone is not enough — a handheld pump-and-tank used on a farm belongs under Agriculture, not Home Cleaning.
 ${ctxSection}
 Return ONLY valid JSON, no markdown:
 {

@@ -43,6 +43,12 @@ export async function POST(
     return NextResponse.json({ error: "categoryCode is required" }, { status: 400 });
   }
 
+  // `?mode=schema-only` short-circuits the Gemini fill step. The seller's
+  // drawer pick uses this — they want empty fields to render so they can
+  // type values in. The full AI-fill path (no mode) is opt-in via the
+  // "Fill empty fields with AI" button on the schema form.
+  const schemaOnly = req.nextUrl.searchParams.get("mode") === "schema-only";
+
   // Optional free-text seller hint — flows to Pass C so the AI honours
   // things the images don't show (pack size, exact variant, etc.).
   const userContext: string | null =
@@ -80,9 +86,14 @@ export async function POST(
       { status: 404 }
     );
   }
-  if (!cat.is_leaf) {
+  // Gate by Jumia's canonical listability signal — attribute_set_sid.
+  // We used to gate by is_leaf here, but Jumia accepts listings on any
+  // category that has its own attribute set (e.g. "Watches" alongside
+  // "Watches > Smart Watches"). Matching getListableCategories() so the
+  // drawer pick and the AI pick agree on what's listable.
+  if (!cat.attribute_set_sid) {
     return NextResponse.json(
-      { error: `"${cat.name}" is a parent category. Jumia only allows listings on leaves.` },
+      { error: `"${cat.name}" can't accept listings on Jumia (no attribute set).` },
       { status: 422 }
     );
   }
@@ -103,7 +114,63 @@ export async function POST(
     }
   }
 
-  // ── 4. Ask Gemini to fill the attributes for this category ───────────────
+  // ── 4. Schema-only short-circuit: drawer picks render empty fields ────────
+  //
+  // The seller asked for category X. We've validated and cached its schema.
+  // In schema-only mode we DON'T call Gemini — fields just render empty so
+  // the seller can type values in. Stale dynamic_attributes from the
+  // previous category are wiped (only user-edited keys that ALSO exist in
+  // the new schema survive, same as the merge below). This persists the
+  // new category + clears the slate.
+  if (schemaOnly) {
+    const previousDyn = (listing.dynamic_attributes ?? {}) as Record<string, string>;
+    const previousSources = (listing.field_sources ?? {}) as Record<string, "ai" | "user">;
+    const previousConfidence = (listing.field_confidence ?? {}) as Record<string, { confidence: number; source: string; reasoning?: string }>;
+
+    const validKeys = new Set(attrs.map((a) => a.name));
+    const carriedDyn: Record<string, string> = {};
+    const carriedSources: Record<string, "ai" | "user"> = { ...previousSources };
+    const carriedConfidence: Record<string, { confidence: number; source: string; reasoning?: string }> = { ...previousConfidence };
+
+    for (const k of Object.keys(carriedSources)) {
+      if (k.startsWith("dynamic_attributes.")) {
+        const attrName = k.slice("dynamic_attributes.".length);
+        if (!validKeys.has(attrName)) delete carriedSources[k];
+      }
+    }
+    for (const k of Object.keys(carriedConfidence)) {
+      if (k.startsWith("dynamic_attributes.")) {
+        const attrName = k.slice("dynamic_attributes.".length);
+        if (!validKeys.has(attrName)) delete carriedConfidence[k];
+      }
+    }
+    for (const [k, v] of Object.entries(previousDyn)) {
+      if (validKeys.has(k) && previousSources[`dynamic_attributes.${k}`] === "user") {
+        carriedDyn[k] = v;
+      }
+    }
+
+    await db.from("listings").update({
+      category_code:      String(categoryCode),
+      category_path:      body.categoryPath ?? cat.path,
+      dynamic_attributes: carriedDyn,
+      field_sources:      carriedSources,
+      field_confidence:   carriedConfidence,
+      updated_at:         new Date().toISOString(),
+    }).eq("id", params.id);
+
+    return NextResponse.json({
+      success:           true,
+      category: { code: cat.code, name: cat.name, path: cat.path },
+      attributesSchema:  attrs.length,
+      aiFilled:          0,
+      dynamic_attributes: carriedDyn,
+      field_sources:     carriedSources,
+      field_confidence:  carriedConfidence,
+    });
+  }
+
+  // ── 4b. Ask Gemini to fill the attributes for this category ──────────────
   const extracted = await extractAttributesForCategory(images, categoryCode, userContext);
 
   // ── 5. Merge with existing values: AI fills empty slots, user-edited
