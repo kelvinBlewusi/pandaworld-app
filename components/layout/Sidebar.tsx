@@ -20,6 +20,7 @@ import {
   LogOut,
   X,
   Database,
+  Tags,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -266,6 +267,7 @@ export function Sidebar({
               </p>
             </div>
             <NavItem href="/admin/categories" label="Categories" icon={Database} />
+            <NavItem href="/admin/brands"     label="Brands"     icon={Tags} />
           </>
         )}
       </nav>

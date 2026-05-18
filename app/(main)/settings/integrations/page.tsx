@@ -32,19 +32,26 @@ function IntegrationsPageInner() {
   const [disconnecting,setDisconnecting]= useState(false);
   const [showConfirm,  setShowConfirm]  = useState(false);
   const [toast,        setToast]        = useState<{ type: "success"|"error"; msg: string } | null>(null);
-  const [syncingBrands,   setSyncingBrands]   = useState(false);
-  const [brandSyncResult, setBrandSyncResult] = useState<{ brands: number } | null>(null);
 
   // Persistent stats — count + last-synced timestamp for the cached
-  // Jumia category tree. Fetched on page load so the seller always sees
-  // current sync health without having to click "Sync now".
+  // Jumia catalogues. Fetched on page load so sellers see current sync
+  // health without any sync UI on this page (sync is admin-only and
+  // lives under /admin/categories + /admin/brands).
   const [categoryStats, setCategoryStats] = useState<{ count: number; lastSynced: string | null } | null>(null);
+  const [brandStats,    setBrandStats]    = useState<{ count: number; lastSynced: string | null } | null>(null);
 
   const loadCategoryStats = () => {
     fetch("/api/jumia/sync-categories")
       .then((r) => r.json())
       .then((d) => setCategoryStats({ count: d.count ?? 0, lastSynced: d.lastSynced ?? null }))
       .catch(() => setCategoryStats(null));
+  };
+
+  const loadBrandStats = () => {
+    fetch("/api/jumia/brands/status")
+      .then((r) => r.json())
+      .then((d) => setBrandStats({ count: d.count ?? 0, lastSynced: d.lastSynced ?? null }))
+      .catch(() => setBrandStats(null));
   };
 
   // ── Load connection status ─────────────────────────────────────────────────
@@ -55,6 +62,7 @@ function IntegrationsPageInner() {
       .catch(() => setConn(null))
       .finally(() => setLoading(false));
     loadCategoryStats();
+    loadBrandStats();
   }, []);
 
   // ── Handle Jumia OAuth redirect back ──────────────────────────────────────
@@ -81,47 +89,9 @@ function IntegrationsPageInner() {
     setTimeout(() => setToast(null), 6000);
   }
 
-  // Category sync moved to the admin-only /admin/categories page —
-  // sellers see a read-only status card now.
-
-  // ── Sync Jumia brand catalog ──────────────────────────────────────────────
-  async function handleSyncBrands() {
-    setSyncingBrands(true);
-    setBrandSyncResult(null);
-    const ctrl = new AbortController();
-    const timeoutId = setTimeout(() => ctrl.abort(), 90_000);
-    try {
-      const res  = await fetch("/api/admin/jumia/sync-brands", { method: "POST", signal: ctrl.signal });
-      clearTimeout(timeoutId);
-      const rawText = await res.text();
-      let data: { success?: boolean; error?: string; brands?: number } = {};
-      try {
-        data = rawText ? JSON.parse(rawText) : {};
-      } catch (parseErr) {
-        console.error("[Sync Brands] Non-JSON response:", res.status, rawText.slice(0, 300), parseErr);
-        showToast("error", `Brand sync got an invalid response (HTTP ${res.status}). Check Vercel logs.`);
-        return;
-      }
-      if (res.ok && data.success) {
-        setBrandSyncResult({ brands: data.brands ?? 0 });
-        showToast("success", `✅ Synced ${data.brands} brands from Jumia.`);
-      } else {
-        console.error("[Sync Brands] Server error:", res.status, data);
-        showToast("error", data.error ?? `Brand sync failed (HTTP ${res.status}).`);
-      }
-    } catch (e) {
-      clearTimeout(timeoutId);
-      const err = e as Error;
-      console.error("[Sync Brands] Client-side error:", err);
-      if (err.name === "AbortError") {
-        showToast("error", "Brand sync timed out after 90s.");
-      } else {
-        showToast("error", `Brand sync failed: ${err.message}`);
-      }
-    } finally {
-      setSyncingBrands(false);
-    }
-  }
+  // Category + brand sync both moved to admin-only pages
+  // (/admin/categories, /admin/brands) — sellers see read-only status
+  // cards here only.
 
   // ── Kick off OAuth flow ───────────────────────────────────────────────────
   function handleConnect() {
@@ -330,38 +300,43 @@ function IntegrationsPageInner() {
               )}
             </div>
 
-            {/* Brand sync */}
+            {/* Brand catalog — read-only. Sync is admin-only at /admin/brands. */}
             <div className="rounded-xl border bg-zinc-50 p-4 space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-zinc-800">Jumia brand database</p>
-                  <p className="text-xs text-zinc-500 mt-0.5">
-                    Syncs the full Jumia brand catalog so brand names resolve instantly
-                    when pushing products — no live API call needed at submission time.
-                  </p>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="gap-2 shrink-0"
-                  onClick={handleSyncBrands}
-                  disabled={syncingBrands}
-                >
-                  <RefreshCw className={cn("h-3.5 w-3.5", syncingBrands && "animate-spin")} />
-                  {syncingBrands ? "Syncing…" : "Sync now"}
-                </Button>
+              <div>
+                <p className="text-sm font-semibold text-zinc-800">Jumia brand database</p>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  PandaWorld keeps the full Jumia brand list in sync for instant
+                  resolution at push time. Maintained centrally — no action needed.
+                </p>
               </div>
-              {syncingBrands && (
-                <p className="text-xs text-zinc-400 flex items-center gap-1.5">
-                  <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-                  Fetching all brand pages from Jumia — this may take a minute or two…
-                </p>
-              )}
-              {brandSyncResult && (
-                <p className="text-xs text-emerald-700 flex items-center gap-1.5">
-                  <CheckCircle2 className="h-3 w-3 shrink-0" />
-                  {brandSyncResult.brands.toLocaleString()} brands synced
-                </p>
+
+              {brandStats != null && (
+                <div className="rounded-lg border bg-white px-3 py-2 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs text-zinc-500">Brands available</p>
+                    <p className="text-lg font-bold text-zinc-900">
+                      {brandStats.count.toLocaleString()}
+                      <span className="ml-2 text-xs font-normal text-zinc-400">
+                        {brandStats.count === 0
+                          ? "— catalog being prepared"
+                          : "ready for listings"}
+                      </span>
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-[10px] uppercase tracking-wider text-zinc-400">Last refresh</p>
+                    <p className="text-xs text-zinc-700">
+                      {brandStats.lastSynced
+                        ? new Date(brandStats.lastSynced).toLocaleString("en-GB", {
+                            day:    "numeric",
+                            month:  "short",
+                            hour:   "2-digit",
+                            minute: "2-digit",
+                          })
+                        : "—"}
+                    </p>
+                  </div>
+                </div>
               )}
             </div>
 

@@ -9,7 +9,8 @@
     "lint": "next lint",
     "test": "jest",
     "test:watch": "jest --watch",
-    "snapshot-categories": "node --env-file=.env.local --import=tsx scripts/snapshot-categories.ts"
+    "snapshot-categories": "node --env-file=.env.local --import=tsx scripts/snapshot-categories.ts",
+    "snapshot-brands": "node --env-file=.env.local --import=tsx scripts/snapshot-brands.ts"
   },
   "dependencies": {
     "@clerk/nextjs": "^6.12.0",

@@ -5,21 +5,30 @@ import {
   fetchBrandsPageFromJumia,
   upsertBrands,
 } from "@/lib/jumia/brands";
+import { isAdmin } from "@/lib/auth/is-admin";
 
 // ─── POST /api/admin/jumia/sync-brands ───────────────────────────────────────
 //
-// Fetches the full Jumia brand catalog (paginated) and caches it in the
-// `jumia_brands` Supabase table.
+// DEPRECATED single-shot sync. Kept for backward compat with anything that
+// still POSTs here (and so we can drop it cleanly later). New flows should
+// use the batched /sync-brands/page → /sync-brands/finalize pair from the
+// admin UI — this route blocks for ~30-90s and is risky on Vercel's 60s
+// Hobby-tier function ceiling.
 //
 // Pagination: 0-indexed pages. Stops after 2 consecutive empty pages to handle
 // sparse pagination quirks from the Jumia API.
 // Rate limit: same 260 ms delay as sync-categories (≈ 4 req/sec).
+//
+// Admin-gated via ADMIN_USER_IDS env var.
 
 export async function POST(req: NextRequest) {
   void req; // no body needed
 
   const { userId } = await auth();
   if (!userId) return new NextResponse("Unauthorized", { status: 401 });
+  if (!isAdmin(userId)) {
+    return NextResponse.json({ error: "Admin only" }, { status: 403 });
+  }
 
   // Require a valid Jumia connection
   let accessToken: string;
