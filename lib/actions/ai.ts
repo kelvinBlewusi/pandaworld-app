@@ -1,7 +1,7 @@
 "use server";
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { getLeafCategories, getCategoryAttributes } from "@/lib/jumia/categories";
+import { getListableCategories, getCategoryAttributes } from "@/lib/jumia/categories";
 import { mockCategories } from "@/lib/mock/categories";
 import type { JumiaCategoryRow, JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import {
@@ -513,12 +513,17 @@ export async function analyzeProductImages(
     );
   }
 
-  // Load real categories from Supabase
-  const categories = await getLeafCategories();
+  // Load every category Jumia accepts listings on — listable leaves AND
+  // listable parents. Vendor Center allows publishing into a parent
+  // category when it has its own attributeSet (e.g. "Watches" can be
+  // selected directly even though "Watches > Smartwatches" also exists).
+  // Limiting the AI to leaves only would force every listing one level
+  // deeper than Jumia actually requires.
+  const categories = await getListableCategories();
 
   // If no real categories synced yet, fall back gracefully
   const categoryContext = categories.length > 0
-    ? `Choose from the ${categories.length} Jumia GH leaf categories listed below.`
+    ? `Choose from the ${categories.length} Jumia GH listable categories listed below.`
     : "Use your best knowledge of Jumia Ghana categories.";
 
   // First pass: category detection without attributes (fast)
@@ -836,7 +841,7 @@ export async function aiPassB_rankCategory(
     ? `\n\nSELLER CONTEXT (treat as authoritative for what the images don't show — may bias the category choice):\n"${userContext.trim()}"\n`
     : "";
 
-  const prompt = `You are a Jumia category classification expert. Look at the product images and pick the single best Jumia leaf category for them from the candidates below.
+  const prompt = `You are a Jumia category classification expert. Look at the product images and pick the single best Jumia listable category for them from the candidates below. Candidates can be either leaves or listable parents — both are valid choices.
 
 CANDIDATES:
 ${candidateList}
@@ -991,9 +996,10 @@ export async function analyzeProductDescription(
     );
   }
 
-  const categories = await getLeafCategories();
+  // Same pool as the image path — listable parents too, not just leaves.
+  const categories = await getListableCategories();
   const categoryContext = categories.length > 0
-    ? `Choose from the ${categories.length} Jumia GH leaf categories listed below.`
+    ? `Choose from the ${categories.length} Jumia GH listable categories listed below.`
     : "Use your best knowledge of Jumia Ghana categories.";
 
   const prompt = buildPrompt(categories, [], categoryContext) +
