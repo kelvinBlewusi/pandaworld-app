@@ -33,26 +33,8 @@ function IntegrationsPageInner() {
   const [showConfirm,  setShowConfirm]  = useState(false);
   const [toast,        setToast]        = useState<{ type: "success"|"error"; msg: string } | null>(null);
 
-  // Persistent stats — count + last-synced timestamp for the cached
-  // Jumia catalogues. Fetched on page load so sellers see current sync
-  // health without any sync UI on this page (sync is admin-only and
-  // lives under /admin/categories + /admin/brands).
-  const [categoryStats, setCategoryStats] = useState<{ count: number; lastSynced: string | null } | null>(null);
-  const [brandStats,    setBrandStats]    = useState<{ count: number; lastSynced: string | null } | null>(null);
-
-  const loadCategoryStats = () => {
-    fetch("/api/jumia/sync-categories")
-      .then((r) => r.json())
-      .then((d) => setCategoryStats({ count: d.count ?? 0, lastSynced: d.lastSynced ?? null }))
-      .catch(() => setCategoryStats(null));
-  };
-
-  const loadBrandStats = () => {
-    fetch("/api/jumia/brands/status")
-      .then((r) => r.json())
-      .then((d) => setBrandStats({ count: d.count ?? 0, lastSynced: d.lastSynced ?? null }))
-      .catch(() => setBrandStats(null));
-  };
+  // Catalogue stats (categories + brands) are intentionally not loaded
+  // on this seller-facing page — those numbers live behind /admin/* now.
 
   // ── Load connection status ─────────────────────────────────────────────────
   useEffect(() => {
@@ -61,8 +43,6 @@ function IntegrationsPageInner() {
       .then((d) => setConn(d))
       .catch(() => setConn(null))
       .finally(() => setLoading(false));
-    loadCategoryStats();
-    loadBrandStats();
   }, []);
 
   // ── Handle Jumia OAuth redirect back ──────────────────────────────────────
@@ -258,87 +238,12 @@ function IntegrationsPageInner() {
               </div>
             </div>
 
-            {/* Category status — read-only. The catalog is curated by
-                an admin and refreshed centrally; sellers never trigger
-                syncs. Card shows freshness info for transparency. */}
-            <div className="rounded-xl border bg-zinc-50 p-4 space-y-3">
-              <div>
-                <p className="text-sm font-semibold text-zinc-800">Jumia category catalog</p>
-                <p className="text-xs text-zinc-500 mt-0.5">
-                  Maintained centrally so you don&apos;t have to. New categories appear here
-                  automatically whenever Jumia adds them.
-                </p>
-              </div>
-
-              {categoryStats != null && (
-                <div className="rounded-lg border bg-white px-3 py-2 flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-xs text-zinc-500">Categories available</p>
-                    <p className="text-lg font-bold text-zinc-900">
-                      {categoryStats.count.toLocaleString()}
-                      <span className="ml-2 text-xs font-normal text-zinc-400">
-                        {categoryStats.count === 0
-                          ? "— catalog being prepared"
-                          : "available for listings"}
-                      </span>
-                    </p>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <p className="text-[10px] uppercase tracking-wider text-zinc-400">Last refresh</p>
-                    <p className="text-xs text-zinc-700">
-                      {categoryStats.lastSynced
-                        ? new Date(categoryStats.lastSynced).toLocaleString("en-GB", {
-                            day:   "numeric",
-                            month: "short",
-                            hour:  "2-digit",
-                            minute:"2-digit",
-                          })
-                        : "—"}
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Brand catalog — read-only. Sync is admin-only at /admin/brands. */}
-            <div className="rounded-xl border bg-zinc-50 p-4 space-y-3">
-              <div>
-                <p className="text-sm font-semibold text-zinc-800">Jumia brand database</p>
-                <p className="text-xs text-zinc-500 mt-0.5">
-                  PandaWorld keeps the full Jumia brand list in sync for instant
-                  resolution at push time. Maintained centrally — no action needed.
-                </p>
-              </div>
-
-              {brandStats != null && (
-                <div className="rounded-lg border bg-white px-3 py-2 flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-xs text-zinc-500">Brands available</p>
-                    <p className="text-lg font-bold text-zinc-900">
-                      {brandStats.count.toLocaleString()}
-                      <span className="ml-2 text-xs font-normal text-zinc-400">
-                        {brandStats.count === 0
-                          ? "— catalog being prepared"
-                          : "ready for listings"}
-                      </span>
-                    </p>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <p className="text-[10px] uppercase tracking-wider text-zinc-400">Last refresh</p>
-                    <p className="text-xs text-zinc-700">
-                      {brandStats.lastSynced
-                        ? new Date(brandStats.lastSynced).toLocaleString("en-GB", {
-                            day:    "numeric",
-                            month:  "short",
-                            hour:   "2-digit",
-                            minute: "2-digit",
-                          })
-                        : "—"}
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
+            {/* Catalogue status (categories + brands) is intentionally
+                NOT shown to sellers. Counts + refresh timestamps are
+                admin telemetry — sellers don't need to see them and
+                they don't take any action on this page. The data is
+                still kept in sync centrally; admins see the same
+                numbers under /admin/categories and /admin/brands. */}
 
             {/* Token expiry info */}
             {expiryDate && (
