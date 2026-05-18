@@ -234,13 +234,6 @@ export function SchemaForm({
   for (const a of schema)            consume(a, false);
   for (const a of extraFields ?? []) consume(a, true);
 
-  if (merged.length === 0) {
-    // No attributes for this category and no extras — correct for some
-    // catch-all Jumia categories. Render nothing rather than a confusing
-    // empty-state.
-    return null;
-  }
-
   // Build the current value for each attribute: prefer override (live form
   // state) then fall back to the persisted listing value.
   const getValue = (attrName: string): string => {
@@ -249,6 +242,49 @@ export function SchemaForm({
     }
     return readAttributeValue(listing, attrName);
   };
+
+  if (merged.length === 0) {
+    // No attributes for this category and no extras. Some Jumia categories
+    // are genuinely empty (no category-specific schema), others got here
+    // because a live fetch silently failed. Either way, render a clear
+    // empty-state so the section isn't visually blank — the seller knows
+    // the category is set and what to do next.
+    return (
+      <div className="rounded-md border border-dashed border-zinc-300 bg-zinc-50/50 p-6 text-center space-y-3">
+        <p className="text-sm text-zinc-600">
+          This category has no specific fields from Jumia.
+        </p>
+        <p className="text-xs text-zinc-400">
+          Your universal product info above is enough — submit when ready.
+        </p>
+        {onFillWithAI && (
+          <button
+            type="button"
+            onClick={() => { void onFillWithAI(); }}
+            disabled={fillWithAILoading}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors",
+              fillWithAILoading
+                ? "border-zinc-200 bg-zinc-50 text-zinc-400 cursor-not-allowed"
+                : "border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100",
+            )}
+          >
+            {fillWithAILoading ? (
+              <>
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Retrying…
+              </>
+            ) : (
+              <>
+                <Sparkles className="h-3 w-3" />
+                Try AI fill anyway
+              </>
+            )}
+          </button>
+        )}
+      </div>
+    );
+  }
 
   // Group: required first (so seller knows what blocks publish), then
   // optional. Within each group preserve Jumia's natural ordering.
@@ -270,7 +306,24 @@ export function SchemaForm({
   });
 
   if (visible.length === 0) {
-    return null;   // nothing to render in this slice — caller can skip the section header
+    // Filters stripped every field in this slice. Show a friendly
+    // empty-state for the Product Specification section (which is where
+    // onFillWithAI is wired) so the seller doesn't stare at a blank
+    // panel. The Product Information slice doesn't pass onFillWithAI,
+    // so it still returns null — that's intentional because Product
+    // Information always has its universalInfoFields fallback.
+    if (!onFillWithAI) return null;
+    return (
+      <div className="rounded-md border border-dashed border-zinc-300 bg-zinc-50/50 p-6 text-center space-y-3">
+        <p className="text-sm text-zinc-600">
+          No category-specific fields needed here.
+        </p>
+        <p className="text-xs text-zinc-400">
+          Jumia covers everything for this category in the universal product
+          info above. You&apos;re ready to submit.
+        </p>
+      </div>
+    );
   }
 
   // Required fields lead the order so the seller scans them first, but we
