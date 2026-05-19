@@ -7,6 +7,7 @@ import {
   markNeedsReconnect,
 } from "@/lib/jumia/api";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 
 // ─── POST /api/jumia/push ─────────────────────────────────────────────────────
 //
@@ -56,6 +57,11 @@ interface BodyVariant {
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return new NextResponse("Unauthorized", { status: 401 });
+
+  // Rate limit — writes to Jumia VC. Tight cap because retries here
+  // burn the seller's QC reputation + create duplicate-SKU noise.
+  const blocked = checkRateLimit(`jumia-push:${userId}`, RATE_LIMITS.jumiaPush);
+  if (blocked) return blocked;
 
   let listingId: string;
   let bodyVariants: BodyVariant[] | null = null;

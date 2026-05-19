@@ -6,6 +6,7 @@ import {
   isGeminiImageEnabled,
   type EnhanceMode,
 } from "@/lib/gemini-image";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 
 // Gemini image-gen takes 3-8s per image. 8 images × 3 concurrent = ~24s
 // theoretical wall-clock, but real-world we see 30-60s when one slot is
@@ -46,6 +47,12 @@ export async function POST(req: NextRequest) {
 
   const { userId } = await auth();
   if (!userId) return new NextResponse("Unauthorized", { status: 401 });
+
+  // Rate limit — this is the most expensive route in the app (Gemini
+  // image-gen at ~$0.039 per image × up to 8 images per call). Without
+  // a cap a single seller can burn $30+/hour. Limit is per-user.
+  const blocked = checkRateLimit(`enhance-images:${userId}`, RATE_LIMITS.enhanceImages);
+  if (blocked) return blocked;
 
   let listingId: string;
   let mode: EnhanceMode;
@@ -132,13 +139,31 @@ export async function POST(req: NextRequest) {
     nextVariants[f.originalUrl] = prev;
   }
 
-  await db
+  // Graceful fallback if the image_variants migration hasn't been run
+  // yet. Without the column, the update below would 500 — costing the
+  // seller a successful Gemini call. We try the full update first; on
+  // schema error we retry without image_variants so the seller still
+  // gets their enhanced URLs back, just without the variant cache.
+  const persistResult = await db
     .from("listings")
     .update({
       image_variants: nextVariants,
       updated_at:     new Date().toISOString(),
     })
     .eq("id", listingId);
+
+  if (persistResult.error && /column.+image_variants/i.test(persistResult.error.message)) {
+    console.warn(
+      `[enhance-images] image_variants column missing — run supabase/migrations/2026-05-19_image_variants.sql. ` +
+      `Returning enhanced URLs without caching them for re-use.`,
+    );
+    await db
+      .from("listings")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("id", listingId);
+  } else if (persistResult.error) {
+    console.error(`[enhance-images] persist failed: ${persistResult.error.message}`);
+  }
 
   // ── Return the combined result (cached + fresh) preserving source order ──
   const byOriginal = new Map<string, { enhancedUrl: string; error?: string }>();

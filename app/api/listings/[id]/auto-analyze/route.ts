@@ -18,6 +18,7 @@ import {
 } from "@/lib/jumia/category-search";
 import { searchJumiaProductsByTitle } from "@/lib/jumia/catalog-search";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 
 // ─── POST /api/listings/[id]/auto-analyze ────────────────────────────────────
 //
@@ -47,6 +48,10 @@ export async function POST(
 ) {
   const { userId } = await auth();
   if (!userId) return new NextResponse("Unauthorized", { status: 401 });
+
+  // Rate limit — 3 Gemini calls per analyse (~$0.02). Per-user.
+  const blocked = checkRateLimit(`auto-analyze:${userId}`, RATE_LIMITS.autoAnalyze);
+  if (blocked) return blocked;
 
   // Optional free-text hint from the seller — gets passed to Pass A as
   // "SELLER CONTEXT" so the AI honours things the images don't show

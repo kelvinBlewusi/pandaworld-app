@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { polishImages, isPhotoRoomEnabled } from "@/lib/photoroom";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 
 // ─── POST /api/polish-images ──────────────────────────────────────────────────
 //
@@ -25,6 +26,11 @@ export async function POST(req: NextRequest) {
 
   const { userId } = await auth();
   if (!userId) return new NextResponse("Unauthorized", { status: 401 });
+
+  // Rate limit — PhotoRoom is paid per image (~$0.025-0.05). Less
+  // expensive than Gemini image-gen, so a looser cap.
+  const blocked = checkRateLimit(`polish-images:${userId}`, RATE_LIMITS.polishImages);
+  if (blocked) return blocked;
 
   let listingId: string;
   let background: "white" | "transparent" = "white";

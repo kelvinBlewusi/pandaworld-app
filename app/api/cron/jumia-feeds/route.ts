@@ -10,15 +10,20 @@ import { refreshAccessToken } from "@/lib/jumia/oauth";
 // Checks all pending_approval listings across all users and updates statuses.
 //
 // Security: Vercel sets the Authorization: Bearer <CRON_SECRET> header.
-// Set CRON_SECRET in your Vercel env vars.
+// CRON_SECRET is REQUIRED — fail-secure if missing. The previous check
+// only enforced auth when the env var was set, so a misconfigured
+// deploy (env var empty) would expose this endpoint to the public
+// and let anyone poll every seller's pending listings.
 
 export async function GET(req: NextRequest) {
   const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret) {
-    const auth = req.headers.get("authorization");
-    if (auth !== `Bearer ${cronSecret}`) {
-      return new NextResponse("Unauthorized", { status: 401 });
-    }
+  if (!cronSecret) {
+    console.error("[cron] CRON_SECRET is not set — refusing to run. Configure it in your Vercel env vars.");
+    return new NextResponse("Server not configured", { status: 500 });
+  }
+  const authHeader = req.headers.get("authorization");
+  if (authHeader !== `Bearer ${cronSecret}`) {
+    return new NextResponse("Unauthorized", { status: 401 });
   }
 
   const db = createServerClient();
