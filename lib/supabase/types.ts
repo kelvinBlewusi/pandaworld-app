@@ -37,6 +37,13 @@ export interface ListingRow {
   certifications: string[] | null;
   youtube_id: string | null;
   images: string[];
+  /**
+   * Gemini-enhanced versions of each original image, keyed by the
+   * original URL. Shape: { [originalUrl]: { polish?, rebuild? } }.
+   * Written by /api/enhance-images, read by the EnhanceModal. Originals
+   * stay in `images` so the seller can revert without re-uploading.
+   */
+  image_variants: Record<string, { polish?: string; rebuild?: string }> | null;
   status: ListingStatus;
   selling_price: number | null;
   commission_rate: number | null;
@@ -114,6 +121,7 @@ export type ListingInsert = Omit<
   | "jumia_ref" | "jumia_error" | "jumia_synced_at"
   | "dynamic_attributes" | "field_sources" | "quality_score"
   | "quantity" | "update_feed_ref" | "update_feed_status"
+  | "image_variants"
 > & {
   id?: string;
   created_at?: string;
@@ -127,6 +135,7 @@ export type ListingInsert = Omit<
   quantity?: number;
   update_feed_ref?: string | null;
   update_feed_status?: string | null;
+  image_variants?: Record<string, { polish?: string; rebuild?: string }> | null;
 };
 
 export type VariantInsert = Omit<VariantRow, "id" | "created_at"> & {

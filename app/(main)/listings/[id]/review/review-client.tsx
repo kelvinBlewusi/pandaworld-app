@@ -48,6 +48,7 @@ import { stripHtml } from "@/lib/utils/strip-html";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import { CategoryDrawer } from "@/components/ui/category-drawer";
 import { PublishingLoader } from "@/components/ui/publishing-loader";
+import { EnhanceModal, type EnhanceMode } from "@/components/enhance/EnhanceModal";
 import { MultiSelectDropdown } from "@/components/ui/multi-select";
 import { SchemaForm } from "@/components/jumia/SchemaForm";
 import type { JumiaAttributeDef } from "@/components/jumia/SchemaField";
@@ -1900,31 +1901,27 @@ export function ReviewClient({
     }
   }
 
-  // ── Polish state ──────────────────────────────────────────────────────────
-  const [polishing, setPolishing] = useState(false);
-  const [polishMsg, setPolishMsg] = useState<string | null>(null);
+  // ── Gemini image-enhancement modal state ─────────────────────────────────
+  //
+  // Two-mode AI enhancement via the EnhanceModal. Both modes hit
+  // /api/enhance-images with the seller's listing; the modal shows
+  // before/after per image and the seller picks which version applies.
+  // Final picks are persisted via PATCH /api/listings/[id] with a new
+  // images array, then router.refresh() so the rest of the page sees
+  // the new URLs.
+  const [enhanceMode, setEnhanceMode] = useState<EnhanceMode | null>(null);
 
-  async function handlePolishImages() {
-    setPolishing(true);
-    setPolishMsg(null);
-    try {
-      const res = await fetch("/api/polish-images", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ listingId: listing.id, background: "white" }),
-      });
-      const data = await res.json() as { polished?: string[]; replaced?: number; total?: number; error?: string };
-      if (!res.ok) {
-        setPolishMsg(data.error ?? "Polish failed");
-        return;
-      }
-      setPolishMsg(`Polished ${data.replaced ?? 0} of ${data.total ?? 0} images.`);
-      router.refresh();
-    } catch (e) {
-      setPolishMsg(e instanceof Error ? e.message : "Polish failed");
-    } finally {
-      setPolishing(false);
+  async function handleApplyEnhancedImages(chosenUrls: string[]) {
+    const res = await fetch(`/api/listings/${listing.id}`, {
+      method:  "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ images: chosenUrls }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error((data as { error?: string }).error ?? "Couldn't apply image changes");
     }
+    router.refresh();
   }
 
   // ── Quality score ─────────────────────────────────────────────────────────
@@ -2399,28 +2396,44 @@ export function ReviewClient({
                 />
               )}
 
-              {/* Polish CTA — only when images exist */}
+              {/* AI image-enhancement CTA — Gemini-powered, two tiers.
+                  Polish = preserve product, just clean the background.
+                  Rebuild = re-render as a fresh studio shot. Both open
+                  the EnhanceModal which lets the seller compare and
+                  accept/reject per image before applying. */}
               {(listing.images?.length ?? 0) > 0 && (
-                <div className="flex items-center justify-between gap-3 rounded-md border border-violet-200 bg-violet-50/60 px-3 py-2">
+                <div className="rounded-md border border-violet-200 bg-violet-50/60 px-3 py-2 space-y-2">
                   <div className="flex items-center gap-2 text-xs text-violet-700">
                     <Sparkles className="h-3.5 w-3.5" />
-                    <span className="font-medium">Polish images</span>
-                    <span className="text-violet-500">— remove background, add white BG + soft shadow</span>
+                    <span className="font-medium">Enhance with AI</span>
+                    <span className="text-violet-500">— make rough photos appealing</span>
                   </div>
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={handlePolishImages}
-                    disabled={polishing}
-                    className="h-7 text-xs gap-1.5 bg-violet-500 hover:bg-violet-600 text-white"
-                  >
-                    {polishing
-                      ? <><Loader2 className="h-3 w-3 animate-spin" /> Polishing…</>
-                      : <><Sparkles className="h-3 w-3" /> Polish all</>}
-                  </Button>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setEnhanceMode("polish")}
+                      className="h-7 text-xs gap-1.5 border-violet-300 text-violet-700 hover:bg-violet-100"
+                    >
+                      <Sparkles className="h-3 w-3" />
+                      Polish (cleanup)
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => setEnhanceMode("rebuild")}
+                      className="h-7 text-xs gap-1.5 bg-violet-500 hover:bg-violet-600 text-white"
+                    >
+                      <Sparkles className="h-3 w-3" />
+                      Rebuild as studio shot
+                    </Button>
+                    <p className="text-[10px] text-violet-500/80 self-center">
+                      Polish keeps the product exactly. Rebuild re-renders it on white.
+                    </p>
+                  </div>
                 </div>
               )}
-              {polishMsg && <p className="text-xs text-emerald-600">{polishMsg}</p>}
 
               {/* Name + Category */}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -2759,6 +2772,19 @@ export function ReviewClient({
         onSelect={handleCategoryChange}
         initialPath={categoryPath ?? undefined}
       />
+
+      {/* Gemini image-enhancement modal — opens from the Polish / Rebuild
+          buttons above the image grid. Renders before/after pairs and
+          calls onApply with the seller's per-image picks. */}
+      {enhanceMode && (
+        <EnhanceModal
+          open={true}
+          mode={enhanceMode}
+          listingId={listing.id}
+          onClose={() => setEnhanceMode(null)}
+          onApply={handleApplyEnhancedImages}
+        />
+      )}
     </div>
   );
 }

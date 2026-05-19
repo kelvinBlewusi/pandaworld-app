@@ -63,6 +63,7 @@ const SAMPLE_LISTING: ListingRow = {
   quantity:         10,
   update_feed_ref:    null,
   update_feed_status: null,
+  image_variants:     null,
   created_at: "2025-01-01T00:00:00Z",
   updated_at: "2025-01-01T00:00:00Z",
 };
