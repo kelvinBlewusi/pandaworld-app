@@ -195,7 +195,11 @@ export default function ConnectPage() {
             </p>
             <div className="ml-10">
               <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" asChild>
-                <a href={`https://${selectedCountry.url}`} target="_blank" rel="noopener noreferrer">
+                {/* Generic vendorcenter.jumia.com — Jumia 302-redirects to
+                    the seller's country VC after sign-in, so a single URL
+                    works regardless of which country the seller picked
+                    above. Matches the inline text link directly above. */}
+                <a href="https://vendorcenter.jumia.com" target="_blank" rel="noopener noreferrer">
                   <ExternalLink className="h-3.5 w-3.5" />
                   Open Vendor Center
                 </a>
