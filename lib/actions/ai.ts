@@ -23,6 +23,7 @@ import {
 import {
   buildContentPolicyInstructions,
   isRestrictedBrand,
+  stripBrandFromTitle,
 } from "@/lib/ai/jumia-content-policy";
 
 // ─── Output types ─────────────────────────────────────────────────────────────
@@ -161,14 +162,14 @@ STRICT RULES — violations will cause the submission to be rejected:
 3. NEVER fabricate or guess values. If a field cannot be determined with reasonable confidence, set it to null.
 4. For dynamic_attributes: include ONLY fields you can determine from the product. Omit fields you cannot determine — do NOT guess.
 5. Description MUST be between 80 and 500 characters — Jumia rejects anything under 50. Write 2–3 full sentences.
-6. Title MUST be 15–70 characters. Include the brand, model and 1–2 key specs.
+6. Title MUST be 15–70 characters. Lead with the MODEL or identifier + product type + 1–2 key specs. DO NOT include the brand name in the title — Jumia stores brand separately and rejects titles that repeat it ("Product name contains Brand name [X]"). The brand goes in the brand field, not the title.
 7. Highlights MUST be at least 4 bullet points starting with "•" (the bullet character). Each on its own line.
 ${brandRule}
 9. NEVER fill: model, selling_price, warranty fields, production_country, certifications, GTIN, SKU. The seller fills those manually.${attributeSection}
 
 Return ONLY valid JSON. No markdown fences, no explanation, no trailing text:
 {
-  "title": "Full product name including brand, model and 1-2 key specs (15-70 chars)",
+  "title": "Model + product type + key specs (15-70 chars). NO BRAND NAME in the title — it goes in the brand field. Jumia rejects titles that repeat the brand.",
   "description": "2-3 sentences for a Jumia listing (min 80 chars)",
   "highlights": "• bullet1\\n• bullet2\\n• bullet3\\n• bullet4 (min 4 bullets, start each with •)",
   "brand": "Brand name ONLY if logo is clearly visible AND confidence > 0.9, else null",
@@ -535,8 +536,22 @@ function buildCoreResult(
     };
   });
 
+  // Post-AI title scrub. Even after the policy prompt and the rejection-
+  // patterns block, Gemini sometimes drops the brand back into the title
+  // — especially when the brand is short (Orium, Bose, MAC) and reads
+  // like part of a model code. Jumia's QC will then reject the listing
+  // with "Product name contains Brand name [X]". Strip the brand from
+  // the title here as a non-negotiable safety net.
+  const rawTitle = String(parsed.title ?? "");
+  const cleanedTitle = stripBrandFromTitle(rawTitle, brandValue);
+  if (cleanedTitle !== rawTitle.trim()) {
+    console.info(
+      `[AI Pass A] stripped brand "${brandValue}" from title — was "${rawTitle.trim()}", now "${cleanedTitle}".`,
+    );
+  }
+
   return {
-    title:              String(parsed.title       ?? ""),
+    title:              cleanedTitle || rawTitle.trim() || "Unknown product",
     description:        String(parsed.description ?? ""),
     highlights:         String(parsed.highlights  ?? ""),
     brand:              brandValue,
@@ -804,7 +819,7 @@ downstream category picker depends on these two fields to disambiguate
 visually-similar products that live in very different parts of the catalogue.
 
 Rules:
-- title: Concise product name (e.g. "Sony WH-1000XM5 Wireless Noise-Cancelling Headphones"). 5-12 words ideal but length is flexible. NO category names like "headphones for sale".
+- title: Concise product name (model + product type + key specs, e.g. "WH-1000XM5 Wireless Noise-Cancelling Headphones" — note the BRAND "Sony" is OMITTED; brand goes in the brand field, NOT the title; Jumia rejects "Product name contains Brand name"). 5-12 words ideal but length is flexible. NO category names like "headphones for sale".
 - brand: ONLY fill if a brand logo or wordmark is clearly visible AND you are confident. Otherwise null.
 - keywords: 5-10 single-word lower-case keywords (no quotes, no underscores). Think of what a buyer would search for.
 - summary: One sentence describing what the product is and its key visible features.
@@ -903,9 +918,26 @@ Return ONLY valid JSON. No markdown, no commentary:
   const environment: ProductDescription["environment"] =
     rawEnv && VALID_ENVIRONMENTS.has(rawEnv as Environment) ? (rawEnv as Environment) : null;
 
+  // Pass-A title scrub. Same logic as buildCoreResult — strip the brand
+  // out of the title before persisting, even if the model slipped it in
+  // despite the policy block. The Pass-A brand is what the model
+  // claimed, not necessarily the field that ends up on the listing —
+  // we strip whichever brand it returned so we cover both the "AI
+  // proposed Samsung" case (brand survives later) and the "AI proposed
+  // Samsung but it gets downgraded" case (brand becomes Generic but
+  // the title still had Samsung).
+  const passAFinalBrand   = cleanOrNull(strOrNull(parsed.brand));
+  const passARawTitle     = clean(String(parsed.title ?? "").trim());
+  const passACleanedTitle = stripBrandFromTitle(passARawTitle, passAFinalBrand);
+  if (passACleanedTitle !== passARawTitle && passAFinalBrand) {
+    console.info(
+      `[Pass A] stripped brand "${passAFinalBrand}" from title — was "${passARawTitle}", now "${passACleanedTitle}".`,
+    );
+  }
+
   return {
-    title:             clean(String(parsed.title ?? "").trim()) || "Unknown product",
-    brand:             cleanOrNull(strOrNull(parsed.brand)),
+    title:             passACleanedTitle || passARawTitle || "Unknown product",
+    brand:             passAFinalBrand,
     keywords:          keywords.slice(0, 10),
     summary:           clean(String(parsed.summary ?? "").trim()),
     description:       clean(String(parsed.description ?? "").trim()),

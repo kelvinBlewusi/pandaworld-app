@@ -66,12 +66,77 @@ export function isRestrictedBrand(brand: string | null | undefined): boolean {
   return JUMIA_RESTRICTED_BRANDS.has(brand.toLowerCase().trim());
 }
 
+// ─── Brand-in-title safety net ───────────────────────────────────────────────
+//
+// Jumia rejects any listing whose title contains the brand name with a
+// "Product name contains Brand name [X]" error. Even with the prompt
+// telling Gemini to omit the brand, the model occasionally slips up —
+// especially when the brand is short (Orium, Bose, MAC) and reads as
+// part of a model number. This is the post-AI safety net: take the
+// brand the AI confidently picked, strip it from the title, normalise
+// whitespace, return.
+//
+// Case-insensitive whole-word matching. Won't touch the brand inside a
+// model code like "ORIUM-1003" (no word boundary between "ORIUM" and
+// "-1003"), but WILL strip "ORIUM" / "Orium" when it stands alone.
+// "Generic" is treated as a non-brand and never stripped (otherwise
+// every generic-brand listing would lose the word "Generic" from
+// titles like "Generic Rice Cooker").
+
+const TITLE_SEPARATOR_REGEX = /\s{2,}/g;
+
+/**
+ * Remove the brand name from the title if it appears as a standalone
+ * word. Safe to call with any combination of inputs.
+ */
+export function stripBrandFromTitle(
+  title: string | null | undefined,
+  brand: string | null | undefined,
+): string {
+  if (!title) return "";
+  if (!brand) return title.trim();
+  const cleanBrand = brand.trim();
+  if (!cleanBrand || cleanBrand.toLowerCase() === "generic") return title.trim();
+
+  // Escape regex meta-chars in the brand so brands like "Tag Heuer"
+  // or "Tom Ford" (with spaces) work, and "L'Oréal" (with apostrophes)
+  // doesn't blow up the regex.
+  const escaped = cleanBrand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const brandRegex = new RegExp(`\\b${escaped}\\b`, "gi");
+
+  return title
+    .replace(brandRegex, "")
+    .replace(/^[\s\-,–—:|]+/, "")          // strip leading punctuation left behind
+    .replace(/[\s\-,–—:|]+$/, "")          // strip trailing punctuation
+    .replace(TITLE_SEPARATOR_REGEX, " ")    // collapse multi-space
+    .trim();
+}
+
+/**
+ * Returns true when the title contains the brand as a standalone word.
+ * Cheap predicate used to log telemetry when Gemini slipped up despite
+ * the policy block.
+ */
+export function titleContainsBrand(
+  title: string | null | undefined,
+  brand: string | null | undefined,
+): boolean {
+  if (!title || !brand) return false;
+  if (brand.trim().toLowerCase() === "generic") return false;
+  const escaped = brand.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}\\b`, "i").test(title);
+}
+
 // ─── Rejection patterns ──────────────────────────────────────────────────────
 
 export const JUMIA_REJECTION_PATTERNS: ReadonlyArray<{
   reason: string;
   fix:    string;
 }> = [
+  {
+    reason: "Brand name repeated in the title — Jumia rejects \"Product name contains Brand name [X]\" because brand is stored as its own attribute and Jumia renders it separately on the listing page.",
+    fix:    "REMOVE the brand from the title. Lead with the MODEL or product identifier, then the product type. The brand attribute is filled separately and Jumia displays it above the title automatically. E.g. NOT \"Samsung Galaxy A15 Smartphone …\" — instead \"Galaxy A15 Smartphone …\".",
+  },
   {
     reason: "Wrong category — listing filed under a leaf that doesn't match the product",
     fix:    "Pick the most specific LISTABLE category. A phone case lives under Mobile Accessories > Phone Cases, NOT under Mobile Phones.",
@@ -177,27 +242,48 @@ satisfy, and the AI must not write claims that contradict them):
   return `JUMIA CONTENT POLICY — READ EVERY RULE BEFORE GENERATING ANY FIELD.
 
 TITLE / NAME RULES (15-200 characters, Title Case, ASCII only):
-  Required pattern: <Brand> <Model or Identifier> <Product Type> - <Key Spec 1>, <Key Spec 2>[, <Variant>]
+  Required pattern: <Model or Identifier> <Product Type> - <Key Spec 1>, <Key Spec 2>[, <Variant>]
 
-  Good examples:
-    "Samsung Galaxy A15 Smartphone - 6GB RAM, 128GB Storage, Blue"
-    "Nike Air Max 270 Sneakers - Men's Running Shoes, Size 42, Black/White"
-    "Tefal Express Steam Iron - 2400W, Ceramic Soleplate, Anti-Calc"
+  CRITICAL — DO NOT INCLUDE THE BRAND NAME IN THE TITLE.
+  Jumia stores brand as a separate attribute and renders it above the
+  title on the listing page. Repeating the brand in the title triggers
+  the rejection: "Product name contains Brand name [X]" — this is the
+  most common QC failure for new sellers. The brand belongs in the
+  brand field, NOT in the title.
+
+  Good examples (brand omitted from title):
+    "Galaxy A15 Smartphone - 6GB RAM, 128GB Storage, Blue"
+       (brand "Samsung" goes in the brand field, not the title)
+    "Air Max 270 Sneakers - Men's Running Shoes, Size 42, Black/White"
+       (brand "Nike" goes in the brand field)
+    "Express Steam Iron - 2400W, Ceramic Soleplate, Anti-Calc"
+       (brand "Tefal" goes in the brand field)
+    "OR-1003 Electric Rice Cooker - 700-900W, 24H Smart Timer"
+       (brand "Orium" goes in the brand field)
 
   Bad examples (never write anything like these):
+    "Samsung Galaxy A15 Smartphone - 6GB RAM, 128GB Storage"
+       — brand "Samsung" repeated in the title; Jumia rejects this.
+    "ORIUM OR-1003 Electric Rice Cooker - 700-900W"
+       — brand "ORIUM" in the title; Jumia rejects this.
     "BRAND NEW Samsung Smartphone!!! 🔥 Best Deal Today"
-       — caps abuse, banned words, emoji, promo language
+       — caps abuse, banned words, emoji, promo language.
     "Original Imported UK Used Sneakers Size 42"
-       — three condition descriptors from the banned-words list
+       — three condition descriptors from the banned-words list.
     "Indestructible Iron Best Quality"
-       — banned quality claims, no brand or model
+       — banned quality claims, no model.
 
   Hard rules:
+    - NEVER include the brand name in the title — see above. This is
+      THE most enforced Jumia QC rule.
+    - If the product has no clear model number, lead with the product
+      type itself: e.g. "Electric Rice Cooker - 1.8L, Non-Stick Inner Pot".
     - ASCII characters only; no emoji or decorative symbols.
     - No ALL-CAPS WORDS (initialisms like USB, OLED, 4K are fine).
     - No price, discount, shipping promise, free-anything, competitor name.
-    - No restricted brand name unless the seller can prove authorisation
-      (the AI defaults restricted brands to null — see brand rules below).
+    - No restricted brand name (even if you were going to put it in the
+      brand field — restricted brands need seller authorisation and the
+      AI defaults them to null; see brand rules below).
 
 DESCRIPTION RULES (80-500 characters, 2-3 full sentences, plain prose):
   - Lead with what the product is and its headline feature.

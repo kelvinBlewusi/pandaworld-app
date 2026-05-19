@@ -16,6 +16,7 @@ import { createServerClient } from "@/lib/supabase/server";
 import { refreshAccessToken, JUMIA_API_BASE } from "@/lib/jumia/oauth";
 import { mockCategories } from "@/lib/mock/categories";
 import { findBrandExact } from "@/lib/jumia/brands";
+import { stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
 
 // ─── Country → ISO 4217 currency code ────────────────────────────────────────
@@ -366,6 +367,26 @@ function buildBaseProduct(listing: ListingRow, brand: { code: number; name: stri
     .filter(Boolean)
     .map((url, i) => ({ url, primary: i === 0 }));
 
+  // Push-time brand-in-title safety net.
+  //
+  // Jumia rejects any listing whose title contains the resolved brand
+  // name ("Product name contains Brand name [X]"). This catches the
+  // edge case where the title was OK against whatever brand the AI
+  // returned, but the seller manually picked a different brand later
+  // (e.g. AI saw no logo → brand "Generic"; seller picked "Orium"
+  // because they know what it is; but title was already "ORIUM
+  // OR-1003 Electric Rice Cooker"). Strip against the CURRENT push
+  // brand here so the push always satisfies the rule, regardless of
+  // when the brand was set.
+  const rawTitle      = listing.title ?? "";
+  const cleanedTitle  = stripBrandFromTitle(rawTitle, brand.name);
+  if (cleanedTitle !== rawTitle.trim() && brand.name.toLowerCase() !== "generic") {
+    console.info(
+      `[jumia push] stripped brand "${brand.name}" from title — was "${rawTitle.trim()}", now "${cleanedTitle}".`,
+    );
+  }
+  const safeTitle = cleanedTitle || rawTitle.trim();
+
   // Jumia requires `variation` to be non-empty even for products without
   // variants. Their error: "The variation 'variation' value has to be
   // filled in order to create a Product."
@@ -397,7 +418,7 @@ function buildBaseProduct(listing: ListingRow, brand: { code: number; name: stri
   // We send BOTH so we're safe regardless of which the live endpoint
   // actually validates. Unknown fields are ignored by Jumia.
   return {
-    name:        t(listing.title ?? ""),
+    name:        t(safeTitle),
     description: t(listing.description ?? ""),
     parentSku:   listing.sku,
     sellerSku:   listing.sku,
