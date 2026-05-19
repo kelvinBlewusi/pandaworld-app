@@ -1,7 +1,11 @@
 "use server";
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { getListableCategories, getCategoryAttributes } from "@/lib/jumia/categories";
+import {
+  getListableCategories,
+  getCategoryAttributes,
+  getCategoryByCode,
+} from "@/lib/jumia/categories";
 import { getAllBrands } from "@/lib/jumia/brands";
 import type { JumiaBrand } from "@/lib/jumia/brands";
 import { mockCategories } from "@/lib/mock/categories";
@@ -16,6 +20,10 @@ import {
   stripRestrictedWords,
   findRestrictedWords,
 } from "@/lib/ai/restricted-words";
+import {
+  buildContentPolicyInstructions,
+  isRestrictedBrand,
+} from "@/lib/ai/jumia-content-policy";
 
 // ─── Output types ─────────────────────────────────────────────────────────────
 
@@ -79,6 +87,14 @@ function buildPrompt(
   attributes: JumiaCategoryAttribute[],
   categoryContext: string,
   brands: JumiaBrand[] = [],
+  // Optional category path so the policy block can specialise its image
+  // rules (Fashion allows model / lifestyle shots; everything else demands
+  // white background). Passed on the SECOND pass when we know the
+  // category. First pass leaves it undefined — that's fine, the policy
+  // gracefully omits the Fashion-specific note.
+  categoryPath?: string | null,
+  // Image rules don't apply to the description-only entry point.
+  includeImageRules: boolean = true,
 ): string {
   const categoryList = categories
     .map((c) => `${c.code}|${c.path}`)
@@ -118,8 +134,21 @@ function buildPrompt(
     ? `8. Brand: pick the EXACT name from the JUMIA BRAND LIST above (copy/paste, character-perfect). Only fill this if a brand logo or wordmark is clearly visible AND confidence ≥ 0.9 AND the brand appears in the list. If none of those conditions hold, set brand to null. A brand outside the list will be rejected by Jumia.`
     : `8. Brand: leave NULL unless you can clearly see a brand logo or wordmark in the image AND your confidence is above 0.9. A guessed brand causes legal/commercial issues.`;
 
+  // Inject the full Jumia content policy at the top of the prompt so the
+  // AI internalises QC rules BEFORE it sees the category list. The
+  // policy carries the verbatim banned-words instruction (so we don't
+  // need to append restrictedInstr separately on this path) plus the
+  // title/description/highlights/image/brand/category rules and the top
+  // 10 rejection patterns.
+  const contentPolicy = buildContentPolicyInstructions({
+    categoryPath:      categoryPath ?? null,
+    includeImageRules: includeImageRules,
+  });
+
   return `You are an expert Jumia Ghana product listing assistant.
 Analyse the product image(s) and/or description, then return a SINGLE valid JSON object.
+
+${contentPolicy}
 
 ${categoryContext}
 
@@ -414,7 +443,18 @@ function buildCoreResult(
   // they need to chase.
   const brandConfidence = Number(parsed.brand_confidence ?? 0);
   const aiBrand         = strOrNull(parsed.brand);
-  const brandValue      = brandConfidence >= BRAND_CONFIDENCE_THRESHOLD && aiBrand
+
+  // Anti-counterfeit gate: even when the model claims it spotted a
+  // luxury / restricted brand logo with high confidence, Jumia will
+  // reject the listing unless the seller holds documented brand
+  // authorisation. Default these to "Generic" so the seller is forced
+  // to acknowledge the requirement (the UI surfaces a banner upstream
+  // when brand is Generic + the AI saw a restricted name).
+  const aiBrandRestricted = isRestrictedBrand(aiBrand);
+  if (aiBrandRestricted) {
+    console.info(`[AI Pass A] AI claimed restricted brand "${aiBrand}" — overriding to Generic for QC safety.`);
+  }
+  const brandValue = brandConfidence >= BRAND_CONFIDENCE_THRESHOLD && aiBrand && !aiBrandRestricted
     ? aiBrand
     : "Generic";
 
@@ -439,11 +479,17 @@ function buildCoreResult(
   //   - Above threshold + AI detected a real brand → high (image source)
   //   - Below threshold OR no AI brand → "Generic" fallback (inferred, low)
   field_sources["brand"] = "ai";
-  if (brandConfidence >= BRAND_CONFIDENCE_THRESHOLD && aiBrand) {
+  if (brandConfidence >= BRAND_CONFIDENCE_THRESHOLD && aiBrand && !aiBrandRestricted) {
     field_confidence["brand"] = {
       confidence: brandConfidence,
       source:     "image",
       reasoning:  "Logo visible in image",
+    };
+  } else if (aiBrandRestricted && aiBrand) {
+    field_confidence["brand"] = {
+      confidence: 0.3,
+      source:     "inferred",
+      reasoning:  `Detected restricted brand "${aiBrand}". Jumia requires brand-authorisation paperwork for this name — defaulted to Generic. Update only if you can prove authorisation.`,
     };
   } else {
     field_confidence["brand"] = {
@@ -585,7 +631,9 @@ export async function analyzeProductImages(
     const attrs = await getCategoryAttributes(cat.code);
     if (attrs.length > 0) {
       try {
-        const secondPrompt = buildPrompt(categories, attrs, categoryContext, brands);
+        // Pass the category path on the second pass so the policy block
+        // can specialise its image rules (Fashion vs everything else).
+        const secondPrompt = buildPrompt(categories, attrs, categoryContext, brands, cat.path);
         const raw2 = await callGemini(secondPrompt, imageUrls);
         const parsed2 = parseAIResponse(raw2);
         dynamicAttributes = (parsed2.dynamic_attributes ?? {}) as Record<string, string>;
@@ -726,12 +774,24 @@ export async function aiPassA_describeProduct(
   }
   if (!process.env.GOOGLE_API_KEY) throw new Error("GOOGLE_API_KEY is not set.");
 
-  const restrictedInstr = buildRestrictedWordsInstruction();
+  // The full Jumia content policy — includes the verbatim banned-words
+  // instruction, so we don't need restrictedInstr separately here.
+  // We don't yet know the category (Pass A IS the describe-pass), so we
+  // leave categoryPath null and let the policy use the default white-
+  // background rules. Fashion-specific tone gets applied automatically
+  // on Pass C once the category is picked.
+  const policyBlock = buildContentPolicyInstructions({
+    categoryPath:      null,
+    includeImageRules: true,
+  });
+
   const ctxSection = userContext && userContext.trim()
     ? `\n\nSELLER CONTEXT (treat this as authoritative for anything the images don't show):\n"${userContext.trim()}"\n`
     : "";
 
   const prompt = `You are a product-listing assistant for Jumia. Look at the product images and return a JSON object that fills every visible product attribute.
+
+${policyBlock}
 
 CRITICAL — ENVIRONMENT & USE CASE:
 Pay special attention to ENVIRONMENT and PRIMARY USE CASE. A pump-and-tank
@@ -769,7 +829,7 @@ Rules:
       * Unsure
     Each variation needs: label (what the buyer sees, e.g. "Pack of 6") and sku_suffix (short uppercase alphanumeric, e.g. "P6", "HOE", "3SET" — used as a unique tag appended to the parent SKU).
 
-${restrictedInstr}${ctxSection}
+${ctxSection}
 
 Return ONLY valid JSON. No markdown, no commentary:
 {
@@ -941,6 +1001,8 @@ Rules:
 3. Confidence is 0..1. Be honest — use 0.5 or below if you're unsure.
 4. You MUST choose from the candidates above. Do not invent new codes.
 5. When two candidates look visually similar (e.g. carpet cleaner vs farm sprayer, yoga mat vs camping mat, kitchen knife vs hunting knife), pick the one whose path matches the PRIMARY USE CASE and ENVIRONMENT above. Visual similarity alone is not enough — a handheld pump-and-tank used on a farm belongs under Agriculture, not Home Cleaning.
+6. Jumia QC ALWAYS rejects wrong-category listings. Phone cases must NOT be filed under Mobile Phones; they belong in Mobile Accessories > Phone Cases. Headphone cables go under Audio Accessories, not Headphones. Pick the leaf or listable parent whose path matches the product's primary identity, not its parent category.
+7. If the visible brand is a luxury / restricted brand (Rolex, Gucci, Bose, MAC, Ray-Ban, Yeezy, Chanel etc.) the seller will likely fail brand-permission QC regardless of the category you pick — but pick the category accurately anyway; the brand-permission flag is handled separately downstream.
 ${ctxSection}
 Return ONLY valid JSON, no markdown:
 {
@@ -1024,16 +1086,29 @@ export async function extractAttributesForCategory(
     ? `\n\nSELLER CONTEXT (treat as authoritative — these are things the seller knows that the images don't show, e.g. pack size, variant, exact spec):\n"${userContext.trim()}"\n`
     : "";
 
+  // Look up the category path so the policy block can specialise its
+  // image rules (Fashion vs everything else). One extra DB hit per Pass
+  // C — cheap, and the row is almost certainly already in Supabase's
+  // PostgREST cache from earlier in the request.
+  const categoryMeta = await getCategoryByCode(categoryCode);
+  const policyBlock = buildContentPolicyInstructions({
+    categoryPath:      categoryMeta?.path ?? null,
+    includeImageRules: true,
+  });
+
   const prompt = `You are a Jumia product-listing assistant. Look at the product images and fill ONLY the attributes listed below for the category. Return a SINGLE JSON object.
+
+${policyBlock}
 
 CATEGORY ATTRIBUTES TO FILL (use the exact attribute names as keys):
 ${attrLines}
 
 RULES:
 1. Use the exact attribute name as the JSON key.
-2. For attributes with allowed values, pick exactly one value from the list (or null if unsure).
+2. For attributes with allowed values, pick exactly one value from the list (or null if unsure). NEVER invent a value outside the allowed list.
 3. Skip / set null for fields you can't determine from the images. NEVER guess price, model, brand (unless logo clearly visible), or warranty terms.
 4. Return only attributes you could fill — omit ones you're not sure about.
+5. Any attribute value you produce MUST follow the JUMIA CONTENT POLICY above — strip restricted words, never write banned terms ("original", "imported", "brand new", etc.), never invent specs the images don't show.
 ${ctxSection}
 Return ONLY valid JSON, no markdown:
 {
@@ -1096,7 +1171,9 @@ export async function analyzeProductDescription(
     ? `Choose from the ${categories.length} Jumia GH listable categories listed below.`
     : "Use your best knowledge of Jumia Ghana categories.";
 
-  const prompt = buildPrompt(categories, [], categoryContext, brands) +
+  // Description-only path — no images, so skip the image-rules section
+  // of the policy block (last arg false).
+  const prompt = buildPrompt(categories, [], categoryContext, brands, null, false) +
     `\n\nProduct description to analyse:\n"${description}"`;
 
   let parsed: Record<string, unknown>;
@@ -1117,7 +1194,7 @@ export async function analyzeProductDescription(
     const attrs = await getCategoryAttributes(cat.code);
     if (attrs.length > 0) {
       try {
-        const secondPrompt = buildPrompt(categories, attrs, categoryContext, brands) +
+        const secondPrompt = buildPrompt(categories, attrs, categoryContext, brands, cat.path, false) +
           `\n\nProduct description: "${description}"`;
         const raw2 = await callGemini(secondPrompt, []);
         const parsed2 = parseAIResponse(raw2);
