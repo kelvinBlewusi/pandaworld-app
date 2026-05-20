@@ -17,6 +17,7 @@ import { refreshAccessToken, JUMIA_API_BASE } from "@/lib/jumia/oauth";
 import { mockCategories } from "@/lib/mock/categories";
 import { findBrandExact } from "@/lib/jumia/brands";
 import { stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
+import { encrypt, decrypt } from "@/lib/security/token-crypto";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
 
 // ─── Country → ISO 4217 currency code ────────────────────────────────────────
@@ -54,11 +55,17 @@ export async function getValidJumiaCredentials(userId: string): Promise<{
 
   // "credential_auth" is the sentinel stored when credentials were saved but
   // the seller hasn't yet completed the OAuth authorization code flow.
+  // It's a literal string, not an encrypted token, so we check before decrypt.
   if (conn.access_token === "credential_auth") {
     throw new Error("JUMIA_OAUTH_REQUIRED");
   }
 
-  let accessToken = conn.access_token as string;
+  // Decrypt — handles both encrypted ("enc:v1:...") and legacy plaintext
+  // rows transparently. Plaintext rows get re-encrypted on the next
+  // refresh (the write paths below + the OAuth callback both encrypt),
+  // so the table heals itself over time without a one-shot migration.
+  let accessToken = decrypt(conn.access_token as string);
+  const refreshTokenPlain = conn.refresh_token ? decrypt(conn.refresh_token as string) : null;
 
   // Auto-refresh within 5 minutes of expiry. If the refresh itself fails
   // (typically because the seller deleted the OAuth application from their
@@ -67,22 +74,22 @@ export async function getValidJumiaCredentials(userId: string): Promise<{
   if (conn.token_expires_at) {
     const expiresAt = new Date(conn.token_expires_at as string).getTime();
     if (Date.now() >= expiresAt - 5 * 60 * 1000) {
-      if (!conn.refresh_token) {
+      if (!refreshTokenPlain) {
         await markNeedsReconnect(db, userId);
         throw new Error("JUMIA_RECONNECT_REQUIRED");
       }
       const appId     = (conn.app_id     ?? undefined) as string | undefined;
-      const appSecret = (conn.app_secret ?? undefined) as string | undefined;
+      const appSecret = conn.app_secret ? decrypt(conn.app_secret as string) : undefined;
       try {
         const fresh = await refreshAccessToken(
-          conn.refresh_token as string,
+          refreshTokenPlain,
           appId,
           appSecret,
         );
         const newExpiry = new Date(Date.now() + fresh.expires_in * 1000).toISOString();
         await db.from("jumia_connections").update({
-          access_token:     fresh.access_token,
-          refresh_token:    fresh.refresh_token ?? conn.refresh_token,
+          access_token:     encrypt(fresh.access_token),
+          refresh_token:    encrypt(fresh.refresh_token ?? refreshTokenPlain),
           token_expires_at: newExpiry,
           status:           "active",            // recover from past needs_reconnect
           updated_at:       new Date().toISOString(),

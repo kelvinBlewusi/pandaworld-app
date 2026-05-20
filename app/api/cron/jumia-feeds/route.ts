@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
+import { encrypt, decrypt } from "@/lib/security/token-crypto";
 
 export const dynamic = "force-dynamic";
 import { getFeedStatus, getFeedProductDetails } from "@/lib/jumia/api";
@@ -64,16 +65,19 @@ export async function GET(req: NextRequest) {
 
       if (!conn) continue;
 
-      accessToken = conn.access_token as string;
+      // Decrypt — handles both encrypted (enc:v1:…) rows and the
+      // legacy plaintext format transparently.
+      accessToken = decrypt(conn.access_token as string);
+      const refreshTokenPlain = conn.refresh_token ? decrypt(conn.refresh_token as string) : null;
 
       if (conn.token_expires_at) {
         const expiresAt = new Date(conn.token_expires_at as string).getTime();
-        if (Date.now() >= expiresAt - 5 * 60 * 1000 && conn.refresh_token) {
-          const fresh = await refreshAccessToken(conn.refresh_token as string);
+        if (Date.now() >= expiresAt - 5 * 60 * 1000 && refreshTokenPlain) {
+          const fresh = await refreshAccessToken(refreshTokenPlain);
           accessToken = fresh.access_token;
           await db.from("jumia_connections").update({
-            access_token:     fresh.access_token,
-            refresh_token:    fresh.refresh_token ?? conn.refresh_token,
+            access_token:     encrypt(fresh.access_token),
+            refresh_token:    encrypt(fresh.refresh_token ?? refreshTokenPlain),
             token_expires_at: new Date(Date.now() + fresh.expires_in * 1000).toISOString(),
             updated_at:       new Date().toISOString(),
           }).eq("user_id", userId);

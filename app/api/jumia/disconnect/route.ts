@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { revokeToken } from "@/lib/jumia/oauth";
+import { decrypt } from "@/lib/security/token-crypto";
 
 // ─── POST /api/jumia/disconnect ───────────────────────────────────────────────
 // Revokes the Jumia access token, then DELETES the connection row so that:
@@ -21,12 +22,23 @@ export async function POST() {
     .eq("user_id", userId)
     .maybeSingle();
 
-  // Best-effort token revocation (don't fail if Jumia is unreachable)
+  // Best-effort token revocation (don't fail if Jumia is unreachable).
+  // Decrypt before calling revokeToken — Jumia's revoke endpoint takes
+  // the raw token, not our enc:v1: wrapper. decrypt() returns plaintext
+  // strings unchanged so legacy rows still work.
   if (conn?.access_token && conn.access_token !== "credential_auth") {
-    await revokeToken(conn.access_token);
+    try {
+      await revokeToken(decrypt(conn.access_token as string));
+    } catch (e) {
+      console.warn(`[Jumia disconnect] access-token revoke failed: ${(e as Error).message}`);
+    }
   }
   if (conn?.refresh_token) {
-    await revokeToken(conn.refresh_token);
+    try {
+      await revokeToken(decrypt(conn.refresh_token as string));
+    } catch (e) {
+      console.warn(`[Jumia disconnect] refresh-token revoke failed: ${(e as Error).message}`);
+    }
   }
 
   // Delete the row entirely — this clears all shop data and

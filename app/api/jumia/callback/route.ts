@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { exchangeCodeForTokens, fetchJumiaSellerProfile } from "@/lib/jumia/oauth";
+import { encrypt, decrypt } from "@/lib/security/token-crypto";
 
 // ─── GET /api/jumia/callback ──────────────────────────────────────────────────
 // Jumia redirects here after the user authorises PandaWorld.
@@ -76,7 +77,9 @@ export async function GET(req: NextRequest) {
     tokens = await exchangeCodeForTokens(
       code,
       conn.app_id,
-      conn.app_secret,
+      // Decrypt — credentials saved via /save-credentials are now stored
+      // encrypted; pre-encryption rows still pass through unchanged.
+      decrypt(conn.app_secret as string),
       redirectUri,
     );
   } catch (e) {
@@ -101,8 +104,12 @@ export async function GET(req: NextRequest) {
   const { error: dbError } = await db.from("jumia_connections").upsert(
     {
       user_id:          userId,
-      access_token:     tokens.access_token,
-      refresh_token:    tokens.refresh_token ?? null,
+      // Encrypted at rest — see lib/security/token-crypto.ts. A
+      // breach of jumia_connections no longer hands an attacker the
+      // seller's vendor-center access. Encryption is idempotent so
+      // re-running this code path is safe.
+      access_token:     encrypt(tokens.access_token),
+      refresh_token:    tokens.refresh_token ? encrypt(tokens.refresh_token) : null,
       token_expires_at: tokenExpiresAt,
       seller_id:        profile.seller_id,
       seller_name:      profile.seller_name,

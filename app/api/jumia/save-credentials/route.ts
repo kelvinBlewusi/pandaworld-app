@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
+import { encrypt } from "@/lib/security/token-crypto";
 
 // ─── POST /api/jumia/save-credentials ─────────────────────────────────────────
 // Saves per-user Jumia app credentials (credential-based auth, not OAuth).
@@ -21,13 +22,18 @@ export async function POST(req: NextRequest) {
   const db  = createServerClient();
   const now = new Date().toISOString();
 
+  // Encrypt the app_secret at rest. Same OAuth-power as the access
+  // token — a leak gives an attacker the ability to mint new tokens
+  // for this seller indefinitely. See lib/security/token-crypto.ts.
+  const encryptedSecret = encrypt(secretKey);
+
   // Try full upsert with new columns (requires add_onboarding.sql migration)
   const { error: fullError } = await db.from("jumia_connections").upsert(
     {
       user_id:      userId,
       access_token: "credential_auth",   // sentinel — real auth via app_id/app_secret
       app_id:       appId,
-      app_secret:   secretKey,
+      app_secret:   encryptedSecret,
       store_name:   storeName || "Jumia Store",
       country:      country ?? "GH",
       status:       "active",
@@ -54,6 +60,10 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // (note: this minimal fallback skips app_secret because the
+  // installation hasn't run the add_onboarding.sql migration yet.
+  // It's a degraded path used only on fresh deploys; the seller will
+  // need to re-save credentials after the migration runs.)
   const { error: minError } = await db.from("jumia_connections").upsert(
     {
       user_id:      userId,

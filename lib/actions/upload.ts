@@ -2,12 +2,65 @@
 
 import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
+import { fileTypeFromBuffer } from "file-type";
 
 const BUCKET = "product-images";
+
+// ─── Server-side upload guards ───────────────────────────────────────────────
+//
+// We never trust the client-supplied `file.type` header — a malicious
+// caller can stamp "image/jpeg" on a .exe and we'd happily host it on
+// our public bucket. Instead we read the magic bytes via file-type and
+// validate against an allow-list, with a server-side size cap on top.
+//
+// Numbers chosen so they don't bite real sellers:
+//   - 5 MB matches the largest legitimate phone-camera JPG; Jumia's
+//     own limit per image is 2 MB but we accept up to 5 MB locally
+//     because we'll polish/enhance through PhotoRoom/Gemini which
+//     re-encode anyway.
+//   - 50 bytes minimum keeps obviously-corrupt 0-byte uploads out.
+
+const MAX_BYTES = 5 * 1024 * 1024;
+const MIN_BYTES = 50;
+
+const ALLOWED_MIMES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+
+/** Magic-byte validation. Returns the detected MIME or null when invalid. */
+async function validateImageBuffer(
+  buf: Buffer,
+  filenameHint: string,
+): Promise<{ mime: string; ext: string } | null> {
+  if (buf.byteLength < MIN_BYTES) {
+    console.warn(`[upload] rejected ${filenameHint}: too small (${buf.byteLength}B)`);
+    return null;
+  }
+  if (buf.byteLength > MAX_BYTES) {
+    console.warn(`[upload] rejected ${filenameHint}: too large (${buf.byteLength}B > ${MAX_BYTES}B)`);
+    return null;
+  }
+  const detected = await fileTypeFromBuffer(buf);
+  if (!detected || !ALLOWED_MIMES.has(detected.mime)) {
+    console.warn(
+      `[upload] rejected ${filenameHint}: magic bytes say "${detected?.mime ?? "unknown"}"; ` +
+      `only ${Array.from(ALLOWED_MIMES).join("/")} allowed.`,
+    );
+    return null;
+  }
+  return { mime: detected.mime, ext: detected.ext };
+}
 
 /**
  * Upload an array of File objects to Supabase Storage.
  * Returns an array of public URLs.
+ *
+ * Skips any file that fails server-side validation (size cap or
+ * magic-byte mismatch) — the seller sees fewer images, not a hard
+ * error, so a single bad picker click doesn't blow up the whole
+ * batch upload.
  */
 export async function uploadProductImages(formData: FormData): Promise<string[]> {
   const { userId } = await auth();
@@ -20,17 +73,26 @@ export async function uploadProductImages(formData: FormData): Promise<string[]>
   const urls: string[] = [];
 
   for (const file of files) {
-    const ext = file.name.split(".").pop() ?? "jpg";
-    const path = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-
     const buffer = Buffer.from(await file.arrayBuffer());
 
+    const validated = await validateImageBuffer(buffer, file.name || "(unnamed)");
+    if (!validated) continue;
+
+    // Use the detected extension (e.g. "jpg"), NOT whatever was on the
+    // filename. A file named "logo.png" that's actually a JPEG would
+    // otherwise get stored with the wrong extension and confuse CDN
+    // sniffing downstream.
+    const path = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${validated.ext}`;
+
     const { error } = await db.storage.from(BUCKET).upload(path, buffer, {
-      contentType: file.type,
+      contentType: validated.mime,
       upsert: false,
     });
 
-    if (error) throw new Error(`Upload failed: ${error.message}`);
+    if (error) {
+      console.warn(`[upload] storage write failed for ${file.name || "(unnamed)"}: ${error.message}`);
+      continue;
+    }
 
     const { data } = db.storage.from(BUCKET).getPublicUrl(path);
     urls.push(data.publicUrl);
@@ -56,6 +118,21 @@ export async function uploadRemoteImages(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
   for (const remoteUrl of remoteUrls.slice(0, 8)) {
+    // Defence against SSRF / scheme tricks: only allow http(s) URLs.
+    // Without this, a scraped page that put `javascript:` or `file://`
+    // into an <img src> would have made it here and either errored
+    // weirdly or hit our internal network.
+    try {
+      const parsed = new URL(remoteUrl);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        console.warn(`[uploadRemoteImages] rejected non-http(s) URL: ${remoteUrl}`);
+        continue;
+      }
+    } catch {
+      console.warn(`[uploadRemoteImages] rejected malformed URL: ${remoteUrl}`);
+      continue;
+    }
+
     try {
       const res = await fetch(remoteUrl, {
         headers: {
@@ -73,26 +150,30 @@ export async function uploadRemoteImages(
         continue;
       }
 
-      const contentType = res.headers.get("content-type") ?? "image/jpeg";
-      if (!contentType.startsWith("image/")) continue;
-
-      const ext =
-        contentType.includes("png")
-          ? "png"
-          : contentType.includes("webp")
-          ? "webp"
-          : "jpg";
+      // Hard size cap BEFORE we buffer the response — protects against
+      // a malicious source serving multi-GB content. Content-Length is
+      // advisory (could lie), but it catches the obvious cases cheaply.
+      const declaredLen = Number(res.headers.get("content-length") ?? "0");
+      if (declaredLen > MAX_BYTES) {
+        console.warn(`[uploadRemoteImages] rejected ${remoteUrl}: declared size ${declaredLen}B > ${MAX_BYTES}B`);
+        continue;
+      }
 
       const buffer = Buffer.from(await res.arrayBuffer());
-      if (buffer.length < 1024) continue; // skip tiny files (< 1 KB)
+
+      // Magic-byte validation — the server header on the source might
+      // say "image/jpeg" but the actual bytes could be anything. Belt
+      // and braces.
+      const validated = await validateImageBuffer(buffer, remoteUrl);
+      if (!validated) continue;
 
       const path = `${userId}/${Date.now()}-${Math.random()
         .toString(36)
-        .slice(2)}.${ext}`;
+        .slice(2)}.${validated.ext}`;
 
       const { error } = await db.storage
         .from(BUCKET)
-        .upload(path, buffer, { contentType, upsert: false });
+        .upload(path, buffer, { contentType: validated.mime, upsert: false });
 
       if (error) {
         console.warn(`[uploadRemoteImages] skipped ${remoteUrl}: ${error.message}`);
