@@ -148,6 +148,114 @@ export async function markNeedsReconnect(
  * indicates an OAuth problem (401 / 403). Used by route handlers to
  * decide whether to mark the connection needs_reconnect.
  */
+// ─── Connection health check (server-side, with cache) ──────────────────────
+//
+// Used by app/(main)/layout.tsx to detect "seller deleted their OAuth app
+// on the Jumia side" — which used to take up to an hour to surface
+// (token kept working until refresh time) and could happen silently
+// even with the client-side ReconnectBanner because the banner only
+// fires after the page mounts, by which point the seller has already
+// seen content they shouldn't.
+//
+// Probe strategy: hit /shops first (cheapest, most resilient endpoint
+// requiring a live token). If that 401s, mark the row as
+// needs_reconnect and return false. Result is cached per-userId for
+// 60 seconds so we don't make a Jumia API call on every single page
+// navigation — only the first one in each cache window.
+//
+// Cache is per-Vercel-function-instance; lost on cold starts. Same
+// trade-off as the in-memory rate limiter (lib/rate-limit.ts) —
+// acceptable for the first wave of users, can swap to Vercel KV
+// later if cold-start churn becomes an issue.
+
+interface HealthCacheEntry {
+  ok:        boolean;
+  checkedAt: number;
+}
+const HEALTH_CACHE_TTL_MS = 60_000;
+const healthCache = new Map<string, HealthCacheEntry>();
+
+export async function verifyJumiaConnection(
+  userId: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  // Honour cache — skip the Jumia round-trip when we just checked.
+  const cached = healthCache.get(userId);
+  if (cached && Date.now() - cached.checkedAt < HEALTH_CACHE_TTL_MS) {
+    return { ok: cached.ok };
+  }
+
+  const db = createServerClient();
+
+  // Quick DB pre-check. needs_reconnect / revoked rows don't need a
+  // Jumia call — we already know they're broken.
+  const { data: conn } = await db
+    .from("jumia_connections")
+    .select("status, access_token")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (!conn) {
+    healthCache.set(userId, { ok: false, checkedAt: Date.now() });
+    return { ok: false, reason: "not_connected" };
+  }
+  if (conn.status === "needs_reconnect" || conn.status === "revoked") {
+    healthCache.set(userId, { ok: false, checkedAt: Date.now() });
+    return { ok: false, reason: conn.status };
+  }
+  if (conn.access_token === "credential_auth") {
+    // Credential row exists but OAuth hasn't completed yet — this
+    // isn't a "broken connection", it's an in-progress one. Don't
+    // redirect from layout for these; the onboarding flow handles
+    // them. Cache as ok so the layout doesn't keep retrying.
+    healthCache.set(userId, { ok: true, checkedAt: Date.now() });
+    return { ok: true };
+  }
+
+  // Resolve a valid access token. getValidJumiaCredentials handles
+  // auto-refresh and marks needs_reconnect on its own if refresh fails.
+  let accessToken: string;
+  try {
+    const creds = await getValidJumiaCredentials(userId);
+    accessToken = creds.accessToken;
+  } catch (e) {
+    const msg = (e as Error).message;
+    healthCache.set(userId, { ok: false, checkedAt: Date.now() });
+    if (msg === "JUMIA_RECONNECT_REQUIRED") return { ok: false, reason: "needs_reconnect" };
+    if (msg === "JUMIA_OAUTH_REQUIRED")     return { ok: false, reason: "oauth_required" };
+    return { ok: false, reason: "error" };
+  }
+
+  // Probe a live Jumia endpoint. /shops needs the token to be both
+  // valid AND tied to a still-existing OAuth app — the exact failure
+  // mode the seller hit when they deleted their app on the Jumia side.
+  try {
+    const res = await fetch(`${JUMIA_API_BASE}/shops`, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+      signal:  AbortSignal.timeout(8_000),
+    });
+    if (res.status === 401 || res.status === 403) {
+      console.warn(`[Jumia health] /shops returned ${res.status} for user ${userId} — flipping needs_reconnect`);
+      await markNeedsReconnect(db, userId);
+      healthCache.set(userId, { ok: false, checkedAt: Date.now() });
+      return { ok: false, reason: "needs_reconnect" };
+    }
+    // 5xx and network errors are NOT treated as bad credentials — we
+    // don't kick the seller out for transient Jumia hiccups. Return
+    // ok and cache so we don't probe again right away.
+    healthCache.set(userId, { ok: true, checkedAt: Date.now() });
+    return { ok: true };
+  } catch {
+    // Network failure → don't punish the seller; cache ok briefly.
+    healthCache.set(userId, { ok: true, checkedAt: Date.now() });
+    return { ok: true };
+  }
+}
+
+/** Clear the health cache for a user — call after reconnect succeeds. */
+export function clearJumiaHealthCache(userId: string): void {
+  healthCache.delete(userId);
+}
+
 export function isJumiaAuthError(status: number | undefined, body: unknown): boolean {
   if (status === 401 || status === 403) return true;
   if (typeof body === "object" && body !== null) {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { exchangeCodeForTokens, fetchJumiaSellerProfile } from "@/lib/jumia/oauth";
 import { encrypt, decrypt } from "@/lib/security/token-crypto";
+import { clearJumiaHealthCache } from "@/lib/jumia/api";
 
 // ─── GET /api/jumia/callback ──────────────────────────────────────────────────
 // Jumia redirects here after the user authorises PandaWorld.
@@ -128,6 +129,12 @@ export async function GET(req: NextRequest) {
       `${failUrl}${encodeURIComponent("Database error — please try again")}`
     );
   }
+
+  // Bust the layout's health cache so the seller's NEXT navigation
+  // hits Jumia for a fresh probe (otherwise they could see the
+  // dashboard layout loop them back to onboarding for up to 60s after
+  // a successful reconnect, because the cache still says "broken").
+  clearJumiaHealthCache(userId);
 
   console.info(
     `[Jumia OAuth] Connected seller=${profile.seller_name ?? "unknown"} for user=${userId}`
