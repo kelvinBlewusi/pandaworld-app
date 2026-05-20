@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { MarketingFooter } from "@/components/marketing/footer";
+import { Wordmark } from "@/components/marketing/wordmark";
 
 // ─── Public Privacy Policy ───────────────────────────────────────────────────
 //
@@ -326,13 +327,8 @@ function SimpleNav({ active }: { active: "terms" | "privacy" }) {
   return (
     <header className="sticky top-0 z-20 border-b border-zinc-100 bg-white/80 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-        <Link href="/" className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 text-base shadow-sm">
-            🐼
-          </div>
-          <span className="text-base font-bold tracking-tight">
-            PandaWorld
-          </span>
+        <Link href="/" aria-label="pandaworld home">
+          <Wordmark size={28} />
         </Link>
         <nav className="flex items-center gap-1 sm:gap-4">
           <Link
