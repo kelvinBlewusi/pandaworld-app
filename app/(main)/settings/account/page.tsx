@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useUser } from "@clerk/nextjs";
-import { Unlink, RefreshCw, Bell, Shield, User, Loader2, Check, Zap, Sparkles, ShoppingBag } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useUser, useClerk } from "@clerk/nextjs";
+import { Unlink, RefreshCw, Bell, Shield, User, Loader2, Check, Zap, Sparkles, ShoppingBag, AlertTriangle, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,12 +15,45 @@ import type { Plan } from "@/lib/types/subscription";
 
 export default function AccountSettingsPage() {
   const { user, isLoaded } = useUser();
+  const { signOut } = useClerk();
+  const router = useRouter();
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [plan, setPlan] = useState<Plan>("free");
+
+  // Danger-zone state — surfaced at the bottom of the page.
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteConfirm,   setDeleteConfirm]   = useState("");
+  const [deleting,        setDeleting]        = useState(false);
+  const [deleteError,     setDeleteError]     = useState<string | null>(null);
+
+  async function handleDeleteAccount() {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await fetch("/api/account/delete", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ confirm: "DELETE" }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setDeleteError(data.error ?? "Couldn't delete the account. Please contact support.");
+        return;
+      }
+      // Sign out from Clerk's session (the server already deleted the
+      // user, this just clears the local session cookie so we can
+      // redirect home cleanly).
+      await signOut(() => router.push("/"));
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setDeleting(false);
+    }
+  }
   const [storeConn, setStoreConn] = useState<{
     store_name: string | null;
     seller_email: string | null;
@@ -304,6 +338,105 @@ export default function AccountSettingsPage() {
           ))}
         </div>
       </section>
+
+      {/* Danger zone — account deletion (right-to-erasure under
+          Ghana DPA 2012 + GDPR Article 17). Hard delete: revokes
+          Jumia tokens, cancels Paystack sub, wipes storage + DB rows,
+          deletes the Clerk user. No undo. */}
+      <section className="rounded-2xl border border-red-200 bg-red-50/40 p-6 shadow-sm space-y-5">
+        <div className="flex items-center gap-3">
+          <AlertTriangle className="h-4 w-4 text-red-500" />
+          <h2 className="text-sm font-semibold text-red-700">Danger zone</h2>
+        </div>
+        <Separator className="bg-red-200" />
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium text-zinc-800">Delete account</p>
+            <p className="mt-1 text-xs text-zinc-500 leading-relaxed">
+              Permanently remove your account, listings, images, and Jumia
+              connection. Your Pro subscription (if any) will be cancelled.
+              This cannot be undone.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setDeleteConfirm("");
+              setDeleteError(null);
+              setShowDeleteModal(true);
+            }}
+            className="shrink-0 border-red-200 text-red-600 hover:bg-red-100 hover:text-red-700 gap-1.5"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete account
+          </Button>
+        </div>
+      </section>
+
+      {showDeleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-600">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-base font-bold text-zinc-900">Delete your account?</h3>
+                <p className="mt-2 text-xs text-zinc-600 leading-relaxed">
+                  This will permanently delete your profile, all listings,
+                  product images, and Jumia connection. Your active Pro
+                  subscription will be cancelled with Paystack. <strong>This
+                  cannot be undone.</strong>
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-2">
+              <Label htmlFor="delete-confirm" className="text-xs">
+                Type <code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[11px]">DELETE</code> to confirm:
+              </Label>
+              <Input
+                id="delete-confirm"
+                value={deleteConfirm}
+                onChange={(e) => setDeleteConfirm(e.target.value)}
+                placeholder="DELETE"
+                disabled={deleting}
+                className="font-mono"
+              />
+            </div>
+
+            {deleteError && (
+              <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">
+                {deleteError}
+              </p>
+            )}
+
+            <div className="mt-6 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowDeleteModal(false)}
+                disabled={deleting}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleDeleteAccount}
+                disabled={deleting || deleteConfirm !== "DELETE"}
+                className="bg-red-600 hover:bg-red-700 text-white gap-1.5"
+              >
+                {deleting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {deleting ? "Deleting…" : "Delete account"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
