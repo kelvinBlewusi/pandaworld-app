@@ -20,6 +20,7 @@
 
 import { useEffect } from "react";
 import Link from "next/link";
+import * as Sentry from "@sentry/nextjs";
 import { Button } from "@/components/ui/button";
 
 export default function RootError({
@@ -29,10 +30,16 @@ export default function RootError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  // Best-effort telemetry. We don't have Sentry wired yet (next
-  // phase), but Vercel surfaces server logs — push a tagged entry so
-  // we can grep `[root-error]` to find production blow-ups quickly.
+  // Sentry capture + tagged log line. Sentry's auto-instrumentation
+  // picks up most unhandled errors on its own, but routing through
+  // captureException here guarantees we attach the digest (so the
+  // Sentry event can be linked back to the support thread when a
+  // seller quotes their error reference).
   useEffect(() => {
+    Sentry.captureException(error, {
+      tags: { surface: "root-error-boundary" },
+      extra: { digest: error.digest },
+    });
     console.error(`[root-error] ${error.message}`, error);
   }, [error]);
 
