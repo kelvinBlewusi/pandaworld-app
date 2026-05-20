@@ -2219,16 +2219,12 @@ export function ReviewClient({
                          to digest before navigating to the diagnose modal */}
       {publishingPhase && (
         <PublishingLoader
-          caption={
-            publishingPhase === "pushing"
-              ? "Sending your listing to Jumia…"
-              : "Almost there…"
-          }
-          subCaption={
-            publishingPhase === "pushing"
-              ? "Packaging variants, prices and images for the feed."
-              : "Letting Jumia’s feed warm up before we check the status."
-          }
+          // Same brand message for both pushing + settling phases —
+          // sellers don't care about the internal handoff between
+          // "POST in flight" vs "waiting for Jumia's feed to digest",
+          // they care that PandaWorld is doing the work.
+          caption="Automate your listings to Jumia With PandaWorld"
+          subCaption=""
         />
       )}
       {/* ── Header ────────────────────────────────────────────────────────── */}

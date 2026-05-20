@@ -239,8 +239,14 @@ export default function PrivacyPage() {
           </ul>
           <p>
             To exercise any of these rights, contact us via the
-            in-app support button or email <em>(insert support email)</em>.
-            We respond within 30 days.
+            in-app support button or email{" "}
+            <a
+              href="mailto:help.pandaworldai@gmail.com"
+              className="text-orange-600 underline"
+            >
+              help.pandaworldai@gmail.com
+            </a>
+            . We respond within 30 days.
           </p>
 
           <h2>6. Data security</h2>
@@ -293,9 +299,15 @@ export default function PrivacyPage() {
           <p>
             Questions about this Policy or about how your data is
             handled? Reach us via the WhatsApp support button inside
-            the app, or email <em>(insert support email)</em>. To make
-            a formal complaint about data handling, you may also
-            contact Ghana&apos;s Data Protection Commission at{" "}
+            the app, or email{" "}
+            <a
+              href="mailto:help.pandaworldai@gmail.com"
+              className="text-orange-600 underline"
+            >
+              help.pandaworldai@gmail.com
+            </a>
+            . To make a formal complaint about data handling, you may
+            also contact Ghana&apos;s Data Protection Commission at{" "}
             <a
               href="https://dataprotection.org.gh"
               target="_blank"
@@ -331,26 +343,20 @@ function SimpleNav({ active }: { active: "terms" | "privacy" }) {
           <Wordmark size={28} />
         </Link>
         <nav className="flex items-center gap-1 sm:gap-4">
-          <Link
-            href="/terms"
-            className={
-              active === "terms"
-                ? "rounded-md px-3 py-1.5 text-sm font-medium text-orange-600"
-                : "rounded-md px-3 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
-            }
+          {/* Terms + Privacy intentionally non-responsive — these
+              pages need a lawyer review before public link-out. */}
+          <span
+            className="cursor-not-allowed rounded-md px-3 py-1.5 text-sm font-medium text-zinc-300"
+            aria-disabled="true"
           >
             Terms
-          </Link>
-          <Link
-            href="/privacy"
-            className={
-              active === "privacy"
-                ? "rounded-md px-3 py-1.5 text-sm font-medium text-orange-600"
-                : "rounded-md px-3 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
-            }
+          </span>
+          <span
+            className="cursor-not-allowed rounded-md px-3 py-1.5 text-sm font-medium text-zinc-300"
+            aria-disabled="true"
           >
             Privacy
-          </Link>
+          </span>
           <Link
             href="/pricing"
             className="rounded-md px-3 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
