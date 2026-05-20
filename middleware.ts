@@ -17,6 +17,7 @@ const isPublicRoute = createRouteMatcher([
   '/sign-in(.*)',
   '/sign-up(.*)',
   '/api/paystack/webhook',
+  '/api/webhooks/clerk',
   '/api/jumia/callback',
   '/api/cron/(.*)',
 ])

@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { createHmac } from "crypto";
+import { clerkClient } from "@clerk/nextjs/server";
+import { sendEmail } from "@/lib/email/send";
+import { paymentConfirmationEmail } from "@/lib/email/templates";
 
 // ─── POST /api/paystack/webhook ───────────────────────────────────────────────
 // Paystack calls this URL for all subscription lifecycle events.
@@ -89,6 +92,40 @@ export async function POST(request: Request) {
           userId,
           histError
         );
+      }
+
+      // Send the payment-confirmation email. Fire-and-forget — if the
+      // email fails (Resend down, key missing, address invalid), the
+      // user is still on the Pro plan, they just don't get a receipt.
+      // We pull the email + first name from Clerk so we don't have to
+      // store them in our own DB just for transactional mail.
+      try {
+        const client = await clerkClient();
+        const clerkUser = await client.users.getUser(userId);
+        const recipientEmail =
+          clerkUser.primaryEmailAddress?.emailAddress ??
+          clerkUser.emailAddresses[0]?.emailAddress;
+        if (recipientEmail) {
+          const appUrl =
+            process.env.NEXT_PUBLIC_APP_URL ??
+            (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "https://pandaworld.gh");
+          const tpl = paymentConfirmationEmail({
+            firstName: clerkUser.firstName,
+            amount:    `GHS ${(tx.amount / 100).toFixed(2)}`,
+            reference: tx.reference,
+            plan:      "Pro plan — monthly subscription",
+            appUrl,
+          });
+          await sendEmail({
+            to:       recipientEmail,
+            subject:  tpl.subject,
+            html:     tpl.html,
+            text:     tpl.text,
+            category: "payment-confirmation",
+          });
+        }
+      } catch (e) {
+        console.warn(`[Paystack webhook] payment-confirmation email skipped: ${(e as Error).message}`);
       }
 
       break;
