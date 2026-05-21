@@ -75,12 +75,6 @@ export default function PricingPage() {
               );
             })}
           </div>
-
-          <p className="mt-8 text-center text-xs text-zinc-500">
-            Prices in Ghana Cedis (GHS). Billing via Paystack — local
-            cards 1.95%, international 3.9% + ₦100 processed by Paystack.
-            Cancel any time from Settings → Billing.
-          </p>
         </div>
       </section>
 
