@@ -1,13 +1,37 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { auth, currentUser } from "@clerk/nextjs/server";
+import { PLANS, getPaystackPlanCode, type Plan } from "@/lib/billing/plans";
 
 // ─── POST /api/paystack/initialize ───────────────────────────────────────────
-// Creates a Paystack transaction that subscribes the user to the Pro plan.
-// If PAYSTACK_PRO_PLAN_CODE is set → recurring monthly subscription.
-// If not set → one-time charge of GHS 50 (still upgrades, no auto-renewal).
-// Returns { authorization_url } — redirect the browser there.
+//
+// Creates a Paystack transaction that subscribes the user to a paid tier.
+//
+// Request: POST /api/paystack/initialize?tier=starter|pro|business
+//          (or POST body { tier: "starter" } — both supported)
+//
+// Behaviour:
+//   - Looks up the requested tier in lib/billing/plans.ts.
+//   - Reads the matching Paystack plan_code from env (e.g. PAYSTACK_PRO_PLAN_CODE).
+//   - If plan_code is set → recurring monthly subscription via Paystack's
+//     auto-charge engine.
+//   - If plan_code is missing → one-time charge for the tier's price.
+//     The user still gets the tier (webhook + verify reconcile), but
+//     no auto-renewal. Useful in dev before plans are created.
+//
+// Refuses to initialise for "free" (nothing to charge).
+//
+// Returns: { authorization_url, reference, recurring, tier }
+// The frontend redirects to authorization_url; user pays on Paystack;
+// browser comes back via callback_url (/settings/billing); verify route
+// confirms the transaction; webhook makes the plan change durable.
 
-export async function POST() {
+const VALID_PAID_TIERS: Plan[] = ["starter", "pro", "business"];
+
+function isValidPaidTier(value: unknown): value is Plan {
+  return typeof value === "string" && VALID_PAID_TIERS.includes(value as Plan);
+}
+
+export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return new NextResponse("Unauthorized", { status: 401 });
 
@@ -28,21 +52,48 @@ export async function POST() {
     );
   }
 
-  const planCode = process.env.PAYSTACK_PRO_PLAN_CODE;
+  // ── Resolve the tier from query string or body ───────────────────────────
+  //
+  // Prefer query string for new code paths; fall back to body for
+  // backwards compatibility with the legacy "upgrade to Pro" button
+  // that POSTed with no params.
+  const url = new URL(req.url);
+  let tier = url.searchParams.get("tier") as Plan | null;
+
+  if (!tier) {
+    try {
+      const body = (await req.json().catch(() => ({}))) as { tier?: string };
+      if (body.tier) tier = body.tier as Plan;
+    } catch { /* no body — that's fine */ }
+  }
+
+  // Default to "pro" so existing clients that POST without a tier param
+  // keep working. New tier-aware buttons should always pass ?tier=.
+  if (!tier) tier = "pro";
+
+  if (!isValidPaidTier(tier)) {
+    return NextResponse.json(
+      { error: `Tier "${tier}" cannot be purchased. Valid options: ${VALID_PAID_TIERS.join(", ")}.` },
+      { status: 400 }
+    );
+  }
+
+  const plan = PLANS[tier];
+  const planCode = getPaystackPlanCode(tier);
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3002";
 
   // ── Build transaction payload ─────────────────────────────────────────────
-  // GHS 50/month = 5000 pesewas (Paystack uses the smallest currency unit)
+  // Paystack uses the smallest currency unit, so GHS 30 = 3000 pesewas.
   // channels: card + all Ghana mobile money networks (MTN, Vodafone, AirtelTigo)
   const body: Record<string, unknown> = {
     email,
-    amount: 5000,
+    amount: plan.price_ghs_pesewas,
     currency: "GHS",
     channels: ["card", "mobile_money"],
     callback_url: `${appUrl}/settings/billing`,
     metadata: {
       user_id: userId,
-      plan: "pro",
+      plan: tier,                           // webhook reads this to set the right tier
       cancel_action: `${appUrl}/settings/billing`,
     },
   };
@@ -53,9 +104,10 @@ export async function POST() {
   } else {
     // No plan code configured — warn in server logs but proceed as one-time charge
     console.warn(
-      "[Paystack] PAYSTACK_PRO_PLAN_CODE is not set. " +
-        "Payment will be a one-time charge — no automatic monthly renewal. " +
-        "Create a plan at paystack.com/dashboard and set PAYSTACK_PRO_PLAN_CODE."
+      `[Paystack] No plan_code configured for tier "${tier}" ` +
+        `(env var "${plan.paystack_plan_code_env}" not set). ` +
+        `Payment will be a one-time charge — no automatic monthly renewal. ` +
+        `Create a plan at paystack.com/dashboard for ${plan.display_price}/month and set the env var.`
     );
   }
 
@@ -80,7 +132,9 @@ export async function POST() {
 
   return NextResponse.json({
     authorization_url: data.data.authorization_url,
-    reference: data.data.reference,
-    recurring: !!planCode,
+    reference:         data.data.reference,
+    recurring:         !!planCode,
+    tier,
+    amount_ghs:        plan.price_ghs_pesewas / 100,
   });
 }

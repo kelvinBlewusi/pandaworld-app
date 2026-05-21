@@ -210,7 +210,14 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error("process-listing error:", err);
     const message = err instanceof Error ? err.message : "Processing failed";
-    const status = message.startsWith("FREE_LIMIT_REACHED") ? 402 : 500;
+    // 402 Payment Required = "you've hit your monthly quota; upgrade to continue".
+    // Recognise both the new QUOTA_EXCEEDED prefix and the legacy
+    // FREE_LIMIT_REACHED one in case any older client is still parsing
+    // by the old name.
+    const isQuotaError =
+      message.startsWith("QUOTA_EXCEEDED") ||
+      message.startsWith("FREE_LIMIT_REACHED");
+    const status = isQuotaError ? 402 : 500;
     return NextResponse.json({ error: message }, { status });
   }
 }

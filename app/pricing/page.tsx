@@ -1,25 +1,37 @@
 import Link from "next/link";
-import { Check, Sparkles, Zap, ArrowRight } from "lucide-react";
+import { Check, Sparkles, Zap, Rocket, Briefcase, ArrowRight } from "lucide-react";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { Wordmark } from "@/components/marketing/wordmark";
+import { getPublicPlans, type Plan } from "@/lib/billing/plans";
 
 // ─── Public pricing ──────────────────────────────────────────────────────────
 //
 // Lives outside the (main) layout so logged-out visitors can read pricing
-// without bouncing through Clerk. Mirrors the in-app /settings/billing
-// numbers exactly — single source of truth in two files; if you change
-// the price, change both.
+// without bouncing through Clerk. Every tier number comes from
+// lib/billing/plans.ts — change a price/quota there and this page updates.
 //
 // SEO note: this page is intentionally text-heavy (rather than a
-// React-only spec) so the GHS 50 / Free terms get indexed by Google
-// and surface in seller searches like "Jumia listing tool Ghana price".
+// React-only spec) so the GHS amounts get indexed by Google and surface
+// in seller searches like "Jumia listing tool Ghana price".
 
 export const metadata = {
   title:       "Pricing · PandaWorld",
-  description: "Free for your first 5 listings. GHS 50 / month for unlimited AI-generated Jumia listings, image enhancement, and one-click push to Vendor Center.",
+  description: "Free for 5 listings a month. From GHS 30 / month for AI-generated Jumia listings, image enhancement, and one-click push to Vendor Center. Cancel any time.",
+};
+
+// Map each tier id to a Lucide icon. Kept here (not in plans.ts) because
+// the icon set is React-only — plans.ts is consumed by server code that
+// can't import lucide-react cleanly.
+const TIER_ICON: Partial<Record<Plan, { Icon: React.ElementType; bg: string }>> = {
+  free:     { Icon: Sparkles,  bg: "bg-zinc-100 text-zinc-600" },
+  starter:  { Icon: Zap,       bg: "bg-emerald-50 text-emerald-600" },
+  pro:      { Icon: Rocket,    bg: "bg-blue-50 text-blue-600" },
+  business: { Icon: Briefcase, bg: "bg-purple-50 text-purple-600" },
 };
 
 export default function PricingPage() {
+  const tiers = getPublicPlans();
+
   return (
     <div className="min-h-screen bg-white text-zinc-900">
       <MarketingNav />
@@ -30,62 +42,42 @@ export default function PricingPage() {
             Pricing
           </p>
           <h1 className="mt-3 text-3xl font-bold tracking-tight sm:text-5xl">
-            Free until you scale. Then GHS 50 / month.
+            Pick the plan that fits your store.
           </h1>
           <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-zinc-600 sm:text-base">
-            Start with 5 free listings. Upgrade to Pro when you&apos;re ready
-            for unlimited generations and priority support. Cancel any time.
+            5 free listings every month, no card needed. Move to a paid
+            plan when you scale. Cancel any time.
           </p>
         </div>
       </section>
 
       {/* Pricing cards */}
       <section className="bg-zinc-50">
-        <div className="mx-auto max-w-5xl px-6 py-16">
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-            <PricingCard
-              tier="Free"
-              price="GHS 0"
-              period="forever"
-              tagline="Try it out"
-              icon={Sparkles}
-              iconBg="bg-zinc-100 text-zinc-600"
-              features={[
-                "5 product listings",
-                "AI listing generation",
-                "Image polish (white background)",
-                "Push to Jumia Vendor Center",
-                "Price calculator",
-                "Email support",
-              ]}
-              ctaLabel="Start free"
-              ctaHref="/sign-up"
-            />
-            <PricingCard
-              tier="Pro"
-              price="GHS 50"
-              period="/ month"
-              tagline="For serious sellers"
-              icon={Zap}
-              iconBg="bg-blue-50 text-blue-600"
-              badge="Most popular"
-              features={[
-                "Unlimited product listings",
-                "AI listing generation",
-                "Image polish + AI rebuild (studio shots)",
-                "Push to Jumia Vendor Center",
-                "Price calculator",
-                "Priority support",
-                "Early access to new features",
-              ]}
-              ctaLabel="Upgrade to Pro"
-              ctaHref="/sign-up"
-              highlight
-            />
+        <div className="mx-auto max-w-6xl px-6 py-16">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
+            {tiers.map((tier) => {
+              const iconConfig = TIER_ICON[tier.id] ?? TIER_ICON.free!;
+              return (
+                <PricingCard
+                  key={tier.id}
+                  tier={tier.name}
+                  price={tier.display_price}
+                  period={tier.period === "month" ? "/ month" : "forever"}
+                  tagline={tier.description}
+                  icon={iconConfig.Icon}
+                  iconBg={iconConfig.bg}
+                  badge={tier.badge}
+                  features={tier.features}
+                  ctaLabel={tier.id === "free" ? "Start free" : `Choose ${tier.name}`}
+                  ctaHref="/sign-up"
+                  highlight={tier.badge === "Most popular"}
+                />
+              );
+            })}
           </div>
 
           <p className="mt-8 text-center text-xs text-zinc-500">
-            Prices in Ghana Cedis (GHS). Pro billing via Paystack — local
+            Prices in Ghana Cedis (GHS). Billing via Paystack — local
             cards 1.95%, international 3.9% + ₦100 processed by Paystack.
             Cancel any time from Settings → Billing.
           </p>
@@ -104,20 +96,28 @@ export default function PricingPage() {
               a="A product you've created in PandaWorld, with AI-generated title, description, attributes, and images. You can edit a draft as many times as you like — only the act of CREATING a new draft uses up your monthly quota. Pushing the same listing to Jumia multiple times (e.g. after a QC fix) doesn't cost extra."
             />
             <FAQ
+              q="What's the difference between a listing and an image polish?"
+              a="A listing is the analysis pass (title, description, category, attributes). An image polish is when you ask us to clean up a product photo — remove the background, add a white studio look, or rebuild it with AI. They're metered separately so a seller who doesn't need polishing doesn't pay for it."
+            />
+            <FAQ
+              q="What happens when I hit my monthly quota?"
+              a="You'll see an upgrade prompt naming the next tier. Existing listings stay live; only NEW listing creation is paused until you upgrade or the next billing period starts (the quota resets automatically 30 days after your last payment)."
+            />
+            <FAQ
               q="Can I cancel any time?"
-              a="Yes. Cancel from Settings → Billing. You keep Pro features until the end of the current billing period, then drop back to Free (5-listing cap). No long-term contracts."
+              a="Yes. Cancel from Settings → Billing. You keep your paid tier features until the end of the current billing period, then drop back to Free. No long-term contracts."
             />
             <FAQ
               q="What payment methods do you accept?"
-              a="Paystack — local Ghana cards (Visa, Mastercard, Verve), mobile money (MTN, AirtelTigo, Vodafone), and bank transfer. International Visa and Mastercard are accepted with the international transaction fee Paystack charges."
+              a="Paystack — local Ghana cards (Visa, Mastercard, Verve), mobile money (MTN, AirtelTigo, Vodafone), and bank transfer. International Visa and Mastercard accepted with the international transaction fee Paystack charges."
             />
             <FAQ
               q="Do I keep my listings if I cancel?"
-              a="Yes. Your existing listings stay in your dashboard and stay live on Jumia. You just can't create new ones above the Free-tier cap until you re-upgrade."
+              a="Yes. Existing listings stay in your dashboard and live on Jumia. You just can't create new ones above the Free-tier cap until you re-upgrade."
             />
             <FAQ
-              q="Is there a free trial of Pro?"
-              a="Not separately — the Free plan IS the trial. You get to create 5 full listings and push them to Jumia before deciding whether Pro is worth GHS 50."
+              q="Is there a free trial?"
+              a="The Free plan IS the trial. You get 5 listings each month forever — enough to evaluate whether a paid plan is worth it for your volume."
             />
             <FAQ
               q="What about VAT / NHIL?"
@@ -134,7 +134,7 @@ export default function PricingPage() {
             Ready when you are.
           </h2>
           <p className="mt-3 text-sm text-zinc-600">
-            5 free listings. No card. Cancel any time.
+            5 free listings every month. No card. Cancel any time.
           </p>
           <Link
             href="/sign-up"
@@ -214,14 +214,14 @@ function PricingCard({
 }: PricingCardProps) {
   return (
     <div
-      className={`relative rounded-2xl border bg-white p-8 transition-shadow ${
+      className={`relative flex flex-col rounded-2xl border bg-white p-6 transition-shadow ${
         highlight
           ? "border-orange-200 shadow-md shadow-orange-100"
           : "border-zinc-100 hover:shadow-md"
       }`}
     >
       {badge && (
-        <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-orange-500 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-white shadow-md">
+        <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-orange-500 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-white shadow-md">
           {badge}
         </span>
       )}
@@ -230,23 +230,23 @@ function PricingCard({
       </div>
       <div className="mt-5 flex items-baseline justify-between">
         <h3 className="text-lg font-bold">{tier}</h3>
-        <p className="text-xs text-zinc-500">{tagline}</p>
       </div>
-      <div className="mt-2 flex items-baseline gap-1">
+      <p className="mt-0.5 text-[11px] text-zinc-500">{tagline}</p>
+      <div className="mt-3 flex items-baseline gap-1">
         <span className="text-3xl font-bold">{price}</span>
         <span className="text-sm text-zinc-500">{period}</span>
       </div>
-      <ul className="mt-6 space-y-3">
+      <ul className="mt-5 flex-1 space-y-2.5">
         {features.map((f) => (
           <li key={f} className="flex items-start gap-2">
-            <Check className={`mt-0.5 h-4 w-4 shrink-0 ${highlight ? "text-orange-500" : "text-emerald-500"}`} />
-            <span className="text-sm text-zinc-700">{f}</span>
+            <Check className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${highlight ? "text-orange-500" : "text-emerald-500"}`} />
+            <span className="text-xs text-zinc-700">{f}</span>
           </li>
         ))}
       </ul>
       <Link
         href={ctaHref}
-        className={`mt-8 inline-flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors ${
+        className={`mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors ${
           highlight
             ? "bg-orange-500 text-white shadow-sm hover:bg-orange-600"
             : "border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"

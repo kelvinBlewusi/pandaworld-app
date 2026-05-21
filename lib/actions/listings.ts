@@ -4,6 +4,28 @@ import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { ListingRow, ListingInsert, VariantRow } from "@/lib/supabase/types";
+import { checkQuota, incrementUsage } from "@/lib/billing/quota";
+import { PLANS, getNextTierUpgrade } from "@/lib/billing/plans";
+
+// ─── Quota-error helper ──────────────────────────────────────────────────────
+//
+// Format the "you've hit your monthly quota" message consistently so
+// the API route + UI know what to display. The prefix is what the
+// process-listing route uses to translate to HTTP 402. The human part
+// names the next tier so the seller can act on it.
+//
+// Returning a normal Error (not a custom class) keeps the function
+// thenable from server components without needing a class export.
+
+function buildQuotaError(plan: string, used: number, limit: number): Error {
+  const next = getNextTierUpgrade(plan as keyof typeof PLANS);
+  const upgradeNote = next
+    ? ` Upgrade to ${PLANS[next].name} (${PLANS[next].display_price}/month) for ${PLANS[next].monthly_listings} listings.`
+    : " You're already on the highest tier — wait for next period or contact support.";
+  return new Error(
+    `QUOTA_EXCEEDED: You've used ${used} of ${limit} listings on the ${PLANS[plan as keyof typeof PLANS].name} plan this month.${upgradeNote}`
+  );
+}
 
 // ─── Fetch all listings for the current user ──────────────────────────────────
 
@@ -55,21 +77,13 @@ export async function createListing(input: {
 
   const db = createServerClient();
 
-  // ── Plan enforcement: free users limited to 5 listings ───────────────────
-  const [subResult, countResult] = await Promise.all([
-    db.from("subscriptions").select("plan, status").eq("user_id", userId).maybeSingle(),
-    db.from("listings").select("id", { count: "exact", head: true }).eq("user_id", userId),
-  ]);
-
-  const plan = subResult.data?.plan ?? "free";
-  const planStatus = subResult.data?.status ?? "active";
-  const listingCount = countResult.count ?? 0;
-  const isPro = plan === "pro" && planStatus === "active";
-
-  if (!isPro && listingCount >= 5) {
-    throw new Error(
-      "FREE_LIMIT_REACHED: Upgrade to Pro to create unlimited listings."
-    );
+  // ── Plan enforcement: per-period listing quota ───────────────────────────
+  // Delegated to lib/billing/quota.ts which handles lazy period resets
+  // and legacy-Pro grandfather logic. The error message names the
+  // recommended upgrade tier so the UI can deep-link the seller.
+  const quota = await checkQuota(userId, "listing");
+  if (!quota.allowed) {
+    throw buildQuotaError(quota.plan, quota.used, quota.limit);
   }
 
   const sku = `PA-${Date.now().toString(36).toUpperCase()}`;
@@ -114,6 +128,11 @@ export async function createListing(input: {
     .single();
 
   if (error) throw new Error(error.message);
+
+  // Bump the period counter only AFTER a successful insert — keeps the
+  // quota accurate even if Supabase errors mid-flight.
+  await incrementUsage(userId, "listing");
+
   revalidatePath("/listings");
   return data as ListingRow;
 }
@@ -167,16 +186,10 @@ export async function duplicateListing(id: string): Promise<ListingRow> {
 
   const db = createServerClient();
 
-  // ── Plan enforcement (same limit applies to duplicates) ──────────────────
-  const [subResult, countResult] = await Promise.all([
-    db.from("subscriptions").select("plan, status").eq("user_id", userId).maybeSingle(),
-    db.from("listings").select("id", { count: "exact", head: true }).eq("user_id", userId),
-  ]);
-  const plan = subResult.data?.plan ?? "free";
-  const planStatus = subResult.data?.status ?? "active";
-  const isPro = plan === "pro" && planStatus === "active";
-  if (!isPro && (countResult.count ?? 0) >= 5) {
-    throw new Error("FREE_LIMIT_REACHED: Upgrade to Pro to create unlimited listings.");
+  // ── Plan enforcement (same monthly quota applies to duplicates) ──────────
+  const quota = await checkQuota(userId, "listing");
+  if (!quota.allowed) {
+    throw buildQuotaError(quota.plan, quota.used, quota.limit);
   }
 
   const original = await getListing(id);
@@ -199,6 +212,10 @@ export async function duplicateListing(id: string): Promise<ListingRow> {
     .single();
 
   if (error) throw new Error(error.message);
+
+  // Duplicates count against the same monthly quota as fresh creates.
+  await incrementUsage(userId, "listing");
+
   revalidatePath("/listings");
   return data as ListingRow;
 }

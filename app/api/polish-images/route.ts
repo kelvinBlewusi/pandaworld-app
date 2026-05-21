@@ -3,6 +3,8 @@ import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { polishImages, isPhotoRoomEnabled } from "@/lib/photoroom";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
+import { checkQuota, incrementUsage } from "@/lib/billing/quota";
+import { PLANS, getNextTierUpgrade, type Plan } from "@/lib/billing/plans";
 
 // ─── POST /api/polish-images ──────────────────────────────────────────────────
 //
@@ -31,6 +33,27 @@ export async function POST(req: NextRequest) {
   // expensive than Gemini image-gen, so a looser cap.
   const blocked = checkRateLimit(`polish-images:${userId}`, RATE_LIMITS.polishImages);
   if (blocked) return blocked;
+
+  // Monthly polish quota gate (separate from listing quota). Free tier
+  // gets 0 polishes; Starter 10/mo; Pro 30/mo; Business 150/mo. Admin
+  // accounts (ADMIN_USER_IDS env var) bypass the gate entirely.
+  const quota = await checkQuota(userId, "polish");
+  if (!quota.allowed) {
+    const next = getNextTierUpgrade(quota.plan as Plan);
+    const upgradeNote = next
+      ? ` Upgrade to ${PLANS[next].name} (${PLANS[next].display_price}/month) for ${PLANS[next].monthly_polishes} polishes.`
+      : "";
+    return NextResponse.json(
+      {
+        error: `QUOTA_EXCEEDED: You've used ${quota.used} of ${quota.limit} image polishes on the ${PLANS[quota.plan as Plan].name} plan this month.${upgradeNote}`,
+        plan: quota.plan,
+        used: quota.used,
+        limit: quota.limit,
+        suggested_upgrade: next,
+      },
+      { status: 402 }
+    );
+  }
 
   let listingId: string;
   let background: "white" | "transparent" = "white";
@@ -73,6 +96,14 @@ export async function POST(req: NextRequest) {
     .eq("id", listingId);
 
   const replaced = polished.filter((u, i) => u !== sourceUrls[i]).length;
+
+  // Count this as one polish action against the monthly quota — we
+  // bill per "polish call" (= one listing), not per image inside it,
+  // so the seller's cost model matches their mental model. Skipped
+  // for legacy Pro by incrementUsage internally.
+  if (replaced > 0) {
+    await incrementUsage(userId, "polish");
+  }
 
   return NextResponse.json({
     polished,

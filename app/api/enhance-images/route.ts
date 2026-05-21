@@ -7,6 +7,8 @@ import {
   type EnhanceMode,
 } from "@/lib/gemini-image";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
+import { checkQuota, incrementUsage } from "@/lib/billing/quota";
+import { PLANS, getNextTierUpgrade, type Plan } from "@/lib/billing/plans";
 
 // Gemini image-gen takes 3-8s per image. 8 images × 3 concurrent = ~24s
 // theoretical wall-clock, but real-world we see 30-60s when one slot is
@@ -53,6 +55,27 @@ export async function POST(req: NextRequest) {
   // a cap a single seller can burn $30+/hour. Limit is per-user.
   const blocked = checkRateLimit(`enhance-images:${userId}`, RATE_LIMITS.enhanceImages);
   if (blocked) return blocked;
+
+  // Monthly polish quota gate — Gemini rebuild shares the polish bucket
+  // with PhotoRoom because they're the same conceptual action from the
+  // seller's POV ("make my image look better"). Free tier = 0 polishes.
+  const quota = await checkQuota(userId, "polish");
+  if (!quota.allowed) {
+    const next = getNextTierUpgrade(quota.plan as Plan);
+    const upgradeNote = next
+      ? ` Upgrade to ${PLANS[next].name} (${PLANS[next].display_price}/month) for ${PLANS[next].monthly_polishes} polishes.`
+      : "";
+    return NextResponse.json(
+      {
+        error: `QUOTA_EXCEEDED: You've used ${quota.used} of ${quota.limit} image polishes on the ${PLANS[quota.plan as Plan].name} plan this month.${upgradeNote}`,
+        plan: quota.plan,
+        used: quota.used,
+        limit: quota.limit,
+        suggested_upgrade: next,
+      },
+      { status: 402 }
+    );
+  }
 
   let listingId: string;
   let mode: EnhanceMode;
@@ -178,6 +201,14 @@ export async function POST(req: NextRequest) {
       ? { originalUrl: url, enhancedUrl: got.enhancedUrl, error: got.error }
       : { originalUrl: url, enhancedUrl: url, error: "Skipped" };
   });
+
+  // Count one polish action against the monthly quota IF Gemini ran
+  // fresh work (i.e. it wasn't 100% cache hits). Pure cache replays
+  // shouldn't burn the seller's quota — they already paid for those.
+  const billed = fresh.filter((f) => !f.error).length;
+  if (billed > 0) {
+    await incrementUsage(userId, "polish");
+  }
 
   return NextResponse.json({
     enhanced:    orderedResult,

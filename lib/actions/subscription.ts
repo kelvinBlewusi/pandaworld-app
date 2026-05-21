@@ -3,9 +3,18 @@
 import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
 import type { Plan, Subscription } from "@/lib/types/subscription";
-import { PLAN_LIMITS } from "@/lib/types/subscription";
+import {
+  checkQuota,
+  getQuotaSummary,
+  type QuotaSummary,
+} from "@/lib/billing/quota";
 
 // ─── Get or initialise subscription row ──────────────────────────────────────
+//
+// Used by the billing settings page to render plan name, status,
+// period_end, paystack metadata. Quota numbers come from
+// getQuotaSummary() — keep the two concerns separate so the UI can
+// request only what it needs.
 
 export async function getSubscription(): Promise<Subscription | null> {
   const { userId } = await auth();
@@ -17,7 +26,14 @@ export async function getSubscription(): Promise<Subscription | null> {
   const { data, error } = await db
     .from("subscriptions")
     .upsert(
-      { user_id: userId, plan: "free", status: "active" },
+      {
+        user_id: userId,
+        plan: "free",
+        status: "active",
+        listings_used_this_period: 0,
+        polishes_used_this_period: 0,
+        period_start: new Date().toISOString(),
+      },
       { onConflict: "user_id", ignoreDuplicates: true }
     )
     .select()
@@ -36,22 +52,24 @@ export async function getSubscription(): Promise<Subscription | null> {
   return data as Subscription;
 }
 
-// ─── Count listings for the current user ────────────────────────────────────
+// ─── Quota summary for the billing page ─────────────────────────────────────
+//
+// Thin wrapper so client components can call it without importing the
+// quota module directly (quota.ts is "use server" — its exports can
+// be called from client components, but going via this server action
+// keeps the import surface tidy).
 
-export async function getListingCount(): Promise<number> {
+export async function getQuotaSummaryForCurrentUser(): Promise<QuotaSummary | null> {
   const { userId } = await auth();
-  if (!userId) return 0;
-
-  const db = createServerClient();
-  const { count } = await db
-    .from("listings")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", userId);
-
-  return count ?? 0;
+  if (!userId) return null;
+  return getQuotaSummary(userId);
 }
 
 // ─── Check if user can create a new listing ──────────────────────────────────
+//
+// Delegates to checkQuota in lib/billing/quota.ts. Kept here for
+// backwards compatibility with existing callers that imported the
+// canCreateListing name — internally it's a one-line shim now.
 
 export async function canCreateListing(): Promise<{
   allowed: boolean;
@@ -62,18 +80,13 @@ export async function canCreateListing(): Promise<{
   const { userId } = await auth();
   if (!userId) return { allowed: false, plan: "free", used: 0, limit: 5 };
 
-  const db = createServerClient();
-
-  const [subResult, countResult] = await Promise.all([
-    db.from("subscriptions").select("plan").eq("user_id", userId).maybeSingle(),
-    db.from("listings").select("id", { count: "exact", head: true }).eq("user_id", userId),
-  ]);
-
-  const plan = (subResult.data?.plan ?? "free") as Plan;
-  const used = countResult.count ?? 0;
-  const limit = PLAN_LIMITS[plan];
-
-  return { allowed: used < limit, plan, used, limit };
+  const result = await checkQuota(userId, "listing");
+  return {
+    allowed: result.allowed,
+    plan:    result.plan,
+    used:    result.used,
+    limit:   result.limit,
+  };
 }
 
 // ─── Cancel Paystack subscription ────────────────────────────────────────────

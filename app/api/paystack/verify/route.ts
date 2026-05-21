@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
+import { type Plan } from "@/lib/billing/plans";
+
+const VALID_PLANS: Plan[] = ["starter", "pro", "business"];
 
 // ─── GET /api/paystack/verify?reference=xxx ───────────────────────────────────
 // Called after Paystack redirects back to the billing page.
@@ -49,21 +52,35 @@ export async function GET(request: Request) {
   const emailToken = tx.subscription?.email_token ?? null;
   const customerCode = tx.customer?.customer_code ?? null;
 
+  // Tier comes from the metadata we attached during initialize.
+  // Default to "pro" so callers that never set metadata still upgrade
+  // sensibly (matches old behaviour). Webhook is authoritative — verify
+  // is just the fast-path so the UI doesn't have to wait for the
+  // webhook round-trip before showing "you're upgraded".
+  const requestedPlan = (tx.metadata?.plan as string | undefined) ?? "pro";
+  const plan: Plan = VALID_PLANS.includes(requestedPlan as Plan)
+    ? (requestedPlan as Plan)
+    : "pro";
+
   // Calculate period end (30 days from now)
   const periodEnd = new Date();
   periodEnd.setDate(periodEnd.getDate() + 30);
 
-  // Upsert subscription record
+  // Upsert subscription record. Reset the quota window since this is
+  // a fresh billing period.
   const db = createServerClient();
   const { error } = await db.from("subscriptions").upsert(
     {
       user_id: userId,
-      plan: "pro",
+      plan,
       status: "active",
       paystack_customer_code: customerCode,
       paystack_subscription_code: subscriptionCode,
       paystack_email_token: emailToken,
       current_period_end: periodEnd.toISOString(),
+      period_start: new Date().toISOString(),
+      listings_used_this_period: 0,
+      polishes_used_this_period: 0,
       updated_at: new Date().toISOString(),
     },
     { onConflict: "user_id" }
@@ -77,5 +94,5 @@ export async function GET(request: Request) {
     );
   }
 
-  return NextResponse.json({ success: true, plan: "pro" });
+  return NextResponse.json({ success: true, plan });
 }

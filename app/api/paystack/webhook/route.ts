@@ -4,6 +4,12 @@ import { createHmac } from "crypto";
 import { clerkClient } from "@clerk/nextjs/server";
 import { sendEmail } from "@/lib/email/send";
 import { paymentConfirmationEmail } from "@/lib/email/templates";
+import { PLANS, type Plan } from "@/lib/billing/plans";
+
+// Valid tier names the webhook is allowed to upsert into the plan
+// column. We refuse anything else so a malformed metadata field can't
+// quietly land an unknown tier in the DB.
+const VALID_PLANS: Plan[] = ["starter", "pro", "business"];
 
 // ─── POST /api/paystack/webhook ───────────────────────────────────────────────
 // Paystack calls this URL for all subscription lifecycle events.
@@ -54,16 +60,32 @@ export async function POST(request: Request) {
       const periodEnd = new Date();
       periodEnd.setDate(periodEnd.getDate() + 30);
 
-      // Upgrade (or renew) user plan
+      // Tier comes from the metadata we attached during /initialize.
+      // Fall back to "pro" if missing — legacy Paystack subscriptions
+      // (created before the tier param existed) ALL paid GHS 50/mo so
+      // their renewals should keep landing on pro. That keeps existing
+      // Pro renewals working through the migration window.
+      const requestedPlan = (tx.metadata?.plan as string | undefined) ?? "pro";
+      const plan: Plan = VALID_PLANS.includes(requestedPlan as Plan)
+        ? (requestedPlan as Plan)
+        : "pro";
+
+      // Upgrade (or renew) user plan + reset quota counters so the new
+      // billing window starts at 0 used. period_start tracks the quota
+      // window separately from current_period_end (Paystack's renewal
+      // anchor); we sync them here when a payment lands.
       const { error: subError } = await db.from("subscriptions").upsert(
         {
           user_id: userId,
-          plan: "pro",
+          plan,
           status: "active",
           paystack_customer_code: customerCode,
           paystack_subscription_code: subscriptionCode,
           paystack_email_token: emailToken,
           current_period_end: periodEnd.toISOString(),
+          period_start: new Date().toISOString(),
+          listings_used_this_period: 0,
+          polishes_used_this_period: 0,
           updated_at: new Date().toISOString(),
         },
         { onConflict: "user_id" }
@@ -78,12 +100,13 @@ export async function POST(request: Request) {
       }
 
       // Record in billing history
+      const planConfig = PLANS[plan];
       const { error: histError } = await db.from("billing_events").insert({
         user_id: userId,
         event_type: "payment_success",
         amount_ghs: tx.amount / 100,
         reference: tx.reference,
-        description: "Pro plan — monthly subscription",
+        description: `${planConfig.name} plan — monthly subscription`,
       });
 
       if (histError) {
@@ -113,7 +136,7 @@ export async function POST(request: Request) {
             firstName: clerkUser.firstName,
             amount:    `GHS ${(tx.amount / 100).toFixed(2)}`,
             reference: tx.reference,
-            plan:      "Pro plan — monthly subscription",
+            plan:      `${planConfig.name} plan — monthly subscription`,
             appUrl,
           });
           await sendEmail({
@@ -164,12 +187,15 @@ export async function POST(request: Request) {
         break;
       }
 
+      // Paystack subscription.create lands after charge.success on
+      // recurring flows. We DON'T want to overwrite the plan the user
+      // actually picked back to "pro" — the charge.success handler
+      // already set it from metadata. Just attach the recurring codes.
       const { error: updateError } = await db
         .from("subscriptions")
         .update({
           paystack_subscription_code: sub.subscription_code,
           paystack_email_token: sub.email_token,
-          plan: "pro",
           status: "active",
           updated_at: new Date().toISOString(),
         })
