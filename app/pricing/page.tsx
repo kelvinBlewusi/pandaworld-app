@@ -244,17 +244,23 @@ function PricingCard({
           </li>
         ))}
       </ul>
-      <Link
-        href={ctaHref}
-        className={`mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors ${
-          highlight
-            ? "bg-orange-500 text-white shadow-sm hover:bg-orange-600"
-            : "border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
-        }`}
-      >
-        {ctaLabel}
-        <ArrowRight className="h-4 w-4" />
-      </Link>
+      {/* CTA wrapper — mt-auto pins the button to the bottom of every
+          card so all four CTAs sit on the same y-line, even when the
+          feature lists differ in length. h-11 keeps button heights
+          identical across cards (mobile + desktop). */}
+      <div className="mt-6 pt-1">
+        <Link
+          href={ctaHref}
+          className={`inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold transition-colors ${
+            highlight
+              ? "bg-orange-500 text-white shadow-sm hover:bg-orange-600"
+              : "border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
+          }`}
+        >
+          {ctaLabel}
+          <ArrowRight className="h-4 w-4" />
+        </Link>
+      </div>
     </div>
   );
 }

@@ -21,6 +21,7 @@ import {
   X,
   Database,
   Tags,
+  Globe,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -215,6 +216,16 @@ export function Sidebar({
             <Link href="/settings/account" className="flex items-center gap-2 cursor-pointer">
               <Settings className="h-4 w-4" />
               Settings
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            {/* "Landing page" — lets logged-in sellers see the marketing
+                copy / pricing comparison without losing their session.
+                The root path (/) auto-redirects them to /dashboard, so
+                /landing is the only way to get back to the public view. */}
+            <Link href="/landing" className="flex items-center gap-2 cursor-pointer">
+              <Globe className="h-4 w-4" />
+              Landing page
             </Link>
           </DropdownMenuItem>
           <DropdownMenuSeparator />

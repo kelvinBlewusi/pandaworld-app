@@ -80,7 +80,21 @@ export async function POST(req: NextRequest) {
 
   const plan = PLANS[tier];
   const planCode = getPaystackPlanCode(tier);
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3002";
+
+  // App URL for the Paystack callback. Three-step fallback:
+  //   1. NEXT_PUBLIC_APP_URL — set this for the canonical domain
+  //      (e.g. pandaworld.gh). Recommended for production.
+  //   2. VERCEL_URL — Vercel auto-injects this for every deployment
+  //      (e.g. pandaworld-app-xyz.vercel.app). Keeps preview deploys
+  //      self-redirecting instead of bouncing back to localhost.
+  //   3. localhost — last-resort for unconfigured local dev.
+  //
+  // The previous fallback was localhost only, which meant users on
+  // any deployment without NEXT_PUBLIC_APP_URL got redirected to
+  // http://localhost:3002 after payment — broken in prod.
+  const appUrl =
+    process.env.NEXT_PUBLIC_APP_URL
+      ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3002");
 
   // ── Build transaction payload ─────────────────────────────────────────────
   // Paystack uses the smallest currency unit, so GHS 30 = 3000 pesewas.

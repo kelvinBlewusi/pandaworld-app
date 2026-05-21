@@ -444,6 +444,12 @@ function PlanCard({
         ))}
       </ul>
 
+      {/* CTA wrapper — mt-auto + consistent h-10 keeps buttons aligned
+          to the bottom of every card AND at the same y-position even
+          when feature lists have different lengths. On mobile the cards
+          stack, so each button is full-width by default; on desktop
+          all four cards in the row share the same baseline. */}
+      <div className="mt-auto pt-1">
       {/* CTA logic:
             - Free + on Free → "Current plan"
             - Free + on paid → cancel CTA (downgrade is just cancel + wait)
@@ -454,14 +460,14 @@ function PlanCard({
         isPaid ? (
           <Button
             variant="outline"
-            className="w-full text-amber-700 border-amber-200 hover:border-amber-300"
+            className="h-10 w-full text-sm text-amber-700 border-amber-200 hover:border-amber-300"
             onClick={onCancel}
             disabled={!hasPaystackSubscription}
           >
             Cancel to downgrade
           </Button>
         ) : (
-          <Button variant="outline" disabled className="w-full cursor-default">
+          <Button variant="outline" disabled className="h-10 w-full cursor-default text-sm">
             Current plan
           </Button>
         )
@@ -469,20 +475,20 @@ function PlanCard({
         hasPaystackSubscription ? (
           <Button
             variant="outline"
-            className="w-full text-red-500 hover:text-red-600 border-red-200 hover:border-red-300"
+            className="h-10 w-full text-sm text-red-500 hover:text-red-600 border-red-200 hover:border-red-300"
             onClick={onCancel}
           >
             Cancel subscription
           </Button>
         ) : (
-          <Button variant="outline" disabled className="w-full cursor-default">
+          <Button variant="outline" disabled className="h-10 w-full cursor-default text-sm">
             Active — renews manually
           </Button>
         )
       ) : (
         <Button
           className={cn(
-            "w-full gap-2",
+            "h-10 w-full gap-2 text-sm",
             isHighlighted &&
               "bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700",
           )}
@@ -503,6 +509,7 @@ function PlanCard({
           )}
         </Button>
       )}
+      </div>
     </div>
   );
 }
