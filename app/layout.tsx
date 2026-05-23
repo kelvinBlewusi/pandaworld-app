@@ -177,6 +177,21 @@ export default function RootLayout({
     <ClerkProvider>
       <html lang="en" className={inter.variable}>
         <head>
+          {/* Google Search Console domain ownership.
+              The same tag is ALSO declared in the Metadata object above
+              (verification.google) — that's the canonical Next.js path
+              and produces an identical <meta> tag. Having both is
+              harmless: Google handles duplicate verification meta tags
+              fine, and the literal tag here means a quick "view source"
+              on the live site shows the tag verbatim without trusting
+              the metadata API. Remove either one once verification is
+              complete; both have to be kept in sync if you rotate the
+              code. */}
+          <meta
+            name="google-site-verification"
+            content="IydEorSj09jedbfrhwFWb4M3X1WuPIggL8QQrfY68SM"
+          />
+
           {/* JSON-LD structured data — rendered as raw text inside a
               script tag with type="application/ld+json". Two separate
               scripts so we can iterate one without invalidating the
