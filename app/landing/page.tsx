@@ -18,9 +18,12 @@ import { PublicLanding } from "@/components/marketing/public-landing";
 // pointing here so logged-in sellers can find it without typing the
 // URL.
 
-export const metadata = {
-  title:       "PandaWorld — AI listings for Jumia Ghana",
-  description: "Generate complete Jumia listings from product photos in seconds. AI-picked categories, attributes filled, push straight to Vendor Center.",
+export const metadata: import("next").Metadata = {
+  title:       "AI Listing Assistant for Jumia Ghana Sellers",
+  description: "Generate complete Jumia listings from product photos in seconds. AI-picked categories, attributes filled, white-background images, push straight to Vendor Center. Free for 5 listings every month.",
+  alternates: {
+    canonical: "/landing",
+  },
 };
 
 export default async function LandingPage() {

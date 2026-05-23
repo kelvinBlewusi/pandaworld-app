@@ -21,9 +21,16 @@ import { Wordmark } from "@/components/marketing/wordmark";
 // Lists every category of data we collect, the legal basis, retention,
 // the seller's rights, and the contact path for data-subject requests.
 
-export const metadata = {
-  title:       "Privacy Policy · PandaWorld",
-  description: "How PandaWorld collects, processes, stores and shares your data — including the third-party services we rely on.",
+export const metadata: import("next").Metadata = {
+  title:       "Privacy Policy",
+  description: "How PandaWorld collects, uses, stores and shares your data. Compliant with the Ghana Data Protection Act 2012 (Act 843). Details on Clerk, Supabase, Google Gemini, PhotoRoom, Paystack, Vercel processors.",
+  alternates: {
+    canonical: "/privacy",
+  },
+  robots: {
+    index:  true,
+    follow: true,
+  },
 };
 
 const LAST_UPDATED = "2026-05-20";

@@ -17,9 +17,18 @@ import { Wordmark } from "@/components/marketing/wordmark";
 // Sections are numbered for easy reference if Support ever has to
 // quote one to a seller in a dispute.
 
-export const metadata = {
-  title:       "Terms of Service · PandaWorld",
-  description: "Terms of Service for using PandaWorld — the AI-powered Jumia Ghana listing assistant.",
+export const metadata: import("next").Metadata = {
+  title:       "Terms of Service",
+  description: "Terms of Service for using PandaWorld — the AI-powered Jumia Ghana listing assistant. Subscription terms, refunds, intellectual property, governing law (Ghana).",
+  alternates: {
+    canonical: "/terms",
+  },
+  // Legal pages don't need rich social-sharing previews; keep robots
+  // indexable but don't waste OG image bandwidth on them.
+  robots: {
+    index:  true,
+    follow: true,
+  },
 };
 
 const LAST_UPDATED = "2026-05-20";

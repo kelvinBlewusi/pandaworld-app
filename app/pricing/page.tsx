@@ -14,9 +14,26 @@ import { getPublicPlans, type Plan } from "@/lib/billing/plans";
 // React-only spec) so the GHS amounts get indexed by Google and surface
 // in seller searches like "Jumia listing tool Ghana price".
 
-export const metadata = {
-  title:       "Pricing · PandaWorld",
-  description: "Free for 5 listings a month. From GHS 30 / month for AI-generated Jumia listings, image enhancement, and one-click push to Vendor Center. Cancel any time.",
+// Per-page metadata — overrides the root layout's defaults for SEO.
+// The title template `%s · PandaWorld` in app/layout.tsx renders this
+// as "Pricing · PandaWorld" in the browser tab + SERP.
+export const metadata: import("next").Metadata = {
+  title:       "Pricing — Jumia Ghana Listing Tool",
+  description: "PandaWorld pricing for Jumia Ghana sellers. Free for 5 listings/month. Starter GHS 30, Pro GHS 65, Business GHS 120 per month. Pay with Mobile Money or card. Cancel any time.",
+  keywords: [
+    "PandaWorld pricing",
+    "Jumia tool pricing Ghana",
+    "AI listing tool cost",
+    "Jumia seller subscription Ghana",
+  ],
+  openGraph: {
+    title:       "Pricing — PandaWorld for Jumia Ghana Sellers",
+    description: "Free for 5 listings/month. Paid plans from GHS 30/month. Pay with Mobile Money or card. Cancel any time.",
+    type:        "website",
+  },
+  alternates: {
+    canonical: "/pricing",
+  },
 };
 
 // Map each tier id to a Lucide icon. Kept here (not in plans.ts) because
