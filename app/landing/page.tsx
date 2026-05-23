@@ -19,8 +19,8 @@ import { PublicLanding } from "@/components/marketing/public-landing";
 // URL.
 
 export const metadata: import("next").Metadata = {
-  title:       "AI Listing Assistant for Jumia Ghana Sellers",
-  description: "Generate complete Jumia listings from product photos in seconds. AI-picked categories, attributes filled, white-background images, push straight to Vendor Center. Free for 5 listings every month.",
+  title:       "AI Listing Assistant for Jumia Africa Sellers",
+  description: "Generate complete Jumia listings from product photos in seconds. AI-picked categories, attributes filled, white-background images, push straight to Vendor Center. Works across Ghana, Nigeria, Kenya, Egypt, Morocco, and more. Free for 5 listings every month.",
   alternates: {
     canonical: "/landing",
   },

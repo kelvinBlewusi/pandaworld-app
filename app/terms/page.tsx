@@ -19,7 +19,7 @@ import { Wordmark } from "@/components/marketing/wordmark";
 
 export const metadata: import("next").Metadata = {
   title:       "Terms of Service",
-  description: "Terms of Service for using PandaWorld — the AI-powered Jumia Ghana listing assistant. Subscription terms, refunds, intellectual property, governing law (Ghana).",
+  description: "Terms of Service for using PandaWorld — the AI-powered Jumia listing assistant for sellers across Africa. Subscription terms, refunds, intellectual property, governing law (Ghana).",
   alternates: {
     canonical: "/terms",
   },
@@ -57,17 +57,22 @@ export default function TermsPage() {
             These Terms of Service (&quot;Terms&quot;) govern your use of{" "}
             <strong>{COMPANY_NAME}</strong> (&quot;we&quot;,{" "}
             &quot;us&quot;, &quot;the Service&quot;), an AI-powered listing
-            assistant for sellers on Jumia Ghana. By creating an account or
-            using the Service, you agree to these Terms. If you do not
-            agree, do not use the Service.
+            assistant for sellers on Jumia&apos;s marketplaces across
+            Africa. By creating an account or using the Service, you
+            agree to these Terms. If you do not agree, do not use the
+            Service.
           </p>
 
           <h2>1. Who can use {COMPANY_NAME}</h2>
           <p>
-            You must be at least 18 years old and legally able to enter into a
-            contract under Ghanaian law. The Service is intended for active
-            Jumia Ghana sellers — you must hold a valid Vendor Center
-            account in good standing.
+            You must be at least 18 years old and legally able to enter
+            into a contract under Ghanaian law (regardless of where you
+            are located, since {COMPANY_NAME} is governed by Ghanaian
+            law — see Section 13). The Service is intended for active
+            Jumia sellers in any Jumia African market we support
+            (Ghana, Nigeria, Kenya, Egypt, Morocco, Senegal,
+            Ivory Coast, Tanzania, Uganda) — you must hold a valid
+            Vendor Center account in good standing.
           </p>
 
           <h2>2. What the Service does</h2>

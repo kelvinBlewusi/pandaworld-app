@@ -32,22 +32,33 @@ const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://pandaworldai.site";
 export const metadata: Metadata = {
   metadataBase: new URL(APP_URL),
   title: {
-    default:  "PandaWorld — AI Listing Assistant for Jumia Ghana Sellers",
+    default:  "PandaWorld — AI Listing Assistant for Jumia Africa Sellers",
     template: "%s · PandaWorld",
   },
   description:
-    "AI-powered product listings for Jumia Ghana. Snap a photo, get a complete listing in seconds — category, attributes, images, pushed straight to Vendor Center.",
+    "AI-powered product listings for Jumia sellers across Africa. Snap a photo, get a complete listing in seconds — category, attributes, images, pushed straight to Vendor Center. Works in Ghana, Nigeria, Kenya, Egypt, Morocco, and more.",
   applicationName: "PandaWorld",
+  // Keyword set spans every Jumia market we technically support (the
+  // onboarding flow already lists 9 countries). Per-country keywords
+  // here drive long-tail SEO for "Jumia Nigeria tool" / "Jumia Kenya
+  // listing app" style searches without diluting the core ranking.
   keywords: [
-    "Jumia Ghana",
     "Jumia seller tool",
     "Jumia Vendor Center",
+    "Jumia Africa",
+    "Jumia Ghana",
+    "Jumia Nigeria",
+    "Jumia Kenya",
+    "Jumia Egypt",
+    "Jumia Morocco",
+    "Jumia Senegal",
+    "Jumia Ivory Coast",
+    "Jumia Uganda",
     "AI product listing",
-    "Ghana e-commerce",
-    "product upload Ghana",
+    "African e-commerce",
+    "product upload Africa",
     "Jumia category picker",
     "Jumia QC",
-    "Accra software company",
     "product image background removal",
     "AI listing tool",
   ],
@@ -69,15 +80,19 @@ export const metadata: Metadata = {
   // or Next.js will emit duplicate og:image tags.
   openGraph: {
     type:        "website",
-    locale:      "en_GH",
+    // Generic English locale — sellers across all 9 Jumia African
+    // markets read the page; en_GH would be misleading for Nigerian /
+    // Kenyan / Egyptian visitors. Open Graph treats "en_US" as the
+    // default for English content without a specific regional fit.
+    locale:      "en_US",
     url:         APP_URL,
     siteName:    "PandaWorld",
-    title:       "PandaWorld — AI Listing Assistant for Jumia Ghana Sellers",
-    description: "Snap a photo, get a complete Jumia listing in seconds. AI picks the category, fills attributes, polishes images, and pushes to Vendor Center. Free for 5 listings every month.",
+    title:       "PandaWorld — AI Listing Assistant for Jumia Africa Sellers",
+    description: "Snap a photo, get a complete Jumia listing in seconds. AI picks the category, fills attributes, polishes images, and pushes to Vendor Center. Works across Africa. Free for 5 listings every month.",
   },
   twitter: {
     card:        "summary_large_image",
-    title:       "PandaWorld — AI Listing Assistant for Jumia Ghana",
+    title:       "PandaWorld — AI Listing Assistant for Jumia Africa",
     description: "Snap a photo, get a complete Jumia listing in seconds. Free for 5 listings every month.",
   },
   // Google Search Console domain ownership.
@@ -127,9 +142,13 @@ const organizationLd = {
   // accepts it as a logo source. Upgrade to a dedicated square logo
   // once you have brand assets.
   logo:            `${APP_URL}/opengraph-image`,
-  description:     "AI-powered product listing assistant for Jumia Ghana sellers.",
+  description:     "AI-powered product listing assistant for Jumia sellers across Africa.",
   foundingDate:    "2026",
   founders:        [{ "@type": "Person", name: "PandaWorld Team" }],
+  // The legal entity is based in Accra (where the company is
+  // registered + governed). That stays accurate even as we serve
+  // sellers in other Jumia markets — Google reads this for the
+  // knowledge-panel "headquarters" line.
   address: {
     "@type":          "PostalAddress",
     addressCountry:   "GH",
@@ -140,7 +159,21 @@ const organizationLd = {
     contactType:     "customer support",
     email:           "help.pandaworldai@gmail.com",
     availableLanguage: ["English"],
-    areaServed:      "GH",
+    // We serve every African country where Jumia operates. Each entry
+    // gives Google a separate localised signal for SERPs in that
+    // market (e.g. a Nigerian search for "Jumia listing tool" sees us
+    // because areaServed includes NG).
+    areaServed: [
+      { "@type": "Country", name: "Ghana"        },
+      { "@type": "Country", name: "Nigeria"      },
+      { "@type": "Country", name: "Kenya"        },
+      { "@type": "Country", name: "Egypt"        },
+      { "@type": "Country", name: "Morocco"      },
+      { "@type": "Country", name: "Senegal"      },
+      { "@type": "Country", name: "Ivory Coast"  },
+      { "@type": "Country", name: "Tanzania"     },
+      { "@type": "Country", name: "Uganda"       },
+    ],
   },
   sameAs: [
     // Add socials here once they exist (Twitter, LinkedIn, etc.)
@@ -153,7 +186,7 @@ const softwareApplicationLd = {
   name:              "PandaWorld",
   operatingSystem:   "Web",
   applicationCategory: "BusinessApplication",
-  description:       "AI-powered listing assistant for Jumia Ghana sellers. Auto-generates titles, descriptions, categories, attributes, and product images. Pushes listings to Jumia Vendor Center.",
+  description:       "AI-powered listing assistant for Jumia sellers across Africa. Auto-generates titles, descriptions, categories, attributes, and product images. Pushes listings to Jumia Vendor Center.",
   url:               APP_URL,
   offers: [
     { "@type": "Offer", name: "Free",     price: "0",   priceCurrency: "GHS", description: "5 listings every month" },
@@ -163,8 +196,10 @@ const softwareApplicationLd = {
   ],
   audience: {
     "@type":        "Audience",
-    audienceType:   "Jumia Ghana sellers",
-    geographicArea: { "@type": "Country", name: "Ghana" },
+    audienceType:   "Jumia sellers across Africa",
+    // No single geographicArea — we serve nine Jumia markets. Listing
+    // them all here would over-stuff the schema; the Organization's
+    // `areaServed` array already covers the full footprint.
   },
 } as const;
 

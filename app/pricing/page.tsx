@@ -18,16 +18,19 @@ import { getPublicPlans, type Plan } from "@/lib/billing/plans";
 // The title template `%s · PandaWorld` in app/layout.tsx renders this
 // as "Pricing · PandaWorld" in the browser tab + SERP.
 export const metadata: import("next").Metadata = {
-  title:       "Pricing — Jumia Ghana Listing Tool",
-  description: "PandaWorld pricing for Jumia Ghana sellers. Free for 5 listings/month. Starter GHS 30, Pro GHS 65, Business GHS 120 per month. Pay with Mobile Money or card. Cancel any time.",
+  title:       "Pricing — Jumia Africa Listing Tool",
+  description: "PandaWorld pricing for Jumia sellers across Africa. Free for 5 listings/month. Starter GHS 30, Pro GHS 65, Business GHS 120 per month. Pay with Mobile Money or card. Cancel any time.",
   keywords: [
     "PandaWorld pricing",
-    "Jumia tool pricing Ghana",
+    "Jumia tool pricing",
     "AI listing tool cost",
-    "Jumia seller subscription Ghana",
+    "Jumia seller subscription",
+    "Jumia Africa pricing",
+    "Jumia Nigeria tool cost",
+    "Jumia Kenya pricing",
   ],
   openGraph: {
-    title:       "Pricing — PandaWorld for Jumia Ghana Sellers",
+    title:       "Pricing — PandaWorld for Jumia Africa Sellers",
     description: "Free for 5 listings/month. Paid plans from GHS 30/month. Pay with Mobile Money or card. Cancel any time.",
     type:        "website",
   },

@@ -19,7 +19,7 @@ import { ImageResponse } from "next/og";
 
 export const runtime = "edge";
 
-export const alt    = "PandaWorld — AI listings for Jumia Ghana sellers";
+export const alt    = "PandaWorld — AI listings for Jumia Africa sellers";
 export const size   = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -56,7 +56,7 @@ export default async function OpenGraphImage() {
           }}
         >
           <span style={{ fontSize: "24px" }}>🐼</span>
-          Built for Jumia Ghana sellers
+          Built for Jumia Africa sellers
         </div>
 
         {/* Main headline */}
