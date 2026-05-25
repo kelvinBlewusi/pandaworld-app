@@ -40,8 +40,46 @@ export async function GET(request: Request) {
   const data = await res.json();
 
   if (!res.ok || data.data?.status !== "success") {
+    // Diagnostic log — when a real seller hits this, the Vercel log
+    // entry has enough info to fix the cause without re-running them
+    // through another payment.
+    //
+    // Reveals the most common failure modes:
+    //   - 404 from Paystack → reference doesn't exist in this account
+    //     (wrong secret-key mode: live key vs test transaction, or vice
+    //     versa)
+    //   - 401 from Paystack → secret key invalid / expired
+    //   - tx.status = "failed" → MoMo declined, card refused
+    //   - tx.status = "abandoned" → user closed the page before paying
+    //
+    // Secret-key prefix is logged WITHOUT the rest of the key so an
+    // ops engineer can confirm the mode without exposing credentials.
+    console.error(
+      "[Paystack verify] failed", JSON.stringify({
+        reference,
+        userId,
+        paystack_http_status: res.status,
+        paystack_message:     data?.message,
+        tx_status:            data?.data?.status,
+        secret_key_prefix:    secretKey.slice(0, 8),  // "sk_live_" or "sk_test_"
+        paystack_body:        data,  // full body for forensic
+      }, null, 2)
+    );
+
     return NextResponse.json(
-      { error: "Payment not successful", status: data.data?.status },
+      {
+        error: data?.data?.status === "failed"
+          ? "Payment failed at Paystack (the card or wallet was declined). Try again."
+          : data?.data?.status === "abandoned"
+            ? "Payment was abandoned — the Paystack window was closed before completing. Try again."
+            : res.status === 404
+              ? `Transaction not found in Paystack (${secretKey.startsWith("sk_live_") ? "live" : "test"} mode). The secret-key mode in Vercel may not match the mode the page was paid in.`
+              : data?.message
+                ? `Paystack error: ${data.message}`
+                : "Payment not successful",
+        status: data?.data?.status,
+        paystack_http_status: res.status,
+      },
       { status: 400 }
     );
   }
