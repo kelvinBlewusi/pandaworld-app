@@ -234,3 +234,32 @@ export function getNextTierUpgrade(plan: Plan): Plan | null {
     case "business": return null;
   }
 }
+
+/**
+ * Find the tier whose price matches the given amount (in GHS pesewas).
+ * Returns null if no paid tier matches.
+ *
+ * Used by /api/paystack/verify + /api/paystack/webhook as the most
+ * reliable tier resolution path — Paystack always passes back the
+ * actual amount charged via tx.amount, regardless of whether
+ * metadata or reference round-tripped. The seller paid for what
+ * they paid for, not what they intended.
+ *
+ * Each Payment Page has a fixed amount tied to one tier:
+ *   GHS 30  → starter
+ *   GHS 65  → pro
+ *   GHS 120 → business
+ *
+ * If a Page were configured for custom amounts, the matcher could
+ * return null on an unexpected amount — caller should fall back to
+ * metadata / reference / sensible default in that case.
+ */
+export function findTierByAmount(amountInPesewas: number): Plan | null {
+  if (typeof amountInPesewas !== "number" || !Number.isFinite(amountInPesewas)) {
+    return null;
+  }
+  const match = Object.values(PLANS).find(
+    (p) => isPaidPlan(p.id) && p.price_ghs_pesewas === amountInPesewas
+  );
+  return match?.id ?? null;
+}

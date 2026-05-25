@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
-import { type Plan } from "@/lib/billing/plans";
+import { type Plan, findTierByAmount } from "@/lib/billing/plans";
 import { parsePaystackReference } from "@/lib/billing/paystack-reference";
 
 const VALID_PLANS: Plan[] = ["starter", "pro", "business"];
@@ -102,25 +102,46 @@ export async function GET(request: Request) {
   const emailToken = tx.subscription?.email_token ?? null;
   const customerCode = tx.customer?.customer_code ?? null;
 
-  // Tier resolution — three-tier fallback (May 2026 Payment Pages fix):
-  //   1. Read from tx.metadata.plan — the canonical source set by /initialize
-  //   2. If missing, parse from tx.reference (format: pw.<userId>.<tier>.<rand>)
-  //      Paystack Payment Pages occasionally drop the metadata URL param,
-  //      but the reference itself round-trips verbatim, so encoding the
-  //      tier in the reference too gives us a working fallback.
-  //   3. Fall back to "pro" if both fail. Webhook is authoritative; verify
-  //      is just the fast-path so the UI doesn't wait for the webhook
-  //      round-trip before showing "you're upgraded".
-  const metadataPlan = tx.metadata?.plan as string | undefined;
+  // Tier resolution — FOUR-step fallback (May 2026 Payment Pages fix):
+  //   1. findTierByAmount(tx.amount) — the AUTHORITATIVE source.
+  //      Paystack always returns the amount charged. Each Payment Page
+  //      has a fixed amount tied to exactly one tier (30/65/120 GHS), so
+  //      matching by amount is bulletproof — it's based on what the
+  //      seller actually paid, not what we hoped Paystack would round-trip.
+  //   2. tx.metadata.plan — what we set in /initialize. Often dropped by
+  //      Payment Pages, but we still check in case it survived.
+  //   3. parsePaystackReference(tx.reference) — Payment Pages override our
+  //      reference with their own (T....), so this almost always returns
+  //      null here. Kept for legacy /transaction/initialize transactions.
+  //   4. Hard fall back to "pro" if all three fail and log loudly. Should
+  //      never happen in production with our fixed-amount pages.
+  const amountTier      = findTierByAmount(tx.amount);
+  const metadataPlan    = tx.metadata?.plan as string | undefined;
   const referenceParsed = parsePaystackReference(tx.reference);
-  const requestedPlan = metadataPlan ?? referenceParsed.tier ?? "pro";
+  const requestedPlan   = amountTier ?? metadataPlan ?? referenceParsed.tier ?? "pro";
+
   const plan: Plan = VALID_PLANS.includes(requestedPlan as Plan)
     ? (requestedPlan as Plan)
     : "pro";
 
-  if (!metadataPlan && referenceParsed.tier) {
+  // Telemetry: log how the tier was resolved on each successful verify.
+  // Helps us notice if metadata starts working / breaking, or if the
+  // amount-match path is the only thing keeping activations alive.
+  console.info(
+    `[Paystack verify] resolved tier "${plan}" via ${
+      amountTier
+        ? `amount match (${tx.amount} pesewas)`
+        : metadataPlan
+          ? "metadata.plan"
+          : referenceParsed.tier
+            ? "reference parse"
+            : "default fallback (CHECK ME)"
+    } for user ${userId}, reference ${tx.reference}`,
+  );
+
+  if (!amountTier && metadataPlan) {
     console.warn(
-      `[Paystack verify] metadata.plan missing; recovered tier "${referenceParsed.tier}" from reference "${tx.reference}".`,
+      `[Paystack verify] amount ${tx.amount} did not match any plan price; falling back to metadata.plan "${metadataPlan}".`,
     );
   }
 

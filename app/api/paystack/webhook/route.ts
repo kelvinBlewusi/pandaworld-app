@@ -4,7 +4,7 @@ import { createHmac } from "crypto";
 import { clerkClient } from "@clerk/nextjs/server";
 import { sendEmail } from "@/lib/email/send";
 import { paymentConfirmationEmail } from "@/lib/email/templates";
-import { PLANS, type Plan } from "@/lib/billing/plans";
+import { PLANS, type Plan, findTierByAmount } from "@/lib/billing/plans";
 import { parsePaystackReference } from "@/lib/billing/paystack-reference";
 
 // Valid tier names the webhook is allowed to upsert into the plan
@@ -78,17 +78,33 @@ export async function POST(request: Request) {
       const periodEnd = new Date();
       periodEnd.setDate(periodEnd.getDate() + 30);
 
-      // Tier resolution — same fallback chain.
-      // Legacy fallback to "pro" preserved so subscriptions from the
-      // pre-Payment-Pages era continue renewing at the right tier.
-      const requestedPlan = metadataPlan ?? referenceParsed.tier ?? "pro";
+      // Tier resolution — same FOUR-step fallback as /verify:
+      //   1. findTierByAmount(tx.amount) — authoritative, matches the
+      //      seller's actual charge against the fixed-amount Payment Page.
+      //   2. metadata.plan — if Paystack passed it through
+      //   3. parsePaystackReference — works for legacy /transaction/initialize
+      //   4. "pro" default if all fail (logged loudly)
+      const amountTier = findTierByAmount(tx.amount);
+      const requestedPlan = amountTier ?? metadataPlan ?? referenceParsed.tier ?? "pro";
       const plan: Plan = VALID_PLANS.includes(requestedPlan as Plan)
         ? (requestedPlan as Plan)
         : "pro";
 
-      if (!metadataPlan && referenceParsed.tier) {
+      console.info(
+        `[Paystack webhook] charge.success resolved tier "${plan}" via ${
+          amountTier
+            ? `amount match (${tx.amount} pesewas)`
+            : metadataPlan
+              ? "metadata.plan"
+              : referenceParsed.tier
+                ? "reference parse"
+                : "default fallback (CHECK ME)"
+        } for user ${userId}.`,
+      );
+
+      if (!amountTier && metadataPlan) {
         console.warn(
-          `[Paystack webhook] metadata.plan missing; recovered tier "${referenceParsed.tier}" from reference "${tx.reference}".`,
+          `[Paystack webhook] amount ${tx.amount} did not match any plan price; falling back to metadata.plan "${metadataPlan}".`,
         );
       }
 
