@@ -11,9 +11,9 @@ import {
   Loader2,
   AlertCircle,
   CalendarDays,
-  X,
   CreditCard,
   Crown,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -26,6 +26,7 @@ import {
 import type { Subscription } from "@/lib/types/subscription";
 import type { QuotaSummary } from "@/lib/billing/quota";
 import { PLANS, getPublicPlans, type Plan, type PlanConfig } from "@/lib/billing/plans";
+import { NotificationToast, type ToastInput } from "@/components/ui/notification-toast";
 
 // ─── Icon mapping ────────────────────────────────────────────────────────────
 // React-only — kept out of lib/billing/plans.ts so the plan module
@@ -51,7 +52,7 @@ function BillingPageInner() {
   const [cancelPending, startCancelTransition] = useTransition();
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
-  const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null);
+  const [toast, setToast] = useState<ToastInput | null>(null);
 
   // ── Load subscription + quota on mount ─────────────────────────────────────
   useEffect(() => {
@@ -78,7 +79,11 @@ function BillingPageInner() {
       .then(async (data) => {
         if (data.success) {
           const planName = PLANS[(data.plan as Plan) ?? "pro"]?.name ?? "your new plan";
-          showToast("success", `🎉 Welcome to ${planName}! Your plan has been activated.`);
+          showToast({
+            type:    "success",
+            title:   `Welcome to ${planName}`,
+            message: `Your plan has been activated. Quota is fresh for the new period.`,
+          });
           const [updatedSub, updatedQuota] = await Promise.all([
             getSubscription(),
             getQuotaSummaryForCurrentUser(),
@@ -87,17 +92,28 @@ function BillingPageInner() {
           setQuota(updatedQuota);
           router.replace("/settings/billing");
         } else {
-          showToast("error", `Payment verification failed: ${data.error ?? "Unknown error"}`);
+          showToast({
+            type:    "error",
+            title:   "Payment verification failed",
+            message: data.error ?? "Unknown error",
+          });
         }
       })
-      .catch(() => showToast("error", "Could not verify payment. Contact support."))
+      .catch(() =>
+        showToast({
+          type:    "error",
+          title:   "Could not verify payment",
+          message: "Network error. Contact support if this persists.",
+        })
+      )
       .finally(() => setVerifying(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function showToast(type: "success" | "error", msg: string) {
-    setToast({ type, msg });
-    setTimeout(() => setToast(null), 5000);
+  function showToast(toastInput: ToastInput) {
+    setToast(toastInput);
+    // NotificationToast handles its own auto-dismiss + slide-out;
+    // we just clear the state when it tells us it's done.
   }
 
   // ── Initiate paid-plan upgrade (or tier switch) ────────────────────────────
@@ -112,11 +128,19 @@ function BillingPageInner() {
       if (data.authorization_url) {
         window.location.href = data.authorization_url;
       } else {
-        showToast("error", data.error ?? "Could not start payment. Try again.");
+        showToast({
+          type:    "error",
+          title:   "Could not start payment",
+          message: data.error ?? "Try again in a moment.",
+        });
         setUpgradingTier(null);
       }
     } catch {
-      showToast("error", "Network error. Please try again.");
+      showToast({
+        type:    "error",
+        title:   "Network error",
+        message: "Check your connection and try again.",
+      });
       setUpgradingTier(null);
     }
   }
@@ -128,10 +152,11 @@ function BillingPageInner() {
       const result = await cancelSubscription();
       if (result.success) {
         setShowCancelConfirm(false);
-        showToast(
-          "success",
-          "Subscription cancelled. Your paid features continue until the current period ends, then revert to Free.",
-        );
+        showToast({
+          type:    "success",
+          title:   "Subscription cancelled",
+          message: "Paid features continue until the current period ends, then revert to Free.",
+        });
         const updated = await getSubscription();
         setSub(updated);
       } else {
@@ -158,26 +183,10 @@ function BillingPageInner() {
 
   return (
     <div className="space-y-8 max-w-5xl">
-      {/* Toast */}
+      {/* macOS-style notification toast (with chime via Web Audio API).
+          Sits absolutely-positioned top-right; auto-dismisses after 5s. */}
       {toast && (
-        <div
-          className={cn(
-            "fixed top-4 right-4 z-50 flex items-center gap-3 rounded-xl border px-4 py-3 shadow-lg text-sm font-medium",
-            toast.type === "success"
-              ? "bg-emerald-50 border-emerald-200 text-emerald-800"
-              : "bg-red-50 border-red-200 text-red-800"
-          )}
-        >
-          {toast.type === "success" ? (
-            <Check className="h-4 w-4 shrink-0" />
-          ) : (
-            <AlertCircle className="h-4 w-4 shrink-0" />
-          )}
-          {toast.msg}
-          <button onClick={() => setToast(null)} className="ml-2 opacity-60 hover:opacity-100">
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
+        <NotificationToast toast={toast} onClose={() => setToast(null)} />
       )}
 
       {/* Header */}
@@ -244,6 +253,7 @@ function BillingPageInner() {
             <PlanCard
               key={plan.id}
               plan={plan}
+              currentPlan={currentPlan}
               iconConfig={iconConfig}
               isCurrent={isCurrent}
               isPaid={isPaid}
@@ -377,6 +387,9 @@ function BillingPageInner() {
 
 interface PlanCardProps {
   plan: PlanConfig;
+  /** The seller's current plan — used to compute the lock state for
+      lower-tier cards (e.g. Pro user can't pick Starter). */
+  currentPlan: Plan;
   iconConfig: { Icon: React.ElementType; iconBg: string; iconColor: string };
   isCurrent: boolean;
   isPaid: boolean;
@@ -388,6 +401,7 @@ interface PlanCardProps {
 
 function PlanCard({
   plan,
+  currentPlan,
   iconConfig,
   isCurrent,
   isPaid,
@@ -400,14 +414,32 @@ function PlanCard({
   const isFree = plan.id === "free";
   const isHighlighted = plan.badge === "Most popular";
 
+  // ── Lock logic ─────────────────────────────────────────────────────────
+  // A paid plan card is LOCKED if the seller is currently on a higher
+  // paid tier (e.g. Pro user sees Starter as locked). Free is exempt
+  // from the lock — paid users see Free as "Cancel to downgrade"
+  // because cancelling the subscription is the only way to step down.
+  //
+  // Rationale: paying for a lower tier mid-subscription is wasteful
+  // (you already get more features at the current tier). To switch
+  // down, sellers cancel + repurchase the lower tier next period.
+  const currentSortOrder = PLANS[currentPlan].sort_order;
+  const isLocked =
+    !isFree &&
+    !isCurrent &&
+    isPaid &&
+    plan.sort_order < currentSortOrder;
+
   return (
     <div
       className={cn(
-        "relative rounded-2xl border bg-white p-5 flex flex-col shadow-sm",
-        isHighlighted && "ring-2 ring-blue-500"
+        "relative rounded-2xl border bg-white p-5 flex flex-col shadow-sm transition-opacity",
+        isHighlighted && "ring-2 ring-blue-500",
+        // Lock state: dim the whole card but keep the content readable
+        isLocked && "opacity-60",
       )}
     >
-      {plan.badge && (
+      {plan.badge && !isLocked && (
         <div className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-blue-600 px-3 py-1 text-[11px] font-semibold text-white shadow">
           {plan.badge}
         </div>
@@ -415,6 +447,12 @@ function PlanCard({
       {isCurrent && (
         <div className="absolute -top-3 right-3 rounded-full bg-zinc-800 px-3 py-1 text-[11px] font-semibold text-white shadow">
           Current
+        </div>
+      )}
+      {isLocked && (
+        <div className="absolute -top-3 left-1/2 -translate-x-1/2 flex items-center gap-1 whitespace-nowrap rounded-full bg-zinc-200 px-3 py-1 text-[11px] font-semibold text-zinc-600 shadow">
+          <Lock className="h-3 w-3" />
+          Below your plan
         </div>
       )}
 
@@ -451,12 +489,22 @@ function PlanCard({
           all four cards in the row share the same baseline. */}
       <div className="mt-auto pt-1">
       {/* CTA logic:
+            - Locked (paid seller, lower-tier card) → disabled lock button
             - Free + on Free → "Current plan"
             - Free + on paid → cancel CTA (downgrade is just cancel + wait)
             - Paid + isCurrent + has Paystack sub → cancel button
             - Paid + isCurrent without sub code → "Active"
             - Paid + not current → upgrade/switch button */}
-      {isFree ? (
+      {isLocked ? (
+        <Button
+          variant="outline"
+          disabled
+          className="h-10 w-full cursor-not-allowed gap-1.5 text-sm text-zinc-400 border-zinc-200"
+        >
+          <Lock className="h-3.5 w-3.5" />
+          Below your current plan
+        </Button>
+      ) : isFree ? (
         isPaid ? (
           <Button
             variant="outline"
