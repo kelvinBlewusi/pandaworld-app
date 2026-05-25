@@ -55,14 +55,17 @@ export async function POST(req: NextRequest) {
       //     If we have images → vision mode (images are most accurate).
       //     If no images but we have title/description → text mode.
       //     (This handles sites that block scraping but have a descriptive URL slug.)
+      // userContext = seller's AI-chat override; pass-through so warranty /
+      // country / product_note defaults can be overridden per listing.
+      const userContext = (formData.get("userContext") as string | null) ?? null;
       let analysis;
       if (imageUrls.length > 0) {
-        analysis = await analyzeProductImages(imageUrls);
+        analysis = await analyzeProductImages(imageUrls, userContext);
       } else if (scraped.title || scraped.description) {
         const textInput = [scraped.title, scraped.description]
           .filter(Boolean)
           .join(". ");
-        analysis = await analyzeProductDescription(textInput);
+        analysis = await analyzeProductDescription(textInput, userContext);
       } else {
         return NextResponse.json(
           { error: "No images or text found at that URL. Try pasting the product name or description instead." },
@@ -98,6 +101,11 @@ export async function POST(req: NextRequest) {
         main_material:      analysis.main_material || null,
         material_family:    analysis.material_family || null,
         selling_price:      finalPrice ?? null,
+        // AI-filled defaults (May 2026) — overridable by seller's AI-chat
+        warranty_duration:  analysis.warranty_duration,
+        warranty_text:      analysis.warranty_text,
+        warranty_address:   analysis.warranty_address,
+        production_country: analysis.production_country,
         dynamic_attributes: analysis.dynamic_attributes ?? {},
         field_sources:      analysis.field_sources,
         field_confidence:   analysis.field_confidence ?? null,
@@ -157,14 +165,18 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Step 2: AI analysis (full one-shot pipeline — legacy)
+    // Step 2: AI analysis (full one-shot pipeline — legacy).
+    // userContext = the seller's AI-chat free-text override. Pass-through
+    // so AI-default fields (warranty / country / product_note) can be
+    // overridden per listing.
     let analysis;
     const description = formData.get("description") as string | null;
+    const userContext = (formData.get("userContext") as string | null) ?? null;
 
     if (mode === "ai" && description && !files.length) {
-      analysis = await analyzeProductDescription(description);
+      analysis = await analyzeProductDescription(description, userContext);
     } else if (imageUrls.length > 0) {
-      analysis = await analyzeProductImages(imageUrls);
+      analysis = await analyzeProductImages(imageUrls, userContext);
     } else {
       throw new Error("No images or description provided");
     }
@@ -191,6 +203,11 @@ export async function POST(req: NextRequest) {
       main_material:       analysis.main_material || null,
       material_family:     analysis.material_family || null,
       selling_price:       analysis.selling_price,
+      // AI-filled defaults (May 2026) — overridable by seller's AI-chat
+      warranty_duration:   analysis.warranty_duration,
+      warranty_text:       analysis.warranty_text,
+      warranty_address:    analysis.warranty_address,
+      production_country:  analysis.production_country,
       dynamic_attributes:  analysis.dynamic_attributes ?? {},
       field_sources:       analysis.field_sources,
       field_confidence:    analysis.field_confidence ?? null,

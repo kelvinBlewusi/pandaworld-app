@@ -14,6 +14,8 @@ import {
   SELLER_REQUIRED_FIELDS,
   SELLER_REQUIRED_ATTR_KEYS,
   BRAND_CONFIDENCE_THRESHOLD,
+  AI_FIELD_DEFAULTS,
+  AI_DYNAMIC_ATTR_DEFAULTS,
 } from "@/lib/ai/policy";
 import {
   buildRestrictedWordsInstruction,
@@ -41,6 +43,18 @@ export interface AIProductAnalysis {
   model:           string | null;
   main_material:   string | null;
   material_family: string | null;
+
+  // ── AI-defaulted fields (overridable by seller's AI-chat context) ──
+  // These previously lived in SELLER_REQUIRED_FIELDS and the AI was
+  // forbidden from filling them. As of May 2026 the AI fills them with
+  // stable defaults (see lib/ai/policy.ts AI_FIELD_DEFAULTS) so sellers
+  // don't have to type the same "warranty: none" 100 times. If the
+  // seller's AI-chat context names a real warranty / country, the AI
+  // uses that instead.
+  warranty_duration:  string | null;
+  warranty_text:      string | null;
+  warranty_address:   string | null;
+  production_country: string | null;
 
   // Category (resolved from Jumia real tree)
   category_id:      string;   // kept for backwards compat (= String(category_code))
@@ -96,6 +110,11 @@ function buildPrompt(
   categoryPath?: string | null,
   // Image rules don't apply to the description-only entry point.
   includeImageRules: boolean = true,
+  // Seller's free-text "AI chat" content. Wired through every prompt
+  // site so the AI ALWAYS sees the seller's overrides on every pass
+  // (initial fill + every re-run). Overrides the AI defaults below
+  // (warranty / production_country / product_note / from_the_manufacturer).
+  userContext?: string | null,
 ): string {
   const categoryList = categories
     .map((c) => `${c.code}|${c.path}`)
@@ -146,6 +165,15 @@ function buildPrompt(
     includeImageRules: includeImageRules,
   });
 
+  // Seller's AI-chat content — ALWAYS injected when present. This is
+  // the seller's free-text override and takes precedence over the AI's
+  // generic defaults below (warranty / country / product_note / etc.).
+  // Threaded through every prompt site (Pass A + Pass B + Pass C + every
+  // re-run) so the override is never lost between rounds.
+  const userContextSection = userContext && userContext.trim()
+    ? `\n\nSELLER AI-CHAT CONTEXT — authoritative for anything the images don't show, and OVERRIDES any default values below. If the seller mentions a warranty, country, manufacturer info, or custom customer note here, use their version instead of the defaults:\n"""${userContext.trim()}"""\n`
+    : "";
+
   return `You are an expert Jumia Ghana product listing assistant.
 Analyse the product image(s) and/or description, then return a SINGLE valid JSON object.
 
@@ -155,32 +183,46 @@ ${categoryContext}
 
 JUMIA CATEGORY LIST (code|path):
 ${categoryList}
-${brandSection}
+${brandSection}${userContextSection}
 STRICT RULES — violations will cause the submission to be rejected:
 1. Pick the single most specific matching category from the list. Use the exact numeric code.
 2. Provide the top 3 best-matching category codes from the list above, in descending confidence order.
-3. NEVER fabricate or guess values. If a field cannot be determined with reasonable confidence, set it to null.
-4. For dynamic_attributes: include ONLY fields you can determine from the product. Omit fields you cannot determine — do NOT guess.
-5. Description MUST be between 80 and 500 characters — Jumia rejects anything under 50. Write 2–3 full sentences.
+3. NEVER fabricate values for specs you can't see. If a spec (weight, dimensions, screen size) isn't visible AND isn't in the AI-chat context, set the field to null.
+4. For dynamic_attributes: include any field you can determine from the product OR that has a default below. Omit fields you genuinely can't determine — do NOT guess on category-specific specs.
+5. Description: 80–1500 characters. May be plain prose, bullets, or a mix — use whichever fits the product. Promotional / marketing language is allowed.
 6. Title MUST be 15–70 characters. Lead with the MODEL or identifier + product type + 1–2 key specs. DO NOT include the brand name in the title — Jumia stores brand separately and rejects titles that repeat it ("Product name contains Brand name [X]"). The brand goes in the brand field, not the title.
-7. Highlights MUST be at least 4 bullet points starting with "•" (the bullet character). Each on its own line.
+7. Highlights: free-form (plain prose, bullets, or mixed). No word limit per line. When bullets are used, start each with "• ".
 ${brandRule}
-9. NEVER fill: model, selling_price, warranty fields, production_country, certifications, GTIN, SKU. The seller fills those manually.${attributeSection}
+
+9. FIELD-FILLING DEFAULTS — fill these even though sellers used to do them manually. Use the defaults below UNLESS the SELLER AI-CHAT CONTEXT above overrides them:
+   - model: Fill with the product's model number/name if you are CONFIDENT (visible on packaging or product). Otherwise null.
+   - warranty_duration: "${AI_FIELD_DEFAULTS.warranty_duration}" (unless seller specifies a real warranty)
+   - warranty_text:     "${AI_FIELD_DEFAULTS.warranty_text}" (unless seller specifies real warranty terms)
+   - warranty_address:  "${AI_FIELD_DEFAULTS.warranty_address}" (unless seller specifies a real warranty address)
+   - production_country: Pick based on general knowledge — country of likely manufacture for this product/brand (e.g. "China" for unbranded electronics, "Ghana" for hand-made local, "Vietnam" for many sneakers). Use the country name in English. If seller specifies a country in their AI-chat context, use that instead.
+   - dynamic_attributes.product_note: Always include the customer-feedback note below (sellers can override via AI-chat context).
+   - dynamic_attributes.from_the_manufacturer: "${AI_DYNAMIC_ATTR_DEFAULTS.from_the_manufacturer}" (unless seller provides manufacturer copy in AI-chat context).
+
+10. NEVER fill (seller-required, legal/commercial risk): selling_price, warranty_type, certifications, GTIN, SKU, stock, quantity.${attributeSection}
 
 Return ONLY valid JSON. No markdown fences, no explanation, no trailing text:
 {
   "title": "Model + product type + key specs (15-70 chars). NO BRAND NAME in the title — it goes in the brand field. Jumia rejects titles that repeat the brand.",
-  "description": "2-3 sentences for a Jumia listing (min 80 chars)",
-  "highlights": "• bullet1\\n• bullet2\\n• bullet3\\n• bullet4 (min 4 bullets, start each with •)",
+  "description": "80-1500 chars. Plain prose, bullets, or mix. Marketing copy welcome.",
+  "highlights": "Free-form. Bullets, prose, or mix.",
   "brand": "Brand name ONLY if logo is clearly visible AND confidence > 0.9, else null",
   "brand_confidence": 0.0,
   "color": "Specific color e.g. Midnight Black, or null",
   "color_family": "Base color e.g. Black, or null",
   "weight_kg": null,
   "selling_price": null,
-  "model": null,
+  "model": "Model number/name if confident from image, else null",
   "main_material": "e.g. Plastic, Metal, Fabric, or null",
   "material_family": "e.g. Metal, Fabric, Plastic, or null",
+  "warranty_duration": "${AI_FIELD_DEFAULTS.warranty_duration}",
+  "warranty_text": "${AI_FIELD_DEFAULTS.warranty_text}",
+  "warranty_address": "${AI_FIELD_DEFAULTS.warranty_address}",
+  "production_country": "Country of manufacture based on general knowledge — e.g. China, Ghana, Vietnam",
   "category_code": "EXACT numeric code from category list above — your top pick",
   "category_path": "Matching path from category list above for your top pick",
   "category_confidence": 0.0,
@@ -189,7 +231,9 @@ Return ONLY valid JSON. No markdown fences, no explanation, no trailing text:
     { "code": "third-best numeric code",  "confidence": 0.0 }
   ],
   "dynamic_attributes": {
-    "attribute_name": "value — only include if you are confident"
+    "product_note": "${AI_DYNAMIC_ATTR_DEFAULTS.product_note}",
+    "from_the_manufacturer": "${AI_DYNAMIC_ATTR_DEFAULTS.from_the_manufacturer}",
+    "attribute_name": "value — only include other category-specific attributes if you are confident"
   }
 }`;
 }
@@ -424,13 +468,26 @@ function buildCoreResult(
   //
   // Even if the model returns gtin / sku / price etc., strip them so the
   // seller is forced to supply them manually. Empty / null entries also
-  // dropped here.
+  // dropped here. We THEN layer the AI-defaulted attributes
+  // (product_note + from_the_manufacturer) so they're always present
+  // unless the AI already wrote real values for them.
   const cleanDyn: Record<string, string> = {};
   for (const [rawKey, v] of Object.entries(dynAttrs)) {
     const k = rawKey.toLowerCase();
     if (SELLER_REQUIRED_ATTR_KEYS.has(k)) continue;
     if (v != null && String(v).trim() !== "" && String(v).toLowerCase() !== "null") {
       cleanDyn[rawKey] = String(v).trim();
+    }
+  }
+
+  // Layer the AI-defaulted dynamic attributes. If the AI already filled
+  // them (or the seller's AI-chat override produced different values),
+  // keep what the AI returned. Otherwise pad with the defaults so every
+  // listing has the customer-feedback note + from_the_manufacturer
+  // value — categories that don't use those attrs will ignore them.
+  for (const [k, defaultVal] of Object.entries(AI_DYNAMIC_ATTR_DEFAULTS)) {
+    if (!cleanDyn[k] || cleanDyn[k].length === 0) {
+      cleanDyn[k] = defaultVal;
     }
   }
 
@@ -474,6 +531,10 @@ function buildCoreResult(
     "color", "color_family",
     "weight_kg",
     "main_material", "material_family",
+    // AI-fillable as of May 2026 — defaults applied below if absent.
+    "model",
+    "warranty_duration", "warranty_text", "warranty_address",
+    "production_country",
   ];
 
   // Brand confidence depends on how we resolved it:
@@ -562,10 +623,22 @@ function buildCoreResult(
                           : (parsed.weight_kg != null && parsed.weight_kg !== "null"
                               ? Number(parsed.weight_kg)
                               : null),
-    selling_price:      null,   // ALWAYS seller-supplied
-    model:              null,   // ALWAYS seller-supplied
+    selling_price:      null,   // ALWAYS seller-supplied (commercial risk)
+    // model: AI may fill if confident; otherwise null. Was previously
+    // hard-nulled because legal risk was assumed — clarified to "AI-
+    // fillable if visible on the product itself" per May 2026 rule update.
+    model:              strOrNull(parsed.model),
     main_material:      strOrNull(parsed.main_material),
     material_family:    strOrNull(parsed.material_family),
+    // ── AI-defaulted fields with userContext override ────────────────────
+    // The AI prompt explicitly tells Gemini to fill these with the values
+    // in AI_FIELD_DEFAULTS unless the seller's AI-chat context says
+    // otherwise. If the model returns nothing (older model, sub-par
+    // response), we fall back to the defaults here.
+    warranty_duration:  strOrNull(parsed.warranty_duration)  ?? AI_FIELD_DEFAULTS.warranty_duration,
+    warranty_text:      strOrNull(parsed.warranty_text)      ?? AI_FIELD_DEFAULTS.warranty_text,
+    warranty_address:   strOrNull(parsed.warranty_address)   ?? AI_FIELD_DEFAULTS.warranty_address,
+    production_country: strOrNull(parsed.production_country),  // AI picks based on knowledge; null only if it genuinely can't decide
     category_id:        String(cat.code),
     category_code:      String(cat.code),
     category_path:      cat.path,
@@ -584,7 +657,8 @@ function buildCoreResult(
 const USE_MOCK_AI = process.env.USE_MOCK_AI === "true";
 
 export async function analyzeProductImages(
-  imageUrls: string[]
+  imageUrls:   string[],
+  userContext?: string | null,  // free-text AI-chat from the seller; threaded into every prompt pass
 ): Promise<AIProductAnalysis> {
   if (!imageUrls.length) throw new Error("No images provided");
 
@@ -620,8 +694,9 @@ export async function analyzeProductImages(
     ? `Choose from the ${categories.length} Jumia GH listable categories listed below.`
     : "Use your best knowledge of Jumia Ghana categories.";
 
-  // First pass: category detection without attributes (fast)
-  const firstPassPrompt = buildPrompt(categories, [], categoryContext, brands);
+  // First pass: category detection without attributes (fast). userContext
+  // is threaded in so AI-chat overrides apply even on the first pass.
+  const firstPassPrompt = buildPrompt(categories, [], categoryContext, brands, null, true, userContext);
 
   let parsed: Record<string, unknown>;
   try {
@@ -648,7 +723,8 @@ export async function analyzeProductImages(
       try {
         // Pass the category path on the second pass so the policy block
         // can specialise its image rules (Fashion vs everything else).
-        const secondPrompt = buildPrompt(categories, attrs, categoryContext, brands, cat.path);
+        // userContext threaded through so AI-chat overrides persist.
+        const secondPrompt = buildPrompt(categories, attrs, categoryContext, brands, cat.path, true, userContext);
         const raw2 = await callGemini(secondPrompt, imageUrls);
         const parsed2 = parseAIResponse(raw2);
         dynamicAttributes = (parsed2.dynamic_attributes ?? {}) as Record<string, string>;
@@ -1180,7 +1256,8 @@ Return ONLY valid JSON, no markdown:
 // ─── Main: analyse text description ──────────────────────────────────────────
 
 export async function analyzeProductDescription(
-  description: string
+  description:  string,
+  userContext?: string | null,  // free-text AI-chat from the seller; threaded into every prompt pass
 ): Promise<AIProductAnalysis> {
   if (USE_MOCK_AI) {
     console.warn("[AI] USE_MOCK_AI=true — returning mock analysis");
@@ -1204,8 +1281,9 @@ export async function analyzeProductDescription(
     : "Use your best knowledge of Jumia Ghana categories.";
 
   // Description-only path — no images, so skip the image-rules section
-  // of the policy block (last arg false).
-  const prompt = buildPrompt(categories, [], categoryContext, brands, null, false) +
+  // of the policy block (includeImageRules=false). userContext threaded
+  // through so AI-chat overrides apply on every pass.
+  const prompt = buildPrompt(categories, [], categoryContext, brands, null, false, userContext) +
     `\n\nProduct description to analyse:\n"${description}"`;
 
   let parsed: Record<string, unknown>;
@@ -1226,7 +1304,7 @@ export async function analyzeProductDescription(
     const attrs = await getCategoryAttributes(cat.code);
     if (attrs.length > 0) {
       try {
-        const secondPrompt = buildPrompt(categories, attrs, categoryContext, brands, cat.path, false) +
+        const secondPrompt = buildPrompt(categories, attrs, categoryContext, brands, cat.path, false, userContext) +
           `\n\nProduct description: "${description}"`;
         const raw2 = await callGemini(secondPrompt, []);
         const parsed2 = parseAIResponse(raw2);
@@ -1286,7 +1364,17 @@ function buildMockAnalysis(): AIProductAnalysis {
   }
   return {
     ...template,
-    dynamic_attributes: template.dynamic_attributes as unknown as Record<string, string>,
+    // Layer the new AI-defaulted fields so the mock matches the live
+    // AIProductAnalysis shape (warranty / production_country are
+    // AI-fillable as of May 2026).
+    warranty_duration:  AI_FIELD_DEFAULTS.warranty_duration,
+    warranty_text:      AI_FIELD_DEFAULTS.warranty_text,
+    warranty_address:   AI_FIELD_DEFAULTS.warranty_address,
+    production_country: "China",  // arbitrary plausible default for mock data
+    dynamic_attributes: {
+      ...AI_DYNAMIC_ATTR_DEFAULTS,
+      ...(template.dynamic_attributes as unknown as Record<string, string>),
+    },
     category_id:     mock.id,
     category_code:   mock.code,
     category_path:   mock.path,

@@ -171,7 +171,7 @@ export const JUMIA_REJECTION_PATTERNS: ReadonlyArray<{
   },
   {
     reason: "Description too short — under 50 characters triggers automatic Jumia rejection",
-    fix:    "Floor at 80 characters with 2-3 full sentences. The AI's description must read like prose, not bullet points.",
+    fix:    "Floor at 80 characters. Description can run up to 1500 characters and may use prose, bullets, or a mix — pick whichever fits the product.",
   },
   {
     reason: "Generic title pattern — \"Quality Product\", \"Best Item\", \"Cool Thing\", no brand or model",
@@ -285,25 +285,34 @@ TITLE / NAME RULES (15-200 characters, Title Case, ASCII only):
       brand field — restricted brands need seller authorisation and the
       AI defaults them to null; see brand rules below).
 
-DESCRIPTION RULES (80-500 characters, 2-3 full sentences, plain prose):
+DESCRIPTION RULES (80-1500 characters, any format that fits the product):
+  - May be plain prose, bullet points, or a mix of both. Use whichever
+    format best showcases the product — long-form prose for a story-led
+    item (e.g. handmade leather bag), bullets for spec-led tech, mixed
+    for products with both narrative and a feature list.
+  - All formatting styles allowed: bold, italics, line breaks, bullets,
+    short paragraphs, headings. Use them where they help readability.
   - Lead with what the product is and its headline feature.
-  - Follow with one or two sentences on key materials, benefits, use cases.
-  - No bullet points in the description body (bullets belong in highlights).
-  - No promotional language: "best", "amazing", "incredible", "you'll
-    love", "act fast", "limited time".
+  - Marketing / promotional language is permitted — write copy that sells.
+    "Best-in-class", "premium", "elevate your", "perfect for" etc. are
+    fine; the goal is conversion, not bland prose.
   - No URLs, hashtags, social handles, prices, discount mentions.
   - No condition descriptors from the banned-words list.
   - No counterfeit-suggestive claims (\"100% human hair\", \"AAA grade\",
     \"OEM original\", \"1:1 replica\", inflated battery mAh).
 
-HIGHLIGHTS RULES (4-6 bullet points, one per line, each starting with "• "):
-  - 5-12 words per bullet. Sentence-fragment style.
-  - Each bullet starts with the • character + space + capital letter.
-  - Bullet 1: headline feature ("Triple-camera system with optical zoom").
-  - Bullets 2-3: key specifications (capacity, materials, dimensions).
-  - Bullets 4-5: usability / fit / care.
-  - Bullet 6 (optional): warranty or certification only.
-  - No emoji, no HTML, no [brackets] or (parentheses).
+HIGHLIGHTS RULES (free-form, any format that fits the product):
+  - May be plain prose, bullet points, or a mix of both. Bullets are
+    common but NOT required — for a luxury / story-led item, two
+    short prose paragraphs may sell better than five bullets.
+  - All formatting styles allowed (bold, italics, line breaks, bullets,
+    short paragraphs). Use them where they help readability.
+  - No word limit per bullet or per line — write as much or as little as
+    the product warrants. A single great sentence beats five forced ones.
+  - When bullets are used, start each line with "• " (bullet + space).
+  - Order bullets / paragraphs by buyer importance: headline feature
+    first, then specs, then usability / fit / care, then warranty.
+  - No HTML tags, no inline emoji rows, no decorative symbols.
 
 BRAND & ANTI-COUNTERFEIT RULES:
   - Pick brand verbatim from the JUMIA BRAND LIST passed in this prompt.
