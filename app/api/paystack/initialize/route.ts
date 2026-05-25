@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { PLANS, getPaystackPageUrl, type Plan } from "@/lib/billing/plans";
+import { buildPaystackReference } from "@/lib/billing/paystack-reference";
 
 // ─── POST /api/paystack/initialize ───────────────────────────────────────────
 //
@@ -44,25 +45,6 @@ const VALID_PAID_TIERS: Plan[] = ["starter", "pro", "business"];
 
 function isValidPaidTier(value: unknown): value is Plan {
   return typeof value === "string" && VALID_PAID_TIERS.includes(value as Plan);
-}
-
-/**
- * Generate a transaction reference that encodes the user + tier. Format:
- *   pw_<userId-segment>_<tier>_<random>
- *
- * The Paystack reference field is what we get back in webhooks /
- * verify calls. Encoding user + tier in the reference itself is a
- * belt-and-braces fallback if Paystack drops the metadata field
- * (rare, but happened twice in our test fixtures during the
- * subscription migration). Webhook reads metadata first; falls back
- * to parsing the reference if metadata is missing.
- */
-function buildReference(userId: string, tier: Plan): string {
-  // Clerk user ids look like user_2abc...; keep them whole, just sanitise
-  // anything that might trip Paystack's allowed-char rule for references.
-  const safeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, "");
-  const rand = Math.random().toString(36).slice(2, 8);
-  return `pw_${safeUserId}_${tier}_${rand}`;
 }
 
 export async function POST(req: NextRequest) {
@@ -126,7 +108,7 @@ export async function POST(req: NextRequest) {
     process.env.NEXT_PUBLIC_APP_URL
       ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3002");
 
-  const reference = buildReference(userId, tier);
+  const reference = buildPaystackReference(userId, tier);
 
   // ── Append query params to the Payment Page URL ──────────────────────────
   //

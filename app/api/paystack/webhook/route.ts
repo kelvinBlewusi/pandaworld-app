@@ -5,6 +5,7 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { sendEmail } from "@/lib/email/send";
 import { paymentConfirmationEmail } from "@/lib/email/templates";
 import { PLANS, type Plan } from "@/lib/billing/plans";
+import { parsePaystackReference } from "@/lib/billing/paystack-reference";
 
 // Valid tier names the webhook is allowed to upsert into the plan
 // column. We refuse anything else so a malformed metadata field can't
@@ -43,14 +44,31 @@ export async function POST(request: Request) {
     // ── Successful charge (initial payment OR monthly renewal) ────────────
     case "charge.success": {
       const tx = event.data;
-      const userId = tx.metadata?.user_id as string | undefined;
 
+      // ── User + tier resolution (May 2026 Payment Pages fix) ───────────
+      // Three-tier fallback identical to /verify:
+      //   1. metadata.user_id / metadata.plan — the canonical source
+      //   2. parsePaystackReference(tx.reference) — recovers from
+      //      pw.<userId>.<tier>.<rand> format if metadata was dropped
+      //   3. Bail if neither path yields a user — better to skip than
+      //      write a row under "unknown"
+      const metadataUserId = tx.metadata?.user_id as string | undefined;
+      const metadataPlan   = tx.metadata?.plan    as string | undefined;
+      const referenceParsed = parsePaystackReference(tx.reference);
+
+      const userId = metadataUserId ?? referenceParsed.userId;
       if (!userId) {
         console.error(
-          "[Paystack webhook] charge.success: missing user_id in metadata",
+          "[Paystack webhook] charge.success: cannot identify user — metadata.user_id missing AND reference is not in pw.<userId>.<tier>.<rand> format",
           { reference: tx.reference, email: tx.customer?.email }
         );
         break;
+      }
+
+      if (!metadataUserId && referenceParsed.userId) {
+        console.warn(
+          `[Paystack webhook] metadata.user_id missing; recovered "${referenceParsed.userId}" from reference "${tx.reference}".`,
+        );
       }
 
       const subscriptionCode = tx.subscription?.subscription_code ?? null;
@@ -60,15 +78,19 @@ export async function POST(request: Request) {
       const periodEnd = new Date();
       periodEnd.setDate(periodEnd.getDate() + 30);
 
-      // Tier comes from the metadata we attached during /initialize.
-      // Fall back to "pro" if missing — legacy Paystack subscriptions
-      // (created before the tier param existed) ALL paid GHS 50/mo so
-      // their renewals should keep landing on pro. That keeps existing
-      // Pro renewals working through the migration window.
-      const requestedPlan = (tx.metadata?.plan as string | undefined) ?? "pro";
+      // Tier resolution — same fallback chain.
+      // Legacy fallback to "pro" preserved so subscriptions from the
+      // pre-Payment-Pages era continue renewing at the right tier.
+      const requestedPlan = metadataPlan ?? referenceParsed.tier ?? "pro";
       const plan: Plan = VALID_PLANS.includes(requestedPlan as Plan)
         ? (requestedPlan as Plan)
         : "pro";
+
+      if (!metadataPlan && referenceParsed.tier) {
+        console.warn(
+          `[Paystack webhook] metadata.plan missing; recovered tier "${referenceParsed.tier}" from reference "${tx.reference}".`,
+        );
+      }
 
       // Upgrade (or renew) user plan + reset quota counters so the new
       // billing window starts at 0 used. period_start tracks the quota

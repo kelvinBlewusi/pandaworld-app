@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { type Plan } from "@/lib/billing/plans";
+import { parsePaystackReference } from "@/lib/billing/paystack-reference";
 
 const VALID_PLANS: Plan[] = ["starter", "pro", "business"];
 
@@ -52,15 +53,27 @@ export async function GET(request: Request) {
   const emailToken = tx.subscription?.email_token ?? null;
   const customerCode = tx.customer?.customer_code ?? null;
 
-  // Tier comes from the metadata we attached during initialize.
-  // Default to "pro" so callers that never set metadata still upgrade
-  // sensibly (matches old behaviour). Webhook is authoritative — verify
-  // is just the fast-path so the UI doesn't have to wait for the
-  // webhook round-trip before showing "you're upgraded".
-  const requestedPlan = (tx.metadata?.plan as string | undefined) ?? "pro";
+  // Tier resolution — three-tier fallback (May 2026 Payment Pages fix):
+  //   1. Read from tx.metadata.plan — the canonical source set by /initialize
+  //   2. If missing, parse from tx.reference (format: pw.<userId>.<tier>.<rand>)
+  //      Paystack Payment Pages occasionally drop the metadata URL param,
+  //      but the reference itself round-trips verbatim, so encoding the
+  //      tier in the reference too gives us a working fallback.
+  //   3. Fall back to "pro" if both fail. Webhook is authoritative; verify
+  //      is just the fast-path so the UI doesn't wait for the webhook
+  //      round-trip before showing "you're upgraded".
+  const metadataPlan = tx.metadata?.plan as string | undefined;
+  const referenceParsed = parsePaystackReference(tx.reference);
+  const requestedPlan = metadataPlan ?? referenceParsed.tier ?? "pro";
   const plan: Plan = VALID_PLANS.includes(requestedPlan as Plan)
     ? (requestedPlan as Plan)
     : "pro";
+
+  if (!metadataPlan && referenceParsed.tier) {
+    console.warn(
+      `[Paystack verify] metadata.plan missing; recovered tier "${referenceParsed.tier}" from reference "${tx.reference}".`,
+    );
+  }
 
   // Calculate period end (30 days from now)
   const periodEnd = new Date();
