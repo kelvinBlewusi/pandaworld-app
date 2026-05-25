@@ -4,7 +4,7 @@ import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { ListingRow, ListingInsert, VariantRow } from "@/lib/supabase/types";
-import { checkQuota, incrementUsage } from "@/lib/billing/quota";
+import { checkQuota, incrementUsage, decrementUsage } from "@/lib/billing/quota";
 import { PLANS, getNextTierUpgrade } from "@/lib/billing/plans";
 
 // ─── Quota-error helper ──────────────────────────────────────────────────────
@@ -162,12 +162,41 @@ export async function updateListing(
 }
 
 // ─── Delete a listing ─────────────────────────────────────────────────────────
+//
+// Quota refund policy:
+//   - draft + processing  → refund (the seller paid the quota cost for
+//     the AI analysis, never actually used it on Jumia — give it back so
+//     they can re-use the credit on a real listing).
+//   - pending_approval    → NO refund (already on Jumia waiting for QC,
+//     the AI work + push was consumed).
+//   - live + failed       → NO refund (Jumia QC's already evaluated it).
+//
+// This is what "if a user deletes drafts that were not submitted to
+// jumia, lets their quota reset" means in practice — only refund for
+// the never-pushed states.
+
+const QUOTA_REFUNDABLE_STATUSES = new Set(["draft", "processing"]);
 
 export async function deleteListing(id: string): Promise<void> {
   const { userId } = await auth();
   if (!userId) throw new Error("Unauthenticated");
 
   const db = createServerClient();
+
+  // Read status BEFORE deletion so we know whether to refund.
+  // .maybeSingle() — if the listing's gone (race), we just delete-noop.
+  const { data: listing } = await db
+    .from("listings")
+    .select("status")
+    .eq("id", id)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  const shouldRefund =
+    listing != null &&
+    typeof listing.status === "string" &&
+    QUOTA_REFUNDABLE_STATUSES.has(listing.status);
+
   const { error } = await db
     .from("listings")
     .delete()
@@ -175,6 +204,13 @@ export async function deleteListing(id: string): Promise<void> {
     .eq("user_id", userId);
 
   if (error) throw new Error(error.message);
+
+  // Refund AFTER the delete succeeds so we don't credit a quota back
+  // when the delete itself failed.
+  if (shouldRefund) {
+    await decrementUsage(userId, "listing");
+  }
+
   revalidatePath("/listings");
 }
 
@@ -221,6 +257,11 @@ export async function duplicateListing(id: string): Promise<ListingRow> {
 }
 
 // ─── Bulk delete listings ────────────────────────────────────────────────────
+//
+// Same refund policy as deleteListing — count how many of the listings
+// being bulk-deleted are in a refundable state (draft / processing) and
+// decrement the quota by that exact count. Listings already pushed to
+// Jumia (pending_approval / live / failed) do not refund.
 
 export async function bulkDeleteListings(ids: string[]): Promise<void> {
   const { userId } = await auth();
@@ -228,6 +269,23 @@ export async function bulkDeleteListings(ids: string[]): Promise<void> {
   if (!ids.length) return;
 
   const db = createServerClient();
+
+  // Read statuses for all rows we're about to delete (single round-trip).
+  // Only count refundable rows — push the rest through without a credit.
+  const { data: targets } = await db
+    .from("listings")
+    .select("status")
+    .in("id", ids)
+    .eq("user_id", userId);
+
+  const refundCount = (targets ?? []).reduce<number>(
+    (acc, row) =>
+      typeof row.status === "string" && QUOTA_REFUNDABLE_STATUSES.has(row.status)
+        ? acc + 1
+        : acc,
+    0,
+  );
+
   const { error } = await db
     .from("listings")
     .delete()
@@ -235,6 +293,14 @@ export async function bulkDeleteListings(ids: string[]): Promise<void> {
     .eq("user_id", userId);
 
   if (error) throw new Error(error.message);
+
+  // Decrement once per refundable listing. Loop is cheap (each row is
+  // one tiny SQL UPDATE) and decrementUsage floors at 0 so we can't
+  // over-refund even if `targets` and the delete diverged.
+  for (let i = 0; i < refundCount; i++) {
+    await decrementUsage(userId, "listing");
+  }
+
   revalidatePath("/listings");
 }
 

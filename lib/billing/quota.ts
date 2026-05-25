@@ -281,6 +281,69 @@ export async function incrementUsage(
 }
 
 /**
+ * Decrement the per-period usage counter for the given action (i.e.
+ * refund a quota credit). Called from `deleteListing()` when the user
+ * deletes a draft that was never submitted to Jumia — see the listings
+ * action for the status-based eligibility check.
+ *
+ * Floors at 0 so an out-of-sync state (deleting more rows than were
+ * counted against the current period) can't produce a negative usage
+ * value that breaks the UI.
+ *
+ * No-op for admin users (they're unmetered).
+ */
+export async function decrementUsage(
+  userId: string,
+  action: QuotaAction,
+): Promise<void> {
+  if (isAdmin(userId)) return; // admins bypass metering
+
+  const db = createServerClient();
+
+  const { data: row } = await db
+    .from("subscriptions")
+    .select(
+      "listings_used_this_period, polishes_used_this_period"
+    )
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (!row) {
+    // No row to refund against. Silent — happens if the seller is brand
+    // new and their subscription row hasn't been provisioned yet
+    // (shouldn't happen, but no need to warn).
+    return;
+  }
+
+  const column =
+    action === "listing"
+      ? "listings_used_this_period"
+      : "polishes_used_this_period";
+  const currentValue = (row as Record<string, number>)[column];
+  // Math.max(0, …) prevents the counter ever dipping below zero — keeps
+  // the usage bar UI honest even if the seller deletes drafts faster
+  // than we increment.
+  const newValue = Math.max(0, currentValue - 1);
+
+  if (newValue === currentValue) return; // already at 0; nothing to do
+
+  const { error } = await db
+    .from("subscriptions")
+    .update({
+      [column]: newValue,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", userId);
+
+  if (error) {
+    console.error(
+      `[quota] Failed to decrement ${action} usage for ${userId}:`,
+      error.message
+    );
+  }
+}
+
+/**
  * Read-only snapshot of the user's quota state for the billing UI.
  * Returns BOTH listings + polishes so the page can render two usage
  * bars in one round-trip.
