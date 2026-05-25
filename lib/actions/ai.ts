@@ -811,13 +811,22 @@ export interface ProductDescription {
   // Universal Jumia listing fields the AI can infer from images. The
   // auto-analyze route persists these to the listing alongside the
   // category-specific dynamic_attributes from Pass C.
-  description:     string;              // 80-500 chars, full sentences
-  highlights:      string;              // 4+ bullets starting with •
+  description:     string;              // 80-1500 chars, prose/bullets/mixed
+  highlights:      string;              // free-form (prose, bullets, or mixed)
   color:           string | null;       // specific colour name(s), comma-separated
   color_family:    string | null;       // base colour from common Jumia families
   weight_kg:       number | null;       // only if visible on packaging
   main_material:   string | null;       // e.g. "Plastic", "Aluminium"
   material_family: string | null;       // e.g. "Plastic", "Metal", "Fabric"
+  // ── AI-defaulted (overridable by seller's "What do you want in the
+  // listing" text). Per May 2026 rule update these are no longer
+  // seller-required — AI fills with stable defaults unless the seller's
+  // userContext says otherwise.
+  model:              string | null;    // model number/name if confident
+  warranty_duration:  string | null;    // default "None"
+  warranty_text:      string | null;    // default "N/A"
+  warranty_address:   string | null;    // default "N/A"
+  production_country: string | null;    // AI picks based on general knowledge
   /**
    * Short phrase describing what the product is FOR — e.g. "agricultural
    * pesticide spraying", "household carpet cleaning", "office stationery".
@@ -861,6 +870,12 @@ export async function aiPassA_describeProduct(
       color: null, color_family: null, weight_kg: null, main_material: null, material_family: null,
       intended_use_case: null, environment: "unknown",
       variations: [],
+      // AI-defaulted fields (May 2026)
+      model: null,
+      warranty_duration:  AI_FIELD_DEFAULTS.warranty_duration,
+      warranty_text:      AI_FIELD_DEFAULTS.warranty_text,
+      warranty_address:   AI_FIELD_DEFAULTS.warranty_address,
+      production_country: "China",
     };
   }
   if (!process.env.GOOGLE_API_KEY) throw new Error("GOOGLE_API_KEY is not set.");
@@ -899,13 +914,18 @@ Rules:
 - brand: ONLY fill if a brand logo or wordmark is clearly visible AND you are confident. Otherwise null.
 - keywords: 5-10 single-word lower-case keywords (no quotes, no underscores). Think of what a buyer would search for.
 - summary: One sentence describing what the product is and its key visible features.
-- description: 80-500 characters. 2-3 full sentences. Describe what the product is and its visible features. JUMIA REJECTS anything under 50 chars. Do not include price, brand claims, or promotional language.
-- highlights: 4-6 bullet points, each starting with "•" (the bullet character) on its own line. Concise feature highlights based on what you see.
+- description: 80-1500 characters. May be plain prose, bullet points, or a mix. Use whatever formatting best showcases the product (bold, line breaks, short paragraphs, bullets — all allowed). Marketing/promotional language is permitted ("premium", "best-in-class", "perfect for"). Jumia rejects anything under 50 chars.
+- highlights: Free-form. May be prose, bullets, or mixed. No word limit per line. When bullets are used, start each with "• ".
 - color: Specific visible colour(s). Multiple colours separated by commas (e.g. "Blue, Black"). Null if uncertain.
 - color_family: Base colour family from {Black, White, Grey, Brown, Beige, Red, Orange, Yellow, Green, Blue, Purple, Pink, Multicolour}. Null if uncertain.
 - weight_kg: Only fill if you can see the weight printed on packaging or the product itself. Numeric kilograms (e.g. 1.2). Null otherwise.
 - main_material: e.g. "Plastic", "Stainless Steel", "Cotton". Null if uncertain.
 - material_family: e.g. "Plastic", "Metal", "Fabric", "Wood", "Glass". Null if uncertain.
+- model: Product model number/name if visible on the packaging or product itself (e.g. "WH-1000XM5", "Galaxy A15"). Null if not visible.
+- warranty_duration: "${AI_FIELD_DEFAULTS.warranty_duration}" by default. Override only if the seller's "What do you want in the listing" text mentions a real warranty period.
+- warranty_text: "${AI_FIELD_DEFAULTS.warranty_text}" by default. Override only if the seller's text describes the warranty terms.
+- warranty_address: "${AI_FIELD_DEFAULTS.warranty_address}" by default. Override only if the seller's text gives a real warranty address.
+- production_country: Pick based on general knowledge — country of likely manufacture for this product/brand (e.g. "China" for unbranded electronics, "Vietnam" for many sneakers, "Ghana" for hand-made local goods, "USA" for many Apple products, "Germany" for many automotive accessories). Use the country name in English. Override the default with whatever country the seller's text specifies if any.
 - intended_use_case: Short phrase identifying what the product is FOR — e.g. "agricultural pesticide spraying", "household carpet cleaning", "office stationery", "outdoor camping". Null only if completely unclear.
 - environment: Exactly one of {home, farm, garden, office, workshop, industrial, outdoor, personal, unknown}. "home" = lived-in indoor spaces. "farm" = agriculture / ranch / crops. "garden" = backyard / lawn / small-scale outdoor plant care. "workshop" = handyman / DIY / hobby builds. "industrial" = factory / commercial scale. "outdoor" = recreation outside the home (camping, sports). "personal" = items worn or carried on the body (clothing, accessories). Use "unknown" instead of guessing.
 - variations: Distinct product variants visible in the images. Be CONSERVATIVE — only populate when the images clearly show multiple choices the buyer can pick between.
@@ -920,6 +940,8 @@ Rules:
       * Unsure
     Each variation needs: label (what the buyer sees, e.g. "Pack of 6") and sku_suffix (short uppercase alphanumeric, e.g. "P6", "HOE", "3SET" — used as a unique tag appended to the parent SKU).
 
+IMPORTANT — All defaults above are OVERRIDDEN by the seller's "What do you want in the listing" text below. If they mention a warranty, country, or any other field-specific override, use their version instead.
+
 ${ctxSection}
 
 Return ONLY valid JSON. No markdown, no commentary:
@@ -929,12 +951,17 @@ Return ONLY valid JSON. No markdown, no commentary:
   "keywords": ["..."],
   "summary": "...",
   "description": "...",
-  "highlights": "• ...\\n• ...\\n• ...\\n• ...",
+  "highlights": "...",
   "color": null,
   "color_family": null,
   "weight_kg": null,
   "main_material": null,
   "material_family": null,
+  "model": null,
+  "warranty_duration": "${AI_FIELD_DEFAULTS.warranty_duration}",
+  "warranty_text": "${AI_FIELD_DEFAULTS.warranty_text}",
+  "warranty_address": "${AI_FIELD_DEFAULTS.warranty_address}",
+  "production_country": "China",
   "intended_use_case": null,
   "environment": "unknown",
   "variations": []
@@ -1025,7 +1052,15 @@ Return ONLY valid JSON. No markdown, no commentary:
                          : null,
     main_material:     cleanOrNull(strOrNull(parsed.main_material)),
     material_family:   cleanOrNull(strOrNull(parsed.material_family)),
-    intended_use_case: cleanOrNull(strOrNull(parsed.intended_use_case)),
+    // ── AI-defaulted fields (overridable via userContext / "What do you
+    // want in the listing" text). Fall back to the centrally-defined
+    // defaults if the model didn't return anything.
+    model:              cleanOrNull(strOrNull(parsed.model)),
+    warranty_duration:  cleanOrNull(strOrNull(parsed.warranty_duration))  ?? AI_FIELD_DEFAULTS.warranty_duration,
+    warranty_text:      cleanOrNull(strOrNull(parsed.warranty_text))      ?? AI_FIELD_DEFAULTS.warranty_text,
+    warranty_address:   cleanOrNull(strOrNull(parsed.warranty_address))   ?? AI_FIELD_DEFAULTS.warranty_address,
+    production_country: cleanOrNull(strOrNull(parsed.production_country)),  // AI picks; null only if it can't decide
+    intended_use_case:  cleanOrNull(strOrNull(parsed.intended_use_case)),
     environment,
     variations,
   };
@@ -1241,6 +1276,19 @@ Return ONLY valid JSON, no markdown:
     if (SELLER_REQUIRED_ATTR_KEYS.has(k.toLowerCase())) continue;
     if (v == null || String(v).trim() === "" || String(v).toLowerCase() === "null") continue;
     dynamic_attributes[k] = String(v).trim();
+  }
+
+  // Layer in the AI-defaulted attribute values (product_note,
+  // from_the_manufacturer). If the AI already filled them with real
+  // content — possibly because the seller's userContext said so —
+  // keep what the AI returned. Otherwise pad with the defaults so
+  // every listing has the customer-feedback note + manufacturer
+  // placeholder. Categories that don't accept these attribute names
+  // will silently drop them at push time.
+  for (const [k, defaultVal] of Object.entries(AI_DYNAMIC_ATTR_DEFAULTS)) {
+    if (!dynamic_attributes[k] || dynamic_attributes[k].length === 0) {
+      dynamic_attributes[k] = defaultVal;
+    }
   }
 
   const field_sources:    Record<string, "ai"> = {};

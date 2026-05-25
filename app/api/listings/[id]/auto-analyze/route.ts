@@ -301,6 +301,15 @@ export async function POST(
   setIfEmpty("main_material",   description.main_material,   { confidence: 0.8,  source: "inferred" });
   setIfEmpty("material_family", description.material_family, { confidence: 0.8,  source: "inferred" });
 
+  // ── AI-defaulted fields (May 2026) — were seller-required before, now
+  // AI fills with stable defaults. The seller's "What do you want in
+  // the listing" text overrides these via userContext on the prompt.
+  setIfEmpty("model",              description.model,              { confidence: 0.8,  source: "image",    reasoning: "Model number/name visible on product or packaging." });
+  setIfEmpty("warranty_duration",  description.warranty_duration,  { confidence: 0.6,  source: "inferred", reasoning: "Default — override in the AI-chat field to set a real warranty." });
+  setIfEmpty("warranty_text",      description.warranty_text,      { confidence: 0.6,  source: "inferred", reasoning: "Default — override in the AI-chat field to set warranty terms." });
+  setIfEmpty("warranty_address",   description.warranty_address,   { confidence: 0.6,  source: "inferred", reasoning: "Default — override in the AI-chat field to set a warranty address." });
+  setIfEmpty("production_country", description.production_country, { confidence: 0.7,  source: "inferred", reasoning: "AI inference based on brand / category. Override via AI-chat if known." });
+
   // Merge category alternates → top-3 with confidence
   const alternatesForUI = [
     { code: chosen.code, name: chosen.name, path: chosen.path, confidence: chosen.confidence },
