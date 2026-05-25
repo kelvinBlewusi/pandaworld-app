@@ -66,19 +66,30 @@ export async function GET(request: Request) {
       }, null, 2)
     );
 
+    // Paystack returns "Transaction reference not found" for both
+    // genuinely-missing references AND for mode mismatch (live tx vs
+    // test secret key). The latter is by far the most common when
+    // a real seller hits this, so we surface a fix-oriented error.
+    const isNotFound =
+      res.status === 404 ||
+      /transaction reference not found/i.test(data?.message ?? "");
+
+    const ourMode = secretKey.startsWith("sk_live_") ? "LIVE" : "TEST";
+
     return NextResponse.json(
       {
         error: data?.data?.status === "failed"
           ? "Payment failed at Paystack (the card or wallet was declined). Try again."
           : data?.data?.status === "abandoned"
             ? "Payment was abandoned — the Paystack window was closed before completing. Try again."
-            : res.status === 404
-              ? `Transaction not found in Paystack (${secretKey.startsWith("sk_live_") ? "live" : "test"} mode). The secret-key mode in Vercel may not match the mode the page was paid in.`
+            : isNotFound
+              ? `Paystack cannot find this transaction with your ${ourMode}-mode secret key. The Payment Page that received the payment was probably in the OTHER mode. Fix: in Vercel → Settings → Environment Variables, set PAYSTACK_SECRET_KEY to the secret key from the same mode (Live or Test) as your Paystack Page, then redeploy.`
               : data?.message
                 ? `Paystack error: ${data.message}`
                 : "Payment not successful",
         status: data?.data?.status,
         paystack_http_status: res.status,
+        secret_key_mode: ourMode,
       },
       { status: 400 }
     );
