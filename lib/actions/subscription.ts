@@ -90,6 +90,20 @@ export async function canCreateListing(): Promise<{
 }
 
 // ─── Cancel Paystack subscription ────────────────────────────────────────────
+//
+// Handles both flavours of paid plan since the May 2026 Payment Pages
+// migration:
+//
+//   - Recurring Payment Page: Paystack fired subscription.create after
+//     the first charge, so paystack_subscription_code is populated.
+//     We call Paystack's /subscription/disable to stop future charges.
+//
+//   - One-time Payment Page (no recurring config in Paystack):
+//     subscription_code is NULL because no Paystack subscription was
+//     ever created. There's nothing to disable on their side — the
+//     seller already paid once and Paystack won't auto-charge them
+//     again. We just mark the row status=cancelled so the access
+//     reverts to Free at the current period_end.
 
 export async function cancelSubscription(): Promise<{ success: boolean; error?: string }> {
   const { userId } = await auth();
@@ -99,29 +113,36 @@ export async function cancelSubscription(): Promise<{ success: boolean; error?: 
 
   const { data: sub } = await db
     .from("subscriptions")
-    .select("paystack_subscription_code, paystack_email_token")
+    .select("paystack_subscription_code, paystack_email_token, plan, status")
     .eq("user_id", userId)
     .single();
 
-  if (!sub?.paystack_subscription_code) {
-    return { success: false, error: "No active subscription found" };
+  if (!sub || sub.plan === "free" || sub.status !== "active") {
+    return { success: false, error: "No active paid plan to cancel" };
   }
 
-  const res = await fetch("https://api.paystack.co/subscription/disable", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      code: sub.paystack_subscription_code,
-      token: sub.paystack_email_token,
-    }),
-  });
+  // Recurring path: paystack_subscription_code is present, call Paystack
+  // to disable the recurring charge.
+  if (sub.paystack_subscription_code) {
+    const res = await fetch("https://api.paystack.co/subscription/disable", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        code:  sub.paystack_subscription_code,
+        token: sub.paystack_email_token,
+      }),
+    });
 
-  if (!res.ok) {
-    return { success: false, error: "Failed to cancel with Paystack" };
+    if (!res.ok) {
+      return { success: false, error: "Failed to cancel with Paystack" };
+    }
   }
+  // One-time path: nothing to disable on Paystack — they already
+  // received the money and aren't going to auto-charge again. Fall
+  // through to the DB update below which marks status=cancelled.
 
   await db
     .from("subscriptions")

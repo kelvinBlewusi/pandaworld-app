@@ -1,34 +1,68 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth, currentUser } from "@clerk/nextjs/server";
-import { PLANS, getPaystackPlanCode, type Plan } from "@/lib/billing/plans";
+import { PLANS, getPaystackPageUrl, type Plan } from "@/lib/billing/plans";
 
 // ─── POST /api/paystack/initialize ───────────────────────────────────────────
 //
-// Creates a Paystack transaction that subscribes the user to a paid tier.
+// Builds a Paystack Payment Page URL for the requested tier and returns it
+// so the browser can redirect to Paystack's hosted checkout.
 //
 // Request: POST /api/paystack/initialize?tier=starter|pro|business
 //          (or POST body { tier: "starter" } — both supported)
 //
-// Behaviour:
-//   - Looks up the requested tier in lib/billing/plans.ts.
-//   - Reads the matching Paystack plan_code from env (e.g. PAYSTACK_PRO_PLAN_CODE).
-//   - If plan_code is set → recurring monthly subscription via Paystack's
-//     auto-charge engine.
-//   - If plan_code is missing → one-time charge for the tier's price.
-//     The user still gets the tier (webhook + verify reconcile), but
-//     no auto-renewal. Useful in dev before plans are created.
+// May 2026 — switched from /transaction/initialize (API-driven) to
+// Paystack Payment Pages (hosted URLs). Pages are created in Paystack
+// Dashboard → Pages and their URLs are stored in env vars:
+//   PAYSTACK_STARTER_PAGE_URL  e.g. https://paystack.com/pay/pandaworld-starter
+//   PAYSTACK_PRO_PAGE_URL
+//   PAYSTACK_BUSINESS_PAGE_URL
 //
-// Refuses to initialise for "free" (nothing to charge).
+// We append these query params to the Page URL:
+//   - email          — prefills the email field with the Clerk email so the
+//                      seller doesn't retype it
+//   - metadata       — JSON-encoded { user_id, plan } so the webhook can
+//                      attribute the payment back to the right user + tier
+//   - reference      — our generated reference for end-to-end correlation
+//                      (also encodes user_id + tier so a fallback parse
+//                      works even if Paystack drops the metadata field)
+//   - redirect_url   — overrides the Page's configured callback so the
+//                      seller lands back on /settings/billing on the
+//                      current deployment (handles preview vs production
+//                      without per-environment Paystack config)
 //
-// Returns: { authorization_url, reference, recurring, tier }
-// The frontend redirects to authorization_url; user pays on Paystack;
-// browser comes back via callback_url (/settings/billing); verify route
-// confirms the transaction; webhook makes the plan change durable.
+// Returns: { authorization_url, reference, tier, amount_ghs }
+//   The frontend (settings/billing page.tsx) reads authorization_url and
+//   sets window.location.href = url — same shape as before so no UI
+//   changes are needed.
+//
+// On success the seller pays on Paystack → Paystack redirects to
+//   {redirect_url}?trxref=<ref>&reference=<ref>
+// /settings/billing detects the trxref and calls /api/paystack/verify
+// which validates the transaction with Paystack and activates the tier.
 
 const VALID_PAID_TIERS: Plan[] = ["starter", "pro", "business"];
 
 function isValidPaidTier(value: unknown): value is Plan {
   return typeof value === "string" && VALID_PAID_TIERS.includes(value as Plan);
+}
+
+/**
+ * Generate a transaction reference that encodes the user + tier. Format:
+ *   pw_<userId-segment>_<tier>_<random>
+ *
+ * The Paystack reference field is what we get back in webhooks /
+ * verify calls. Encoding user + tier in the reference itself is a
+ * belt-and-braces fallback if Paystack drops the metadata field
+ * (rare, but happened twice in our test fixtures during the
+ * subscription migration). Webhook reads metadata first; falls back
+ * to parsing the reference if metadata is missing.
+ */
+function buildReference(userId: string, tier: Plan): string {
+  // Clerk user ids look like user_2abc...; keep them whole, just sanitise
+  // anything that might trip Paystack's allowed-char rule for references.
+  const safeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, "");
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `pw_${safeUserId}_${tier}_${rand}`;
 }
 
 export async function POST(req: NextRequest) {
@@ -44,19 +78,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const secretKey = process.env.PAYSTACK_SECRET_KEY;
-  if (!secretKey) {
-    return NextResponse.json(
-      { error: "Paystack is not configured. Add PAYSTACK_SECRET_KEY to .env.local." },
-      { status: 500 }
-    );
-  }
-
   // ── Resolve the tier from query string or body ───────────────────────────
-  //
-  // Prefer query string for new code paths; fall back to body for
-  // backwards compatibility with the legacy "upgrade to Pro" button
-  // that POSTed with no params.
   const url = new URL(req.url);
   let tier = url.searchParams.get("tier") as Plan | null;
 
@@ -64,7 +86,7 @@ export async function POST(req: NextRequest) {
     try {
       const body = (await req.json().catch(() => ({}))) as { tier?: string };
       if (body.tier) tier = body.tier as Plan;
-    } catch { /* no body — that's fine */ }
+    } catch { /* no body — fine */ }
   }
 
   // Default to "pro" so existing clients that POST without a tier param
@@ -79,75 +101,55 @@ export async function POST(req: NextRequest) {
   }
 
   const plan = PLANS[tier];
-  const planCode = getPaystackPlanCode(tier);
-
-  // App URL for the Paystack callback. Three-step fallback:
-  //   1. NEXT_PUBLIC_APP_URL — set this for the canonical domain
-  //      (e.g. pandaworld.gh). Recommended for production.
-  //   2. VERCEL_URL — Vercel auto-injects this for every deployment
-  //      (e.g. pandaworld-app-xyz.vercel.app). Keeps preview deploys
-  //      self-redirecting instead of bouncing back to localhost.
-  //   3. localhost — last-resort for unconfigured local dev.
-  //
-  // The previous fallback was localhost only, which meant users on
-  // any deployment without NEXT_PUBLIC_APP_URL got redirected to
-  // http://localhost:3002 after payment — broken in prod.
-  const appUrl =
-    process.env.NEXT_PUBLIC_APP_URL
-      ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3002");
-
-  // ── Build transaction payload ─────────────────────────────────────────────
-  // Paystack uses the smallest currency unit, so GHS 30 = 3000 pesewas.
-  // channels: card + all Ghana mobile money networks (MTN, Vodafone, AirtelTigo)
-  const body: Record<string, unknown> = {
-    email,
-    amount: plan.price_ghs_pesewas,
-    currency: "GHS",
-    channels: ["card", "mobile_money"],
-    callback_url: `${appUrl}/settings/billing`,
-    metadata: {
-      user_id: userId,
-      plan: tier,                           // webhook reads this to set the right tier
-      cancel_action: `${appUrl}/settings/billing`,
-    },
-  };
-
-  if (planCode) {
-    // Attach plan code → Paystack auto-creates a recurring subscription
-    body.plan = planCode;
-  } else {
-    // No plan code configured — warn in server logs but proceed as one-time charge
-    console.warn(
-      `[Paystack] No plan_code configured for tier "${tier}" ` +
-        `(env var "${plan.paystack_plan_code_env}" not set). ` +
-        `Payment will be a one-time charge — no automatic monthly renewal. ` +
-        `Create a plan at paystack.com/dashboard for ${plan.display_price}/month and set the env var.`
-    );
-  }
-
-  const res = await fetch("https://api.paystack.co/transaction/initialize", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${secretKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-
-  const data = await res.json();
-
-  if (!res.ok || !data.data?.authorization_url) {
-    console.error("[Paystack] Initialize error:", data);
+  const pageUrl = getPaystackPageUrl(tier);
+  if (!pageUrl) {
     return NextResponse.json(
-      { error: data.message ?? "Failed to initialise payment. Try again." },
+      {
+        error:
+          `Paystack Payment Page not configured for ${plan.name}. ` +
+          `Create the page in Paystack Dashboard → Pages and set "${plan.paystack_page_url_env}" in Vercel env to the page URL ` +
+          `(e.g. https://paystack.com/pay/pandaworld-${tier}).`,
+      },
       { status: 500 }
     );
   }
 
+  // ── Build callback URL ───────────────────────────────────────────────────
+  //
+  // Override the Page's configured success URL so preview deployments
+  // self-redirect instead of bouncing back to the canonical production
+  // domain. Three-step fallback:
+  //   1. NEXT_PUBLIC_APP_URL — set this for the canonical domain
+  //   2. VERCEL_URL — Vercel auto-injects for every deployment
+  //   3. localhost — last-resort for unconfigured local dev
+  const appUrl =
+    process.env.NEXT_PUBLIC_APP_URL
+      ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3002");
+
+  const reference = buildReference(userId, tier);
+
+  // ── Append query params to the Payment Page URL ──────────────────────────
+  //
+  // Paystack Payment Pages accept these as standard query params. URL
+  // construction via URLSearchParams handles the encoding so brand names
+  // with spaces or special chars in the email don't break the URL.
+  const paymentUrl = new URL(pageUrl);
+  paymentUrl.searchParams.set("email", email);
+  paymentUrl.searchParams.set("reference", reference);
+  paymentUrl.searchParams.set("redirect_url", `${appUrl}/settings/billing`);
+  // Paystack accepts metadata as JSON-encoded — webhook decodes it
+  paymentUrl.searchParams.set(
+    "metadata",
+    JSON.stringify({
+      user_id:       userId,
+      plan:          tier,
+      cancel_action: `${appUrl}/settings/billing`,
+    })
+  );
+
   return NextResponse.json({
-    authorization_url: data.data.authorization_url,
-    reference:         data.data.reference,
-    recurring:         !!planCode,
+    authorization_url: paymentUrl.toString(),
+    reference,
     tier,
     amount_ghs:        plan.price_ghs_pesewas / 100,
   });

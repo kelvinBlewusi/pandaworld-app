@@ -55,10 +55,20 @@ export interface PlanConfig {
   /** Monthly image-polish quota (PhotoRoom + Gemini image-gen combined). */
   monthly_polishes: number;
   /**
-   * Env-var name (not the value!) that holds the Paystack plan_code.
+   * Env-var name (not the value!) that holds the Paystack Payment Page
+   * URL for this tier (e.g. "https://paystack.com/pay/pandaworld-starter").
+   *
+   * Why a Page URL and not a plan_code: switched in May 2026 from the
+   * API-driven /transaction/initialize flow (which required Plan codes)
+   * to Paystack-hosted Payment Pages. The Page URL is what the seller's
+   * browser redirects to — Paystack hosts the entire checkout UI on
+   * their domain. Our /api/paystack/initialize just builds the right
+   * URL with metadata (user_id + tier) appended as query params; no
+   * API call to Paystack is made on the initialise side.
+   *
    * null for free (nothing to charge).
    */
-  paystack_plan_code_env: string | null;
+  paystack_page_url_env: string | null;
   /** Bullet list rendered on plan cards. */
   features: string[];
   /** Pinned badge for the recommended tier. */
@@ -90,7 +100,7 @@ export const PLANS: Record<Plan, PlanConfig> = {
     period:                 "month",
     monthly_listings:       5,
     monthly_polishes:       0,
-    paystack_plan_code_env: null,
+    paystack_page_url_env: null,
     features: [
       "5 product uploads / month",
       "AI listing generation",
@@ -110,7 +120,7 @@ export const PLANS: Record<Plan, PlanConfig> = {
     period:                 "month",
     monthly_listings:       30,
     monthly_polishes:       10,
-    paystack_plan_code_env: "PAYSTACK_STARTER_PLAN_CODE",
+    paystack_page_url_env: "PAYSTACK_STARTER_PAGE_URL",
     features: [
       "30 product uploads / month",
       "10 image polishes / month",
@@ -130,7 +140,7 @@ export const PLANS: Record<Plan, PlanConfig> = {
     period:                 "month",
     monthly_listings:       100,
     monthly_polishes:       30,
-    paystack_plan_code_env: "PAYSTACK_PRO_PLAN_CODE",
+    paystack_page_url_env: "PAYSTACK_PRO_PAGE_URL",
     features: [
       "100 product uploads / month",
       "30 image polishes / month",
@@ -151,7 +161,7 @@ export const PLANS: Record<Plan, PlanConfig> = {
     period:                 "month",
     monthly_listings:       500,                   // fair-use cap
     monthly_polishes:       150,
-    paystack_plan_code_env: "PAYSTACK_BUSINESS_PLAN_CODE",
+    paystack_page_url_env: "PAYSTACK_BUSINESS_PAGE_URL",
     features: [
       "500 product uploads / month (fair-use)",
       "150 image polishes / month",
@@ -185,11 +195,18 @@ export function getPublicPlans(): PlanConfig[] {
     .sort((a, b) => a.sort_order - b.sort_order);
 }
 
-/** Returns the Paystack plan code for a tier by reading the env var. */
-export function getPaystackPlanCode(plan: Plan): string | null {
-  const envName = PLANS[plan].paystack_plan_code_env;
+/**
+ * Returns the Paystack Payment Page URL for a tier by reading the env var.
+ * Used by /api/paystack/initialize to redirect the seller's browser to
+ * the Paystack-hosted checkout page. Returns null for free (nothing to
+ * charge) or when the env var isn't configured yet.
+ */
+export function getPaystackPageUrl(plan: Plan): string | null {
+  const envName = PLANS[plan].paystack_page_url_env;
   if (!envName) return null;
-  return process.env[envName] ?? null;
+  const value = process.env[envName];
+  if (!value || value.trim().length === 0) return null;
+  return value.trim();
 }
 
 /**

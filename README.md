@@ -35,11 +35,11 @@ Copy `.env.local.example` to `.env.local` and fill in the values below.
 | `JUMIA_CLIENT_SECRET` | ✅ | Jumia Vendor Center OAuth client secret |
 | `JUMIA_REDIRECT_URI` | ✅ | Must match the Redirect URI set in Jumia Vendor Center app settings. E.g. `http://localhost:3002/api/jumia/callback` |
 | `NEXT_PUBLIC_APP_URL` | ✅ | Full base URL of this app (no trailing slash). E.g. `http://localhost:3002` |
-| `PAYSTACK_SECRET_KEY` | For billing | Paystack secret key (for paid subscriptions) |
+| `PAYSTACK_SECRET_KEY` | For billing | Paystack secret key (used by /verify and /webhook routes; the initialize route uses Payment Page URLs instead of the API) |
 | `NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY` | For billing | Paystack public key |
-| `PAYSTACK_STARTER_PLAN_CODE` | For billing | Paystack plan code for the Starter tier (GHS 30/month). Create the plan in Paystack Dashboard → Plans, copy the code here. |
-| `PAYSTACK_PRO_PLAN_CODE` | For billing | Paystack plan code for the Pro tier (GHS 65/month). |
-| `PAYSTACK_BUSINESS_PLAN_CODE` | For billing | Paystack plan code for the Business tier (GHS 120/month). |
+| `PAYSTACK_STARTER_PAGE_URL` | For billing | Paystack Payment Page URL for the Starter tier (GHS 30/month). Create the page in **Paystack Dashboard → Pages → New** with the tier price + currency = GHS, set type to recurring if you want auto-renewal, copy the page URL here (looks like `https://paystack.com/pay/pandaworld-starter`). |
+| `PAYSTACK_PRO_PAGE_URL` | For billing | Paystack Payment Page URL for the Pro tier (GHS 65/month). |
+| `PAYSTACK_BUSINESS_PAGE_URL` | For billing | Paystack Payment Page URL for the Business tier (GHS 120/month). |
 | `ADMIN_USER_IDS` | Optional | Comma-separated list of Clerk user ids (e.g. `user_2abc...,user_2def...`) that get unlimited usage on all gated routes. Useful for the founder + staff accounts. Bypasses every quota check (listings + image polish). |
 | `CRON_SECRET` | For prod | Shared secret for Vercel cron auth. Required for `/api/cron/*` routes including the daily quota-reset sweep. |
 | `QUALITY_SCORE_MIN` | Optional | Minimum quality score (0–100) required to publish. Default: `60` |
