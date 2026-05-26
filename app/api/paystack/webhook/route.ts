@@ -83,48 +83,43 @@ export async function POST(request: Request) {
       const periodEnd = new Date();
       periodEnd.setDate(periodEnd.getDate() + 30);
 
-      // Tier resolution — same FIVE-step fallback as /verify
-      // (see verify/route.ts for the full rationale):
-      //   1. slug match  ← PRIMARY (stable across price changes)
-      //   2. amount match
-      //   3. metadata.plan
-      //   4. parsePaystackReference
-      //   5. "pro" default
+      // ── Read pending_tier (set by /api/paystack/initialize) ────────────
+      // This is the AUTHORITATIVE tier source — we control it
+      // end-to-end. Survives Paystack dropping metadata, overriding
+      // references, omitting paymentpage.slug, AND price changes.
+      const { data: pendingRow } = await db
+        .from("subscriptions")
+        .select("pending_tier")
+        .eq("user_id", userId)
+        .maybeSingle();
+      const pendingTier = pendingRow?.pending_tier as Plan | undefined;
+
+      // Tier resolution — pending_tier is PRIMARY; old fallbacks
+      // remain as defense in depth.
       const slugTier   = findTierByPaystackPageSlug(tx.paymentpage?.slug);
       const amountTier = findTierByAmount(tx.amount);
       const requestedPlan =
-        slugTier ?? amountTier ?? metadataPlan ?? referenceParsed.tier ?? "pro";
+        pendingTier ?? slugTier ?? amountTier ?? metadataPlan ?? referenceParsed.tier ?? "pro";
       const plan: Plan = VALID_PLANS.includes(requestedPlan as Plan)
         ? (requestedPlan as Plan)
         : "pro";
 
       const resolver =
-        slugTier ? `slug match ("${tx.paymentpage?.slug}")`
+        pendingTier ? `pending_tier (DB) = "${pendingTier}"`
+        : slugTier ? `slug match ("${tx.paymentpage?.slug}")`
         : amountTier ? `amount match (${tx.amount} pesewas)`
         : metadataPlan ? "metadata.plan"
         : referenceParsed.tier ? "reference parse"
-        : "default fallback (CHECK ME)";
+        : "default fallback (CHECK ME — pending_tier was NOT recorded at /initialize)";
       console.info(
         `[Paystack webhook] charge.success resolved tier "${plan}" via ${resolver} for user ${userId}.`,
       );
 
-      // Drift warning: slug + amount disagree means a price change
-      // in Paystack hasn't been reflected in lib/billing/plans.ts.
-      if (slugTier && amountTier && slugTier !== amountTier) {
-        console.warn(
-          `[Paystack webhook] PRICE DRIFT: slug "${tx.paymentpage?.slug}" → tier "${slugTier}" but tx.amount ${tx.amount} → tier "${amountTier}". Reconcile lib/billing/plans.ts to match Paystack.`,
-        );
-      }
-      if (!slugTier && !amountTier && metadataPlan) {
-        console.warn(
-          `[Paystack webhook] neither slug nor amount resolved a tier; falling back to metadata.plan "${metadataPlan}".`,
-        );
-      }
-
       // Upgrade (or renew) user plan + reset quota counters so the new
       // billing window starts at 0 used. period_start tracks the quota
       // window separately from current_period_end (Paystack's renewal
-      // anchor); we sync them here when a payment lands.
+      // anchor); we sync them here when a payment lands. Clear
+      // pending_tier — we've consumed it.
       const { error: subError } = await db.from("subscriptions").upsert(
         {
           user_id: userId,
@@ -135,6 +130,7 @@ export async function POST(request: Request) {
           paystack_email_token: emailToken,
           current_period_end: periodEnd.toISOString(),
           period_start: new Date().toISOString(),
+          pending_tier: null,  // ← consumed; clear it
           listings_used_this_period: 0,
           polishes_used_this_period: 0,
           updated_at: new Date().toISOString(),

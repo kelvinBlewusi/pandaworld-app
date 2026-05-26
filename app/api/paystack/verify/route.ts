@@ -101,76 +101,86 @@ export async function GET(request: Request) {
 
   const tx = data.data;
 
+  // ── DIAGNOSTIC: log what Paystack actually returned ───────────────────
+  // Helps us see why slug-match doesn't fire on real Pages transactions
+  // (Paystack's verify response sometimes omits paymentpage.* — this
+  // tells us exactly what's there so we can rely on the right field).
+  console.info(
+    "[Paystack verify] tx shape:",
+    JSON.stringify(
+      {
+        has_paymentpage:  !!tx.paymentpage,
+        paymentpage_keys: tx.paymentpage ? Object.keys(tx.paymentpage) : null,
+        paymentpage_slug: tx.paymentpage?.slug,
+        paymentpage_id:   tx.paymentpage?.id,
+        has_metadata:     !!tx.metadata,
+        metadata_keys:    tx.metadata ? Object.keys(tx.metadata) : null,
+        metadata_plan:    tx.metadata?.plan,
+        metadata_user_id: tx.metadata?.user_id,
+        amount:           tx.amount,
+        currency:         tx.currency,
+        channel:          tx.channel,
+        reference:        tx.reference,
+      },
+      null,
+      2,
+    ),
+  );
+
   // Extract subscription info if Paystack attached one
   const subscriptionCode = tx.subscription?.subscription_code ?? null;
   const emailToken = tx.subscription?.email_token ?? null;
   const customerCode = tx.customer?.customer_code ?? null;
 
-  // Tier resolution — FIVE-step fallback (May 2026 robustness pass):
-  //   1. findTierByPaystackPageSlug(tx.paymentpage.slug) — PRIMARY.
-  //      The Page slug is stable across price changes. If you bump the
-  //      Starter Page price in Paystack from GHS 30 → GHS 35 without
-  //      updating price_ghs_pesewas here, this match still wins and
-  //      the right tier activates. Slug only changes if you rename
-  //      the Page URL in Paystack, which is a deliberate action.
-  //   2. findTierByAmount(tx.amount) — fallback when the page slug
-  //      can't be resolved (e.g. legacy transactions from before the
-  //      slug-match was wired). Brittle to price changes — that's why
-  //      it's not first any more.
-  //   3. tx.metadata.plan — what we set in /initialize. Often dropped
-  //      by Payment Pages but checked in case it survived.
-  //   4. parsePaystackReference(tx.reference) — Payment Pages override
-  //      our reference with their own (T...), so this rarely fires
-  //      for new transactions. Kept for legacy /transaction/initialize.
-  //   5. Hard fall back to "pro" and log loudly. Means none of the
-  //      above worked — investigate via Vercel logs.
+  // ── Read the AUTHORITATIVE pending_tier we wrote at /initialize ──────
+  // This is the ONLY tier source we control end-to-end:
+  //   1. /initialize wrote pending_tier="business" to subscriptions
+  //   2. User paid on Paystack
+  //   3. /verify (us, here) reads pending_tier="business" back
+  // No dependency on Paystack returning anything specific. Reliable
+  // even when the Paystack page price changed, even when Paystack
+  // strips metadata, even when their reference overrides ours.
+  const db = createServerClient();
+  const { data: pendingRow } = await db
+    .from("subscriptions")
+    .select("pending_tier")
+    .eq("user_id", userId)
+    .maybeSingle();
+  const pendingTier = pendingRow?.pending_tier as Plan | undefined;
+
+  // Tier resolution — pending_tier is now PRIMARY. Old fallbacks
+  // (slug → amount → metadata → reference → default) still run as
+  // defense in depth if pending_tier somehow wasn't recorded.
   const slugTier        = findTierByPaystackPageSlug(tx.paymentpage?.slug);
   const amountTier      = findTierByAmount(tx.amount);
   const metadataPlan    = tx.metadata?.plan as string | undefined;
   const referenceParsed = parsePaystackReference(tx.reference);
   const requestedPlan   =
-    slugTier ?? amountTier ?? metadataPlan ?? referenceParsed.tier ?? "pro";
+    pendingTier ?? slugTier ?? amountTier ?? metadataPlan ?? referenceParsed.tier ?? "pro";
 
   const plan: Plan = VALID_PLANS.includes(requestedPlan as Plan)
     ? (requestedPlan as Plan)
     : "pro";
 
-  // Telemetry: log how the tier was resolved on each successful verify.
-  // Helps us notice if the slug-match path is doing its job (it should
-  // be the only one used in steady state), or if we've drifted into
-  // amount-only / default-fallback territory.
+  // Telemetry: which resolver path won this transaction. In steady
+  // state with the fix shipped, this should always be "pending_tier".
   const resolver =
-    slugTier ? `slug match ("${tx.paymentpage?.slug}")`
+    pendingTier ? `pending_tier (DB) = "${pendingTier}"`
+    : slugTier ? `slug match ("${tx.paymentpage?.slug}")`
     : amountTier ? `amount match (${tx.amount} pesewas)`
     : metadataPlan ? "metadata.plan"
     : referenceParsed.tier ? "reference parse"
-    : "default fallback (CHECK ME)";
+    : "default fallback (CHECK ME — pending_tier was NOT recorded at /initialize)";
   console.info(
     `[Paystack verify] resolved tier "${plan}" via ${resolver} for user ${userId}, reference ${tx.reference}`,
   );
-
-  // Drift warning: slug + amount disagree means the Paystack price
-  // was changed without updating price_ghs_pesewas here. Slug wins
-  // (price-change resilience) but we surface the drift so someone
-  // notices and reconciles.
-  if (slugTier && amountTier && slugTier !== amountTier) {
-    console.warn(
-      `[Paystack verify] PRICE DRIFT: slug "${tx.paymentpage?.slug}" → tier "${slugTier}" but tx.amount ${tx.amount} → tier "${amountTier}". Update lib/billing/plans.ts price_ghs_pesewas to match the new Paystack price for ${slugTier}.`,
-    );
-  }
-  if (!slugTier && !amountTier && metadataPlan) {
-    console.warn(
-      `[Paystack verify] neither slug nor amount resolved a tier; falling back to metadata.plan "${metadataPlan}". paymentpage.slug=${tx.paymentpage?.slug}, amount=${tx.amount}`,
-    );
-  }
 
   // Calculate period end (30 days from now)
   const periodEnd = new Date();
   periodEnd.setDate(periodEnd.getDate() + 30);
 
   // Upsert subscription record. Reset the quota window since this is
-  // a fresh billing period.
-  const db = createServerClient();
+  // a fresh billing period. Clear pending_tier — we've consumed it.
   const { error } = await db.from("subscriptions").upsert(
     {
       user_id: userId,
@@ -181,6 +191,7 @@ export async function GET(request: Request) {
       paystack_email_token: emailToken,
       current_period_end: periodEnd.toISOString(),
       period_start: new Date().toISOString(),
+      pending_tier: null,  // ← consumed; clear it
       listings_used_this_period: 0,
       polishes_used_this_period: 0,
       updated_at: new Date().toISOString(),

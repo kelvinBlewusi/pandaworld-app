@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { PLANS, getPaystackPageUrl, type Plan } from "@/lib/billing/plans";
 import { buildPaystackReference } from "@/lib/billing/paystack-reference";
+import { createServerClient } from "@/lib/supabase/server";
 
 // ─── POST /api/paystack/initialize ───────────────────────────────────────────
 //
@@ -109,6 +110,48 @@ export async function POST(req: NextRequest) {
       ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3002");
 
   const reference = buildPaystackReference(userId, tier);
+
+  // ── Record the user's intended tier in OUR database ─────────────────────
+  //
+  // Why: Paystack Payment Pages reliably drop metadata and override our
+  // reference, so we cannot trust them to tell us which tier the user
+  // chose. Instead, we write `pending_tier` to the user's subscription
+  // row HERE — before redirect — and read it back in /verify and the
+  // webhook as the authoritative source.
+  //
+  // This is the single most reliable way to make sure a seller who
+  // clicks "Choose Business" gets Business, even if:
+  //   - Paystack price changed (amount-match would fail)
+  //   - Paystack didn't return paymentpage.slug (slug-match would fail)
+  //   - Paystack stripped our metadata + overrode our reference
+  //
+  // Upsert so first-time payers (who don't have a subscription row yet)
+  // also get the pending_tier recorded.
+  const db = createServerClient();
+  const { error: pendingErr } = await db
+    .from("subscriptions")
+    .upsert(
+      {
+        user_id:      userId,
+        pending_tier: tier,
+        updated_at:   new Date().toISOString(),
+      },
+      { onConflict: "user_id" },
+    );
+
+  if (pendingErr) {
+    // Don't block the flow — they can still pay, and the resolver
+    // chain in /verify will fall back to amount/metadata/etc. But log
+    // loudly so we know to investigate.
+    console.error(
+      `[Paystack initialize] failed to write pending_tier="${tier}" for ${userId}: ${pendingErr.message}. ` +
+      `Tier resolution will fall back to amount/metadata/reference matching.`,
+    );
+  } else {
+    console.info(
+      `[Paystack initialize] wrote pending_tier="${tier}" for user ${userId}, reference ${reference}`,
+    );
+  }
 
   // ── Append query params to the Payment Page URL ──────────────────────────
   //
