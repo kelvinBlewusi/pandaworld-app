@@ -1,8 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { UserButton, useUser, useClerk } from "@clerk/nextjs";
+import { getQuotaSummaryForCurrentUser } from "@/lib/actions/subscription";
+import { PlanBadge } from "@/components/billing/plan-badge";
+import type { Plan } from "@/lib/billing/plans";
 import {
   LayoutDashboard,
   List,
@@ -118,10 +122,30 @@ function NewListingLink() {
   );
 }
 
-// ─── User chip (real Clerk identity) ─────────────────────────────────────────
+// ─── User chip (real Clerk identity + plan badge) ───────────────────────────
 
 function UserChip() {
   const { user } = useUser();
+  const [plan, setPlan] = useState<Plan | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  // Pull the EFFECTIVE plan from the quota engine (which auto-expires
+  // past-due paid plans to "free" and flags admins). One server-action
+  // call on mount — cheap, single Supabase query, cached for the rest
+  // of the session. We don't re-fetch on route change since plans
+  // rarely flip mid-session and any change goes through /verify or
+  // the webhook which then triggers its own page reload via the
+  // billing settings flow.
+  useEffect(() => {
+    let cancelled = false;
+    getQuotaSummaryForCurrentUser().then((q) => {
+      if (cancelled || !q) return;
+      setPlan(q.plan as Plan);
+      setIsAdmin(q.is_admin);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
   return (
     <div className="mt-3 flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-zinc-50">
       <UserButton
@@ -135,9 +159,16 @@ function UserChip() {
         <p className="truncate text-xs font-medium text-zinc-800">
           {user?.firstName ?? user?.username ?? "You"}
         </p>
-        <p className="truncate text-[10px] text-zinc-400">
-          {user?.primaryEmailAddress?.emailAddress ?? ""}
-        </p>
+        {/* Plan badge slides in once the quota summary returns. Shown
+            on its own line below the name so the user identity stays
+            the dominant text. */}
+        {plan ? (
+          <PlanBadge plan={plan} isAdmin={isAdmin} size="xs" className="mt-0.5" />
+        ) : (
+          <p className="truncate text-[10px] text-zinc-400">
+            {user?.primaryEmailAddress?.emailAddress ?? ""}
+          </p>
+        )}
       </div>
     </div>
   );

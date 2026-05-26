@@ -3,15 +3,16 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useUser, useClerk } from "@clerk/nextjs";
-import { Unlink, RefreshCw, Bell, Shield, User, Loader2, Check, Zap, Sparkles, ShoppingBag, AlertTriangle, Trash2 } from "lucide-react";
+import { Unlink, RefreshCw, Bell, Shield, User, Loader2, Check, ShoppingBag, AlertTriangle, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
-import { getSubscription } from "@/lib/actions/subscription";
+import { getQuotaSummaryForCurrentUser } from "@/lib/actions/subscription";
 import type { Plan } from "@/lib/types/subscription";
+import { PlanBadge } from "@/components/billing/plan-badge";
 
 export default function AccountSettingsPage() {
   const { user, isLoaded } = useUser();
@@ -23,6 +24,7 @@ export default function AccountSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [plan, setPlan] = useState<Plan>("free");
+  const [isAdmin, setIsAdmin] = useState(false);
 
   // Danger-zone state — surfaced at the bottom of the page.
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -63,10 +65,17 @@ export default function AccountSettingsPage() {
   } | null>(null);
   const [storesLoading, setStoresLoading] = useState(true);
 
-  // Load subscription plan
+  // Load the EFFECTIVE subscription plan via getQuotaSummary.
+  // Don't use getSubscription() — its `plan` column can be stale
+  // until the cron downgrades expired rows. getQuotaSummary already
+  // computes the effective plan (auto-expires past-due paid plans
+  // to "free") and surfaces the admin flag.
   useEffect(() => {
-    getSubscription().then((sub) => {
-      if (sub?.plan) setPlan(sub.plan as Plan);
+    getQuotaSummaryForCurrentUser().then((q) => {
+      if (q) {
+        setPlan(q.plan as Plan);
+        setIsAdmin(q.is_admin);
+      }
     });
   }, []);
 
@@ -159,17 +168,11 @@ export default function AccountSettingsPage() {
             <p className="text-sm text-zinc-400">{displayEmail}</p>
             {memberSince && (
               <p className="mt-0.5 text-xs text-zinc-400 flex items-center gap-1.5">
-                {plan === "pro" ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-600">
-                    <Zap className="h-2.5 w-2.5" />
-                    Pro plan
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold text-zinc-500">
-                    <Sparkles className="h-2.5 w-2.5" />
-                    Free plan
-                  </span>
-                )}
+                {/* PlanBadge renders the EFFECTIVE plan (Free / Starter /
+                    Pro / Business) — auto-expired past-due paid plans
+                    show as Free, admin users show as "Admin · Unlimited".
+                    See components/billing/plan-badge.tsx. */}
+                <PlanBadge plan={plan} isAdmin={isAdmin} size="sm" />
                 <span>· Member since {memberSince}</span>
               </p>
             )}
