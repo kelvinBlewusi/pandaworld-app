@@ -1,5 +1,6 @@
 "use server";
 
+import { auth } from "@clerk/nextjs/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
   getListableCategories,
@@ -27,6 +28,32 @@ import {
   isRestrictedBrand,
   stripBrandFromTitle,
 } from "@/lib/ai/jumia-content-policy";
+import { pickModelForPlan, type ModelKind } from "@/lib/billing/ai-models";
+import { getQuotaSummary } from "@/lib/billing/quota";
+import type { Plan } from "@/lib/billing/plans";
+
+// ─── Tier-aware model selection helper ──────────────────────────────────────
+//
+// Resolves the user's effective plan via the quota engine (which knows
+// about admins + expired-paid-plan-downgrades) and returns the right
+// Gemini model for the requested kind of call. Falls back gracefully
+// to undefined if there's no userId (callGemini will then use the
+// global PREFERRED_MODELS array — same as before this commit).
+
+async function resolveModel(
+  userId: string | null | undefined,
+  kind: ModelKind,
+): Promise<string | undefined> {
+  if (!userId) return undefined;
+  try {
+    const summary = await getQuotaSummary(userId);
+    return pickModelForPlan(summary.plan as Plan, kind, { isAdmin: summary.is_admin });
+  } catch {
+    // Quota lookup is non-critical for model selection — degrade
+    // silently to the global default.
+    return undefined;
+  }
+}
 
 // ─── Output types ─────────────────────────────────────────────────────────────
 
@@ -298,7 +325,14 @@ async function discoverWorkingModel(apiKey: string): Promise<string> {
 
 async function callGemini(
   prompt: string,
-  imageUrls: string[]
+  imageUrls: string[],
+  // Optional tier-based model override. When provided, we try this
+  // model FIRST (instead of the PREFERRED_MODELS array). If it errors
+  // out we fall through to the normal preference list. This lets paid
+  // users get Gemini 2.5 Flash while free users get the cheaper
+  // 2.0 Flash, without forcing a full pipeline rewrite. See
+  // lib/billing/ai-models.ts → pickModelForPlan().
+  preferredModel?: string,
 ): Promise<string> {
   const apiKey = process.env.GOOGLE_API_KEY;
   if (!apiKey) throw new Error("GOOGLE_API_KEY not set");
@@ -331,13 +365,29 @@ async function callGemini(
     throw new Error(`Could not download any of the ${imageUrls.length} images for analysis: ${errors}`);
   }
 
-  // 1. If we previously resolved a working model, try it first
   const tryModel = async (name: string) => {
     const model = genAI.getGenerativeModel({ model: name });
     const result = await model.generateContent([prompt, ...validImageParts]);
     return result.response.text();
   };
 
+  // 1. Caller passed a tier-aware preferred model (e.g. Free → 2.0 Flash,
+  //    Paid → 2.5 Flash). Try it first — succeeds in the common case.
+  //    On failure (model unavailable, throttled, deprecated) fall through
+  //    to the global cache + preference list.
+  if (preferredModel) {
+    try {
+      const text = await tryModel(preferredModel);
+      console.info(`[AI] Tier-preferred model: ${preferredModel}`);
+      return text;
+    } catch (e) {
+      console.warn(
+        `[AI] Tier-preferred model ${preferredModel} failed: ${(e as Error).message.slice(0, 100)}. Falling back.`,
+      );
+    }
+  }
+
+  // 2. If we previously resolved a working model, try it first
   if (_resolvedModel) {
     try { return await tryModel(_resolvedModel); }
     catch (e) {
@@ -346,7 +396,7 @@ async function callGemini(
     }
   }
 
-  // 2. Try each preferred model in order
+  // 3. Try each preferred model in order
   const errors: string[] = [];
   for (const modelName of PREFERRED_MODELS) {
     try {
@@ -674,6 +724,12 @@ export async function analyzeProductImages(
     );
   }
 
+  // Resolve the tier-preferred Gemini model for this user (Free →
+  // 2.0 Flash, Paid → 2.5 Flash). One quota lookup per call; if it
+  // fails for any reason we degrade silently to the global default.
+  const { userId } = await auth();
+  const visionModel = await resolveModel(userId, "vision");
+
   // Load every category Jumia accepts listings on — listable leaves AND
   // listable parents. Vendor Center allows publishing into a parent
   // category when it has its own attributeSet (e.g. "Watches" can be
@@ -700,7 +756,7 @@ export async function analyzeProductImages(
 
   let parsed: Record<string, unknown>;
   try {
-    const raw = await callGemini(firstPassPrompt, imageUrls);
+    const raw = await callGemini(firstPassPrompt, imageUrls, visionModel);
     parsed = parseAIResponse(raw);
   } catch (e) {
     const msg = (e as Error).message ?? "Gemini analysis failed";
@@ -725,7 +781,7 @@ export async function analyzeProductImages(
         // can specialise its image rules (Fashion vs everything else).
         // userContext threaded through so AI-chat overrides persist.
         const secondPrompt = buildPrompt(categories, attrs, categoryContext, brands, cat.path, true, userContext);
-        const raw2 = await callGemini(secondPrompt, imageUrls);
+        const raw2 = await callGemini(secondPrompt, imageUrls, visionModel);
         const parsed2 = parseAIResponse(raw2);
         dynamicAttributes = (parsed2.dynamic_attributes ?? {}) as Record<string, string>;
         // Use the re-parsed data (may have better attribute values)
@@ -880,6 +936,10 @@ export async function aiPassA_describeProduct(
   }
   if (!process.env.GOOGLE_API_KEY) throw new Error("GOOGLE_API_KEY is not set.");
 
+  // Tier-aware model selection (Free → 2.0 Flash, Paid → 2.5 Flash).
+  const { userId } = await auth();
+  const visionModel = await resolveModel(userId, "vision");
+
   // The full Jumia content policy — includes the verbatim banned-words
   // instruction, so we don't need restrictedInstr separately here.
   // We don't yet know the category (Pass A IS the describe-pass), so we
@@ -969,7 +1029,7 @@ Return ONLY valid JSON. No markdown, no commentary:
 
   let parsed: Record<string, unknown>;
   try {
-    const raw = await callGemini(prompt, imageUrls);
+    const raw = await callGemini(prompt, imageUrls, visionModel);
     parsed = parseAIResponse(raw);
   } catch (e) {
     throw new Error(`Describe pass failed: ${(e as Error).message}`);
@@ -1117,6 +1177,10 @@ export async function aiPassB_rankCategory(
   }
   if (!process.env.GOOGLE_API_KEY) throw new Error("GOOGLE_API_KEY is not set.");
 
+  // Tier-aware model selection — Pass B is a vision call.
+  const { userId: rankUserId } = await auth();
+  const rankVisionModel = await resolveModel(rankUserId, "vision");
+
   const candidateList = candidates
     .map((c, i) => `${i + 1}. ${c.code} — ${c.path}`)
     .join("\n");
@@ -1160,7 +1224,7 @@ Return ONLY valid JSON, no markdown:
 
   let parsed: Record<string, unknown>;
   try {
-    const raw = await callGemini(prompt, imageUrls);
+    const raw = await callGemini(prompt, imageUrls, rankVisionModel);
     parsed = parseAIResponse(raw);
   } catch (e) {
     throw new Error(`Rank pass failed: ${(e as Error).message}`);
@@ -1229,6 +1293,10 @@ export async function extractAttributesForCategory(
     ? `\n\nSELLER CONTEXT (treat as authoritative — these are things the seller knows that the images don't show, e.g. pack size, variant, exact spec):\n"${userContext.trim()}"\n`
     : "";
 
+  // Tier-aware model selection — Pass C is a vision call.
+  const { userId: attrUserId } = await auth();
+  const attrVisionModel = await resolveModel(attrUserId, "vision");
+
   // Look up the category path so the policy block can specialise its
   // image rules (Fashion vs everything else). One extra DB hit per Pass
   // C — cheap, and the row is almost certainly already in Supabase's
@@ -1262,7 +1330,7 @@ Return ONLY valid JSON, no markdown:
 
   let parsed: Record<string, unknown>;
   try {
-    const raw = await callGemini(prompt, imageUrls);
+    const raw = await callGemini(prompt, imageUrls, attrVisionModel);
     parsed = parseAIResponse(raw);
   } catch (e) {
     console.error("[AI] extractAttributesForCategory failed:", (e as Error).message);
@@ -1318,6 +1386,10 @@ export async function analyzeProductDescription(
     );
   }
 
+  // Tier-aware model selection — no images here, so "text" kind.
+  const { userId: descUserId } = await auth();
+  const descTextModel = await resolveModel(descUserId, "text");
+
   // Same pool as the image path — listable parents too, not just
   // leaves — plus the brand catalogue so the AI binds to real names.
   const [categories, brands] = await Promise.all([
@@ -1336,7 +1408,7 @@ export async function analyzeProductDescription(
 
   let parsed: Record<string, unknown>;
   try {
-    const raw = await callGemini(prompt, []);
+    const raw = await callGemini(prompt, [], descTextModel);
     parsed = parseAIResponse(raw);
   } catch (e) {
     const msg = (e as Error).message ?? "Gemini analysis failed";
@@ -1354,7 +1426,7 @@ export async function analyzeProductDescription(
       try {
         const secondPrompt = buildPrompt(categories, attrs, categoryContext, brands, cat.path, false, userContext) +
           `\n\nProduct description: "${description}"`;
-        const raw2 = await callGemini(secondPrompt, []);
+        const raw2 = await callGemini(secondPrompt, [], descTextModel);
         const parsed2 = parseAIResponse(raw2);
         dynamicAttributes = (parsed2.dynamic_attributes ?? dynamicAttributes) as Record<string, string>;
         Object.assign(parsed, parsed2);
@@ -1557,7 +1629,16 @@ Examples:
   // Use first image only — context for "image quality" rejections.
   // No image is also fine; rejection text alone is usually enough.
   const imageUrls = (listing.images ?? []).slice(0, 1);
-  const raw = await callGemini(prompt, imageUrls);
+
+  // Tier-aware model selection — rejection resolver is vision when
+  // images are present, text otherwise.
+  const { userId: resolveUserId } = await auth();
+  const resolveModelName = await resolveModel(
+    resolveUserId,
+    imageUrls.length > 0 ? "vision" : "text",
+  );
+
+  const raw = await callGemini(prompt, imageUrls, resolveModelName);
   const parsed = parseAIResponse(raw) as Partial<RejectionResolution>;
 
   if (!parsed.updates || typeof parsed.updates !== "object") {

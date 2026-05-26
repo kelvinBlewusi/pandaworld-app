@@ -1911,21 +1911,6 @@ export function ReviewClient({
   // the new URLs.
   const [enhanceMode, setEnhanceMode] = useState<EnhanceMode | null>(null);
 
-  // ── Maintenance notice for image enhancement ─────────────────────────────
-  //
-  // The Gemini image-generation backend is currently flaky enough that
-  // we'd rather not let sellers spend a quota credit on it. Instead of
-  // opening the EnhanceModal on click, we surface a short maintenance
-  // notice and bail. Toggle this back to opening the modal when the
-  // upstream issue is resolved.
-  const [showImageEnhanceMaintenance, setShowImageEnhanceMaintenance] = useState(false);
-
-  function showImageEnhanceMaintenanceNotice() {
-    setShowImageEnhanceMaintenance(true);
-    // Auto-dismiss after 7s so the violet block doesn't stay yellow forever.
-    window.setTimeout(() => setShowImageEnhanceMaintenance(false), 7000);
-  }
-
   async function handleApplyEnhancedImages(chosenUrls: string[]) {
     const res = await fetch(`/api/listings/${listing.id}`, {
       method:  "PATCH",
@@ -2409,11 +2394,10 @@ export function ReviewClient({
 
               {/* AI image-enhancement CTA — Gemini-powered, two modes.
                   Polish = preserve product, just clean the background.
-                  Rebuild = re-render as a fresh studio shot.
-                  Currently UNDER MAINTENANCE: both buttons short-circuit
-                  to showImageEnhanceMaintenanceNotice() instead of
-                  opening the EnhanceModal. When upstream is fixed, swap
-                  the onClick back to setEnhanceMode(mode). */}
+                  Rebuild = re-render as a fresh studio shot. Both open
+                  the EnhanceModal which lets the seller compare and
+                  accept/reject per image before applying. Gated by
+                  the polish quota (Free=0, paid tiers vary). */}
               {(listing.images?.length ?? 0) > 0 && (
                 <div className="rounded-md border border-violet-200 bg-violet-50/60 px-3 py-2 space-y-2">
                   <div className="flex items-center gap-2 text-xs text-violet-700">
@@ -2426,7 +2410,7 @@ export function ReviewClient({
                       type="button"
                       size="sm"
                       variant="outline"
-                      onClick={showImageEnhanceMaintenanceNotice}
+                      onClick={() => setEnhanceMode("polish")}
                       className="h-7 text-xs gap-1.5 border-violet-300 text-violet-700 hover:bg-violet-100"
                     >
                       <Sparkles className="h-3 w-3" />
@@ -2435,7 +2419,7 @@ export function ReviewClient({
                     <Button
                       type="button"
                       size="sm"
-                      onClick={showImageEnhanceMaintenanceNotice}
+                      onClick={() => setEnhanceMode("rebuild")}
                       className="h-7 text-xs gap-1.5 bg-violet-500 hover:bg-violet-600 text-white"
                     >
                       <Sparkles className="h-3 w-3" />
@@ -2445,20 +2429,6 @@ export function ReviewClient({
                       Polish keeps the product exactly. Rebuild re-renders it on white.
                     </p>
                   </div>
-
-                  {/* Maintenance toast inside the violet block — appears
-                      after either button click, auto-dismisses in 7s.
-                      Kept inline (not as a global toast) so the message
-                      sits right next to the buttons that triggered it. */}
-                  {showImageEnhanceMaintenance && (
-                    <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
-                      <p>
-                        We are investigating a technical issue with our image
-                        generation tool, kindly follow this page for updates.
-                      </p>
-                    </div>
-                  )}
                 </div>
               )}
 
