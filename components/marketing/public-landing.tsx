@@ -3,6 +3,7 @@ import { ArrowRight, LayoutDashboard } from "lucide-react";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { Wordmark } from "@/components/marketing/wordmark";
 import { ConnectTutorial } from "@/components/marketing/connect-tutorial";
+import { AnimatedToastReel } from "@/components/marketing/animated-toast-reel";
 
 // ─── Public landing — reusable across / (logged-out) and /landing ────────────
 //
@@ -39,13 +40,15 @@ export function PublicLanding({ isAuthenticated = false }: PublicLandingProps) {
                 one click.
               </span>
             </h1>
-            <p className="mt-6 text-base leading-relaxed text-zinc-600 sm:text-lg">
-              Skip manual uploads. PandaworldAI generates the listing, picks
-              the right Jumia category, fills every required attribute, and
-              pushes straight to your store — no copy-pasting, no form
-              filling, no long hours on listing products.
-            </p>
-            <div className="mt-8 flex w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:items-center">
+            {/* Animated toast reel — the static value-prop paragraph
+                replaced with a stack of macOS-style notifications that
+                cycle every 3s, narrating what PandaWorld does step by
+                step. Show, don't tell. Pauses on hover so the seller
+                can read whichever one caught their eye. */}
+            <div className="mt-8">
+              <AnimatedToastReel />
+            </div>
+            <div className="mt-12 flex w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:items-center">
               <Link
                 href={isAuthenticated ? "/dashboard" : "/sign-up"}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-orange-500 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-orange-500/20 transition-all hover:bg-orange-600 hover:shadow-lg sm:w-auto"
