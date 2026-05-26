@@ -21,6 +21,7 @@ import {
 import { searchJumiaProductsByTitle } from "@/lib/jumia/catalog-search";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
+import { AI_DYNAMIC_ATTR_DEFAULTS } from "@/lib/ai/policy";
 
 // ─── POST /api/listings/[id]/auto-analyze ────────────────────────────────────
 //
@@ -410,11 +411,40 @@ export async function POST(
     }
   }
 
+  // ── Post-hoc default-fill on dynamic_attributes ─────────────────────────
+  // Pass C is told about AI_DYNAMIC_ATTR_DEFAULTS in its prompt, but the
+  // model doesn't reliably echo back keys the category schema doesn't
+  // explicitly list. The product_note (buyer review nudge) and
+  // from_the_manufacturer defaults SHOULD appear on every listing — they
+  // get silently stripped by Jumia on categories that don't accept them,
+  // so it's safe to set them universally.
+  //
+  // Rules:
+  //   - Don't overwrite a value the AI already filled (it may have
+  //     legitimately customised the note based on userContext).
+  //   - Don't overwrite a user-edited value (mergedSources[k] === "user").
+  //   - Otherwise inject the canonical default from policy.ts.
+  const finalDynamicAttrs: Record<string, string> = { ...filled.dynamic_attributes };
+  for (const [k, v] of Object.entries(AI_DYNAMIC_ATTR_DEFAULTS)) {
+    const existing = finalDynamicAttrs[k];
+    if (existing && existing.trim().length > 0) continue; // AI already set
+    if (mergedSources[k] === "user") continue;            // seller set explicitly
+    finalDynamicAttrs[k] = v;
+    if (!mergedSources[k]) mergedSources[k] = "ai";
+    if (!mergedConfidence[k]) {
+      mergedConfidence[k] = {
+        confidence: 0.6,
+        source:     "inferred",
+        reasoning:  `Default '${k}' applied — override per-listing if needed.`,
+      };
+    }
+  }
+
   await db.from("listings").update({
     ...updates,
     category_code:       String(chosen.code),
     category_path:       chosen.path,
-    dynamic_attributes:  filled.dynamic_attributes,
+    dynamic_attributes:  finalDynamicAttrs,
     field_sources:       mergedSources,
     field_confidence:    mergedConfidence,
     category_alternates: alternatesForUI,

@@ -299,8 +299,12 @@ export default function BatchAddProductsPage() {
     // Pre-allocate the result array so we can fill it positionally —
     // important because the seller's tab order has to be preserved
     // when we route to /review?batch=id1,id2,id3 at the end.
-    const listingIds: (string | null)[] = new Array(drafts.length).fill(null);
-    const errors:     string[]          = [];
+    const listingIds:     (string | null)[] = new Array(drafts.length).fill(null);
+    const errors:         string[]          = [];
+    // Listings whose UPLOAD succeeded but ANALYZE failed (after retry).
+    // The review page should surface these so the seller knows to hit
+    // "Re-run analysis" manually for those products.
+    const analyzeFailures: string[]         = [];
 
     // ── Per-product worker: upload images + create draft + run analyze.
     // Returns the new listingId on success, or null on failure (errors
@@ -339,22 +343,41 @@ export default function BatchAddProductsPage() {
         return null;
       }
 
-      // 2. Run the auto-analyze pipeline. Non-fatal if it fails — the
-      //    listing exists, the seller can hit "Re-run analysis" from
-      //    the review page.
-      try {
-        const analyzeRes = await fetch(`/api/listings/${listingId}/auto-analyze`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body:    d.aiInstruction.trim()
-            ? JSON.stringify({ userPrompt: d.aiInstruction.trim() })
-            : undefined,
-        });
-        if (!analyzeRes.ok) {
-          console.warn(`[batch] auto-analyze failed for ${listingId}`);
+      // 2. Run the auto-analyze pipeline with one auto-retry on failure.
+      //    Common failure causes are transient Gemini timeouts or rate
+      //    limits; a single retry recovers most. Hard failures still let
+      //    the listing exist as a draft — the seller can hit "Re-run
+      //    analysis" from the review page.
+      const analyzeBody = d.aiInstruction.trim()
+        ? JSON.stringify({ userPrompt: d.aiInstruction.trim() })
+        : undefined;
+
+      async function runAnalyze(attempt: number): Promise<boolean> {
+        try {
+          const analyzeRes = await fetch(`/api/listings/${listingId}/auto-analyze`, {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    analyzeBody,
+          });
+          if (analyzeRes.ok) return true;
+          console.warn(`[batch] auto-analyze attempt ${attempt} returned ${analyzeRes.status} for ${listingId}`);
+          return false;
+        } catch (e) {
+          console.warn(`[batch] auto-analyze attempt ${attempt} threw for ${listingId}: ${(e as Error).message}`);
+          return false;
         }
-      } catch (e) {
-        console.warn(`[batch] auto-analyze threw for ${listingId}: ${(e as Error).message}`);
+      }
+
+      const firstOk = await runAnalyze(1);
+      if (!firstOk) {
+        // Brief backoff (1s) to let any transient rate-limit window pass,
+        // then one retry. Total worst-case extra wait is ~1s + analyze
+        // timeout, which is acceptable for the reliability gain.
+        await new Promise((r) => setTimeout(r, 1000));
+        const secondOk = await runAnalyze(2);
+        if (!secondOk) {
+          analyzeFailures.push(listingId);
+        }
       }
       return listingId;
     }
@@ -405,7 +428,10 @@ export default function BatchAddProductsPage() {
     // Surface non-fatal upload errors as a toast-ish info on the next
     // page later (logged for now — UI plumbing in a follow-up).
     if (errors.length > 0) {
-      console.warn(`[batch] ${errors.length} of ${drafts.length} products failed: ${errors.join(" | ")}`);
+      console.warn(`[batch] ${errors.length} of ${drafts.length} products failed upload: ${errors.join(" | ")}`);
+    }
+    if (analyzeFailures.length > 0) {
+      console.warn(`[batch] ${analyzeFailures.length} of ${drafts.length} products analyzed-failed: ${analyzeFailures.join(", ")}`);
     }
 
     // All successful drafts created. Route to first product's review
@@ -414,8 +440,13 @@ export default function BatchAddProductsPage() {
     // tabbed-upload experience after AI has finished. Also forward
     // the `enhance` param if the picker said to auto-rebuild — the
     // review page reads it and opens the rebuild modal on mount.
+    //
+    // ?retry=id1,id2 — listings whose analyze step failed after retry.
+    // The review page reads this and shows a banner prompting the
+    // seller to re-run analysis on those specific products.
     const qs = new URLSearchParams();
     if (successfulIds.length > 1) qs.set("batch", successfulIds.join(","));
+    if (analyzeFailures.length > 0) qs.set("retry", analyzeFailures.join(","));
     const enhanceParam = search.get("enhance");
     if (enhanceParam === "rebuild") qs.set("enhance", "rebuild");
     const queryString = qs.toString() ? `?${qs.toString()}` : "";

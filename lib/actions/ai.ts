@@ -390,6 +390,18 @@ function toResizedSupabaseUrl(url: string, maxEdge = 1024): string {
   return `${rewritten}${sep}width=${maxEdge}&height=${maxEdge}&resize=contain&quality=80`;
 }
 
+// Single attempt against one URL — returns the fetched ImagePart or
+// throws with a descriptive error. Used twice by fetchImagePart so the
+// resize + original-URL fallback share the same encoding logic.
+async function attemptImageFetch(url: string, timeoutMs: number): Promise<ImagePart> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const buffer   = await res.arrayBuffer();
+  const base64   = Buffer.from(buffer).toString("base64");
+  const mimeType = (res.headers.get("content-type") ?? "image/jpeg") as string;
+  return { inlineData: { data: base64, mimeType } };
+}
+
 async function fetchImagePart(url: string): Promise<ImageFetchResult> {
   // Resize-at-CDN: ~5× fewer image tokens for Gemini, ~2× faster inference.
   // Cache key is the RESIZED URL so we get cache hits across passes
@@ -402,34 +414,32 @@ async function fetchImagePart(url: string): Promise<ImageFetchResult> {
   if (cached && cached.expires > Date.now()) {
     return { ok: true, part: cached.part };
   }
+
+  // 1) Try the resized URL first (fast path).
+  // Generous 15s timeout — Supabase's first render of a given image is a
+  // cold transform (~5-8s on free tier). Subsequent hits are CDN-cached.
   try {
-    const res = await fetch(resizedUrl, { signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) {
-      // If the resize endpoint failed (Supabase project might not have
-      // image transformations enabled), fall back to the original URL
-      // so we don't break analyze for projects on the free Storage tier.
-      if (resizedUrl !== url) {
-        console.warn(`[AI] image-resize 4xx (${res.status}) — falling back to original URL`);
-        const fallback = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-        if (!fallback.ok) return { ok: false, error: `HTTP ${fallback.status}` };
-        const buffer   = await fallback.arrayBuffer();
-        const base64   = Buffer.from(buffer).toString("base64");
-        const mimeType = (fallback.headers.get("content-type") ?? "image/jpeg") as string;
-        const part: ImagePart = { inlineData: { data: base64, mimeType } };
-        _imagePartCache.set(resizedUrl, { part, expires: Date.now() + IMAGE_CACHE_TTL_MS });
-        return { ok: true, part };
-      }
-      return { ok: false, error: `HTTP ${res.status}` };
-    }
-    const buffer   = await res.arrayBuffer();
-    const base64   = Buffer.from(buffer).toString("base64");
-    const mimeType = (res.headers.get("content-type") ?? "image/jpeg") as string;
-    const part: ImagePart = { inlineData: { data: base64, mimeType } };
-    // Cache for next pass in this same analyze run.
+    const part = await attemptImageFetch(resizedUrl, 15_000);
     _imagePartCache.set(resizedUrl, { part, expires: Date.now() + IMAGE_CACHE_TTL_MS });
     return { ok: true, part };
-  } catch (e) {
-    return { ok: false, error: (e as Error).message };
+  } catch (resizeErr) {
+    // 2) Fall back to the original URL on ANY failure of the resize
+    //    path (timeout, network error, 4xx — previously only 4xx
+    //    fell back, which meant a slow Supabase cold-render returned
+    //    "ok: false" and the analyze silently failed for the listing).
+    if (resizedUrl === url) {
+      return { ok: false, error: (resizeErr as Error).message };
+    }
+    console.warn(
+      `[AI] image-resize failed (${(resizeErr as Error).message.slice(0, 80)}) — falling back to original URL`,
+    );
+    try {
+      const part = await attemptImageFetch(url, 15_000);
+      _imagePartCache.set(resizedUrl, { part, expires: Date.now() + IMAGE_CACHE_TTL_MS });
+      return { ok: true, part };
+    } catch (originalErr) {
+      return { ok: false, error: (originalErr as Error).message };
+    }
   }
 }
 
