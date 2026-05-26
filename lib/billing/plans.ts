@@ -27,8 +27,8 @@
 export type Plan =
   | "free"        // 5 listings / month, no image polish
   | "starter"     // GHS 30 / month — 30 listings, 10 polishes
-  | "pro"         // GHS 65 / month — 100 listings, 30 polishes
-  | "business";   // GHS 120 / month — 500 listings (fair-use), 150 polishes
+  | "pro"         // GHS 65 / month — 70 listings, 30 polishes
+  | "business";   // GHS 120 / month — 100 listings, 50 polishes
 
 // Note: there is intentionally no "legacy" tier here. Admins (devs / staff)
 // get unlimited usage via lib/billing/admin.ts (env-var-based list) — not
@@ -141,11 +141,11 @@ export const PLANS: Record<Plan, PlanConfig> = {
     price_ghs_pesewas:      6500,                  // GHS 65
     display_price:          "GHS 65",
     period:                 "month",
-    monthly_listings:       100,
+    monthly_listings:       70,
     monthly_polishes:       30,
     paystack_page_url_env: "PAYSTACK_PRO_PAGE_URL",
     features: [
-      "100 product listings / month",
+      "70 product listings / month",
       "30 AI image polishes + studio rebuilds / month",
       "AI listing generation (Gemini 2.5 Flash)",
       "Image polish + AI studio-shot rebuild",
@@ -164,12 +164,12 @@ export const PLANS: Record<Plan, PlanConfig> = {
     price_ghs_pesewas:      12000,                 // GHS 120
     display_price:          "GHS 120",
     period:                 "month",
-    monthly_listings:       500,                   // fair-use cap
-    monthly_polishes:       150,
+    monthly_listings:       100,
+    monthly_polishes:       50,
     paystack_page_url_env: "PAYSTACK_BUSINESS_PAGE_URL",
     features: [
-      "500 product listings / month (fair-use)",
-      "150 AI image polishes + studio rebuilds / month",
+      "100 product listings / month",
+      "50 AI image polishes + studio rebuilds / month",
       "✨ AI listing generation (Gemini 2.5 Pro — our best model)",
       "✨ Generate product photos from text (Imagen 3) — no photo needed",
       "Image polish + AI studio-shot rebuild",

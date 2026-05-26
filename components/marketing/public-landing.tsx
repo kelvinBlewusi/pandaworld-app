@@ -119,14 +119,14 @@ export function PublicLanding({ isAuthenticated = false }: PublicLandingProps) {
             <TierTile
               name="Pro"
               price="GHS 65"
-              line="100 listings + 30 image polishes"
+              line="70 listings + 30 image polishes"
               detail="Serious sellers — bulk push, priority support."
               badge="Most popular"
             />
             <TierTile
               name="Business"
               price="GHS 120"
-              line="500 listings + 150 image polishes"
+              line="100 listings + 50 image polishes"
               detail="Resellers + high-volume stores. Advanced analytics."
             />
           </div>

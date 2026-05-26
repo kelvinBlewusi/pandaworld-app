@@ -191,8 +191,8 @@ const softwareApplicationLd = {
   offers: [
     { "@type": "Offer", name: "Free",     price: "0",   priceCurrency: "GHS", description: "5 listings every month" },
     { "@type": "Offer", name: "Starter",  price: "30",  priceCurrency: "GHS", description: "30 listings + 10 image polishes / month" },
-    { "@type": "Offer", name: "Pro",      price: "65",  priceCurrency: "GHS", description: "100 listings + 30 image polishes / month" },
-    { "@type": "Offer", name: "Business", price: "120", priceCurrency: "GHS", description: "500 listings + 150 image polishes / month" },
+    { "@type": "Offer", name: "Pro",      price: "65",  priceCurrency: "GHS", description: "70 listings + 30 image polishes / month" },
+    { "@type": "Offer", name: "Business", price: "120", priceCurrency: "GHS", description: "100 listings + 50 image polishes / month" },
   ],
   audience: {
     "@type":        "Audience",
