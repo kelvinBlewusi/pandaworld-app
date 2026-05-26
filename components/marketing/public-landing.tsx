@@ -44,11 +44,16 @@ export function PublicLanding({ isAuthenticated = false }: PublicLandingProps) {
                 replaced with a stack of macOS-style notifications that
                 cycle every 3s, narrating what PandaWorld does step by
                 step. Show, don't tell. Pauses on hover so the seller
-                can read whichever one caught their eye. */}
-            <div className="mt-8">
+                can read whichever one caught their eye.
+
+                The wrapper is `w-full max-w-[440px]` — explicit width
+                so the toast reel doesn't collapse inside the parent
+                flex-col with items-start. (See the layout-bug note in
+                animated-toast-reel.tsx for why this matters.) */}
+            <div className="mt-8 w-full max-w-[440px]">
               <AnimatedToastReel />
             </div>
-            <div className="mt-12 flex w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:items-center">
+            <div className="mt-10 flex w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:items-center">
               <Link
                 href={isAuthenticated ? "/dashboard" : "/sign-up"}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-orange-500 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-orange-500/20 transition-all hover:bg-orange-600 hover:shadow-lg sm:w-auto"
