@@ -1,87 +1,127 @@
 /**
  * Tier-aware Gemini model picker.
  *
- * Strategy (May 2026, post $10 API-credit purchase):
+ * Strategy (May 2026, with paid Gemini credits):
  *
- *   Free tier      → gemini-2.0-flash         (cheaper, ~33% less per call)
- *   Starter / Pro / Business → gemini-2.5-flash         (better quality)
+ *   Free                    → gemini-2.5-flash-lite   (cheapest, ~50% less than 2.0 Flash)
+ *   Starter / Pro           → gemini-2.5-flash        (production sweet spot)
+ *   Business + Admin        → gemini-2.5-pro          (best reasoning, slower, ~5–10× cost)
  *
- *   Image generation (polish / rebuild):
- *     gemini-2.5-flash-image-preview (the only viable Gemini image-gen
- *     model right now). Free tier doesn't get image gen at all
- *     (gated by polish quota = 0).
+ *   Image editing (polish / rebuild — all paid):
+ *     gemini-2.5-flash-image-preview
+ *
+ *   Image generation from text (Business + Admin only):
+ *     imagen-3.0-generate-002 — purpose-built text-to-image
  *
  * Why this split:
- *   - The $10 API budget funds ~2k–3k full listings on 2.5 Flash or
- *     ~3.5k–4.5k on 2.0 Flash. Routing free users to the cheaper
- *     model preserves credit for paying customers who deserve the
- *     better quality.
- *   - Quality difference is real but modest for the structured-JSON
- *     output our prompts produce. Free users still get useable
- *     listings; paid users get the polish.
- *   - When we get the Google for Startups credits ($300–$1k), we can
- *     promote everyone to 2.5 Flash with one config change here.
+ *   - Free funnel runs on the cheapest viable model. Quality is OK
+ *     for structured-JSON output, well within Jumia QC acceptance.
+ *   - Starter / Pro get the standard production model. Same as Free
+ *     used to use, but now meaningfully better than what Free sees.
+ *   - Business gets the premium model — they pay GHS 120/mo and
+ *     deserve the visible quality bump (better category accuracy,
+ *     fewer hallucinated attributes, smarter override handling).
+ *   - Image FROM SCRATCH (no source photo) is Business-only because
+ *     it's the marketing differentiator: "Don't have product photos?
+ *     We'll generate them for you." Justifies the price jump.
  *
- * Admin override: admins always get the best model regardless of
- * "plan" (they're testing the production experience).
+ * Admin override: always treated as Business (premium).
  */
 
 import type { Plan } from "@/lib/billing/plans";
 
 /** Kind of AI call — different models for different purposes. */
 export type ModelKind =
-  | "vision"      // multimodal: image + text in, JSON out (listing analysis)
-  | "text"        // text-only in, JSON out (description-only path, rejection resolver)
-  | "image-gen";  // image in, image out (polish + rebuild)
+  | "vision"             // multimodal: image + text in, JSON out (listing analysis)
+  | "text"               // text-only in, JSON out (description-only path, rejection resolver)
+  | "image-edit"         // image in, image out (polish + rebuild from a real photo)
+  | "image-from-scratch" // text in, image out (Business-only "no photo? we'll make one")
+  | "embedding";         // text in, vector out (category similarity search)
 
 // ── Model name constants ────────────────────────────────────────────────────
-// Hardcoded model IDs are kept in this one file so swapping Gemini
-// versions later is a single-line change. The Gemini API also returns
-// these names from /v1beta/models — see lib/actions/ai.ts'
-// discoverWorkingModel() for the fallback list.
+// Hardcoded model IDs in one file so swapping Gemini versions later
+// is a single-line change. The Gemini API returns these names from
+// /v1beta/models — see lib/actions/ai.ts' discoverWorkingModel() for
+// the runtime discovery fallback.
 
-const MODEL_CHEAP_FAST    = "gemini-2.0-flash";
-const MODEL_PREMIUM_TEXT  = "gemini-2.5-flash";
-const MODEL_PREMIUM_VISION = "gemini-2.5-flash";
+const MODEL_LITE       = "gemini-2.5-flash-lite";          // Free tier
+const MODEL_STANDARD   = "gemini-2.5-flash";               // Starter / Pro
+const MODEL_PREMIUM    = "gemini-2.5-pro";                 // Business / Admin
 
-// Image generation — currently only one viable Gemini model.
-// `gemini-2.5-flash-image-preview` is the public preview ID; if
-// Google promotes it to GA the name will change and we update here.
-const MODEL_IMAGE_GEN     = "gemini-2.5-flash-image-preview";
+// Image editing — currently only one viable Gemini model. Used by
+// the "Polish" and "Rebuild as studio shot" buttons (which take an
+// existing seller photo as input).
+const MODEL_IMAGE_EDIT = "gemini-2.5-flash-image-preview";
+
+// Image FROM SCRATCH — Google Imagen 3. Purpose-built text-to-image,
+// produces studio-quality product shots from a description alone.
+// Business-tier only (see api/generate-product-image/route.ts).
+const MODEL_IMAGE_FROM_SCRATCH = "imagen-3.0-generate-002";
+
+// Text embeddings — for category retrieval. 768-dim vectors.
+// Used by lib/ai/embeddings.ts to embed product descriptions and
+// jumia_categories rows; pgvector cosine similarity finds the
+// nearest categories.
+const MODEL_EMBEDDING = "text-embedding-004";
 
 /**
  * Pick the right Gemini model for a (plan, kind) combination.
  *
- * Admins are always treated as paid for model selection (they pay
- * the API cost in their testing time anyway, and we want them to see
- * the production experience).
+ * Admins are always treated as Business (premium) for model
+ * selection — they're testing the production experience and we want
+ * them to see the best version.
  */
 export function pickModelForPlan(
   plan: Plan,
   kind: ModelKind,
   opts: { isAdmin?: boolean } = {},
 ): string {
-  const treatAsPaid = opts.isAdmin === true || plan !== "free";
+  const tier: "free" | "standard" | "premium" =
+    opts.isAdmin === true || plan === "business"
+      ? "premium"
+      : plan === "free"
+        ? "free"
+        : "standard"; // starter, pro
 
   switch (kind) {
-    case "image-gen":
-      // Only one model; tier doesn't change which we use. The polish
-      // quota gates whether the user can call this at all (Free = 0).
-      return MODEL_IMAGE_GEN;
+    case "image-edit":
+      // Same model for all paid tiers; Free is gated at the quota layer.
+      return MODEL_IMAGE_EDIT;
+
+    case "image-from-scratch":
+      // Business-only feature; routes/UI also gate this.
+      return MODEL_IMAGE_FROM_SCRATCH;
+
+    case "embedding":
+      // One embedding model across the board — embeddings don't have
+      // meaningful "premium" tiers.
+      return MODEL_EMBEDDING;
 
     case "vision":
-      return treatAsPaid ? MODEL_PREMIUM_VISION : MODEL_CHEAP_FAST;
-
     case "text":
-      return treatAsPaid ? MODEL_PREMIUM_TEXT : MODEL_CHEAP_FAST;
+      // The big-three text/vision models split by tier.
+      if (tier === "premium")  return MODEL_PREMIUM;
+      if (tier === "standard") return MODEL_STANDARD;
+      return MODEL_LITE;
   }
 }
 
 /**
- * Helper: returns true if this plan/admin combination is entitled to
- * the premium-model experience. Use in UI when you want to surface
- * the model upgrade as a feature.
+ * Helper: true if this plan/admin is on the PREMIUM model
+ * (Gemini 2.5 Pro). Use to surface "you're using our best AI"
+ * messaging in the UI for Business / Admin users.
  */
 export function isOnPremiumModel(plan: Plan, opts: { isAdmin?: boolean } = {}): boolean {
-  return opts.isAdmin === true || plan !== "free";
+  return opts.isAdmin === true || plan === "business";
+}
+
+/**
+ * Helper: true if this plan is entitled to image-from-scratch
+ * generation (Imagen 3). Currently Business + Admin only.
+ */
+export function canGenerateImagesFromScratch(
+  plan: Plan,
+  opts: { isAdmin?: boolean } = {},
+): boolean {
+  return opts.isAdmin === true || plan === "business";
 }

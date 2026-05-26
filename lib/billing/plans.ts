@@ -103,7 +103,7 @@ export const PLANS: Record<Plan, PlanConfig> = {
     paystack_page_url_env: null,
     features: [
       "5 product listings / month",
-      "AI listing generation (Gemini 2.0 Flash)",
+      "AI listing generation (Gemini 2.5 Flash-Lite)",
       "Jumia category + attribute auto-fill",
       "Jumia export (.xlsx) + one-click push",
       "Price calculator",
@@ -125,7 +125,7 @@ export const PLANS: Record<Plan, PlanConfig> = {
     features: [
       "30 product listings / month",
       "10 AI image polishes / month",
-      "AI listing generation (Gemini 2.5 Flash — better quality)",
+      "AI listing generation (Gemini 2.5 Flash)",
       "Image polish + studio-shot rebuild (background, shadow, white BG)",
       "Jumia category + attribute auto-fill",
       "Jumia export + one-click push",
@@ -147,7 +147,7 @@ export const PLANS: Record<Plan, PlanConfig> = {
     features: [
       "100 product listings / month",
       "30 AI image polishes + studio rebuilds / month",
-      "AI listing generation (Gemini 2.5 Flash — better quality)",
+      "AI listing generation (Gemini 2.5 Flash)",
       "Image polish + AI studio-shot rebuild",
       "Bulk push to Jumia",
       "Priority email support",
@@ -170,7 +170,8 @@ export const PLANS: Record<Plan, PlanConfig> = {
     features: [
       "500 product listings / month (fair-use)",
       "150 AI image polishes + studio rebuilds / month",
-      "AI listing generation (Gemini 2.5 Flash — better quality)",
+      "✨ AI listing generation (Gemini 2.5 Pro — our best model)",
+      "✨ Generate product photos from text (Imagen 3) — no photo needed",
       "Image polish + AI studio-shot rebuild",
       "Bulk push to Jumia + bulk operations",
       "Advanced analytics",

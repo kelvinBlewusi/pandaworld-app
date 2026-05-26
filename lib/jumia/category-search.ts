@@ -27,6 +27,8 @@
 
 import Fuse from "fuse.js";
 import type { JumiaCategoryRow } from "@/lib/jumia/categories";
+import { createServerClient } from "@/lib/supabase/server";
+import { embedText, toPgvectorLiteral } from "@/lib/ai/embeddings";
 
 export interface CategoryCandidate {
   code:               number;
@@ -36,7 +38,7 @@ export interface CategoryCandidate {
   /** 0–1 retrieval relevance — NOT vision confidence */
   retrievalScore:     number;
   /** Where this candidate came from — useful for debugging the pipeline */
-  source:             "fuzzy" | "jumia" | "merged";
+  source:             "fuzzy" | "jumia" | "merged" | "embedding";
 }
 
 interface IndexedRow extends JumiaCategoryRow {
@@ -101,6 +103,89 @@ export function searchCategoriesByText(
   }
 
   return out;
+}
+
+/**
+ * Embedding-based semantic search over jumia_categories. Requires
+ * the pgvector migration (supabase/migrations/2026-05-26_category-embeddings.sql)
+ * AND for the embeddings to have been backfilled (POST
+ * /api/admin/embed-categories).
+ *
+ * Flow:
+ *   1. Embed the query text via Google text-embedding-004 (768 dim).
+ *   2. Cosine-similarity query against jumia_categories.embedding
+ *      using pgvector's <=> operator (smallest distance = nearest).
+ *   3. Return the top-N as candidates, scored 0–1 (1 = perfect).
+ *
+ * Falls back to an empty array on any error (caller handles). This is
+ * intentional — the auto-analyze pipeline composes embedding + fuzzy
+ * + Jumia results, so an embedding failure should degrade gracefully,
+ * not break listing creation.
+ *
+ * Cost: ~$0.0001 per call (the embedding) + ~5ms Supabase query time.
+ * Negligible compared to a Pass A/B vision call.
+ */
+export async function searchCategoriesByEmbedding(
+  query: string,
+  limit: number = 8,
+): Promise<CategoryCandidate[]> {
+  if (!query.trim()) return [];
+
+  try {
+    // 1. Embed the query
+    const { vector } = await embedText(query);
+    const literal = toPgvectorLiteral(vector);
+
+    // 2. Cosine-similarity query.
+    //
+    // The <=> operator is pgvector's cosine DISTANCE (0=identical,
+    // 1=orthogonal, 2=opposite). Convert to similarity by `1 - dist`
+    // and clamp to [0, 1] so the score plays nicely with the
+    // fuzzy-search scoring (which is also a [0, 1] relevance).
+    //
+    // WHERE embedding IS NOT NULL skips unembedded rows so the
+    // ivfflat index can be used.
+    //
+    // attribute_set_sid IS NOT NULL ensures we only return listable
+    // categories (matches the rest of the pipeline).
+    const db = createServerClient();
+    const { data, error } = await db.rpc("search_categories_by_embedding", {
+      query_embedding: literal,
+      match_limit:     limit,
+    });
+
+    if (error) {
+      // RPC may not exist yet on databases that haven't run the
+      // migration's accompanying function. Surface a one-line warning
+      // and degrade silently.
+      console.warn(
+        `[category-search] searchCategoriesByEmbedding RPC error: ${error.message}. Falling back to fuzzy search only.`,
+      );
+      return [];
+    }
+
+    type RpcRow = {
+      code:               number;
+      name:               string;
+      path:               string;
+      attribute_set_sid:  string | null;
+      similarity:         number;  // 0..1, higher = more similar
+    };
+
+    return (data as RpcRow[] ?? []).map((r) => ({
+      code:              r.code,
+      name:              r.name,
+      path:              r.path,
+      attribute_set_sid: r.attribute_set_sid,
+      retrievalScore:    Math.max(0, Math.min(1, r.similarity)),
+      source:            "embedding" as const,
+    }));
+  } catch (e) {
+    console.warn(
+      `[category-search] searchCategoriesByEmbedding failed: ${(e as Error).message}. Falling back to fuzzy search only.`,
+    );
+    return [];
+  }
 }
 
 /**

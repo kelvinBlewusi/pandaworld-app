@@ -25,6 +25,7 @@ import {
   ListChecks,
   Pencil,
   Clock,
+  Wand2,
 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -49,6 +50,8 @@ import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import { CategoryDrawer } from "@/components/ui/category-drawer";
 import { PublishingLoader } from "@/components/ui/publishing-loader";
 import { EnhanceModal, type EnhanceMode } from "@/components/enhance/EnhanceModal";
+import { GenerateImageModal } from "@/components/imagen/GenerateImageModal";
+import { getQuotaSummaryForCurrentUser } from "@/lib/actions/subscription";
 import { MultiSelectDropdown } from "@/components/ui/multi-select";
 import { SchemaForm } from "@/components/jumia/SchemaForm";
 import type { JumiaAttributeDef } from "@/components/jumia/SchemaField";
@@ -1911,6 +1914,24 @@ export function ReviewClient({
   // the new URLs.
   const [enhanceMode, setEnhanceMode] = useState<EnhanceMode | null>(null);
 
+  // ── Imagen 3 generate-from-scratch modal state (Business-only) ──────────
+  //
+  // Different from the enhance modal: this generates a brand-new
+  // product photo from a text prompt via Google Imagen 3. Server
+  // enforces Business-tier gate; we ask the quota engine here just to
+  // decide whether to render the button at all (a Free user hitting
+  // the button would just see an error toast — better to hide it).
+  const [showGenerateImage, setShowGenerateImage] = useState(false);
+  const [canGenerateImages, setCanGenerateImages] = useState(false);
+  useEffect(() => {
+    getQuotaSummaryForCurrentUser().then((q) => {
+      if (!q) return;
+      // Business + Admin only — mirrors canGenerateImagesFromScratch
+      // in lib/billing/ai-models.ts.
+      setCanGenerateImages(q.is_admin || q.plan === "business");
+    });
+  }, []);
+
   async function handleApplyEnhancedImages(chosenUrls: string[]) {
     const res = await fetch(`/api/listings/${listing.id}`, {
       method:  "PATCH",
@@ -2432,6 +2453,35 @@ export function ReviewClient({
                 </div>
               )}
 
+              {/* Imagen 3 — generate a product photo FROM SCRATCH.
+                  Business-tier-only (also Admin). Different from
+                  Polish/Rebuild because no source photo is needed —
+                  pure text-to-image via Google Imagen 3. */}
+              {canGenerateImages && (
+                <div className="rounded-md border border-fuchsia-200 bg-gradient-to-r from-fuchsia-50/60 to-violet-50/60 px-3 py-2 space-y-2">
+                  <div className="flex items-center gap-2 text-xs text-fuchsia-700">
+                    <Wand2 className="h-3.5 w-3.5" />
+                    <span className="font-medium">Generate a product photo</span>
+                    <span className="rounded-full bg-fuchsia-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-fuchsia-700">
+                      Business
+                    </span>
+                    <span className="text-fuchsia-500">— no source photo needed</span>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => setShowGenerateImage(true)}
+                    className="h-7 text-xs gap-1.5 bg-gradient-to-r from-violet-500 to-fuchsia-500 hover:from-violet-600 hover:to-fuchsia-600 text-white"
+                  >
+                    <Wand2 className="h-3 w-3" />
+                    Generate from description
+                  </Button>
+                  <p className="text-[10px] text-fuchsia-500/80">
+                    Type what your product looks like. Imagen 3 generates a studio shot in seconds.
+                  </p>
+                </div>
+              )}
+
               {/* Name + Category */}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
@@ -2780,6 +2830,17 @@ export function ReviewClient({
           listingId={listing.id}
           onClose={() => setEnhanceMode(null)}
           onApply={handleApplyEnhancedImages}
+        />
+      )}
+
+      {/* Imagen 3 — generate a product photo from text. Business-only.
+          Server enforces the tier gate so non-Business users hitting
+          this would just see an error; we hide the trigger entirely. */}
+      {showGenerateImage && (
+        <GenerateImageModal
+          listingId={listing.id}
+          onApplied={() => { /* router.refresh() runs inside the modal */ }}
+          onClose={() => setShowGenerateImage(false)}
         />
       )}
     </div>

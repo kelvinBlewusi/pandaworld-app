@@ -14,7 +14,9 @@ import {
 } from "@/lib/jumia/categories";
 import {
   searchCategoriesByText,
+  searchCategoriesByEmbedding,
   mergeCandidates,
+  type CategoryCandidate,
 } from "@/lib/jumia/category-search";
 import { searchJumiaProductsByTitle } from "@/lib/jumia/catalog-search";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
@@ -131,18 +133,46 @@ export async function POST(
     );
   }
 
-  const fuzzyHits = searchCategoriesByText(retrievalQuery, listableCategories, 6);
+  // Three-source retrieval (May 2026 + embeddings):
+  //   1. Fuzzy lexical search (Fuse.js, local, free)
+  //   2. Semantic embedding search (pgvector, ~$0.0001 per call)
+  //   3. Jumia catalog lookup (their search API)
+  //
+  // Embedding search is the new addition — it catches non-English
+  // product names (e.g. "Kente cloth"), brand-specific terms
+  // ("AirPods Pro"), and vague descriptions where lexical overlap
+  // with the category tree is poor. Failure-tolerant: if the
+  // embedding RPC isn't set up, this returns [] and the pipeline
+  // still works on lexical + Jumia signals.
+  //
+  // Run all three in parallel — independent network calls.
+  const fuzzyPromise: Promise<CategoryCandidate[]> = Promise.resolve(
+    searchCategoriesByText(retrievalQuery, listableCategories, 6),
+  );
+  const embeddingPromise: Promise<CategoryCandidate[]> =
+    searchCategoriesByEmbedding(retrievalQuery, 6);
+  const jumiaPromise: Promise<CategoryCandidate[]> = (async () => {
+    try {
+      const { accessToken } = await getValidJumiaCredentials(userId);
+      return await searchJumiaProductsByTitle(accessToken, description.title, 3);
+    } catch {
+      return [];
+    }
+  })();
 
-  // Best-effort Jumia catalog lookup (silently returns [] on failure)
-  let jumiaHits: typeof fuzzyHits = [];
-  try {
-    const { accessToken } = await getValidJumiaCredentials(userId);
-    jumiaHits = await searchJumiaProductsByTitle(accessToken, description.title, 3);
-  } catch {
-    // OK — catalog search is optional enrichment, not critical
-  }
+  const [fuzzyHits, embeddingHits, jumiaHits] = await Promise.all([
+    fuzzyPromise,
+    embeddingPromise,
+    jumiaPromise,
+  ]);
 
-  let candidates = mergeCandidates(fuzzyHits, jumiaHits, 8);
+  // Merge all three — categories that appear in multiple sources
+  // float to the top (mergeCandidates handles the score boost).
+  let candidates = mergeCandidates(mergeCandidates(fuzzyHits, embeddingHits, 8), jumiaHits, 8);
+
+  console.info(
+    `[auto-analyze] retrieval: fuzzy=${fuzzyHits.length} embedding=${embeddingHits.length} jumia=${jumiaHits.length} → merged=${candidates.length}`,
+  );
 
   // Fallback: if the fuzzy + Jumia retrieval both came up empty, hand
   // the rank-pass the full listable set (capped) instead of failing the
