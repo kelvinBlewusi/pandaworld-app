@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
-import { type Plan, findTierByAmount } from "@/lib/billing/plans";
+import {
+  type Plan,
+  findTierByAmount,
+  findTierByPaystackPageSlug,
+} from "@/lib/billing/plans";
 import { parsePaystackReference } from "@/lib/billing/paystack-reference";
 
 const VALID_PLANS: Plan[] = ["starter", "pro", "business"];
@@ -102,46 +106,61 @@ export async function GET(request: Request) {
   const emailToken = tx.subscription?.email_token ?? null;
   const customerCode = tx.customer?.customer_code ?? null;
 
-  // Tier resolution — FOUR-step fallback (May 2026 Payment Pages fix):
-  //   1. findTierByAmount(tx.amount) — the AUTHORITATIVE source.
-  //      Paystack always returns the amount charged. Each Payment Page
-  //      has a fixed amount tied to exactly one tier (30/65/120 GHS), so
-  //      matching by amount is bulletproof — it's based on what the
-  //      seller actually paid, not what we hoped Paystack would round-trip.
-  //   2. tx.metadata.plan — what we set in /initialize. Often dropped by
-  //      Payment Pages, but we still check in case it survived.
-  //   3. parsePaystackReference(tx.reference) — Payment Pages override our
-  //      reference with their own (T....), so this almost always returns
-  //      null here. Kept for legacy /transaction/initialize transactions.
-  //   4. Hard fall back to "pro" if all three fail and log loudly. Should
-  //      never happen in production with our fixed-amount pages.
+  // Tier resolution — FIVE-step fallback (May 2026 robustness pass):
+  //   1. findTierByPaystackPageSlug(tx.paymentpage.slug) — PRIMARY.
+  //      The Page slug is stable across price changes. If you bump the
+  //      Starter Page price in Paystack from GHS 30 → GHS 35 without
+  //      updating price_ghs_pesewas here, this match still wins and
+  //      the right tier activates. Slug only changes if you rename
+  //      the Page URL in Paystack, which is a deliberate action.
+  //   2. findTierByAmount(tx.amount) — fallback when the page slug
+  //      can't be resolved (e.g. legacy transactions from before the
+  //      slug-match was wired). Brittle to price changes — that's why
+  //      it's not first any more.
+  //   3. tx.metadata.plan — what we set in /initialize. Often dropped
+  //      by Payment Pages but checked in case it survived.
+  //   4. parsePaystackReference(tx.reference) — Payment Pages override
+  //      our reference with their own (T...), so this rarely fires
+  //      for new transactions. Kept for legacy /transaction/initialize.
+  //   5. Hard fall back to "pro" and log loudly. Means none of the
+  //      above worked — investigate via Vercel logs.
+  const slugTier        = findTierByPaystackPageSlug(tx.paymentpage?.slug);
   const amountTier      = findTierByAmount(tx.amount);
   const metadataPlan    = tx.metadata?.plan as string | undefined;
   const referenceParsed = parsePaystackReference(tx.reference);
-  const requestedPlan   = amountTier ?? metadataPlan ?? referenceParsed.tier ?? "pro";
+  const requestedPlan   =
+    slugTier ?? amountTier ?? metadataPlan ?? referenceParsed.tier ?? "pro";
 
   const plan: Plan = VALID_PLANS.includes(requestedPlan as Plan)
     ? (requestedPlan as Plan)
     : "pro";
 
   // Telemetry: log how the tier was resolved on each successful verify.
-  // Helps us notice if metadata starts working / breaking, or if the
-  // amount-match path is the only thing keeping activations alive.
+  // Helps us notice if the slug-match path is doing its job (it should
+  // be the only one used in steady state), or if we've drifted into
+  // amount-only / default-fallback territory.
+  const resolver =
+    slugTier ? `slug match ("${tx.paymentpage?.slug}")`
+    : amountTier ? `amount match (${tx.amount} pesewas)`
+    : metadataPlan ? "metadata.plan"
+    : referenceParsed.tier ? "reference parse"
+    : "default fallback (CHECK ME)";
   console.info(
-    `[Paystack verify] resolved tier "${plan}" via ${
-      amountTier
-        ? `amount match (${tx.amount} pesewas)`
-        : metadataPlan
-          ? "metadata.plan"
-          : referenceParsed.tier
-            ? "reference parse"
-            : "default fallback (CHECK ME)"
-    } for user ${userId}, reference ${tx.reference}`,
+    `[Paystack verify] resolved tier "${plan}" via ${resolver} for user ${userId}, reference ${tx.reference}`,
   );
 
-  if (!amountTier && metadataPlan) {
+  // Drift warning: slug + amount disagree means the Paystack price
+  // was changed without updating price_ghs_pesewas here. Slug wins
+  // (price-change resilience) but we surface the drift so someone
+  // notices and reconciles.
+  if (slugTier && amountTier && slugTier !== amountTier) {
     console.warn(
-      `[Paystack verify] amount ${tx.amount} did not match any plan price; falling back to metadata.plan "${metadataPlan}".`,
+      `[Paystack verify] PRICE DRIFT: slug "${tx.paymentpage?.slug}" → tier "${slugTier}" but tx.amount ${tx.amount} → tier "${amountTier}". Update lib/billing/plans.ts price_ghs_pesewas to match the new Paystack price for ${slugTier}.`,
+    );
+  }
+  if (!slugTier && !amountTier && metadataPlan) {
+    console.warn(
+      `[Paystack verify] neither slug nor amount resolved a tier; falling back to metadata.plan "${metadataPlan}". paymentpage.slug=${tx.paymentpage?.slug}, amount=${tx.amount}`,
     );
   }
 

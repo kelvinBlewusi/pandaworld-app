@@ -239,20 +239,20 @@ export function getNextTierUpgrade(plan: Plan): Plan | null {
  * Find the tier whose price matches the given amount (in GHS pesewas).
  * Returns null if no paid tier matches.
  *
- * Used by /api/paystack/verify + /api/paystack/webhook as the most
- * reliable tier resolution path — Paystack always passes back the
- * actual amount charged via tx.amount, regardless of whether
- * metadata or reference round-tripped. The seller paid for what
- * they paid for, not what they intended.
+ * Used by /api/paystack/verify + /api/paystack/webhook as a SECONDARY
+ * tier resolution path. The primary is findTierByPaystackPageSlug
+ * (slug-matching is stable across price changes; amount-matching
+ * breaks if you update Paystack's price without updating this file).
  *
  * Each Payment Page has a fixed amount tied to one tier:
  *   GHS 30  → starter
  *   GHS 65  → pro
  *   GHS 120 → business
  *
- * If a Page were configured for custom amounts, the matcher could
- * return null on an unexpected amount — caller should fall back to
- * metadata / reference / sensible default in that case.
+ * If a Page were configured for custom amounts (or you change the
+ * price in Paystack without bumping price_ghs_pesewas here), the
+ * matcher returns null — caller falls back to slug / metadata /
+ * reference / sensible default.
  */
 export function findTierByAmount(amountInPesewas: number): Plan | null {
   if (typeof amountInPesewas !== "number" || !Number.isFinite(amountInPesewas)) {
@@ -262,4 +262,60 @@ export function findTierByAmount(amountInPesewas: number): Plan | null {
     (p) => isPaidPlan(p.id) && p.price_ghs_pesewas === amountInPesewas
   );
   return match?.id ?? null;
+}
+
+/**
+ * Extract the Paystack Page slug from a Page URL.
+ *
+ *   "https://paystack.com/pay/pandaworld-starter"  → "pandaworld-starter"
+ *   "https://paystack.shop/pay/pandaworld-pro"     → "pandaworld-pro"
+ *   "pandaworld-business"                          → "pandaworld-business"
+ *   garbage / empty                                → null
+ *
+ * Used by findTierByPaystackPageSlug to look up which tier a
+ * Paystack transaction's `paymentpage.slug` corresponds to.
+ */
+export function extractPaystackPageSlug(url: string | null | undefined): string | null {
+  if (!url || typeof url !== "string") return null;
+  const trimmed = url.trim();
+  if (trimmed.length === 0) return null;
+
+  // If it's already a bare slug (no slashes), return it as-is
+  if (!trimmed.includes("/")) return trimmed.toLowerCase();
+
+  // Otherwise pull the last non-empty path segment
+  const segments = trimmed.split("/").filter((s) => s.length > 0);
+  const last = segments[segments.length - 1];
+  if (!last || last.includes(".")) return null; // .com/.shop/etc — not a slug
+  return last.toLowerCase();
+}
+
+/**
+ * Find the tier whose Paystack Page slug matches the given slug.
+ * Returns null if no tier matches OR the slug is unparseable.
+ *
+ * This is the PRIMARY tier resolver as of May 2026 — the slug is the
+ * most stable identifier Paystack returns. Page IDs are stable across
+ * price changes, name changes, and even most config changes.
+ *
+ * The Paystack transaction object includes paymentpage.slug for any
+ * transaction originating from a Payment Page. We compare it against
+ * the slugs we derive from our PAYSTACK_*_PAGE_URL env vars.
+ */
+export function findTierByPaystackPageSlug(slug: string | null | undefined): Plan | null {
+  if (!slug) return null;
+  const normalised = slug.toLowerCase().trim();
+  if (!normalised) return null;
+
+  for (const plan of Object.values(PLANS)) {
+    if (!isPaidPlan(plan.id)) continue;
+    const envName = plan.paystack_page_url_env;
+    if (!envName) continue;
+    const url = process.env[envName];
+    const tierSlug = extractPaystackPageSlug(url);
+    if (tierSlug && tierSlug === normalised) {
+      return plan.id;
+    }
+  }
+  return null;
 }

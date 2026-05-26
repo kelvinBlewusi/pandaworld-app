@@ -4,7 +4,12 @@ import { createHmac } from "crypto";
 import { clerkClient } from "@clerk/nextjs/server";
 import { sendEmail } from "@/lib/email/send";
 import { paymentConfirmationEmail } from "@/lib/email/templates";
-import { PLANS, type Plan, findTierByAmount } from "@/lib/billing/plans";
+import {
+  PLANS,
+  type Plan,
+  findTierByAmount,
+  findTierByPaystackPageSlug,
+} from "@/lib/billing/plans";
 import { parsePaystackReference } from "@/lib/billing/paystack-reference";
 
 // Valid tier names the webhook is allowed to upsert into the plan
@@ -78,33 +83,41 @@ export async function POST(request: Request) {
       const periodEnd = new Date();
       periodEnd.setDate(periodEnd.getDate() + 30);
 
-      // Tier resolution — same FOUR-step fallback as /verify:
-      //   1. findTierByAmount(tx.amount) — authoritative, matches the
-      //      seller's actual charge against the fixed-amount Payment Page.
-      //   2. metadata.plan — if Paystack passed it through
-      //   3. parsePaystackReference — works for legacy /transaction/initialize
-      //   4. "pro" default if all fail (logged loudly)
+      // Tier resolution — same FIVE-step fallback as /verify
+      // (see verify/route.ts for the full rationale):
+      //   1. slug match  ← PRIMARY (stable across price changes)
+      //   2. amount match
+      //   3. metadata.plan
+      //   4. parsePaystackReference
+      //   5. "pro" default
+      const slugTier   = findTierByPaystackPageSlug(tx.paymentpage?.slug);
       const amountTier = findTierByAmount(tx.amount);
-      const requestedPlan = amountTier ?? metadataPlan ?? referenceParsed.tier ?? "pro";
+      const requestedPlan =
+        slugTier ?? amountTier ?? metadataPlan ?? referenceParsed.tier ?? "pro";
       const plan: Plan = VALID_PLANS.includes(requestedPlan as Plan)
         ? (requestedPlan as Plan)
         : "pro";
 
+      const resolver =
+        slugTier ? `slug match ("${tx.paymentpage?.slug}")`
+        : amountTier ? `amount match (${tx.amount} pesewas)`
+        : metadataPlan ? "metadata.plan"
+        : referenceParsed.tier ? "reference parse"
+        : "default fallback (CHECK ME)";
       console.info(
-        `[Paystack webhook] charge.success resolved tier "${plan}" via ${
-          amountTier
-            ? `amount match (${tx.amount} pesewas)`
-            : metadataPlan
-              ? "metadata.plan"
-              : referenceParsed.tier
-                ? "reference parse"
-                : "default fallback (CHECK ME)"
-        } for user ${userId}.`,
+        `[Paystack webhook] charge.success resolved tier "${plan}" via ${resolver} for user ${userId}.`,
       );
 
-      if (!amountTier && metadataPlan) {
+      // Drift warning: slug + amount disagree means a price change
+      // in Paystack hasn't been reflected in lib/billing/plans.ts.
+      if (slugTier && amountTier && slugTier !== amountTier) {
         console.warn(
-          `[Paystack webhook] amount ${tx.amount} did not match any plan price; falling back to metadata.plan "${metadataPlan}".`,
+          `[Paystack webhook] PRICE DRIFT: slug "${tx.paymentpage?.slug}" → tier "${slugTier}" but tx.amount ${tx.amount} → tier "${amountTier}". Reconcile lib/billing/plans.ts to match Paystack.`,
+        );
+      }
+      if (!slugTier && !amountTier && metadataPlan) {
+        console.warn(
+          `[Paystack webhook] neither slug nor amount resolved a tier; falling back to metadata.plan "${metadataPlan}".`,
         );
       }
 
