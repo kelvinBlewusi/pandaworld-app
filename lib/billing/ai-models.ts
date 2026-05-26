@@ -48,6 +48,17 @@ const MODEL_LITE       = "gemini-2.5-flash-lite";          // Free tier
 const MODEL_STANDARD   = "gemini-2.5-flash";               // Starter / Pro
 const MODEL_PREMIUM    = "gemini-2.5-pro";                 // Business / Admin
 
+// The model used by the auto-analyze pipeline for the "own images"
+// listing flow — regardless of seller tier. Pinned here so a single
+// edit re-routes every Free / Starter / Pro / Business analyze call
+// without touching the per-tier ladder above.
+//
+// May 2026: pinned to gemini-3.1-flash-lite for speed + cost on the
+// only active flow (rebuild + text-to-image are disabled). If this
+// model is not enabled on the API key, callGemini's fallback chain
+// drops back to PREFERRED_MODELS / discovered models automatically.
+const MODEL_OWN_IMAGES_FLOW = "gemini-3.1-flash-lite";
+
 // Image editing — currently only one viable Gemini model. Used by
 // the "Polish" and "Rebuild as studio shot" buttons (which take an
 // existing seller photo as input).
@@ -113,6 +124,30 @@ export function pickModelForPlan(
  */
 export function isOnPremiumModel(plan: Plan, opts: { isAdmin?: boolean } = {}): boolean {
   return opts.isAdmin === true || plan === "business";
+}
+
+/**
+ * Model used by the "own images" listing-analyze flow — same for
+ * every tier. Called by the auto-analyze route via resolveModel()
+ * when forceBestModel:true is passed.
+ *
+ * Returns the dedicated own-images model for vision/text kinds; for
+ * other kinds (image-edit / image-from-scratch / embedding) it falls
+ * back to the standard per-kind model so the contract still works
+ * for any caller that flips forceBestModel on those kinds.
+ */
+export function pickModelForOwnImagesFlow(kind: ModelKind): string {
+  switch (kind) {
+    case "vision":
+    case "text":
+      return MODEL_OWN_IMAGES_FLOW;
+    case "image-edit":
+      return MODEL_IMAGE_EDIT;
+    case "image-from-scratch":
+      return MODEL_IMAGE_FROM_SCRATCH;
+    case "embedding":
+      return MODEL_EMBEDDING;
+  }
 }
 
 /**

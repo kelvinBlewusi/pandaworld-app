@@ -28,7 +28,7 @@ import {
   isRestrictedBrand,
   stripBrandFromTitle,
 } from "@/lib/ai/jumia-content-policy";
-import { pickModelForPlan, type ModelKind } from "@/lib/billing/ai-models";
+import { pickModelForPlan, pickModelForOwnImagesFlow, type ModelKind } from "@/lib/billing/ai-models";
 import { getQuotaSummary } from "@/lib/billing/quota";
 import type { Plan } from "@/lib/billing/plans";
 
@@ -45,12 +45,15 @@ async function resolveModel(
   kind: ModelKind,
   opts: { forceBestModel?: boolean } = {},
 ): Promise<string | undefined> {
-  // forceBestModel: bypass tier ladder entirely and pretend the user
-  // is on Business (premium). Used by the listing analyze pipeline,
-  // where we want every seller — Free included — to see the highest
-  // quality output for the "own images" flow.
+  // forceBestModel: bypass the tier ladder entirely and return the
+  // model pinned for the "own images" analyze flow. Same model for
+  // every seller — Free / Starter / Pro / Business — because the
+  // auto-analyze pipeline is the only active listing-creation path
+  // and we want consistent output quality across the user base.
+  // The dedicated model is defined in lib/billing/ai-models.ts so a
+  // future swap is a one-line edit.
   if (opts.forceBestModel) {
-    return pickModelForPlan("business" as Plan, kind, { isAdmin: true });
+    return pickModelForOwnImagesFlow(kind);
   }
   if (!userId) return undefined;
   try {
