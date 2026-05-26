@@ -348,6 +348,28 @@ BRAND & ANTI-COUNTERFEIT RULES:
   - Never invent a brand. "Generic" is a valid fallback when no logo is
     visible.
 
+NUMERIC FIELDS — STRICTLY NUMBERS, NEVER STRINGS:
+  - weight_kg, weight, size_l/w/h, screen_size, battery_capacity, ram_size,
+    storage_capacity (when expressed numerically), and any other field that
+    represents a quantity → MUST be a plain number, NOT a string. NEVER write
+    "(estimated)", "approx", "about", "~", "kg", "GB", or any unit/comment
+    inside a numeric field. The downstream form is a number input — text
+    will be stripped or break the field.
+  - If you cannot determine a confident number, return null. Do NOT guess
+    a number and wrap it in "(estimated)" to flag uncertainty — the seller
+    interprets that as a real value, and it breaks the form.
+
+ALWAYS-INCLUDED DYNAMIC ATTRIBUTES (never omit, write a real product-specific value):
+  - product_note: A buyer-feedback nudge (the standard "thanks, please leave
+    a review when you receive your order" message). The default is fine
+    unless the seller has a more specific message to convey.
+  - what_is_in_the_box: A real item list based on the images. Examples:
+      * Phone: "1× Smartphone, 1× USB-C charger, 1× User manual"
+      * Drone: "1× Drone, 1× Remote, 2× Batteries, 4× Spare propellers, 1× Case"
+      * Kettle: "1× Electric Kettle, 1× User manual"
+    NEVER omit this. If only the product is visible, default to
+    "1× [product type] and any standard accessories shown in the images."
+
 CATEGORY & ATTRIBUTE DISCIPLINE:
   - Always pick the most specific LISTABLE category (the candidate pool
     already filters to listable parents and leaves — pick from those).

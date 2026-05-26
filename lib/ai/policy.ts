@@ -90,5 +90,14 @@ export const AI_DYNAMIC_ATTR_DEFAULTS: Record<string, string> = {
     "share your feedback and leave a review. Your honest review helps " +
     "other buyers make confident decisions and helps us keep improving. " +
     "Thank you for shopping with us!",
+  // ALWAYS populated — Jumia's "What's in the Box" field is a buyer-trust
+  // signal that converts. Sellers forget to fill it; the AI shouldn't.
+  // The Pass A / combined prompt is instructed to override this default
+  // with a real, product-specific item list (e.g. "1× Smartphone, 1× USB-C
+  // cable, 1× User manual"). This generic fallback only ships when the
+  // model fails to fill it for whatever reason — better than empty.
+  what_is_in_the_box:
+    "1× Product unit and any standard accessories shown in the images. " +
+    "Please refer to the product description and highlights for full details.",
   from_the_manufacturer: "N/A",
 };

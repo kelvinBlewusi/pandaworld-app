@@ -465,7 +465,27 @@ export async function POST(
   setField("highlights",      description.highlights,      { confidence: 0.85, source: "inferred" });
   setField("color",           description.color,           { confidence: 0.85, source: "image" });
   setField("color_family",    description.color_family,    { confidence: 0.85, source: "image" });
-  setField("weight_kg",       description.weight_kg,       { confidence: 0.7,  source: "image",  reasoning: "Weight inferred from visible packaging" });
+
+  // Server-side scrub for weight_kg. The Pass A prompt instructs the
+  // model to return a pure number or null, but the AI occasionally
+  // smuggles text in ("0.5 (estimated)", "0.5 kg", "around 1.2"). Strip
+  // anything that's not part of a floating-point number, parse, and
+  // only set the field if the result is a finite positive number.
+  // Anything else collapses to null so the seller can fill it.
+  let scrubbedWeight: number | null = null;
+  if (description.weight_kg != null) {
+    const raw = String(description.weight_kg);
+    // Match the first floating-point number in the string (handles "0.5",
+    // "0.5 (estimated)", "0.5 kg", "approx 1.2"). Reject negatives.
+    const match = raw.match(/(\d+(?:\.\d+)?)/);
+    if (match) {
+      const n = parseFloat(match[1]);
+      if (Number.isFinite(n) && n > 0 && n < 1000) {
+        scrubbedWeight = n;
+      }
+    }
+  }
+  setField("weight_kg", scrubbedWeight, { confidence: 0.7, source: "image", reasoning: "Weight inferred from visible packaging" });
   setField("main_material",   description.main_material,   { confidence: 0.8,  source: "inferred" });
   setField("material_family", description.material_family, { confidence: 0.8,  source: "inferred" });
 

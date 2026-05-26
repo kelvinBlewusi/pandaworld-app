@@ -238,7 +238,8 @@ ${brandRule}
    - warranty_text:     "${AI_FIELD_DEFAULTS.warranty_text}" (unless seller specifies real warranty terms)
    - warranty_address:  "${AI_FIELD_DEFAULTS.warranty_address}" (unless seller specifies a real warranty address)
    - production_country: Pick based on general knowledge — country of likely manufacture for this product/brand (e.g. "China" for unbranded electronics, "Ghana" for hand-made local, "Vietnam" for many sneakers). Use the country name in English. If seller specifies a country in their AI-chat context, use that instead.
-   - dynamic_attributes.product_note: Always include the customer-feedback note below (sellers can override via AI-chat context).
+   - dynamic_attributes.product_note: ALWAYS include the customer-feedback note below (sellers can override via AI-chat context). NEVER omit.
+   - dynamic_attributes.what_is_in_the_box: ALWAYS include. Write a real product-specific item list like "1× Smartphone, 1× USB-C cable, 1× User manual, 1× Box" — NOT a generic placeholder. Read the images for clues (charger? case? cable? manual visible?). If nothing visible beyond the product, default to "1× [product type] and any standard accessories shown in the images." NEVER omit this field.
    - dynamic_attributes.from_the_manufacturer: "${AI_DYNAMIC_ATTR_DEFAULTS.from_the_manufacturer}" (unless seller provides manufacturer copy in AI-chat context).
 
 10. NEVER fill (seller-required, legal/commercial risk): selling_price, warranty_type, certifications, GTIN, SKU, stock, quantity.${attributeSection}
@@ -252,7 +253,7 @@ Return ONLY valid JSON. No markdown fences, no explanation, no trailing text:
   "brand_confidence": 0.0,
   "color": "Specific color e.g. Midnight Black, or null",
   "color_family": "Base color e.g. Black, or null",
-  "weight_kg": null,
+  "weight_kg": null,  // ⚠ NUMBER OR null ONLY — never strings like "0.5 (estimated)", never units, never parentheticals.
   "selling_price": null,
   "model": "Model number/name if confident from image, else null",
   "main_material": "e.g. Plastic, Metal, Fabric, or null",
@@ -1109,7 +1110,7 @@ Rules:
 - highlights: Free-form. May be prose, bullets, or mixed. No word limit per line. When bullets are used, start each with "• ".
 - color: Specific visible colour(s). Multiple colours separated by commas (e.g. "Blue, Black"). Null if uncertain.
 - color_family: Base colour family from {Black, White, Grey, Brown, Beige, Red, Orange, Yellow, Green, Blue, Purple, Pink, Multicolour}. Null if uncertain.
-- weight_kg: Only fill if you can see the weight printed on packaging or the product itself. Numeric kilograms (e.g. 1.2). Null otherwise.
+- weight_kg: STRICTLY a number — nothing else. Examples of VALID values: 0.5, 1.2, 12.5. Examples of INVALID values you must NEVER return: "0.5 (estimated)", "approx 0.5", "0.5 kg", "0.5kg", "around 1.2", "unknown". If you can't see or confidently infer the weight, return null — not a guess wrapped in parentheses. The downstream form is a number-only input; any text you put here will be stripped or break the field.
 - main_material: e.g. "Plastic", "Stainless Steel", "Cotton". Null if uncertain.
 - material_family: e.g. "Plastic", "Metal", "Fabric", "Wood", "Glass". Null if uncertain.
 - model: Product model number/name if visible on the packaging or product itself (e.g. "WH-1000XM5", "Galaxy A15"). Null if not visible.
@@ -1145,7 +1146,7 @@ Return ONLY valid JSON. No markdown, no commentary:
   "highlights": "...",
   "color": null,
   "color_family": null,
-  "weight_kg": null,
+  "weight_kg": null,  // ⚠ NUMBER OR null ONLY — never strings, units, or parentheticals like "0.5 (estimated)".
   "main_material": null,
   "material_family": null,
   "model": null,
@@ -1664,6 +1665,9 @@ OUTPUT RULES:
 4. Skip any attribute you can't determine — null/omit is better than guessing. EXCEPT for required-by-Jumia fields where general online knowledge can give you a sensible answer (e.g. typical material for a known product line) — fill those with moderate confidence.
 5. Disambiguate visually-similar candidates by PRIMARY USE CASE + ENVIRONMENT — a farm sprayer goes under Agriculture, not Home Cleaning.
 6. Confidence is 0..1. Be honest. Set needsConfirmation=true if your top pick is below 0.75 OR within 0.15 of your second choice.
+7. ALWAYS include these dynamic_attributes keys, even if the chosen category's schema doesn't list them (Jumia silently drops unknown keys; the cost of including is zero, the cost of omitting is a missed buyer-trust signal):
+   - product_note: A short, friendly note thanking the buyer and asking for a review once they receive the item. The default is fine: "Dear Customer, once you receive your item, please take a moment to share your feedback and leave a review. Thank you for shopping with us!"
+   - what_is_in_the_box: A real, product-specific item list — read the images for clues (charger? case? cable? manual?). Examples: "1× Smartphone, 1× USB-C charger, 1× User manual, 1× Protective case" / "1× Drone, 1× Remote controller, 2× Batteries, 1× Charger, 4× Spare propellers, 1× Carrying case". NEVER omit. If you can't tell from the images, default to "1× [product type] and any standard accessories shown in the images."
 ${ctxSection}
 Return ONLY valid JSON, no markdown:
 {
