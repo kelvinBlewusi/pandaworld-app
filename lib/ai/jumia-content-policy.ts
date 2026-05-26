@@ -139,7 +139,7 @@ export const JUMIA_REJECTION_PATTERNS: ReadonlyArray<{
   },
   {
     reason: "Wrong category — listing filed under a leaf that doesn't match the product",
-    fix:    "Pick the most specific LISTABLE category. A phone case lives under Mobile Accessories > Phone Cases, NOT under Mobile Phones.",
+    fix:    "Pick the most specific LISTABLE category. A phone case lives under Mobile Accessories > Phone Cases, NOT under Mobile Phones. Lean on general online knowledge of the product (brand, model, typical use case) to disambiguate visually-similar candidates.",
   },
   {
     reason: "Misleading title — claims a feature (waterproof, wireless, OLED) not visible in the images",
@@ -158,8 +158,8 @@ export const JUMIA_REJECTION_PATTERNS: ReadonlyArray<{
     fix:    "White background (#FFFFFF) for non-Fashion; single product centred; no watermarks; no overlay text; 500-2000px square.",
   },
   {
-    reason: "Empty required attribute — the AI returned null or guessed instead of leaving the seller to fill",
-    fix:    "Return null with a one-line note in field_confidence when the image doesn't show the value. Never invent.",
+    reason: "Empty required attribute — the AI returned null when it could have inferred a sensible value from general knowledge of the brand / model / product line",
+    fix:    "If the image doesn't directly show the value, fall back to general online knowledge of the product. Only return null when you have no reasonable basis (the field truly is unknowable). Mark inferred values with ~0.7 confidence in field_confidence so the seller knows to verify.",
   },
   {
     reason: "Variant mismatch — variation labels in the title don't match the variants table",
@@ -171,7 +171,7 @@ export const JUMIA_REJECTION_PATTERNS: ReadonlyArray<{
   },
   {
     reason: "Description too short — under 50 characters triggers automatic Jumia rejection",
-    fix:    "Floor at 80 characters. Description can run up to 1500 characters and may use prose, bullets, or a mix — pick whichever fits the product.",
+    fix:    "Floor at 80 characters. Description can run up to 3000 characters and may use prose, bullets, tables, HTML, or embedded images — pick whichever fits the product.",
   },
   {
     reason: "Generic title pattern — \"Quality Product\", \"Best Item\", \"Cool Thing\", no brand or model",
@@ -285,34 +285,50 @@ TITLE / NAME RULES (15-200 characters, Title Case, ASCII only):
       brand field — restricted brands need seller authorisation and the
       AI defaults them to null; see brand rules below).
 
-DESCRIPTION RULES (80-1500 characters, any format that fits the product):
-  - May be plain prose, bullet points, or a mix of both. Use whichever
+DESCRIPTION RULES (80-3000 characters, any format that fits the product):
+  - May be plain prose, bullet points, tables, or a mix. Use whichever
     format best showcases the product — long-form prose for a story-led
-    item (e.g. handmade leather bag), bullets for spec-led tech, mixed
-    for products with both narrative and a feature list.
+    item (e.g. handmade leather bag), bullets for spec-led tech, tables
+    for comparison or spec-sheet style listings, mixed for products with
+    both narrative and a feature list.
   - All formatting styles allowed: bold, italics, line breaks, bullets,
-    short paragraphs, headings. Use them where they help readability.
+    short paragraphs, headings, tables. Use them where they help
+    readability.
+  - HTML may be used (e.g. <p>, <ul>, <li>, <table>, <tr>, <td>, <br>,
+    <strong>, <em>, <img>). Stick to safe, semantic tags — no <script>,
+    no inline JavaScript, no event handlers.
+  - Images may be embedded inline (<img src="...">) when they add value
+    — for example a spec diagram, a size chart, or an in-use photo
+    alongside the main gallery. Use full URLs that the seller will host.
   - Lead with what the product is and its headline feature.
   - Marketing / promotional language is permitted — write copy that sells.
     "Best-in-class", "premium", "elevate your", "perfect for" etc. are
     fine; the goal is conversion, not bland prose.
-  - No URLs, hashtags, social handles, prices, discount mentions.
+  - No URLs to external sites in the prose, no hashtags, no social
+    handles, no prices, no discount mentions. (Inline <img> URLs are
+    fine — those are media, not navigation.)
   - No condition descriptors from the banned-words list.
   - No counterfeit-suggestive claims (\"100% human hair\", \"AAA grade\",
     \"OEM original\", \"1:1 replica\", inflated battery mAh).
 
 HIGHLIGHTS RULES (free-form, any format that fits the product):
-  - May be plain prose, bullet points, or a mix of both. Bullets are
+  - May be plain prose, bullet points, tables, or a mix. Bullets are
     common but NOT required — for a luxury / story-led item, two
-    short prose paragraphs may sell better than five bullets.
-  - All formatting styles allowed (bold, italics, line breaks, bullets,
-    short paragraphs). Use them where they help readability.
+    short prose paragraphs may sell better than five bullets; for a
+    spec-led item a quick comparison table can outperform both.
+  - All formatting styles allowed: bold, italics, line breaks, bullets,
+    short paragraphs, tables. Use them where they help readability.
+  - HTML may be used (the same safe-tag whitelist as Description —
+    <p>, <ul>, <li>, <table>, <tr>, <td>, <br>, <strong>, <em>, <img>).
+  - Images may be embedded inline (<img src="...">) when they
+    illustrate a highlight (e.g. an icon-style feature graphic).
   - No word limit per bullet or per line — write as much or as little as
     the product warrants. A single great sentence beats five forced ones.
   - When bullets are used, start each line with "• " (bullet + space).
   - Order bullets / paragraphs by buyer importance: headline feature
     first, then specs, then usability / fit / care, then warranty.
-  - No HTML tags, no inline emoji rows, no decorative symbols.
+  - No inline emoji rows, no decorative symbols outside the bullet
+    character itself.
 
 BRAND & ANTI-COUNTERFEIT RULES:
   - Pick brand verbatim from the JUMIA BRAND LIST passed in this prompt.
@@ -335,12 +351,20 @@ BRAND & ANTI-COUNTERFEIT RULES:
 CATEGORY & ATTRIBUTE DISCIPLINE:
   - Always pick the most specific LISTABLE category (the candidate pool
     already filters to listable parents and leaves — pick from those).
-  - Fill every REQUIRED attribute Jumia returns for the category. If the
-    image doesn't clearly show a value, return null — never guess.
+  - Fill every REQUIRED attribute Jumia returns for the category. For
+    attributes the image doesn't directly show, you MAY draw on general
+    online knowledge of this product / brand / model to infer a
+    confident value (e.g. inferring the typical material of a known
+    product line, or the standard warranty length for a known brand).
+    Only return null when you have no reasonable basis at all — don't
+    sandbag a field you genuinely know the answer to. Mark inferred
+    values with a moderate confidence (~0.7) so the seller knows to
+    double-check.
   - For constrained-vocabulary attributes (Color, Material, Size),
-    pick exactly one of the allowed_values supplied. Never invent a value.
-  - For multi-variant axes (Color × Size), only fabricate combinations the
-    images clearly show. Don't pad with unseen sizes/colours.
+    pick exactly one of the allowed_values supplied. Never invent a
+    value outside that list.
+  - For multi-variant axes (Color × Size), only fabricate combinations
+    the images clearly show. Don't pad with unseen sizes/colours.
 
 ${restrictedBlock}
 ${imageBlock}

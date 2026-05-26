@@ -286,86 +286,140 @@ export default function BatchAddProductsPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const router = useRouter();
 
+  // Concurrency cap on the parallel batch. Three concurrent products is
+  // a comfortable inside the Gemini Flash-Lite per-minute rate limit
+  // even when each analyze fires 3 API calls of its own (9 in-flight
+  // model calls peak). Higher caps risk a 429 mid-batch.
+  const BATCH_CONCURRENCY = 3;
+
   async function handleSubmit() {
     setSubmitting(true);
     setSubmitError(null);
-    const listingIds: string[] = [];
 
-    try {
-      for (let i = 0; i < drafts.length; i++) {
-        const d = drafts[i];
-        const label = drafts.length === 1 ? "Uploading images…" : `Uploading product ${i + 1}/${drafts.length}…`;
-        setSubmitStep(label);
+    // Pre-allocate the result array so we can fill it positionally —
+    // important because the seller's tab order has to be preserved
+    // when we route to /review?batch=id1,id2,id3 at the end.
+    const listingIds: (string | null)[] = new Array(drafts.length).fill(null);
+    const errors:     string[]          = [];
 
-        // 1. Upload images + create draft (no AI analysis yet)
-        const fd = new FormData();
-        fd.append("mode", "own");
-        fd.append("skipAnalysis", "true");
-        d.images.forEach((img) => {
-          if (img.file) fd.append("files", img.file);
-        });
-        if (d.name.trim().length >= 15) fd.append("name", d.name.trim());
-        if (d.categoryCode != null) {
-          fd.append("categoryCode", String(d.categoryCode));
-          if (d.categoryPath) fd.append("categoryPath", d.categoryPath);
-        }
-        // Persist the seller's "what do you want in the listing" text so
-        // it survives across re-analyzes. The auto-analyze route also
-        // updates this column, but we set it here too in case the seller
-        // navigates away before the first analyze finishes.
-        if (d.aiInstruction.trim()) {
-          fd.append("userPrompt", d.aiInstruction.trim().slice(0, 1000));
-        }
+    // ── Per-product worker: upload images + create draft + run analyze.
+    // Returns the new listingId on success, or null on failure (errors
+    // collected separately so one bad product doesn't abort the batch).
+    async function processOne(d: typeof drafts[number], idx: number): Promise<string | null> {
+      // 1. Upload images + create draft (no AI analysis yet)
+      const fd = new FormData();
+      fd.append("mode", "own");
+      fd.append("skipAnalysis", "true");
+      d.images.forEach((img) => {
+        if (img.file) fd.append("files", img.file);
+      });
+      if (d.name.trim().length >= 15) fd.append("name", d.name.trim());
+      if (d.categoryCode != null) {
+        fd.append("categoryCode", String(d.categoryCode));
+        if (d.categoryPath) fd.append("categoryPath", d.categoryPath);
+      }
+      // Persist the seller's "what do you want in the listing" text so
+      // it survives across re-analyzes. The auto-analyze route also
+      // updates this column, but we set it here too in case the seller
+      // navigates away before the first analyze finishes.
+      if (d.aiInstruction.trim()) {
+        fd.append("userPrompt", d.aiInstruction.trim().slice(0, 1000));
+      }
 
-        const createRes = await fetch("/api/process-listing", { method: "POST", body: fd });
+      let listingId: string;
+      try {
+        const createRes  = await fetch("/api/process-listing", { method: "POST", body: fd });
         const createData = await createRes.json();
         if (!createRes.ok || !createData.listingId) {
           throw new Error(createData.error ?? "Failed to create listing");
         }
-        const listingId = createData.listingId as string;
-        listingIds.push(listingId);
+        listingId = createData.listingId as string;
+      } catch (e) {
+        errors.push(`Product ${idx + 1}: ${(e as Error).message ?? "upload failed"}`);
+        return null;
+      }
 
-        // 2. Run the new auto-analyze pipeline (4 passes — picks category +
-        //    fills attributes). If user already picked a category we still
-        //    run it; the merge logic on the server respects their choice.
-        setSubmitStep(
-          drafts.length === 1
-            ? "Analysing with AI…"
-            : `Analysing product ${i + 1}/${drafts.length} with AI…`
-        );
+      // 2. Run the auto-analyze pipeline. Non-fatal if it fails — the
+      //    listing exists, the seller can hit "Re-run analysis" from
+      //    the review page.
+      try {
         const analyzeRes = await fetch(`/api/listings/${listingId}/auto-analyze`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: d.aiInstruction.trim()
+          body:    d.aiInstruction.trim()
             ? JSON.stringify({ userPrompt: d.aiInstruction.trim() })
             : undefined,
         });
         if (!analyzeRes.ok) {
-          // Non-fatal — listing is created, AI just couldn't run. The user
-          // can hit "Analyze with AI" again from the review page.
           console.warn(`[batch] auto-analyze failed for ${listingId}`);
         }
+      } catch (e) {
+        console.warn(`[batch] auto-analyze threw for ${listingId}: ${(e as Error).message}`);
       }
-
-      // All drafts created. Route to first product's review page so the
-      // seller can verify + edit + submit to Jumia.
-      if (listingIds.length > 0) {
-        // Include the full batch ID list so the review page can show a
-        // product switcher (prdt1 / prdt2 / prdt3 …) — preserves the
-        // tabbed-upload experience after AI has finished. Also forward
-        // the `enhance` param if the picker said to auto-rebuild — the
-        // review page reads it and opens the rebuild modal on mount.
-        const qs = new URLSearchParams();
-        if (listingIds.length > 1) qs.set("batch", listingIds.join(","));
-        const enhanceParam = search.get("enhance");
-        if (enhanceParam === "rebuild") qs.set("enhance", "rebuild");
-        const queryString = qs.toString() ? `?${qs.toString()}` : "";
-        router.push(`/listings/${listingIds[0]}/review${queryString}`);
-      }
-    } catch (e) {
-      setSubmitError(e instanceof Error ? e.message : "Something went wrong");
-      setSubmitting(false);
+      return listingId;
     }
+
+    // ── Concurrency-capped worker pool ──────────────────────────────────────
+    // Replaces the old `for (let i = 0; i < drafts.length; i++)` serial
+    // loop. With 5 products and ~12s per analyze, serial took ~60s;
+    // BATCH_CONCURRENCY=3 takes ~24s (two waves of three).
+    //
+    // We use a shared cursor + N workers pattern so the third product
+    // doesn't have to wait for the first to fully finish before starting.
+    let completed = 0;
+    const setStep = (n: number) =>
+      setSubmitStep(
+        drafts.length === 1
+          ? "Uploading + analysing with AI…"
+          : `Processing ${n} / ${drafts.length} products in parallel…`,
+      );
+    setStep(0);
+
+    let cursor = 0;
+    async function worker() {
+      while (true) {
+        const i = cursor++;
+        if (i >= drafts.length) return;
+        const id = await processOne(drafts[i], i);
+        listingIds[i] = id;
+        completed++;
+        setStep(completed);
+      }
+    }
+
+    await Promise.all(
+      Array.from({ length: Math.min(BATCH_CONCURRENCY, drafts.length) }, worker),
+    );
+
+    const successfulIds = listingIds.filter((id): id is string => id !== null);
+
+    // If every single product failed to upload, surface the first error
+    // and stay on this page so the seller can retry. Partial-failure
+    // batches still proceed so the seller can review what DID succeed.
+    if (successfulIds.length === 0) {
+      setSubmitError(errors[0] ?? "Something went wrong — please try again.");
+      setSubmitting(false);
+      return;
+    }
+
+    // Surface non-fatal upload errors as a toast-ish info on the next
+    // page later (logged for now — UI plumbing in a follow-up).
+    if (errors.length > 0) {
+      console.warn(`[batch] ${errors.length} of ${drafts.length} products failed: ${errors.join(" | ")}`);
+    }
+
+    // All successful drafts created. Route to first product's review
+    // page. Include the full batch ID list so the review page can show
+    // a product switcher (prdt1 / prdt2 / prdt3 …) — preserves the
+    // tabbed-upload experience after AI has finished. Also forward
+    // the `enhance` param if the picker said to auto-rebuild — the
+    // review page reads it and opens the rebuild modal on mount.
+    const qs = new URLSearchParams();
+    if (successfulIds.length > 1) qs.set("batch", successfulIds.join(","));
+    const enhanceParam = search.get("enhance");
+    if (enhanceParam === "rebuild") qs.set("enhance", "rebuild");
+    const queryString = qs.toString() ? `?${qs.toString()}` : "";
+    router.push(`/listings/${successfulIds[0]}/review${queryString}`);
   }
 
   return (

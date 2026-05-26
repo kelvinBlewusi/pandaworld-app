@@ -227,9 +227,9 @@ STRICT RULES — violations will cause the submission to be rejected:
 2. Provide the top 3 best-matching category codes from the list above, in descending confidence order.
 3. NEVER fabricate values for specs you can't see. If a spec (weight, dimensions, screen size) isn't visible AND isn't in the AI-chat context, set the field to null.
 4. For dynamic_attributes: include any field you can determine from the product OR that has a default below. Omit fields you genuinely can't determine — do NOT guess on category-specific specs.
-5. Description: 80–1500 characters. May be plain prose, bullets, or a mix — use whichever fits the product. Promotional / marketing language is allowed.
+5. Description: 80–3000 characters. May be plain prose, bullets, tables, HTML, or a mix — use whichever fits the product. Inline <img> tags are allowed for product diagrams / size charts / spec sheets. Promotional / marketing language is allowed.
 6. Title MUST be 15–70 characters. Lead with the MODEL or identifier + product type + 1–2 key specs. DO NOT include the brand name in the title — Jumia stores brand separately and rejects titles that repeat it ("Product name contains Brand name [X]"). The brand goes in the brand field, not the title.
-7. Highlights: free-form (plain prose, bullets, or mixed). No word limit per line. When bullets are used, start each with "• ".
+7. Highlights: free-form (plain prose, bullets, tables, HTML, or mixed). No word limit per line. When bullets are used, start each with "• ". Inline images are permitted.
 ${brandRule}
 
 9. FIELD-FILLING DEFAULTS — fill these even though sellers used to do them manually. Use the defaults below UNLESS the SELLER AI-CHAT CONTEXT above overrides them:
@@ -246,7 +246,7 @@ ${brandRule}
 Return ONLY valid JSON. No markdown fences, no explanation, no trailing text:
 {
   "title": "Model + product type + key specs (15-70 chars). NO BRAND NAME in the title — it goes in the brand field. Jumia rejects titles that repeat the brand.",
-  "description": "80-1500 chars. Plain prose, bullets, or mix. Marketing copy welcome.",
+  "description": "80-3000 chars. Plain prose, bullets, tables, HTML, inline images allowed. Marketing copy welcome.",
   "highlights": "Free-form. Bullets, prose, or mix.",
   "brand": "Brand name ONLY if logo is clearly visible AND confidence > 0.9, else null",
   "brand_confidence": 0.0,
@@ -924,7 +924,7 @@ export interface ProductDescription {
   // Universal Jumia listing fields the AI can infer from images. The
   // auto-analyze route persists these to the listing alongside the
   // category-specific dynamic_attributes from Pass C.
-  description:     string;              // 80-1500 chars, prose/bullets/mixed
+  description:     string;              // 80-3000 chars, prose/bullets/tables/HTML/inline images
   highlights:      string;              // free-form (prose, bullets, or mixed)
   color:           string | null;       // specific colour name(s), comma-separated
   color_family:    string | null;       // base colour from common Jumia families
@@ -1038,7 +1038,7 @@ Rules:
 - brand: ONLY fill if a brand logo or wordmark is clearly visible AND you are confident. Otherwise null.
 - keywords: 5-10 single-word lower-case keywords (no quotes, no underscores). Think of what a buyer would search for.
 - summary: One sentence describing what the product is and its key visible features.
-- description: 80-1500 characters. May be plain prose, bullet points, or a mix. Use whatever formatting best showcases the product (bold, line breaks, short paragraphs, bullets — all allowed). Marketing/promotional language is permitted ("premium", "best-in-class", "perfect for"). Jumia rejects anything under 50 chars.
+- description: 80-3000 characters. May be plain prose, bullet points, tables, HTML, or a mix. Use whatever formatting best showcases the product (bold, line breaks, short paragraphs, bullets, tables — all allowed). Safe HTML tags (<p>, <ul>, <li>, <table>, <tr>, <td>, <br>, <strong>, <em>, <img>) are permitted; inline <img> with full URLs is allowed for spec diagrams or size charts. Marketing/promotional language is permitted ("premium", "best-in-class", "perfect for"). Jumia rejects anything under 50 chars.
 - highlights: Free-form. May be prose, bullets, or mixed. No word limit per line. When bullets are used, start each with "• ".
 - color: Specific visible colour(s). Multiple colours separated by commas (e.g. "Blue, Black"). Null if uncertain.
 - color_family: Base colour family from {Black, White, Grey, Brown, Beige, Red, Orange, Yellow, Green, Blue, Purple, Pink, Multicolour}. Null if uncertain.

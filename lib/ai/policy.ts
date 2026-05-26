@@ -86,9 +86,9 @@ export const AI_FIELD_DEFAULTS = {
  */
 export const AI_DYNAMIC_ATTR_DEFAULTS: Record<string, string> = {
   product_note:
-    "Dear Customer, once your order arrives, please take a moment or two " +
-    "to share your feedback. Your input is extremely valuable to me. We " +
-    "review all suggestions carefully to make the necessary improvements. " +
-    "Thank you sincerely.",
+    "Dear Customer, once you receive your item, please take a moment to " +
+    "share your feedback and leave a review. Your honest review helps " +
+    "other buyers make confident decisions and helps us keep improving. " +
+    "Thank you for shopping with us!",
   from_the_manufacturer: "N/A",
 };
