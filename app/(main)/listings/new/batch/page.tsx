@@ -309,6 +309,13 @@ export default function BatchAddProductsPage() {
           fd.append("categoryCode", String(d.categoryCode));
           if (d.categoryPath) fd.append("categoryPath", d.categoryPath);
         }
+        // Persist the seller's "what do you want in the listing" text so
+        // it survives across re-analyzes. The auto-analyze route also
+        // updates this column, but we set it here too in case the seller
+        // navigates away before the first analyze finishes.
+        if (d.aiInstruction.trim()) {
+          fd.append("userPrompt", d.aiInstruction.trim().slice(0, 1000));
+        }
 
         const createRes = await fetch("/api/process-listing", { method: "POST", body: fd });
         const createData = await createRes.json();
@@ -345,11 +352,15 @@ export default function BatchAddProductsPage() {
       if (listingIds.length > 0) {
         // Include the full batch ID list so the review page can show a
         // product switcher (prdt1 / prdt2 / prdt3 …) — preserves the
-        // tabbed-upload experience after AI has finished.
-        const batchQuery = listingIds.length > 1
-          ? `?batch=${listingIds.join(",")}`
-          : "";
-        router.push(`/listings/${listingIds[0]}/review${batchQuery}`);
+        // tabbed-upload experience after AI has finished. Also forward
+        // the `enhance` param if the picker said to auto-rebuild — the
+        // review page reads it and opens the rebuild modal on mount.
+        const qs = new URLSearchParams();
+        if (listingIds.length > 1) qs.set("batch", listingIds.join(","));
+        const enhanceParam = search.get("enhance");
+        if (enhanceParam === "rebuild") qs.set("enhance", "rebuild");
+        const queryString = qs.toString() ? `?${qs.toString()}` : "";
+        router.push(`/listings/${listingIds[0]}/review${queryString}`);
       }
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : "Something went wrong");
@@ -398,7 +409,7 @@ export default function BatchAddProductsPage() {
           {/* Title row */}
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="icon" className="h-8 w-8 -ml-2" asChild>
-              <Link href="/listings/new?mode=own&step=count"><ArrowLeft className="h-4 w-4" /></Link>
+              <Link href="/listings/new"><ArrowLeft className="h-4 w-4" /></Link>
             </Button>
             <h1 className="text-xl font-bold text-zinc-900 flex-1">Add Products</h1>
             <span className="text-xs text-zinc-500">

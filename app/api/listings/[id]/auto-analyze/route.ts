@@ -58,6 +58,14 @@ export async function POST(
   // Optional free-text hint from the seller — gets passed to Pass A as
   // "SELLER CONTEXT" so the AI honours things the images don't show
   // (e.g. "this is a pack of 6 not single unit", "the colour is teal").
+  //
+  // Resolution order:
+  //   1. userPrompt from THIS request body (re-run with a different prompt)
+  //   2. listing.user_prompt persisted from the initial analyze
+  //   3. null (no hint)
+  //
+  // The first non-empty source wins. We then PERSIST whatever was used
+  // back to listing.user_prompt so the next re-run pre-fills correctly.
   let userContext: string | null = null;
   try {
     const body = await req.json();
@@ -71,12 +79,19 @@ export async function POST(
   // ── Load listing + verify ownership ───────────────────────────────────────
   const { data: listing } = await db
     .from("listings")
-    .select("id, user_id, sku, images, title, brand, selling_price, quantity, dynamic_attributes, field_sources, field_confidence")
+    .select("id, user_id, sku, images, title, brand, selling_price, quantity, dynamic_attributes, field_sources, field_confidence, user_prompt")
     .eq("id", params.id)
     .eq("user_id", userId)
     .maybeSingle();
 
   if (!listing) return NextResponse.json({ error: "Listing not found" }, { status: 404 });
+
+  // If no prompt came in this request, fall back to the one we persisted
+  // from a previous analyze. Means the seller can re-run without
+  // re-typing — their original "this is a pack of 6" still applies.
+  if (!userContext && listing.user_prompt) {
+    userContext = listing.user_prompt as string;
+  }
 
   const images = (listing.images ?? []) as string[];
   if (images.length === 0) {
@@ -366,6 +381,11 @@ export async function POST(
     field_sources:       mergedSources,
     field_confidence:    mergedConfidence,
     category_alternates: alternatesForUI,
+    // Persist the seller's free-text prompt so re-runs honour it
+    // automatically (without forcing them to retype on every re-analyze).
+    // null = no prompt this run, but DON'T clobber a previously-stored
+    // one — only persist when we have something fresh to store.
+    ...(userContext ? { user_prompt: userContext } : {}),
     updated_at:          new Date().toISOString(),
   }).eq("id", params.id);
 

@@ -429,31 +429,77 @@ function StepRail({
 
 // ─── Image grid (8 slots, Jumia-style) ────────────────────────────────────────
 
-function ImageGrid({ images }: { images: string[] }) {
+function ImageGrid({
+  images,
+  onAdd,
+  onRemove,
+  busy,
+}: {
+  images:    string[];
+  onAdd?:    (file: File, slotIdx: number) => void;
+  onRemove?: (url: string) => void;
+  busy?:     boolean;
+}) {
   const slots = Array.from({ length: 8 }, (_, i) => images[i] ?? null);
+  const fileRefs = useRef<(HTMLInputElement | null)[]>([]);
+
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-4 gap-3 sm:grid-cols-8">
         {slots.map((url, i) => (
-          <div
-            key={i}
-            className={cn(
-              "group relative flex aspect-square cursor-pointer flex-col items-center justify-center gap-1 rounded-md border-2 overflow-hidden transition-colors",
-              url
-                ? "border-solid border-zinc-200 bg-white"
-                : "border-dashed border-orange-300 bg-white hover:bg-orange-50",
+          <div key={i} className="relative">
+            {/* Hidden file picker per empty slot. Clicking the tile
+                triggers it; only renders for slots without a URL. */}
+            {!url && onAdd && (
+              <input
+                ref={(el) => { fileRefs.current[i] = el; }}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onAdd(f, i);
+                  e.target.value = ""; // reset so re-picking the same file works
+                }}
+              />
             )}
-          >
-            {url ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={url} alt="" className="h-full w-full object-cover" />
-            ) : (
-              <>
-                <Plus className="h-5 w-5 text-orange-400" />
-                <span className="text-[10px] font-medium text-zinc-500">
-                  {i === 0 ? "Main Image" : "Image"}
-                </span>
-              </>
+            <button
+              type="button"
+              disabled={busy || !onAdd && !url}
+              onClick={() => { if (!url && onAdd) fileRefs.current[i]?.click(); }}
+              className={cn(
+                "group relative flex aspect-square w-full flex-col items-center justify-center gap-1 rounded-md border-2 overflow-hidden transition-colors",
+                url
+                  ? "border-solid border-zinc-200 bg-white cursor-default"
+                  : onAdd
+                  ? "border-dashed border-orange-300 bg-white hover:bg-orange-50 cursor-pointer"
+                  : "border-dashed border-zinc-200 bg-zinc-50 cursor-not-allowed",
+                busy && "opacity-60",
+              )}
+            >
+              {url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={url} alt="" className="h-full w-full object-cover" />
+              ) : (
+                <>
+                  <Plus className="h-5 w-5 text-orange-400" />
+                  <span className="text-[10px] font-medium text-zinc-500">
+                    {i === 0 ? "Main Image" : "Image"}
+                  </span>
+                </>
+              )}
+            </button>
+            {url && onRemove && (
+              <button
+                type="button"
+                onClick={() => onRemove(url)}
+                disabled={busy}
+                className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-500 shadow-sm hover:bg-red-50 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="Remove image"
+                title="Remove this image from the listing"
+              >
+                <X className="h-3 w-3" />
+              </button>
             )}
           </div>
         ))}
@@ -1828,7 +1874,13 @@ export function ReviewClient({
   type AnalyzeStep = "idle" | "describing" | "retrieving" | "ranking" | "filling" | "done" | "error";
   const [analyzeStep,   setAnalyzeStep]   = useState<AnalyzeStep>("idle");
   const [analyzeError,  setAnalyzeError]  = useState<string | null>(null);
-  const [analyzePrompt, setAnalyzePrompt] = useState<string>("");
+  // Pre-fill from the listing's persisted user_prompt so re-runs default
+  // to the prompt the seller used on the add page. Empty if first visit
+  // or if no prompt was ever stored. Editable — seller can clear / change
+  // it before clicking Analyze again.
+  const [analyzePrompt, setAnalyzePrompt] = useState<string>(
+    (listing as { user_prompt?: string | null }).user_prompt ?? "",
+  );
   const [analyzeResult, setAnalyzeResult] = useState<{
     title?:               string;
     categoryPath?:        string;
@@ -1906,13 +1958,29 @@ export function ReviewClient({
 
   // ── Gemini image-enhancement modal state ─────────────────────────────────
   //
-  // Two-mode AI enhancement via the EnhanceModal. Both modes hit
-  // /api/enhance-images with the seller's listing; the modal shows
-  // before/after per image and the seller picks which version applies.
-  // Final picks are persisted via PATCH /api/listings/[id] with a new
-  // images array, then router.refresh() so the rest of the page sees
-  // the new URLs.
+  // Single-mode AI enhancement via the EnhanceModal: "rebuild" re-renders
+  // each image as a clean studio shot. Hits /api/enhance-images; the
+  // modal shows before/after per image and the seller picks which
+  // version applies. Final picks are persisted via PATCH /api/listings/[id]
+  // with a new images array, then router.refresh() so the rest of the
+  // page sees the new URLs.
+  //
+  // Polish mode was removed from the UI in May 2026 because users found
+  // the difference confusing; lib/gemini-image.ts still supports it for
+  // future direct API use.
   const [enhanceMode, setEnhanceMode] = useState<EnhanceMode | null>(null);
+
+  // If the user arrived from the Add-Product picker with ?enhance=rebuild,
+  // auto-open the rebuild modal once images have settled. Only fires
+  // once per mount — refreshes don't re-trigger.
+  const autoEnhanceFired = useRef(false);
+  useEffect(() => {
+    if (autoEnhanceFired.current) return;
+    if (searchParams.get("enhance") !== "rebuild") return;
+    if ((listing.images?.length ?? 0) === 0) return;
+    autoEnhanceFired.current = true;
+    setEnhanceMode("rebuild");
+  }, [listing.images, searchParams]);
 
   // ── Imagen 3 generate-from-scratch modal state (Business-only) ──────────
   //
@@ -1931,6 +1999,61 @@ export function ReviewClient({
       setCanGenerateImages(q.is_admin || q.plan === "business");
     });
   }, []);
+
+  // ── Manual image upload / remove on the review page ────────────────────
+  //
+  // Sellers can add MORE photos after AI analysis (e.g. they only had one
+  // shot at create-time, now they want to add another angle). The "+"
+  // tiles in the 8-slot grid POST a file to /api/listings/[id]/images
+  // which appends to listing.images and returns the new full array.
+  const [imageBusy, setImageBusy] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
+
+  async function handleAddImage(file: File) {
+    setImageBusy(true);
+    setImageError(null);
+    try {
+      const fd = new FormData();
+      fd.append("files", file);
+      const res = await fetch(`/api/listings/${listing.id}/images`, {
+        method: "POST",
+        body:   fd,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setImageError(data.error ?? `Upload failed (HTTP ${res.status})`);
+        return;
+      }
+      // Server returned the new full array — push it back to the listing
+      // row by routing-refresh. The server is the source of truth.
+      router.refresh();
+    } catch (e) {
+      setImageError(e instanceof Error ? e.message : "Network error");
+    } finally {
+      setImageBusy(false);
+    }
+  }
+
+  async function handleRemoveImage(url: string) {
+    setImageBusy(true);
+    setImageError(null);
+    try {
+      const res = await fetch(
+        `/api/listings/${listing.id}/images?url=${encodeURIComponent(url)}`,
+        { method: "DELETE" },
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setImageError(data.error ?? `Remove failed (HTTP ${res.status})`);
+        return;
+      }
+      router.refresh();
+    } catch (e) {
+      setImageError(e instanceof Error ? e.message : "Network error");
+    } finally {
+      setImageBusy(false);
+    }
+  }
 
   async function handleApplyEnhancedImages(chosenUrls: string[]) {
     const res = await fetch(`/api/listings/${listing.id}`, {
@@ -2398,8 +2521,16 @@ export function ReviewClient({
             <section ref={infoRef} className="bg-white rounded-md border border-zinc-200 p-6 space-y-5 scroll-mt-6">
               <h2 className="text-lg font-bold text-zinc-900">Product Information</h2>
 
-              {/* Image grid */}
-              <ImageGrid images={listing.images ?? []} />
+              {/* Image grid — clickable "+" tiles upload to /api/listings/[id]/images */}
+              <ImageGrid
+                images={listing.images ?? []}
+                onAdd={(file) => handleAddImage(file)}
+                onRemove={(url) => handleRemoveImage(url)}
+                busy={imageBusy}
+              />
+              {imageError && (
+                <p className="text-xs text-red-600 -mt-1">{imageError}</p>
+              )}
 
               {/* One-click Analyze with AI CTA — full pipeline */}
               {(listing.images?.length ?? 0) > 0 && (
@@ -2413,30 +2544,22 @@ export function ReviewClient({
                 />
               )}
 
-              {/* AI image-enhancement CTA — Gemini-powered, two modes.
-                  Polish = preserve product, just clean the background.
-                  Rebuild = re-render as a fresh studio shot. Both open
-                  the EnhanceModal which lets the seller compare and
-                  accept/reject per image before applying. Gated by
-                  the polish quota (Free=0, paid tiers vary). */}
+              {/* AI image-enhancement CTA — Gemini-powered.
+                  Single mode: Rebuild, which re-renders the seller's
+                  photo as a clean studio shot on white. Polish (subtle
+                  cleanup) was removed in favour of the stronger Rebuild
+                  since users found the difference confusing.
+                  Opens the EnhanceModal which lets the seller compare
+                  before/after per image before applying. Gated by the
+                  polish quota (Free=0, paid tiers vary). */}
               {(listing.images?.length ?? 0) > 0 && (
                 <div className="rounded-md border border-violet-200 bg-violet-50/60 px-3 py-2 space-y-2">
                   <div className="flex items-center gap-2 text-xs text-violet-700">
                     <Sparkles className="h-3.5 w-3.5" />
                     <span className="font-medium">Enhance with AI</span>
-                    <span className="text-violet-500">— make rough photos appealing</span>
+                    <span className="text-violet-500">— turn rough photos into clean studio shots</span>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setEnhanceMode("polish")}
-                      className="h-7 text-xs gap-1.5 border-violet-300 text-violet-700 hover:bg-violet-100"
-                    >
-                      <Sparkles className="h-3 w-3" />
-                      Polish (cleanup)
-                    </Button>
                     <Button
                       type="button"
                       size="sm"
@@ -2447,16 +2570,16 @@ export function ReviewClient({
                       Rebuild as studio shot
                     </Button>
                     <p className="text-[10px] text-violet-500/80 self-center">
-                      Polish keeps the product exactly. Rebuild re-renders it on white.
+                      Re-renders each photo on a pure-white background, lit like a catalogue shot.
                     </p>
                   </div>
                 </div>
               )}
 
-              {/* Imagen 3 — generate a product photo FROM SCRATCH.
+              {/* Text-to-image — generate a product photo FROM SCRATCH.
                   Business-tier-only (also Admin). Different from
-                  Polish/Rebuild because no source photo is needed —
-                  pure text-to-image via Google Imagen 3. */}
+                  Rebuild because no source photo is needed —
+                  pure text-to-image via Gemini 2.5 Image. */}
               {canGenerateImages && (
                 <div className="rounded-md border border-fuchsia-200 bg-gradient-to-r from-fuchsia-50/60 to-violet-50/60 px-3 py-2 space-y-2">
                   <div className="flex items-center gap-2 text-xs text-fuchsia-700">
@@ -2477,7 +2600,7 @@ export function ReviewClient({
                     Generate from description
                   </Button>
                   <p className="text-[10px] text-fuchsia-500/80">
-                    Type what your product looks like. Imagen 3 generates a studio shot in seconds.
+                    Type what your product looks like. Gemini 2.5 Image generates a studio shot in seconds.
                   </p>
                 </div>
               )}

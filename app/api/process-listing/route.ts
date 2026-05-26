@@ -147,7 +147,14 @@ export async function POST(req: NextRequest) {
     const manualCategoryPath = (formData.get("categoryPath") as string | null)?.trim() || null;
 
     if (skipAnalysis) {
-      if (imageUrls.length === 0) {
+      // For text-to-image mode we accept zero images — the seller will
+      // generate the image via /api/generate-product-image which appends
+      // to listing.images. For all other modes we still require at least
+      // one source image.
+      const allowEmptyImages =
+        (formData.get("textToImage") as string | null) === "true";
+
+      if (imageUrls.length === 0 && !allowEmptyImages) {
         throw new Error("At least one image is required");
       }
       const listing = await createListing({
@@ -157,6 +164,18 @@ export async function POST(req: NextRequest) {
         category_code: manualCategoryCode ?? undefined,
         category_path: manualCategoryPath ?? undefined,
       });
+
+      // Persist the seller's "what do you want in the listing" prompt
+      // so re-runs honour it without forcing the seller to retype.
+      // Done as a separate UPDATE because createListing doesn't accept
+      // user_prompt yet (would require a wider type change).
+      const userPrompt = (formData.get("userPrompt") as string | null)?.trim();
+      if (userPrompt) {
+        await updateListing(listing.id, {
+          user_prompt: userPrompt.slice(0, 1000),
+        });
+      }
+
       return NextResponse.json({
         listingId:    listing.id,
         title:        manualName,

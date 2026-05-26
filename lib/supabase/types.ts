@@ -71,6 +71,11 @@ export interface ListingRow {
     path:       string;
     confidence: number;
   }> | null;
+  // Free-text instruction the seller typed in the "What do you want in
+  // the listing" box. Persisted so re-runs (re-analyze, refill-attributes)
+  // honour the same intent without the seller having to retype.
+  // See migration 2026-05-26_listing-user-prompt.sql.
+  user_prompt: string | null;
   // 0-100 quality score cached on last save
   quality_score: number | null;
   // Stock for simple (non-variant) listings; variant stock is on VariantRow.quantity
@@ -121,7 +126,7 @@ export type ListingInsert = Omit<
   | "jumia_ref" | "jumia_error" | "jumia_synced_at"
   | "dynamic_attributes" | "field_sources" | "quality_score"
   | "quantity" | "update_feed_ref" | "update_feed_status"
-  | "image_variants"
+  | "image_variants" | "user_prompt"
 > & {
   id?: string;
   created_at?: string;
@@ -136,6 +141,7 @@ export type ListingInsert = Omit<
   update_feed_ref?: string | null;
   update_feed_status?: string | null;
   image_variants?: Record<string, { polish?: string; rebuild?: string }> | null;
+  user_prompt?: string | null;
 };
 
 export type VariantInsert = Omit<VariantRow, "id" | "created_at"> & {

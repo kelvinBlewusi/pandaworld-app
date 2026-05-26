@@ -114,7 +114,7 @@ export function GenerateImageModal({ listingId, onApplied, onClose }: Props) {
                 Generate a product photo
               </h2>
               <p className="text-xs text-zinc-500 mt-0.5">
-                Imagen 3 — Business plan · no source photo needed
+                Gemini 2.5 Image — Business plan · no source photo needed
               </p>
             </div>
           </div>
@@ -192,7 +192,7 @@ export function GenerateImageModal({ listingId, onApplied, onClose }: Props) {
             <div className="flex items-center justify-center rounded-xl border-2 border-dashed border-zinc-200 bg-zinc-50/60 py-12">
               <div className="flex flex-col items-center gap-2 text-zinc-500">
                 <Loader2 className="h-6 w-6 animate-spin text-violet-500" />
-                <p className="text-xs">Generating with Imagen 3… (4–10 seconds)</p>
+                <p className="text-xs">Generating with Gemini 2.5 Image… (4–10 seconds)</p>
               </div>
             </div>
           )}

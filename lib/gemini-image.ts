@@ -106,33 +106,63 @@ unchanged. Do not stylistically alter a photo that's already clean.`
   // mode === "rebuild"
   return (
     contextLine +
-    `Task: REBUILD the supplied product photo as a fresh, professional Jumia
-listing image. This is for a seller whose original shot is off-axis, badly
-lit, or visually unappealing — the seller wants the product re-shot as if a
-studio photographer took it.
+    `Task: REBUILD the supplied product photo as a high-end catalogue image
+for the Jumia Ghana marketplace. The seller's original shot is amateurish
+(phone camera, poor lighting, distracting background). Re-shoot the same
+product as if a professional product photographer took it in a real studio.
 
-CRITICAL RULES — these are non-negotiable:
-- The product itself MUST stay accurate. Same shape, same dimensions, same
-  colour, same branding, same labels, same packaging text. Re-render the
-  surroundings, not the product. If you change colour, add unseen features,
-  or invent text, the output is rejected.
-- Use a clean, professional studio look:
-  * Pure white background (#FFFFFF).
-  * Soft, even three-point studio lighting (key light from above-front,
-    fill from the side, soft rim).
-  * Subtle natural drop shadow directly under the product. No harsh shadow.
-  * Centre the product with ~10% padding on all sides.
-  * Slight subject elevation — looks like the product is sitting on a
-    seamless white surface.
-- Composition: front-facing or 3/4 angle, whichever showcases the product
-  best. No artistic crops, no lifestyle props, no human hands, no
-  contextual setting (kitchen counter, table, etc.) — JUST the product
-  cleanly lit on white.
-- Output a SQUARE image, 2000×2000 pixels, JPG quality.
-- No watermarks, no text overlays, no decorative elements, no extra
-  objects in the frame.
+PRESERVE THE PRODUCT EXACTLY — this is the most important rule:
+- Same SKU, same brand, same model, same dimensions, same colour, same
+  pattern, same texture, same packaging, same printed text, same labels,
+  same logos, same buttons / dials / ports, same accessories visible in
+  the frame. If you change ANY feature of the product itself, the output
+  is rejected and the seller's listing fails Jumia QC.
+- Do not "improve" the product. Do not change its colour to be more
+  vivid, do not straighten labels, do not remove dents or wear, do not
+  invent a model number, do not add features that aren't there.
+- If the product has multiple parts (e.g. phone + charger + box), keep
+  all of them in the rebuilt image. Do not silently drop accessories.
+- If the original has visible wear, scratches, or imperfections, KEEP
+  THEM. Sellers list used items too — a rebuilt photo that hides wear
+  is dishonest.
 
-Think of this output as a catalogue page hero shot, not a creative ad.`
+STUDIO TREATMENT — apply this to the surroundings only:
+- Pure white background, hex value #FFFFFF. No off-white, no gradient,
+  no seamless paper showing texture. Perfectly flat white pixels.
+- Three-point studio lighting:
+  * Key light: above-front, 45° down, soft / diffused.
+  * Fill light: from the opposite side, ~half intensity, no shadows.
+  * Rim light: behind the product, separating it from the background.
+  The result should be even, soft, neutral — colour-accurate, not warm
+  or cool. Think Apple product page, not Instagram filter.
+- Drop shadow: ONE soft, natural shadow directly under the product
+  (~10% opacity, ~20px blur). Anchors the product so it doesn't look
+  floating. No harsh shadow, no double shadow, no stylised shadow.
+- Product placement: centred horizontally and vertically with ~10%
+  padding on all four sides. Slight elevation — looks like the product
+  is sitting on a seamless white surface, not floating in space.
+- Camera angle: front-facing or 3/4 (~30° turn), whichever showcases
+  the product's key features. NEVER top-down unless the product is
+  inherently flat (e.g. a phone, a wallet). For boxed products, show
+  the front face of the packaging clearly.
+- Resolution: SQUARE, 2000×2000 pixels minimum. Sharp focus. JPG output.
+
+WHAT IS BANNED:
+- No human hands, fingers, or any body parts in the frame.
+- No lifestyle props (tables, plants, fabric, coffee cups, etc.).
+- No contextual setting (kitchen counter, bed, outdoor scene).
+- No additional objects beyond the product itself.
+- No text overlays added to the image (e.g. price tags, "SALE" stickers,
+  watermarks, social-media handles, brand promos).
+- No filters or stylised colour grades.
+- No decorative borders or framing.
+- No mirror reflections (unless the product itself has reflective parts).
+- No multiple angles composited side-by-side — ONE image, ONE angle.
+
+This output must pass Jumia's automated QC on first submission. Imagine
+it as the hero image on Apple.com, Best Buy, or Amazon's main listing
+gallery: pure white background, perfect lighting, product clearly the
+sole subject, photorealistic.`
   );
 }
 

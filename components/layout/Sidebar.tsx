@@ -108,7 +108,7 @@ function NewListingLink() {
 
   return (
     <Link
-      href="/listings/new/batch?count=1"
+      href="/listings/new"
       className={cn(
         "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-all duration-150",
         isActive
