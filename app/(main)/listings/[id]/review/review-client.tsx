@@ -2544,66 +2544,16 @@ export function ReviewClient({
                 />
               )}
 
-              {/* AI image-enhancement CTA — Gemini-powered.
-                  Single mode: Rebuild, which re-renders the seller's
-                  photo as a clean studio shot on white. Polish (subtle
-                  cleanup) was removed in favour of the stronger Rebuild
-                  since users found the difference confusing.
-                  Opens the EnhanceModal which lets the seller compare
-                  before/after per image before applying. Gated by the
-                  polish quota (Free=0, paid tiers vary). */}
-              {(listing.images?.length ?? 0) > 0 && (
-                <div className="rounded-md border border-violet-200 bg-violet-50/60 px-3 py-2 space-y-2">
-                  <div className="flex items-center gap-2 text-xs text-violet-700">
-                    <Sparkles className="h-3.5 w-3.5" />
-                    <span className="font-medium">Enhance with AI</span>
-                    <span className="text-violet-500">— turn rough photos into clean studio shots</span>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={() => setEnhanceMode("rebuild")}
-                      className="h-7 text-xs gap-1.5 bg-violet-500 hover:bg-violet-600 text-white"
-                    >
-                      <Sparkles className="h-3 w-3" />
-                      Rebuild as studio shot
-                    </Button>
-                    <p className="text-[10px] text-violet-500/80 self-center">
-                      Re-renders each photo on a pure-white background, lit like a catalogue shot.
-                    </p>
-                  </div>
-                </div>
-              )}
+              {/* AI image features — TEMPORARILY DISABLED (May 2026).
+                  Both "Rebuild as studio shot" (image-edit) and
+                  "Generate from description" (text-to-image) panels
+                  have been removed pending a model upgrade. They lived
+                  in this block previously; restoring them is a single
+                  revert when the better image model ships.
 
-              {/* Text-to-image — generate a product photo FROM SCRATCH.
-                  Business-tier-only (also Admin). Different from
-                  Rebuild because no source photo is needed —
-                  pure text-to-image via Gemini 2.5 Image. */}
-              {canGenerateImages && (
-                <div className="rounded-md border border-fuchsia-200 bg-gradient-to-r from-fuchsia-50/60 to-violet-50/60 px-3 py-2 space-y-2">
-                  <div className="flex items-center gap-2 text-xs text-fuchsia-700">
-                    <Wand2 className="h-3.5 w-3.5" />
-                    <span className="font-medium">Generate a product photo</span>
-                    <span className="rounded-full bg-fuchsia-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-fuchsia-700">
-                      Business
-                    </span>
-                    <span className="text-fuchsia-500">— no source photo needed</span>
-                  </div>
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => setShowGenerateImage(true)}
-                    className="h-7 text-xs gap-1.5 bg-gradient-to-r from-violet-500 to-fuchsia-500 hover:from-violet-600 hover:to-fuchsia-600 text-white"
-                  >
-                    <Wand2 className="h-3 w-3" />
-                    Generate from description
-                  </Button>
-                  <p className="text-[10px] text-fuchsia-500/80">
-                    Type what your product looks like. Gemini 2.5 Image generates a studio shot in seconds.
-                  </p>
-                </div>
-              )}
+                  Modal mounts further down are kept conditionally so
+                  the existing state hooks don't error — they're just
+                  unreachable without the trigger buttons. */}
 
               {/* Name + Category */}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

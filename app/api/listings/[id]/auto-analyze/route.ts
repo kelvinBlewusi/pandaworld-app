@@ -106,9 +106,14 @@ export async function POST(
   const timings: Record<string, number> = {};
 
   // ── 1. Pass A: describe the product ───────────────────────────────────────
+  //
+  // forceBestModel: true forces Gemini 2.5 Pro for every seller — Free
+  // included — because the "own images" flow is the only active path
+  // (rebuild + text-to-image are on maintenance). Quality > cost while
+  // we channel everyone through one flow.
   let description: Awaited<ReturnType<typeof aiPassA_describeProduct>>;
   try {
-    description = await aiPassA_describeProduct(images, userContext);
+    description = await aiPassA_describeProduct(images, userContext, { forceBestModel: true });
     timings.describe_ms = Date.now() - t0;
   } catch (e) {
     return NextResponse.json(
@@ -234,6 +239,7 @@ export async function POST(
       userContext,
       description.intended_use_case,
       description.environment,
+      { forceBestModel: true },
     );
     timings.rank_ms = Date.now() - tRank;
   } catch (e) {
@@ -283,7 +289,7 @@ export async function POST(
     field_confidence:   {},
   };
   try {
-    filled = await extractAttributesForCategory(images, chosen.code, userContext);
+    filled = await extractAttributesForCategory(images, chosen.code, userContext, { forceBestModel: true });
     timings.fill_ms = Date.now() - tFill;
   } catch (e) {
     console.warn(`[auto-analyze] attribute fill failed: ${(e as Error).message}`);
@@ -292,10 +298,16 @@ export async function POST(
 
   // ── 6. Build merged updates and persist ──────────────────────────────────
   //
-  // Strategy: fill every empty top-level field from Pass A's response.
-  // NEVER overwrite seller-edited values (those with field_sources[k] ===
-  // "user"). Brand has a special fallback to "Generic" since Jumia requires
-  // it and an empty brand blocks Submit.
+  // Strategy:
+  //   - NEVER overwrite seller-edited values (field_sources[k] === "user").
+  //     These are the human's authoritative inputs.
+  //   - DO overwrite previously-AI-set values OR empty values. Re-runs
+  //     are the seller's way of saying "try again, the last attempt
+  //     wasn't right" — refusing to refresh AI fields would mean the
+  //     second run looks identical to the first.
+  //
+  // Brand has a special fallback to "Generic" since Jumia requires it
+  // and an empty brand blocks Submit.
   const previousSources    = (listing.field_sources    ?? {}) as Record<string, "ai" | "user">;
   const previousConfidence = (listing.field_confidence ?? {}) as Record<string, { confidence: number; source: string; reasoning?: string }>;
 
@@ -306,54 +318,70 @@ export async function POST(
   const newSources:    Record<string, "ai">                                                                            = {};
   const newConfidence: Record<string, { confidence: number; source: "image" | "ocr" | "inferred" | "seller-required"; reasoning?: string }> = {};
 
-  const setIfEmpty = (col: string, val: string | number | null, conf: { confidence: number; source: "image" | "ocr" | "inferred" | "seller-required"; reasoning?: string }) => {
-    if (val == null || val === "") return;
-    // Only set when DB is empty OR contains a stale AI value
+  // canFill: true when the field is either empty OR previously-AI-set.
+  // The only reason to skip is a user edit (which we must preserve).
+  // Previously: only filled when EMPTY — meant re-runs after a partial
+  // success silently dropped Pass A's improvements on the floor.
+  const canFill = (col: string): boolean => {
+    if (isUserEdited(col)) return false;
+    // Empty? Always fillable.
     const existing = (listing as unknown as Record<string, unknown>)[col];
-    const stale = !existing || (typeof existing === "string" && existing.trim() === "");
-    if (!stale) return;
-    if (isUserEdited(col)) return;
+    if (existing == null || (typeof existing === "string" && existing.trim() === "")) return true;
+    // Non-empty but AI-set? Refresh on re-run.
+    if (previousSources[col] === "ai") return true;
+    // Non-empty + unknown source = legacy data, treat as user-set.
+    return false;
+  };
+
+  const setField = (col: string, val: string | number | null, conf: { confidence: number; source: "image" | "ocr" | "inferred" | "seller-required"; reasoning?: string }) => {
+    if (val == null || val === "") return;
+    if (!canFill(col)) return;
     updates[col] = val;
     newSources[col] = "ai";
     newConfidence[col] = conf;
   };
 
-  // Title — only fill if too short / missing
-  if (!isUserEdited("title") && (!listing.title || listing.title.length < 15)) {
-    updates.title = description.title;
-    newSources["title"] = "ai";
-    newConfidence["title"] = { confidence: 0.9, source: "inferred" };
+  // Title — fill if too short / missing OR previously AI-set (so re-runs
+  // refresh it). Honour user edits.
+  if (canFill("title") || (!listing.title || (listing.title as string).length < 15)) {
+    if (!isUserEdited("title")) {
+      updates.title = description.title;
+      newSources["title"] = "ai";
+      newConfidence["title"] = { confidence: 0.9, source: "inferred" };
+    }
   }
 
   // Brand — Pass A's brand if confident, else "Generic" fallback so the
   // required field is never empty. Per Jumia API docs, code 1045133 for
   // Generic; resolveBrand maps the name → code at push time.
-  if (!isUserEdited("brand") && !listing.brand) {
-    const brandValue = description.brand && description.brand.trim() ? description.brand : "Generic";
-    updates.brand = brandValue;
-    newSources["brand"] = "ai";
-    newConfidence["brand"] = description.brand
-      ? { confidence: 0.9, source: "image",    reasoning: "Logo visible in image" }
-      : { confidence: 0.5, source: "inferred", reasoning: "No brand logo detected — defaulted to Generic. Edit if you know the real brand." };
+  if (canFill("brand") || !listing.brand) {
+    if (!isUserEdited("brand")) {
+      const brandValue = description.brand && description.brand.trim() ? description.brand : "Generic";
+      updates.brand = brandValue;
+      newSources["brand"] = "ai";
+      newConfidence["brand"] = description.brand
+        ? { confidence: 0.9, source: "image",    reasoning: "Logo visible in image" }
+        : { confidence: 0.5, source: "inferred", reasoning: "No brand logo detected — defaulted to Generic. Edit if you know the real brand." };
+    }
   }
 
   // Other top-level fields
-  setIfEmpty("description",     description.description,     { confidence: 0.85, source: "inferred" });
-  setIfEmpty("highlights",      description.highlights,      { confidence: 0.85, source: "inferred" });
-  setIfEmpty("color",           description.color,           { confidence: 0.85, source: "image" });
-  setIfEmpty("color_family",    description.color_family,    { confidence: 0.85, source: "image" });
-  setIfEmpty("weight_kg",       description.weight_kg,       { confidence: 0.7,  source: "image",  reasoning: "Weight inferred from visible packaging" });
-  setIfEmpty("main_material",   description.main_material,   { confidence: 0.8,  source: "inferred" });
-  setIfEmpty("material_family", description.material_family, { confidence: 0.8,  source: "inferred" });
+  setField("description",     description.description,     { confidence: 0.85, source: "inferred" });
+  setField("highlights",      description.highlights,      { confidence: 0.85, source: "inferred" });
+  setField("color",           description.color,           { confidence: 0.85, source: "image" });
+  setField("color_family",    description.color_family,    { confidence: 0.85, source: "image" });
+  setField("weight_kg",       description.weight_kg,       { confidence: 0.7,  source: "image",  reasoning: "Weight inferred from visible packaging" });
+  setField("main_material",   description.main_material,   { confidence: 0.8,  source: "inferred" });
+  setField("material_family", description.material_family, { confidence: 0.8,  source: "inferred" });
 
   // ── AI-defaulted fields (May 2026) — were seller-required before, now
   // AI fills with stable defaults. The seller's "What do you want in
   // the listing" text overrides these via userContext on the prompt.
-  setIfEmpty("model",              description.model,              { confidence: 0.8,  source: "image",    reasoning: "Model number/name visible on product or packaging." });
-  setIfEmpty("warranty_duration",  description.warranty_duration,  { confidence: 0.6,  source: "inferred", reasoning: "Default — override in the AI-chat field to set a real warranty." });
-  setIfEmpty("warranty_text",      description.warranty_text,      { confidence: 0.6,  source: "inferred", reasoning: "Default — override in the AI-chat field to set warranty terms." });
-  setIfEmpty("warranty_address",   description.warranty_address,   { confidence: 0.6,  source: "inferred", reasoning: "Default — override in the AI-chat field to set a warranty address." });
-  setIfEmpty("production_country", description.production_country, { confidence: 0.7,  source: "inferred", reasoning: "AI inference based on brand / category. Override via AI-chat if known." });
+  setField("model",              description.model,              { confidence: 0.8,  source: "image",    reasoning: "Model number/name visible on product or packaging." });
+  setField("warranty_duration",  description.warranty_duration,  { confidence: 0.6,  source: "inferred", reasoning: "Default — override in the AI-chat field to set a real warranty." });
+  setField("warranty_text",      description.warranty_text,      { confidence: 0.6,  source: "inferred", reasoning: "Default — override in the AI-chat field to set warranty terms." });
+  setField("warranty_address",   description.warranty_address,   { confidence: 0.6,  source: "inferred", reasoning: "Default — override in the AI-chat field to set a warranty address." });
+  setField("production_country", description.production_country, { confidence: 0.7,  source: "inferred", reasoning: "AI inference based on brand / category. Override via AI-chat if known." });
 
   // Merge category alternates → top-3 with confidence
   const alternatesForUI = [

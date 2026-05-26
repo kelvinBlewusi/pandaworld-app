@@ -43,7 +43,15 @@ import type { Plan } from "@/lib/billing/plans";
 async function resolveModel(
   userId: string | null | undefined,
   kind: ModelKind,
+  opts: { forceBestModel?: boolean } = {},
 ): Promise<string | undefined> {
+  // forceBestModel: bypass tier ladder entirely and pretend the user
+  // is on Business (premium). Used by the listing analyze pipeline,
+  // where we want every seller — Free included — to see the highest
+  // quality output for the "own images" flow.
+  if (opts.forceBestModel) {
+    return pickModelForPlan("business" as Plan, kind, { isAdmin: true });
+  }
   if (!userId) return undefined;
   try {
     const summary = await getQuotaSummary(userId);
@@ -323,6 +331,58 @@ async function discoverWorkingModel(apiKey: string): Promise<string> {
   return preferred;
 }
 
+// ─── In-module image cache ─────────────────────────────────────────────────
+//
+// The auto-analyze pipeline calls callGemini 3 times (Pass A, B, C), and
+// every call re-fetches the same Supabase Storage images. Each image is
+// 0.5-2MB and there can be up to 4 per listing — so we were downloading
+// up to 24MB per analyze, most of it duplicate.
+//
+// This cache memoises the base64-encoded inline parts by URL for a short
+// TTL. The 2nd and 3rd passes within the same analyze hit the cache and
+// skip the network round-trip entirely. Single analyze drops by ~2-4s.
+//
+// TTL is short (60s) so we don't hold dozens of MB of image bytes in
+// the Node process across requests. Auto-cleans on access — entries
+// past expiry get deleted before any new write.
+type ImagePart = { inlineData: { data: string; mimeType: string } };
+// Loose shape so existing `.filter((r) => r.ok && r.part).map((r) => r.part!)`
+// + `.map((r) => r.error)` callers downstream don't need narrowing.
+type ImageFetchResult = { ok: boolean; part?: ImagePart; error?: string };
+
+const _imagePartCache = new Map<string, { part: ImagePart; expires: number }>();
+const IMAGE_CACHE_TTL_MS = 60_000;
+
+function pruneExpiredImageCache() {
+  const now = Date.now();
+  // forEach to avoid the ES5 Map-iteration target warning. Behaviour
+  // is identical to `for (const [url, entry] of _imagePartCache)`.
+  _imagePartCache.forEach((entry, url) => {
+    if (entry.expires <= now) _imagePartCache.delete(url);
+  });
+}
+
+async function fetchImagePart(url: string): Promise<ImageFetchResult> {
+  // Cache hit — skip the network call entirely.
+  const cached = _imagePartCache.get(url);
+  if (cached && cached.expires > Date.now()) {
+    return { ok: true, part: cached.part };
+  }
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const buffer   = await res.arrayBuffer();
+    const base64   = Buffer.from(buffer).toString("base64");
+    const mimeType = (res.headers.get("content-type") ?? "image/jpeg") as string;
+    const part: ImagePart = { inlineData: { data: base64, mimeType } };
+    // Cache for next pass in this same analyze run.
+    _imagePartCache.set(url, { part, expires: Date.now() + IMAGE_CACHE_TTL_MS });
+    return { ok: true, part };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 async function callGemini(
   prompt: string,
   imageUrls: string[],
@@ -339,22 +399,16 @@ async function callGemini(
 
   const genAI = new GoogleGenerativeAI(apiKey);
 
-  // Fetch images and convert to inline data
-  const fetchedImages: { ok: boolean; part?: { inlineData: { data: string; mimeType: string } }; error?: string }[] =
-    await Promise.all(
-      imageUrls.slice(0, 4).map(async (url) => {
-        try {
-          const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-          if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
-          const buffer   = await res.arrayBuffer();
-          const base64   = Buffer.from(buffer).toString("base64");
-          const mimeType = (res.headers.get("content-type") ?? "image/jpeg") as string;
-          return { ok: true, part: { inlineData: { data: base64, mimeType } } };
-        } catch (e) {
-          return { ok: false, error: (e as Error).message };
-        }
-      })
-    );
+  // Periodically clear out cache entries we no longer need. Cheap
+  // because we only do this on the way INTO an analyze call, not
+  // during the Gemini round-trip itself.
+  pruneExpiredImageCache();
+
+  // Fetch images (cached) and convert to inline data. The cache means
+  // that the 2nd and 3rd passes of a single analyze skip the network.
+  const fetchedImages: ImageFetchResult[] = await Promise.all(
+    imageUrls.slice(0, 4).map((url) => fetchImagePart(url)),
+  );
 
   const validImageParts = fetchedImages
     .filter((r) => r.ok && r.part)
@@ -916,7 +970,13 @@ type Environment = NonNullable<ProductDescription["environment"]>;
 
 export async function aiPassA_describeProduct(
   imageUrls: string[],
-  userContext?: string | null   // free-text from the seller, e.g. "this is a pack of 6, teal not blue"
+  userContext?: string | null,   // free-text from the seller, e.g. "this is a pack of 6, teal not blue"
+  // forceBestModel: bypass the tier ladder and force Gemini 2.5 Pro
+  // for every user. Used by the listing analyze pipeline to give Free
+  // sellers the same quality as Business sellers on the only flow that
+  // is currently active. Falls through to the global fallback chain
+  // if the premium model errors.
+  opts: { forceBestModel?: boolean } = {},
 ): Promise<ProductDescription> {
   if (!imageUrls.length) throw new Error("No images provided");
   if (USE_MOCK_AI) {
@@ -936,9 +996,10 @@ export async function aiPassA_describeProduct(
   }
   if (!process.env.GOOGLE_API_KEY) throw new Error("GOOGLE_API_KEY is not set.");
 
-  // Tier-aware model selection (Free → 2.0 Flash, Paid → 2.5 Flash).
+  // Tier-aware model selection (Free → Lite, Paid → Flash, Business → Pro).
+  // When forceBestModel is set, every caller gets Gemini 2.5 Pro.
   const { userId } = await auth();
-  const visionModel = await resolveModel(userId, "vision");
+  const visionModel = await resolveModel(userId, "vision", { forceBestModel: opts.forceBestModel });
 
   // The full Jumia content policy — includes the verbatim banned-words
   // instruction, so we don't need restrictedInstr separately here.
@@ -1154,6 +1215,8 @@ export async function aiPassB_rankCategory(
   // visually-similar candidates by what the product is actually FOR.
   useCase?: string | null,
   environment?: ProductDescription["environment"],
+  // Force the premium model across all tiers (see Pass A for rationale).
+  opts: { forceBestModel?: boolean } = {},
 ): Promise<RankingResult> {
   if (candidates.length === 0) {
     return { primary: null, alternates: [], needsUserConfirmation: true };
@@ -1179,7 +1242,7 @@ export async function aiPassB_rankCategory(
 
   // Tier-aware model selection — Pass B is a vision call.
   const { userId: rankUserId } = await auth();
-  const rankVisionModel = await resolveModel(rankUserId, "vision");
+  const rankVisionModel = await resolveModel(rankUserId, "vision", { forceBestModel: opts.forceBestModel });
 
   const candidateList = candidates
     .map((c, i) => `${i + 1}. ${c.code} — ${c.path}`)
@@ -1258,6 +1321,8 @@ export async function extractAttributesForCategory(
   imageUrls:    string[],
   categoryCode: number,
   userContext?: string | null,
+  // Force the premium model across all tiers (see Pass A for rationale).
+  opts: { forceBestModel?: boolean } = {},
 ): Promise<{
   dynamic_attributes: Record<string, string>;
   field_sources:      Record<string, "ai">;
@@ -1295,7 +1360,7 @@ export async function extractAttributesForCategory(
 
   // Tier-aware model selection — Pass C is a vision call.
   const { userId: attrUserId } = await auth();
-  const attrVisionModel = await resolveModel(attrUserId, "vision");
+  const attrVisionModel = await resolveModel(attrUserId, "vision", { forceBestModel: opts.forceBestModel });
 
   // Look up the category path so the policy block can specialise its
   // image rules (Fashion vs everything else). One extra DB hit per Pass

@@ -7,25 +7,30 @@
  * they upload anything. This is the single source of truth for that
  * choice — every "Add Product" CTA in the app routes here first.
  *
- *   1. "Rebuild image and listing"     → /listings/new/batch?count=N&enhance=rebuild
- *      Seller has photos but they're amateurish (phone camera, busy
- *      background). We upload, then auto-rebuild each as a studio shot
- *      on white in the review page.
- *
- *   2. "Text-to-image listing"         → /listings/new/text?count=N
- *      Seller has NO photos. They type a description and Gemini 2.5 Image
- *      generates a studio shot from scratch. Business-tier only.
- *
- *   3. "List with your own images"     → /listings/new/batch?count=N&mode=own
+ *   1. "List with your own images"     → /listings/new/batch?count=N&mode=own
+ *      (ACTIVE — primary flow as of May 2026)
  *      Seller's photos are already studio-quality. Skip the AI image
- *      step entirely. Listing text + category still get AI-generated.
+ *      step entirely. Listing text + category get AI-generated using
+ *      our premium model (Gemini 2.5 Pro) so the listing is rich.
  *
- * This replaces the old auto-redirect to /listings/new/batch?count=1
- * (preserved here as a fallback for sellers who want to bypass the
- * picker — the URL still works directly).
+ *   2. "Rebuild image and listing"     → DISABLED (maintenance)
+ *      Was: upload rough photos, AI re-renders as studio shots.
+ *      Disabled because the underlying image-edit model output quality
+ *      isn't where we want it yet. Re-enabled once we ship a better one.
+ *
+ *   3. "Text-to-image listing"         → DISABLED (maintenance)
+ *      Was: type a description, generate a studio shot from scratch.
+ *      Disabled alongside Rebuild — both will return when the image
+ *      pipeline ships a model upgrade.
+ *
+ * Visual treatment for disabled modes:
+ *   - Card stays visible (so sellers know the feature is coming)
+ *   - "Maintenance" badge in amber instead of the original colour
+ *   - Click is a no-op; cursor reflects unavailable state
+ *   - Subtitle text replaced with "Currently unavailable — back soon"
  */
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -34,16 +39,15 @@ import {
   Wand2,
   ImagePlus,
   ChevronRight,
-  Lock,
   Plus,
   Minus,
   Camera,
+  Wrench,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { getQuotaSummaryForCurrentUser } from "@/lib/actions/subscription";
 
-type Mode = "rebuild" | "text" | "own";
+type Mode = "own" | "rebuild" | "text";
 
 const MIN_PRODUCTS = 1;
 const MAX_PRODUCTS = 10;
@@ -58,77 +62,74 @@ interface ModeOption {
   iconClass:     string;
   /** Tailwind classes for the card hover ring */
   ringClass:     string;
-  /** "Business" badge if the mode is gated */
-  businessOnly?: boolean;
+  /** If true, card renders disabled with a "Coming back soon" overlay. */
+  maintenance?:  boolean;
 }
 
+// Order is intentional: "own" first because it's the only active flow.
+// The other two stay in the list so sellers know they're coming back —
+// just visually disabled with a maintenance message.
 const MODE_OPTIONS: ModeOption[] = [
+  {
+    id:          "own",
+    title:       "List with your own images",
+    subtitle:    "Recommended — fastest, richest listings",
+    description:
+      "Upload your product photos. Our AI writes a complete Jumia listing — title, description, category, attributes — using our best model. Pass QC the first time.",
+    icon:        ImagePlus,
+    iconClass:   "from-emerald-500 to-teal-500",
+    ringClass:   "hover:ring-emerald-200 hover:border-emerald-300",
+  },
   {
     id:          "rebuild",
     title:       "Rebuild image and listing",
-    subtitle:    "Recommended for most sellers",
+    subtitle:    "Currently unavailable — back soon",
     description:
-      "Upload your photos — even amateur phone shots. Our AI rebuilds each one as a clean, studio-quality image on white, then writes the full listing (title, description, category, attributes).",
+      "Upload rough phone photos, our AI re-renders each one as a clean studio shot on white. Coming back once we ship a better image model.",
     icon:        Sparkles,
     iconClass:   "from-orange-500 to-amber-500",
-    ringClass:   "hover:ring-orange-200 hover:border-orange-300",
+    ringClass:   "",
+    maintenance: true,
   },
   {
     id:          "text",
     title:       "Text-to-image listing",
-    subtitle:    "No photo needed",
+    subtitle:    "Currently unavailable — back soon",
     description:
-      "Don't have a product photo? Describe the product in words and our AI generates a studio shot from scratch, plus the full listing.",
+      "Describe the product in words, AI generates the studio shot. Paused while we upgrade the image generator.",
     icon:        Wand2,
     iconClass:   "from-violet-500 to-fuchsia-500",
-    ringClass:   "hover:ring-fuchsia-200 hover:border-fuchsia-300",
-    businessOnly: true,
-  },
-  {
-    id:          "own",
-    title:       "List with your own images",
-    subtitle:    "Skip image enhancement",
-    description:
-      "Already have studio-quality photos? Upload them as-is. We'll skip the image rebuild and just write the listing (title, description, category, attributes).",
-    icon:        ImagePlus,
-    iconClass:   "from-emerald-500 to-teal-500",
-    ringClass:   "hover:ring-emerald-200 hover:border-emerald-300",
+    ringClass:   "",
+    maintenance: true,
   },
 ];
 
 export default function AddProductPicker() {
   const router = useRouter();
-  const [selected, setSelected] = useState<Mode | null>(null);
+  const [selected, setSelected] = useState<Mode | null>("own");
   const [count, setCount]       = useState(1);
-  const [canGenerate, setCanGenerate] = useState(false);
   const [busy, setBusy] = useState(false);
-
-  // Check whether the user is on the Business plan (or Admin). The
-  // "Text-to-image" mode is gated server-side, but disabling the card
-  // up-front gives a cleaner UX than letting them click through and
-  // bounce at /api/generate-product-image.
-  useEffect(() => {
-    getQuotaSummaryForCurrentUser().then((q) => {
-      if (!q) return;
-      setCanGenerate(q.is_admin || q.plan === "business");
-    });
-  }, []);
 
   const handleContinue = () => {
     if (!selected || busy) return;
+    const option = MODE_OPTIONS.find((m) => m.id === selected);
+    if (option?.maintenance) return; // belt-and-braces — UI also blocks click
     setBusy(true);
 
     const n = Math.max(MIN_PRODUCTS, Math.min(MAX_PRODUCTS, count));
 
     switch (selected) {
+      case "own":
+        router.push(`/listings/new/batch?count=${n}&mode=own`);
+        break;
+      // The remaining cases are disabled at the card level; this is a
+      // safety net only — should never run while those modes are on
+      // maintenance.
       case "rebuild":
         router.push(`/listings/new/batch?count=${n}&enhance=rebuild`);
         break;
       case "text":
         router.push(`/listings/new/text?count=${n}`);
-        break;
-      case "own":
-        router.push(`/listings/new/batch?count=${n}&mode=own`);
         break;
     }
   };
@@ -158,36 +159,28 @@ export default function AddProductPicker() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           {MODE_OPTIONS.map((opt) => {
             const Icon       = opt.icon;
-            const disabled   = opt.businessOnly && !canGenerate;
-            const isSelected = selected === opt.id;
+            const disabled   = Boolean(opt.maintenance);
+            const isSelected = !disabled && selected === opt.id;
             return (
               <button
                 key={opt.id}
                 type="button"
                 onClick={() => !disabled && setSelected(opt.id)}
                 disabled={disabled || busy}
+                aria-disabled={disabled}
                 className={cn(
                   "group relative flex flex-col items-start gap-3 rounded-2xl border-2 bg-white p-5 text-left transition-all",
                   isSelected
                     ? "border-orange-500 ring-2 ring-orange-100 shadow-md"
                     : "border-zinc-200 ring-1 ring-transparent",
                   !disabled && !isSelected && opt.ringClass,
-                  disabled && "opacity-60 cursor-not-allowed",
+                  disabled && "opacity-60 cursor-not-allowed grayscale-[0.5]",
                 )}
               >
-                {opt.businessOnly && (
-                  <span className={cn(
-                    "absolute top-3 right-3 rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide",
-                    canGenerate
-                      ? "bg-fuchsia-100 text-fuchsia-700"
-                      : "bg-zinc-100 text-zinc-500"
-                  )}>
-                    {canGenerate ? "Business" : (
-                      <span className="inline-flex items-center gap-1">
-                        <Lock className="h-2.5 w-2.5" />
-                        Business
-                      </span>
-                    )}
+                {disabled && (
+                  <span className="absolute top-3 right-3 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-700">
+                    <Wrench className="h-2.5 w-2.5" />
+                    Maintenance
                   </span>
                 )}
                 <div
@@ -200,14 +193,17 @@ export default function AddProductPicker() {
                 </div>
                 <div className="space-y-1">
                   <h3 className="text-sm font-bold text-zinc-900">{opt.title}</h3>
-                  <p className="text-[11px] font-semibold text-orange-500 uppercase tracking-wide">{opt.subtitle}</p>
+                  <p className={cn(
+                    "text-[11px] font-semibold uppercase tracking-wide",
+                    disabled ? "text-amber-600" : "text-orange-500",
+                  )}>{opt.subtitle}</p>
                 </div>
                 <p className="text-xs text-zinc-600 leading-relaxed">
                   {opt.description}
                 </p>
                 {disabled && (
-                  <p className="text-[10px] text-zinc-500 mt-1">
-                    Upgrade to Business to unlock text-to-image.
+                  <p className="text-[10px] text-amber-700 mt-1 italic">
+                    This tool is currently experiencing downtime. It&apos;ll be back soon.
                   </p>
                 )}
               </button>
@@ -261,11 +257,6 @@ export default function AddProductPicker() {
             Continue
           </Button>
         </div>
-
-        {/* Footnote */}
-        <p className="mt-6 text-center text-[11px] text-zinc-400">
-          You can switch modes per product on the next screen — this is just the starting point.
-        </p>
       </div>
     </div>
   );
