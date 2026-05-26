@@ -96,20 +96,43 @@ export async function POST(req: NextRequest) {
   // 3. Embed in parallel (capped concurrency to respect rate limits).
   const results = await embedTextBatch(texts, 5);
 
-  // 4. Update each row that got a successful embedding.
+  // 4. Update each row that got a successful embedding. Collect errors
+  //    along the way so we can surface them in the response — running the
+  //    backfill is opaque otherwise (the route just keeps returning
+  //    "0 embedded, N remaining" with no clue what's failing).
+  const embedErrors: Array<{ code: number; path: string; error: string }> = [];
+  const updateErrors: Array<{ code: number; error: string }> = [];
   let embedded = 0;
+
   await Promise.all(
     pending.map(async (cat, i) => {
-      const result = results[i];
-      if (!result) return; // embed failed; skip — next run will retry
+      const slot = results[i];
 
-      const literal = toPgvectorLiteral(result.vector);
+      // Slot shape: { vector, model } on success, { error } on failure.
+      if (!("vector" in slot)) {
+        if (embedErrors.length < 10) {
+          embedErrors.push({
+            code:  cat.code,
+            path:  cat.path,
+            error: slot.error.slice(0, 300),
+          });
+        }
+        return;
+      }
+
+      const literal = toPgvectorLiteral(slot.vector);
       const { error: updateErr } = await db
         .from("jumia_categories")
         .update({ embedding: literal })
         .eq("code", cat.code);
 
       if (updateErr) {
+        if (updateErrors.length < 10) {
+          updateErrors.push({
+            code:  cat.code,
+            error: updateErr.message.slice(0, 300),
+          });
+        }
         console.warn(
           `[embed-categories] update failed for code=${cat.code}: ${updateErr.message}`,
         );
@@ -128,12 +151,18 @@ export async function POST(req: NextRequest) {
   const done = (remaining ?? 0) === 0;
 
   console.info(
-    `[embed-categories] ${embedded} embedded this run; ${remaining ?? 0} remaining; done=${done}`,
+    `[embed-categories] ${embedded} embedded this run; ${remaining ?? 0} remaining; done=${done}; embed_errors=${embedErrors.length}; update_errors=${updateErrors.length}`,
   );
 
   return NextResponse.json({
     embedded,
     remaining: remaining ?? 0,
     done,
+    // Diagnostics — empty arrays on a healthy run. Populated when
+    // something's wrong so we can read it from the browser without
+    // tailing Vercel logs.
+    embed_errors:   embedErrors,
+    update_errors:  updateErrors,
+    attempted:      pending.length,
   });
 }

@@ -1,5 +1,5 @@
 /**
- * Text embeddings via Google text-embedding-004.
+ * Text embeddings via Google's Gemini embedding API.
  *
  * Used for:
  *   - Embedding the Jumia category tree once (backfill + on sync)
@@ -7,63 +7,76 @@
  *   - pgvector cosine-similarity lookups (see
  *     lib/jumia/category-search.ts → searchCategoriesByEmbedding)
  *
- * Cost-aware: text-embedding-004 is essentially free at our scale
- * (~$0.00001 per 1k tokens). Embedding all ~10k Jumia categories
- * once costs ~$0.10. Per-listing embedding ~$0.0001.
+ * Cost-aware: embedding-class models are essentially free at our
+ * scale (~$0.00001 per 1k tokens). Embedding all ~10k Jumia
+ * categories once costs ~$0.10. Per-listing embedding ~$0.0001.
  *
- * REST-based (the JS SDK didn't expose embeddings cleanly when this
- * was written). Single fetch per call, 768-dim float32 vector
- * returned as a plain JS number[].
+ * Model fallback chain: the embedding API has been renamed a few
+ * times. We try each in order until one works on the user's API key.
+ * All three produce 768-dim normalised vectors compatible with
+ * pgvector's vector(768) column.
  */
 
-const EMBEDDING_MODEL = "text-embedding-004";
+/** All produce 768-dim vectors compatible with our pgvector column. */
+const EMBEDDING_MODELS_TO_TRY = [
+  "text-embedding-004",      // current public name as of late 2024
+  "gemini-embedding-001",    // newer alias on some accounts
+  "embedding-001",           // legacy name still working on older keys
+];
+
 const EMBED_TIMEOUT_MS = 20_000;
 
+// Cache the first model that works on this server process so we
+// don't waste a fallback attempt on every single call.
+let _resolvedEmbeddingModel: string | null = null;
+
 export interface EmbedTextResult {
-  /** 768-dim cosine-normalised vector. */
+  /** 768-dim vector. */
   vector: number[];
   /** Model used (lets callers spot drift if we ever swap models). */
   model: string;
 }
 
 /**
- * Embed a single piece of text. Returns the 768-dim vector or throws
- * on failure (no silent fallbacks — the caller decides whether to
- * skip the row or retry).
- *
- * Empty / whitespace-only input throws — embeddings of empty
- * strings are useless and waste a quota credit.
+ * Attempt the embed call against ONE specific model. Returns null
+ * on a "model not available" error so the caller can try the next
+ * one. Throws on real errors (auth, network, malformed response)
+ * because retrying with a different model won't fix those.
  */
-export async function embedText(text: string): Promise<EmbedTextResult> {
+async function tryEmbedOneModel(
+  modelName: string,
+  text: string,
+): Promise<EmbedTextResult | { skipReason: string }> {
   const apiKey = process.env.GOOGLE_API_KEY;
   if (!apiKey) throw new Error("GOOGLE_API_KEY not set");
 
-  const clean = text.trim();
-  if (clean.length === 0) {
-    throw new Error("embedText called with empty input");
-  }
-
-  // Truncate at 2000 chars — text-embedding-004 supports up to
-  // 2048 tokens (~8000 chars) but we never need more than a few
-  // hundred chars for category names or product descriptions. Keeps
-  // latency predictable.
-  const truncated = clean.length > 2000 ? clean.slice(0, 2000) : clean;
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:embedContent?key=${apiKey}`;
 
   const res = await fetch(url, {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify({
-      model:   `models/${EMBEDDING_MODEL}`,
-      content: { parts: [{ text: truncated }] },
+      model:   `models/${modelName}`,
+      content: { parts: [{ text }] },
     }),
     signal:  AbortSignal.timeout(EMBED_TIMEOUT_MS),
   });
 
+  // Model-not-found / not-enabled — return skip signal so caller
+  // moves to the next model name in the fallback list.
+  if (res.status === 404) {
+    const body = await res.text().catch(() => "");
+    return { skipReason: `404 ${body.slice(0, 200)}` };
+  }
+
   if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    throw new Error(`embedText failed: ${res.status} ${errText.slice(0, 300)}`);
+    const body = await res.text().catch(() => "");
+    // 400 with "model not supported" is also a fallback signal
+    if (res.status === 400 && /not\s*(found|support|enabled)/i.test(body)) {
+      return { skipReason: `${res.status} ${body.slice(0, 200)}` };
+    }
+    // Anything else (auth, quota, rate-limit) is a real error
+    throw new Error(`embed ${modelName} failed: ${res.status} ${body.slice(0, 300)}`);
   }
 
   const data = (await res.json()) as {
@@ -72,36 +85,84 @@ export async function embedText(text: string): Promise<EmbedTextResult> {
 
   const vector = data.embedding?.values;
   if (!Array.isArray(vector) || vector.length === 0) {
-    throw new Error("embedText: empty embedding returned");
+    throw new Error(
+      `embed ${modelName}: empty vector. response=${JSON.stringify(data).slice(0, 300)}`,
+    );
   }
-  // Sanity check on dimension — text-embedding-004 always returns 768.
-  // If this fails the model changed and our pgvector column is wrong.
   if (vector.length !== 768) {
     throw new Error(
-      `embedText: expected 768-dim vector, got ${vector.length}. Migration needed.`,
+      `embed ${modelName}: expected 768-dim vector, got ${vector.length}`,
     );
   }
 
-  return { vector, model: EMBEDDING_MODEL };
+  return { vector, model: modelName };
+}
+
+/**
+ * Embed a single piece of text. Tries each model in
+ * EMBEDDING_MODELS_TO_TRY until one returns a vector. Caches the
+ * working model for subsequent calls.
+ *
+ * Throws on real errors (auth, rate limit, network) so the caller
+ * can decide whether to retry. Throws only with the LAST error
+ * encountered after exhausting the fallback list.
+ */
+export async function embedText(text: string): Promise<EmbedTextResult> {
+  const clean = text.trim();
+  if (clean.length === 0) {
+    throw new Error("embedText called with empty input");
+  }
+  const truncated = clean.length > 2000 ? clean.slice(0, 2000) : clean;
+
+  // Fast path: we've already resolved a working model
+  if (_resolvedEmbeddingModel) {
+    const result = await tryEmbedOneModel(_resolvedEmbeddingModel, truncated);
+    if ("vector" in result) return result;
+    // The cached model stopped working (rare); fall through to discovery.
+    console.warn(
+      `[embeddings] cached model ${_resolvedEmbeddingModel} returned skip: ${result.skipReason}. Rediscovering.`,
+    );
+    _resolvedEmbeddingModel = null;
+  }
+
+  const skipReasons: string[] = [];
+  for (const modelName of EMBEDDING_MODELS_TO_TRY) {
+    const result = await tryEmbedOneModel(modelName, truncated);
+    if ("vector" in result) {
+      _resolvedEmbeddingModel = modelName;
+      console.info(`[embeddings] using model: ${modelName}`);
+      return result;
+    }
+    skipReasons.push(`${modelName}: ${result.skipReason}`);
+  }
+
+  throw new Error(
+    `embedText: no embedding model available on this API key. Tried: ${skipReasons.join(" | ")}`,
+  );
 }
 
 /**
  * Embed many texts in batches. Helpful for backfilling the
  * jumia_categories table without hammering the rate limit.
  *
- * Concurrency is capped at 5 in-flight requests — text-embedding-004
- * is on the same Gemini quota bucket as the Flash text models, so
- * higher concurrency risks 429s. Returns results in the same order
- * as the input.
+ * Returns an array same length as input. Each slot is either:
+ *   - EmbedTextResult on success
+ *   - { error: "..." } on failure (so the caller can surface why,
+ *     not just "null = failed")
  *
- * Failed embeddings come back as `null` so the caller can skip the
- * row and retry later.
+ * Concurrency is capped at 5 in-flight requests — embedding endpoints
+ * share a quota bucket with text generation, so higher concurrency
+ * risks 429s.
  */
+export type EmbedBatchSlot =
+  | EmbedTextResult
+  | { error: string };
+
 export async function embedTextBatch(
   texts: string[],
   concurrency = 5,
-): Promise<Array<EmbedTextResult | null>> {
-  const out: Array<EmbedTextResult | null> = new Array(texts.length).fill(null);
+): Promise<EmbedBatchSlot[]> {
+  const out: EmbedBatchSlot[] = new Array(texts.length).fill(null) as EmbedBatchSlot[];
   let cursor = 0;
 
   async function worker() {
@@ -111,8 +172,9 @@ export async function embedTextBatch(
       try {
         out[i] = await embedText(texts[i]);
       } catch (e) {
-        console.warn(`[embeddings] embedText failed for idx=${i}: ${(e as Error).message}`);
-        out[i] = null;
+        const msg = (e as Error).message ?? String(e);
+        console.warn(`[embeddings] embedText failed for idx=${i}: ${msg.slice(0, 200)}`);
+        out[i] = { error: msg };
       }
     }
   }
@@ -127,6 +189,5 @@ export async function embedTextBatch(
  * either array syntax or the bracketed literal.
  */
 export function toPgvectorLiteral(vector: number[]): string {
-  // No spaces; pgvector parses `[1,2,3]` faster than `[1, 2, 3]`.
   return `[${vector.join(",")}]`;
 }
