@@ -41,8 +41,17 @@ import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 //   4. AI Pass C — FILL ATTRIBUTES
 //      images + chosen leaf's schema → dynamic_attributes
 //
-// Total: 3 AI calls, ~10 seconds, ~$0.002 per listing. Persists everything
-// to the listing row so the review form re-renders with all fields filled.
+// Total: 3 AI calls, ~10-15 seconds, ~$0.003 per listing. Persists
+// everything to the listing row so the review form re-renders with all
+// fields filled.
+
+// Vercel serverless function timeout. Each analyze runs 3 sequential
+// Gemini calls; with the resized Supabase Storage images and the
+// in-module image cache we typically finish well inside 30s, but the
+// occasional Gemini cold-start can push past the 10s Hobby default.
+// Explicit 60s here covers worst-case + leaves headroom for the
+// concurrent-batch case (3 in-flight analyzes per Vercel function).
+export const maxDuration = 60;
 
 export async function POST(
   req: NextRequest,
@@ -459,12 +468,27 @@ export async function POST(
     }
   }
 
+  // Log the per-pass timing breakdown so we can pinpoint slowness from
+  // Vercel logs without DevTools access. e.g. "describe=12000 rank=14000
+  // fill=11000 total=37500" tells us each Gemini call is ~12s — model
+  // / token / cold-start latency, not retrieval or schema fetch.
+  const total_ms = Date.now() - t0;
+  console.info(
+    `[auto-analyze] listing=${params.id} ` +
+      `describe=${timings.describe_ms ?? "?"}ms ` +
+      `retrieval=${timings.retrieval_ms ?? "?"}ms ` +
+      `rank=${timings.rank_ms ?? "?"}ms ` +
+      `fill=${timings.fill_ms ?? "?"}ms ` +
+      `total=${total_ms}ms ` +
+      `images=${images.length}`,
+  );
+
   // ── 7. Return everything the UI needs to refresh in place ───────────────
   return NextResponse.json({
     success: true,
     timings: {
       ...timings,
-      total_ms: Date.now() - t0,
+      total_ms,
     },
     description,
     category: {
