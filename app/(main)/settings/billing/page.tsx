@@ -165,8 +165,17 @@ function BillingPageInner() {
     });
   }
 
-  const currentPlan: Plan = sub?.plan ?? "free";
-  const isPaid = currentPlan !== "free" && sub?.status === "active";
+  // Source the current plan from the QUOTA SUMMARY, not the raw sub row.
+  // getQuotaSummary() returns the EFFECTIVE plan — auto-expires paid
+  // plans to free when current_period_end has passed (one-time Pages,
+  // cancelled subs past grace period, status=expired rows). Reading
+  // sub.plan directly would show a stale "Pro" badge for a seller
+  // whose subscription ended yesterday. See getEffectivePlan() in
+  // lib/billing/quota.ts for the expiry rules.
+  const currentPlan: Plan = quota?.plan ?? sub?.plan ?? "free";
+  const isPaid =
+    currentPlan !== "free" &&
+    sub?.status === "active";
   const isAdmin = quota?.is_admin === true;
   const publicTiers = getPublicPlans();
 

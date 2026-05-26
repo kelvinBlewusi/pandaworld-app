@@ -29,7 +29,7 @@
  */
 
 import { createServerClient } from "@/lib/supabase/server";
-import type { Plan } from "@/lib/billing/plans";
+import type { Plan, SubStatus } from "@/lib/billing/plans";
 import { getListingQuota, getPolishQuota } from "@/lib/billing/plans";
 import { isAdmin } from "@/lib/billing/admin";
 
@@ -66,9 +66,49 @@ export interface QuotaSummary {
 
 interface QuotaRow {
   plan: Plan;
+  status: SubStatus;
+  /**
+   * When the current paid billing period ends (set by /verify and the
+   * Paystack webhook on every charge.success). NULL for free users
+   * who never paid, or for legacy rows that pre-date this column.
+   */
+  current_period_end: string | null;
   listings_used_this_period: number;
   polishes_used_this_period: number;
   period_start: string;
+}
+
+/**
+ * Compute the EFFECTIVE plan — what the user should be treated as
+ * RIGHT NOW, regardless of what's stored in the `plan` column.
+ *
+ * A paid plan auto-expires to free when:
+ *   - status is "expired"                                   (cron flipped it)
+ *   - status is "cancelled" AND current_period_end < now()  (cancel-and-wait flow)
+ *   - status is "active" AND current_period_end < now()     (one-time Page
+ *     payment that wasn't renewed — common with non-recurring Pages)
+ *
+ * This is the LAZY enforcement path. The Vercel cron
+ * (/api/cron/reset-quotas → expireOverduePlans) is the EAGER backup
+ * that flips the actual DB row to plan="free", status="expired" so
+ * admin queries against Supabase show the right state too.
+ *
+ * Free + admin users are unaffected — they never go through expiry.
+ */
+function getEffectivePlan(row: QuotaRow): Plan {
+  if (row.plan === "free") return "free";
+
+  if (row.status === "expired") return "free";
+
+  if (row.current_period_end) {
+    const expiredAt = new Date(row.current_period_end).getTime();
+    if (Date.now() > expiredAt) {
+      return "free";
+    }
+  }
+
+  // Paid plan, status active (or cancelled but still within paid period)
+  return row.plan;
 }
 
 /**
@@ -82,12 +122,17 @@ interface QuotaRow {
 async function readOrResetQuotaRow(userId: string): Promise<QuotaRow> {
   const db = createServerClient();
 
+  // SELECT shape is shared between the read, recover-from-race, and
+  // initial-insert paths — keep them aligned. status + current_period_end
+  // are needed so getEffectivePlan() can decide if a paid plan has
+  // already expired without paying for a separate round-trip.
+  const COLUMNS =
+    "plan, status, current_period_end, listings_used_this_period, polishes_used_this_period, period_start";
+
   // Try to read the existing row. If none, insert a default free row.
   const { data: existing } = await db
     .from("subscriptions")
-    .select(
-      "plan, listings_used_this_period, polishes_used_this_period, period_start"
-    )
+    .select(COLUMNS)
     .eq("user_id", userId)
     .maybeSingle();
 
@@ -104,9 +149,7 @@ async function readOrResetQuotaRow(userId: string): Promise<QuotaRow> {
         polishes_used_this_period: 0,
         period_start: nowIso,
       })
-      .select(
-        "plan, listings_used_this_period, polishes_used_this_period, period_start"
-      )
+      .select(COLUMNS)
       .single();
 
     if (insertError || !inserted) {
@@ -114,9 +157,7 @@ async function readOrResetQuotaRow(userId: string): Promise<QuotaRow> {
       // Re-read.
       const { data: recovered } = await db
         .from("subscriptions")
-        .select(
-          "plan, listings_used_this_period, polishes_used_this_period, period_start"
-        )
+        .select(COLUMNS)
         .eq("user_id", userId)
         .single();
       row = recovered as QuotaRow;
@@ -210,12 +251,22 @@ export async function checkQuota(
   }
 
   const row = await readOrResetQuotaRow(userId);
-  const limit = quotaForAction(row.plan, action);
-  const used = usedForAction(row, action);
+
+  // Effective plan = what the user should be treated as RIGHT NOW.
+  // Auto-expires paid plans to "free" when current_period_end has
+  // passed (one-time Page payments, cancelled subscriptions whose
+  // grace period is up, status="expired" rows the cron flipped).
+  // See getEffectivePlan() for the full rule set.
+  const effectivePlan = getEffectivePlan(row);
+  const limit = quotaForAction(effectivePlan, action);
+  // Cap the displayed usage at the limit so a Pro user who used 80/100
+  // and just downgraded to Free doesn't see 80/5 — they see 5/5.
+  const usedRaw = usedForAction(row, action);
+  const used = Number.isFinite(limit) ? Math.min(usedRaw, limit) : usedRaw;
 
   return {
     allowed:          used < limit,
-    plan:             row.plan,
+    plan:             effectivePlan,
     used,
     limit,
     period_resets_at: periodResetsAt(row.period_start),
@@ -364,15 +415,27 @@ export async function getQuotaSummary(userId: string): Promise<QuotaSummary> {
 
   const row = await readOrResetQuotaRow(userId);
 
+  // Effective plan = what the user is RIGHT NOW. Auto-expires paid
+  // plans to free when current_period_end has passed. See
+  // getEffectivePlan() for the rules.
+  const effectivePlan = getEffectivePlan(row);
+  const listingLimit  = getListingQuota(effectivePlan);
+  const polishLimit   = getPolishQuota(effectivePlan);
+
+  // Cap displayed usage at the limit so a Pro user who used 80/100
+  // and just downgraded to Free doesn't see 80/5 — they see 5/5.
+  const cap = (n: number, lim: number) =>
+    Number.isFinite(lim) ? Math.min(n, lim) : n;
+
   return {
-    plan:             row.plan,
+    plan:             effectivePlan,
     listings: {
-      used:  row.listings_used_this_period,
-      limit: getListingQuota(row.plan),
+      used:  cap(row.listings_used_this_period, listingLimit),
+      limit: listingLimit,
     },
     polishes: {
-      used:  row.polishes_used_this_period,
-      limit: getPolishQuota(row.plan),
+      used:  cap(row.polishes_used_this_period, polishLimit),
+      limit: polishLimit,
     },
     period_resets_at: periodResetsAt(row.period_start),
     is_admin:         false,
@@ -413,4 +476,72 @@ export async function resetStaleQuotas(): Promise<{ reset_count: number }> {
   }
 
   return { reset_count: data?.length ?? 0 };
+}
+
+/**
+ * Cron sweep: expire paid plans whose current_period_end has passed.
+ * Idempotent. Called by /api/cron/reset-quotas alongside
+ * resetStaleQuotas.
+ *
+ * What it does — finds rows where ALL of these hold:
+ *   1. plan != 'free'                (the row claims a paid tier)
+ *   2. current_period_end < now()    (the paid period is over)
+ *   3. status != 'expired'           (we haven't already flipped it)
+ *
+ * …and flips them to:
+ *   plan = 'free'
+ *   status = 'expired'
+ *   listings_used_this_period = 0  (fresh free quota)
+ *   polishes_used_this_period = 0
+ *   period_start = now()           (start a new free window today)
+ *
+ * Why this is needed alongside the lazy expiry in getEffectivePlan():
+ *   - Lazy expiry is for correctness AT REQUEST TIME — every quota
+ *     check returns the right limits regardless of what's in the row.
+ *   - Cron expiry is for HYGIENE — keeps the actual DB column accurate
+ *     so anyone querying Supabase directly sees the truth, and so the
+ *     UI's plan badge (which reads `subscriptions.plan` via
+ *     getSubscription()) shows "Free" instead of a stale "Pro".
+ *
+ * Returns the count of rows expired for observability.
+ */
+export async function expireOverduePlans(): Promise<{ expired_count: number }> {
+  const db = createServerClient();
+
+  const nowIso = new Date().toISOString();
+
+  const { data, error } = await db
+    .from("subscriptions")
+    .update({
+      plan:                       "free",
+      status:                     "expired",
+      listings_used_this_period:  0,
+      polishes_used_this_period:  0,
+      period_start:               nowIso,
+      updated_at:                 nowIso,
+    })
+    // Has a defined expiry that's already in the past
+    .lt("current_period_end", nowIso)
+    // Currently on a paid tier (free rows have nothing to expire)
+    .neq("plan", "free")
+    // Haven't already been flipped (idempotency)
+    .neq("status", "expired")
+    .select("user_id, plan");
+
+  if (error) {
+    console.error("[quota] expireOverduePlans failed:", error.message);
+    return { expired_count: 0 };
+  }
+
+  if (data && data.length > 0) {
+    // Log which users were downgraded so we can spot patterns
+    // (e.g. lots of expiries on the same day → renewal email job
+    // broke last week).
+    console.info(
+      `[quota] expireOverduePlans: downgraded ${data.length} user(s) to free: ` +
+        data.map((r) => `${r.user_id} (was ${r.plan})`).join(", "),
+    );
+  }
+
+  return { expired_count: data?.length ?? 0 };
 }
