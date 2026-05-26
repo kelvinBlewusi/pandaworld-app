@@ -90,7 +90,6 @@ export default function PricingPage() {
                   features={tier.features}
                   ctaLabel={tier.id === "free" ? "Start free" : `Choose ${tier.name}`}
                   ctaHref="/sign-up"
-                  highlight={tier.badge === "Most popular"}
                 />
               );
             })}
@@ -210,7 +209,6 @@ interface PricingCardProps {
   ctaLabel:  string;
   ctaHref:   string;
   badge?:    string;
-  highlight?: boolean;
 }
 
 function PricingCard({
@@ -224,22 +222,22 @@ function PricingCard({
   ctaLabel,
   ctaHref,
   badge,
-  highlight,
 }: PricingCardProps) {
+  // May 2026 redesign — match the macOS-style toast aesthetic on
+  // /settings/billing. All four tier cards are visually equal-weight
+  // (no orange highlight on "Most popular"), with neutral text-only
+  // badges. The hover lift is the only differentiation, and only when
+  // the card is actually interactive.
   return (
     <div
-      className={`relative flex flex-col rounded-2xl border bg-white p-6 transition-shadow ${
-        highlight
-          ? "border-orange-200 shadow-md shadow-orange-100"
-          : "border-zinc-100 hover:shadow-md"
-      }`}
+      className="relative flex flex-col rounded-2xl border border-zinc-200/70 bg-white/95 p-6 shadow-sm transition-all duration-200 [backdrop-filter:saturate(1.5)_blur(16px)] hover:shadow-md hover:border-zinc-300"
     >
       {badge && (
-        <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-orange-500 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-white shadow-md">
+        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-600 shadow-sm">
           {badge}
         </span>
       )}
-      <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${iconBg}`}>
+      <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${iconBg}`}>
         <Icon className="h-5 w-5" />
       </div>
       <div className="mt-5 flex items-baseline justify-between">
@@ -253,7 +251,7 @@ function PricingCard({
       <ul className="mt-5 flex-1 space-y-2.5">
         {features.map((f) => (
           <li key={f} className="flex items-start gap-2">
-            <Check className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${highlight ? "text-orange-500" : "text-emerald-500"}`} />
+            <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
             <span className="text-xs text-zinc-700">{f}</span>
           </li>
         ))}
@@ -265,11 +263,7 @@ function PricingCard({
       <div className="mt-6 pt-1">
         <Link
           href={ctaHref}
-          className={`inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold transition-colors ${
-            highlight
-              ? "bg-orange-500 text-white shadow-sm hover:bg-orange-600"
-              : "border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
-          }`}
+          className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-700 transition-colors hover:bg-zinc-900 hover:text-white hover:border-zinc-900"
         >
           {ctaLabel}
           <ArrowRight className="h-4 w-4" />

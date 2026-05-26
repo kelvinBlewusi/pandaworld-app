@@ -34,7 +34,7 @@ export function PublicLanding({ isAuthenticated = false }: PublicLandingProps) {
               Built for Jumia sellers
             </div>
             <h1 className="mt-6 text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl">
-              List your products to Vendor Center with{" "}
+              List your products to JUMIA Vendor Center with{" "}
               <span className="bg-gradient-to-r from-orange-500 to-purple-600 bg-clip-text text-transparent">
                 one click.
               </span>
@@ -42,8 +42,8 @@ export function PublicLanding({ isAuthenticated = false }: PublicLandingProps) {
             <p className="mt-6 text-base leading-relaxed text-zinc-600 sm:text-lg">
               Skip manual uploads. PandaworldAI generates the listing, picks
               the right Jumia category, fills every required attribute, and
-              pushes straight to your store — no copy-pasting, no form-
-              filling, no QC nightmares.
+              pushes straight to your store — no copy-pasting, no form
+              filling, no long hours on listing products.
             </p>
             <div className="mt-8 flex w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:items-center">
               <Link

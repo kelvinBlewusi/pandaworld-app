@@ -412,7 +412,6 @@ function PlanCard({
 }: PlanCardProps) {
   const { Icon, iconBg, iconColor } = iconConfig;
   const isFree = plan.id === "free";
-  const isHighlighted = plan.badge === "Most popular";
 
   // ── Lock logic ─────────────────────────────────────────────────────────
   // A paid plan card is LOCKED if the seller is currently on a higher
@@ -430,32 +429,43 @@ function PlanCard({
     isPaid &&
     plan.sort_order < currentSortOrder;
 
+  // ── Design language ────────────────────────────────────────────────────
+  // Per May 2026 redesign: match the macOS-style notification toast.
+  // No more bright-blue ring on the "Most popular" card — every tier
+  // gets equal visual weight so sellers don't feel funneled. Subtler
+  // badges (text-only pills), softer borders, glass background.
   return (
     <div
       className={cn(
-        "relative rounded-2xl border bg-white p-5 flex flex-col shadow-sm transition-opacity",
-        isHighlighted && "ring-2 ring-blue-500",
-        // Lock state: dim the whole card but keep the content readable
-        isLocked && "opacity-60",
+        "relative flex flex-col rounded-2xl border border-zinc-200/70 bg-white/95 p-5 shadow-sm transition-all duration-200",
+        "[backdrop-filter:saturate(1.5)_blur(16px)]",
+        // Hover lift — only when card is interactive (not current/locked)
+        !isCurrent && !isLocked && "hover:shadow-md hover:border-zinc-300",
+        // Lock state: dim but keep content readable
+        isLocked && "opacity-55",
       )}
     >
-      {plan.badge && !isLocked && (
-        <div className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-blue-600 px-3 py-1 text-[11px] font-semibold text-white shadow">
+      {/* Soft badges — text-only, neutral palette. No saturated blue
+          ring, no shouting colors. Position varies by badge type. */}
+      {plan.badge && !isLocked && !isCurrent && (
+        <div className="absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-600 shadow-sm">
           {plan.badge}
         </div>
       )}
       {isCurrent && (
-        <div className="absolute -top-3 right-3 rounded-full bg-zinc-800 px-3 py-1 text-[11px] font-semibold text-white shadow">
+        <div className="absolute -top-2.5 right-3 flex items-center gap-1 whitespace-nowrap rounded-full bg-zinc-900 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow-sm">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
           Current
         </div>
       )}
       {isLocked && (
-        <div className="absolute -top-3 left-1/2 -translate-x-1/2 flex items-center gap-1 whitespace-nowrap rounded-full bg-zinc-200 px-3 py-1 text-[11px] font-semibold text-zinc-600 shadow">
-          <Lock className="h-3 w-3" />
+        <div className="absolute -top-2.5 left-1/2 flex -translate-x-1/2 items-center gap-1 whitespace-nowrap rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500 shadow-sm">
+          <Lock className="h-2.5 w-2.5" />
           Below your plan
         </div>
       )}
 
+      {/* Header — icon + name + description */}
       <div className="mb-3 flex items-center gap-2.5">
         <div className={cn("flex h-9 w-9 items-center justify-center rounded-xl", iconBg)}>
           <Icon className={cn("h-4 w-4", iconColor)} />
@@ -466,6 +476,7 @@ function PlanCard({
         </div>
       </div>
 
+      {/* Price */}
       <div className="mb-4">
         <span className="text-2xl font-bold text-zinc-900">{plan.display_price}</span>
         <span className="text-xs text-zinc-400">
@@ -473,6 +484,7 @@ function PlanCard({
         </span>
       </div>
 
+      {/* Features */}
       <ul className="mb-5 flex-1 space-y-2">
         {plan.features.map((feat) => (
           <li key={feat} className="flex items-start gap-2 text-[11px] text-zinc-600">
@@ -482,24 +494,14 @@ function PlanCard({
         ))}
       </ul>
 
-      {/* CTA wrapper — mt-auto + consistent h-10 keeps buttons aligned
-          to the bottom of every card AND at the same y-position even
-          when feature lists have different lengths. On mobile the cards
-          stack, so each button is full-width by default; on desktop
-          all four cards in the row share the same baseline. */}
+      {/* CTA — same neutral button across all paid tiers since no card
+          is highlighted any more. Pinned at bottom via mt-auto. */}
       <div className="mt-auto pt-1">
-      {/* CTA logic:
-            - Locked (paid seller, lower-tier card) → disabled lock button
-            - Free + on Free → "Current plan"
-            - Free + on paid → cancel CTA (downgrade is just cancel + wait)
-            - Paid + isCurrent + has Paystack sub → cancel button
-            - Paid + isCurrent without sub code → "Active"
-            - Paid + not current → upgrade/switch button */}
       {isLocked ? (
         <Button
           variant="outline"
           disabled
-          className="h-10 w-full cursor-not-allowed gap-1.5 text-sm text-zinc-400 border-zinc-200"
+          className="h-10 w-full cursor-not-allowed gap-1.5 border-zinc-200 text-sm text-zinc-400"
         >
           <Lock className="h-3.5 w-3.5" />
           Below your current plan
@@ -508,7 +510,7 @@ function PlanCard({
         isPaid ? (
           <Button
             variant="outline"
-            className="h-10 w-full text-sm text-amber-700 border-amber-200 hover:border-amber-300"
+            className="h-10 w-full border-amber-200 text-sm text-amber-700 hover:border-amber-300"
             onClick={onCancel}
             disabled={!hasPaystackSubscription}
           >
@@ -523,7 +525,7 @@ function PlanCard({
         hasPaystackSubscription ? (
           <Button
             variant="outline"
-            className="h-10 w-full text-sm text-red-500 hover:text-red-600 border-red-200 hover:border-red-300"
+            className="h-10 w-full border-red-200 text-sm text-red-500 hover:border-red-300 hover:text-red-600"
             onClick={onCancel}
           >
             Cancel subscription
@@ -535,12 +537,8 @@ function PlanCard({
         )
       ) : (
         <Button
-          className={cn(
-            "h-10 w-full gap-2 text-sm",
-            isHighlighted &&
-              "bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700",
-          )}
-          variant={isHighlighted ? "default" : "outline"}
+          variant="outline"
+          className="h-10 w-full gap-2 border-zinc-300 text-sm font-medium hover:bg-zinc-900 hover:text-white hover:border-zinc-900"
           onClick={() => onUpgrade(plan.id)}
           disabled={upgradingTier !== null}
         >
