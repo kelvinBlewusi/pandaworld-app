@@ -52,12 +52,18 @@ async function tryEmbedOneModel(
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:embedContent?key=${apiKey}`;
 
+  // outputDimensionality:768 is required for gemini-embedding-001 (defaults
+  // to 3072 otherwise). text-embedding-004 / embedding-001 ignore it and
+  // always return 768, so passing it for all three models is safe.
+  // gemini-embedding-001 is a Matryoshka model — truncating to 768 is the
+  // documented use-case, no quality loss vs. the full 3072.
   const res = await fetch(url, {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify({
-      model:   `models/${modelName}`,
-      content: { parts: [{ text }] },
+      model:                `models/${modelName}`,
+      content:              { parts: [{ text }] },
+      outputDimensionality: 768,
     }),
     signal:  AbortSignal.timeout(EMBED_TIMEOUT_MS),
   });
@@ -83,16 +89,37 @@ async function tryEmbedOneModel(
     embedding?: { values?: number[] };
   };
 
-  const vector = data.embedding?.values;
-  if (!Array.isArray(vector) || vector.length === 0) {
+  const raw = data.embedding?.values;
+  if (!Array.isArray(raw) || raw.length === 0) {
     throw new Error(
       `embed ${modelName}: empty vector. response=${JSON.stringify(data).slice(0, 300)}`,
     );
   }
+
+  // gemini-embedding-001 occasionally returns the full 3072-dim vector
+  // even when outputDimensionality is requested (older API versions).
+  // If so, truncate to first 768 dims — safe for Matryoshka-trained models.
+  let vector = raw;
+  if (vector.length > 768) {
+    vector = vector.slice(0, 768);
+  }
+
+  // Refuse anything else weird (e.g. 1536 from a model we don't know).
   if (vector.length !== 768) {
-    throw new Error(
-      `embed ${modelName}: expected 768-dim vector, got ${vector.length}`,
-    );
+    // Returning a skip signal so the caller can try the next model name
+    // instead of bailing out of the whole fallback chain.
+    return {
+      skipReason: `unexpected vector length ${raw.length} (need 768)`,
+    };
+  }
+
+  // Re-normalise to unit length. Matryoshka truncation breaks the original
+  // unit-norm property; re-normalising restores it so cosine-distance
+  // queries against pgvector behave correctly.
+  const sumSq = vector.reduce((s, x) => s + x * x, 0);
+  const norm  = Math.sqrt(sumSq);
+  if (norm > 0 && Math.abs(norm - 1) > 1e-4) {
+    vector = vector.map((x) => x / norm);
   }
 
   return { vector, model: modelName };
