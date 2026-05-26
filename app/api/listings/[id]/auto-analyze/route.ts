@@ -5,6 +5,8 @@ import {
   aiPassA_describeProduct,
   aiPassB_rankCategory,
   extractAttributesForCategory,
+  aiPassBC_pickAndFill,
+  type CandidateWithSchema,
 } from "@/lib/actions/ai";
 import {
   getListableCategories,
@@ -239,72 +241,155 @@ export async function POST(
     );
   }
 
-  // ── 3. Pass B: rank candidates ────────────────────────────────────────────
-  const tRank = Date.now();
-  let ranked: Awaited<ReturnType<typeof aiPassB_rankCategory>>;
-  try {
-    ranked = await aiPassB_rankCategory(
-      images,
-      candidates,
-      userContext,
-      description.intended_use_case,
-      description.environment,
-      { forceBestModel: true },
-    );
-    timings.rank_ms = Date.now() - tRank;
-  } catch (e) {
-    return NextResponse.json(
-      { error: `Step 3 (rank) failed: ${(e as Error).message}`, description, candidates },
-      { status: 500 }
-    );
-  }
+  // ── 3 + 4 + 5 combined: pick category AND fill its attributes in ONE call.
+  //
+  // This collapses what used to be three serial steps (Pass B rank → schema
+  // fetch → Pass C fill) into one Gemini call + parallel schema prefetch.
+  // Saves ~1 round-trip (~5-8s typical, more on Pro). The old separate
+  // Pass B + Pass C still exist below as a safety fallback if the combined
+  // call returns an invalid result (model picked a code not in candidates,
+  // or threw entirely).
+  //
+  // Step a: take the top 3 candidates and prefetch their attribute schemas
+  //         in parallel (cached for repeat categories — fast for the
+  //         common case where the seller's catalogue is already cached).
+  // Step b: single Gemini call that does both pick + fill, with
+  //         server-side validation that the chosen code is in the set.
+  // Step c: on combined-call failure (ok=false), fall back to the old
+  //         flow: aiPassB_rankCategory → schema fetch → extractAttrs.
+  const tCombined        = Date.now();
+  const TOP_N_FOR_COMBINED = 3;
+  const topNCandidates   = candidates.slice(0, TOP_N_FOR_COMBINED);
 
-  if (!ranked.primary) {
-    return NextResponse.json(
-      {
-        error: "The AI couldn't pick a category from the candidates. Pick manually.",
-        description,
-        candidates,
-      },
-      { status: 422 }
-    );
-  }
+  // Parallel schema fetch for top-N candidates. We need them all in hand
+  // before the combined Gemini call so the model can pick + fill from
+  // any of them. Fetch-from-Jumia fallback for uncached categories.
+  const accessTokenForBatch = await getValidJumiaCredentials(userId)
+    .then((c) => c.accessToken)
+    .catch(() => null);
 
-  const chosen = ranked.primary;
-
-  // ── 4. Make sure attribute schema is cached for chosen leaf ──────────────
-  let attrs = await getCategoryAttributes(chosen.code);
-  if (attrs.length === 0) {
-    // Need to find the category row to get attribute_set_sid
-    const catRow = listableCategories.find((c) => c.code === chosen.code);
-    if (catRow?.attribute_set_sid) {
-      try {
-        const { accessToken } = await getValidJumiaCredentials(userId);
-        const fresh = await fetchAttributesFromJumia(accessToken, catRow.attribute_set_sid);
-        if (fresh.length > 0) {
-          await upsertAttributes(chosen.code, fresh);
-          attrs = fresh;
+  const candidatesWithSchemas: CandidateWithSchema[] = await Promise.all(
+    topNCandidates.map(async (c) => {
+      let attrs = await getCategoryAttributes(c.code);
+      if (attrs.length === 0) {
+        const catRow = listableCategories.find((lc) => lc.code === c.code);
+        if (catRow?.attribute_set_sid && accessTokenForBatch) {
+          try {
+            const fresh = await fetchAttributesFromJumia(accessTokenForBatch, catRow.attribute_set_sid);
+            if (fresh.length > 0) {
+              await upsertAttributes(c.code, fresh);
+              attrs = fresh;
+            }
+          } catch (e) {
+            console.warn(`[auto-analyze] schema fetch failed for code=${c.code}: ${(e as Error).message}`);
+          }
         }
-      } catch (e) {
-        console.warn(`[auto-analyze] schema fetch failed: ${(e as Error).message}`);
       }
+      return {
+        code:  c.code,
+        name:  c.name,
+        path:  c.path,
+        attrs,
+      };
+    }),
+  );
+
+  // The combined call — single Gemini round-trip for category + attrs.
+  const combined = await aiPassBC_pickAndFill(
+    images,
+    candidatesWithSchemas,
+    userContext,
+    description.intended_use_case,
+    description.environment,
+    { forceBestModel: true },
+  );
+
+  let ranked: Awaited<ReturnType<typeof aiPassB_rankCategory>>;
+  let filled: Awaited<ReturnType<typeof extractAttributesForCategory>>;
+
+  if (combined.ok && combined.primary) {
+    timings.combined_bc_ms = Date.now() - tCombined;
+    ranked = {
+      primary:               combined.primary,
+      alternates:            combined.alternates,
+      needsUserConfirmation: combined.needsUserConfirmation,
+    };
+    filled = {
+      dynamic_attributes: combined.dynamic_attributes,
+      field_sources:      combined.field_sources,
+      field_confidence:   combined.field_confidence,
+    };
+  } else {
+    // ── Fallback path: the combined call failed (model returned an
+    // invalid code, threw, or didn't pick anything). Fall back to the
+    // proven separate Pass B → schema fetch → Pass C flow so the
+    // listing still gets analysed properly.
+    console.warn(
+      "[auto-analyze] combined Pass B+C did not produce a usable result; falling back to separate passes.",
+    );
+
+    const tRank = Date.now();
+    try {
+      ranked = await aiPassB_rankCategory(
+        images,
+        candidates,
+        userContext,
+        description.intended_use_case,
+        description.environment,
+        { forceBestModel: true },
+      );
+      timings.rank_ms = Date.now() - tRank;
+    } catch (e) {
+      return NextResponse.json(
+        { error: `Step 3 (rank) failed: ${(e as Error).message}`, description, candidates },
+        { status: 500 }
+      );
+    }
+
+    if (!ranked.primary) {
+      return NextResponse.json(
+        {
+          error: "The AI couldn't pick a category from the candidates. Pick manually.",
+          description,
+          candidates,
+        },
+        { status: 422 }
+      );
+    }
+
+    // Schema-fetch for the chosen category (might not be in our top-N
+    // if Pass B picked something different from the combined attempt).
+    const chosenSchema = candidatesWithSchemas.find((c) => c.code === ranked.primary!.code);
+    if (chosenSchema && chosenSchema.attrs.length > 0) {
+      // Already prefetched — reuse.
+    } else {
+      const catRow = listableCategories.find((c) => c.code === ranked.primary!.code);
+      if (catRow?.attribute_set_sid && accessTokenForBatch) {
+        try {
+          const fresh = await fetchAttributesFromJumia(accessTokenForBatch, catRow.attribute_set_sid);
+          if (fresh.length > 0) await upsertAttributes(ranked.primary.code, fresh);
+        } catch (e) {
+          console.warn(`[auto-analyze] fallback schema fetch failed: ${(e as Error).message}`);
+        }
+      }
+    }
+
+    const tFill = Date.now();
+    filled = { dynamic_attributes: {}, field_sources: {}, field_confidence: {} };
+    try {
+      filled = await extractAttributesForCategory(images, ranked.primary.code, userContext, { forceBestModel: true });
+      timings.fill_ms = Date.now() - tFill;
+    } catch (e) {
+      console.warn(`[auto-analyze] fallback attribute fill failed: ${(e as Error).message}`);
     }
   }
 
-  // ── 5. Pass C: fill attributes ────────────────────────────────────────────
-  const tFill = Date.now();
-  let filled: Awaited<ReturnType<typeof extractAttributesForCategory>> = {
-    dynamic_attributes: {},
-    field_sources:      {},
-    field_confidence:   {},
-  };
-  try {
-    filled = await extractAttributesForCategory(images, chosen.code, userContext, { forceBestModel: true });
-    timings.fill_ms = Date.now() - tFill;
-  } catch (e) {
-    console.warn(`[auto-analyze] attribute fill failed: ${(e as Error).message}`);
-    // Don't fail the whole pipeline — category was picked, just no AI fill
-  }
+  // Pull `chosen` + `attrs` into the local namespace expected by the
+  // downstream merge logic. `attrs` is the chosen category's schema
+  // (used only to populate the response's attributes_in_schema diagnostic).
+  const chosen = ranked.primary!;
+  const chosenWithSchema = candidatesWithSchemas.find((c) => c.code === chosen.code);
+  const attrs = chosenWithSchema?.attrs ?? await getCategoryAttributes(chosen.code);
 
   // ── 6. Build merged updates and persist ──────────────────────────────────
   //
@@ -499,18 +584,21 @@ export async function POST(
   }
 
   // Log the per-pass timing breakdown so we can pinpoint slowness from
-  // Vercel logs without DevTools access. e.g. "describe=12000 rank=14000
-  // fill=11000 total=37500" tells us each Gemini call is ~12s — model
-  // / token / cold-start latency, not retrieval or schema fetch.
+  // Vercel logs without DevTools access. After the B+C collapse the
+  // typical breakdown is `describe=Xms retrieval=Yms combined_bc=Zms`;
+  // the rank/fill numbers only appear when the combined call failed
+  // and we dropped to the separate-pass fallback.
   const total_ms = Date.now() - t0;
   console.info(
     `[auto-analyze] listing=${params.id} ` +
       `describe=${timings.describe_ms ?? "?"}ms ` +
       `retrieval=${timings.retrieval_ms ?? "?"}ms ` +
-      `rank=${timings.rank_ms ?? "?"}ms ` +
-      `fill=${timings.fill_ms ?? "?"}ms ` +
+      `combined_bc=${timings.combined_bc_ms ?? "—"}ms ` +
+      `rank=${timings.rank_ms ?? "—"}ms ` +
+      `fill=${timings.fill_ms ?? "—"}ms ` +
       `total=${total_ms}ms ` +
-      `images=${images.length}`,
+      `images=${images.length} ` +
+      `path=${timings.combined_bc_ms != null ? "combined" : "fallback"}`,
   );
 
   // ── 7. Return everything the UI needs to refresh in place ───────────────

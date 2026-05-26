@@ -1504,6 +1504,271 @@ Return ONLY valid JSON, no markdown:
   return { dynamic_attributes, field_sources, field_confidence };
 }
 
+// ─── Combined Pass B + Pass C ────────────────────────────────────────────────
+//
+// One Gemini call that picks a category AND fills its attributes — replaces
+// the old two-call sequence (aiPassB_rankCategory followed by
+// extractAttributesForCategory).
+//
+// Why combine: each Gemini round-trip is the dominant cost in the analyze
+// pipeline (~5-12s with Flash Lite, more with Pro). Folding two calls into
+// one shaves roughly one round-trip per analyze (~5-8s typical), plus we
+// dodge the schema-fetch round-trip that used to sit between B and C
+// because we pre-fetch all candidate schemas in parallel upstream.
+//
+// Caller contract (auto-analyze route):
+//   1. Pick the top 3 candidates from retrieval.
+//   2. Fetch their attribute schemas in parallel (Promise.all over
+//      getCategoryAttributes; fall back to fetchAttributesFromJumia for
+//      uncached categories) — schemas typically cached, so this is cheap.
+//   3. Pass the candidate + schema pairs here.
+//
+// Validation: if the model picks a code that's NOT in the candidate set,
+// we reject the response and the caller falls back to the old separate-
+// Pass B + Pass C flow as a safety net.
+//
+// On Gemini failure, we DON'T throw — return an empty PickAndFillResult
+// with primary=null + needsUserConfirmation=true so the caller can
+// gracefully drop to the fallback path. Throws are reserved for hard
+// errors (API key missing, network completely down).
+
+export interface CandidateWithSchema {
+  code:   number;
+  name:   string;
+  path:   string;
+  attrs:  JumiaCategoryAttribute[];
+}
+
+export interface PickAndFillResult {
+  primary:                RankedCategory | null;
+  alternates:             RankedCategory[];
+  needsUserConfirmation:  boolean;
+  dynamic_attributes:     Record<string, string>;
+  field_sources:          Record<string, "ai">;
+  field_confidence:       AIProductAnalysis["field_confidence"];
+  /** True when the Gemini call returned a valid response we could use. */
+  ok:                     boolean;
+}
+
+export async function aiPassBC_pickAndFill(
+  imageUrls: string[],
+  candidates: CandidateWithSchema[],
+  userContext?: string | null,
+  useCase?: string | null,
+  environment?: ProductDescription["environment"],
+  opts: { forceBestModel?: boolean } = {},
+): Promise<PickAndFillResult> {
+  const empty = (ok: boolean): PickAndFillResult => ({
+    primary:               null,
+    alternates:            [],
+    needsUserConfirmation: true,
+    dynamic_attributes:    {},
+    field_sources:         {},
+    field_confidence:      {},
+    ok,
+  });
+
+  if (candidates.length === 0) return empty(false);
+
+  if (!imageUrls.length) {
+    // No images — return the first candidate without ranking, no attrs.
+    const c = candidates[0];
+    return {
+      primary:               { code: c.code, name: c.name, path: c.path, confidence: 0.5 },
+      alternates:            candidates.slice(1, 3).map((x) => ({
+        code: x.code, name: x.name, path: x.path, confidence: 0.3,
+      })),
+      needsUserConfirmation: true,
+      dynamic_attributes:    {},
+      field_sources:         {},
+      field_confidence:      {},
+      ok:                    true,
+    };
+  }
+
+  if (USE_MOCK_AI) {
+    const c = candidates[0];
+    return {
+      primary:               { code: c.code, name: c.name, path: c.path, confidence: 0.9 },
+      alternates:            candidates.slice(1, 3).map((x) => ({
+        code: x.code, name: x.name, path: x.path, confidence: 0.4,
+      })),
+      needsUserConfirmation: false,
+      dynamic_attributes:    {},
+      field_sources:         {},
+      field_confidence:      {},
+      ok:                    true,
+    };
+  }
+
+  if (!process.env.GOOGLE_API_KEY) throw new Error("GOOGLE_API_KEY is not set.");
+
+  const { userId } = await auth();
+  const visionModel = await resolveModel(userId, "vision", { forceBestModel: opts.forceBestModel });
+
+  // Cap schemas at the first 20 inferable attributes per candidate so the
+  // prompt stays under control even for huge categories like Smartphones
+  // (which has 40+ attributes). Most listings rarely need to fill more
+  // than 10-15 anyway — required attributes are usually a handful.
+  const MAX_ATTRS_PER_CANDIDATE = 20;
+
+  const candidateBlocks = candidates.map((c, i) => {
+    const inferable = c.attrs.filter((a) => !SELLER_REQUIRED_ATTR_KEYS.has(a.name.toLowerCase()));
+    // Required attributes float to the top so the model always sees them.
+    const sorted = inferable.sort((a, b) => (b.required ? 1 : 0) - (a.required ? 1 : 0));
+    const trimmed = sorted.slice(0, MAX_ATTRS_PER_CANDIDATE);
+    const attrLines = trimmed.length === 0
+      ? "    (no inferable attributes)"
+      : trimmed.map((a) => {
+          const valStr = a.allowed_values.length
+            ? ` (allowed: ${a.allowed_values.slice(0, 12).join(", ")}${a.allowed_values.length > 12 ? ", …" : ""})`
+            : "";
+          return `    - ${a.name}: ${a.label}${valStr}${a.required ? " [REQUIRED]" : ""}`;
+        }).join("\n");
+
+    return `${i + 1}. CODE ${c.code} — ${c.path}\n${attrLines}`;
+  }).join("\n\n");
+
+  const ctxSection = userContext && userContext.trim()
+    ? `\n\nSELLER CONTEXT (treat as authoritative for what the images don't show):\n"${userContext.trim()}"\n`
+    : "";
+
+  const useCaseBlock =
+    useCase || (environment && environment !== "unknown")
+      ? `\nPRIMARY USE CASE: ${useCase ?? "(not specified)"}\nENVIRONMENT: ${environment ?? "unknown"}\n`
+      : "";
+
+  // Use Pass C-style policy block (Fashion-vs-other image-rules tone) —
+  // we don't know the chosen category yet, so pass null categoryPath
+  // and the default white-background rules apply. Acceptable tradeoff
+  // for the round-trip we're saving.
+  const policyBlock = buildContentPolicyInstructions({
+    categoryPath:      null,
+    includeImageRules: true,
+  });
+
+  const prompt = `You are a Jumia listing assistant. In ONE response, do TWO things:
+
+STEP 1 — Pick the best Jumia category from these candidates (each shows its attribute schema underneath):
+
+${candidateBlocks}
+${useCaseBlock}
+STEP 2 — For YOUR CHOSEN category from Step 1, fill the attribute values you can determine from the images.
+
+${policyBlock}
+
+OUTPUT RULES:
+1. chosen_code MUST be one of the candidate codes above. Do not invent.
+2. dynamic_attributes keys MUST be attribute names from your chosen category's list (the names shown after "- " on each schema line). NEVER include attributes from a different candidate.
+3. For attributes with an allowed list, pick exactly one value from that list. Otherwise omit.
+4. Skip any attribute you can't determine — null/omit is better than guessing. EXCEPT for required-by-Jumia fields where general online knowledge can give you a sensible answer (e.g. typical material for a known product line) — fill those with moderate confidence.
+5. Disambiguate visually-similar candidates by PRIMARY USE CASE + ENVIRONMENT — a farm sprayer goes under Agriculture, not Home Cleaning.
+6. Confidence is 0..1. Be honest. Set needsConfirmation=true if your top pick is below 0.75 OR within 0.15 of your second choice.
+${ctxSection}
+Return ONLY valid JSON, no markdown:
+{
+  "chosen_code":       <number from the list>,
+  "chosen_confidence": 0.0,
+  "alternates": [
+    { "code": <number>, "confidence": 0.0 }
+  ],
+  "needsConfirmation": false,
+  "dynamic_attributes": {
+    "attribute_name": "value"
+  },
+  "reasoning": "one-line explanation"
+}`;
+
+  let parsed: Record<string, unknown>;
+  try {
+    const raw = await callGemini(prompt, imageUrls, visionModel);
+    parsed = parseAIResponse(raw);
+  } catch (e) {
+    console.warn(`[AI] aiPassBC_pickAndFill failed: ${(e as Error).message}`);
+    return empty(false);
+  }
+
+  // ── Validate the response ───────────────────────────────────────────────
+  const codeToCandidate = new Map(candidates.map((c) => [c.code, c]));
+  const chosenCode      = Number(parsed.chosen_code);
+  const chosen          = codeToCandidate.get(chosenCode);
+
+  if (!chosen) {
+    console.warn(
+      `[AI] aiPassBC_pickAndFill: model returned code ${chosenCode} not in candidates [${candidates.map((c) => c.code).join(", ")}].`,
+    );
+    return empty(false);
+  }
+
+  const primary: RankedCategory = {
+    code:       chosen.code,
+    name:       chosen.name,
+    path:       chosen.path,
+    confidence: Math.max(0, Math.min(1, Number(parsed.chosen_confidence ?? 0))),
+  };
+
+  const rawAlts = Array.isArray(parsed.alternates) ? (parsed.alternates as Array<Record<string, unknown>>) : [];
+  const alternates: RankedCategory[] = rawAlts
+    .map((a) => {
+      const code = Number(a.code);
+      const cand = codeToCandidate.get(code);
+      if (!cand || cand.code === primary.code) return null;
+      return {
+        code: cand.code, name: cand.name, path: cand.path,
+        confidence: Math.max(0, Math.min(1, Number(a.confidence ?? 0))),
+      };
+    })
+    .filter((a): a is RankedCategory => a !== null)
+    .slice(0, 2);
+
+  // Determine needsConfirmation. Honour the model's hint if it set one,
+  // else recompute from confidences (same rule as Pass B).
+  const top1 = primary.confidence;
+  const top2 = alternates[0]?.confidence ?? 0;
+  const needsUserConfirmation =
+    typeof parsed.needsConfirmation === "boolean"
+      ? parsed.needsConfirmation
+      : (top1 < 0.75 || (top1 - top2) < 0.15);
+
+  // Filter dynamic_attributes to only keys that exist in the chosen
+  // category's schema AND aren't seller-required (price, sku, etc.).
+  // Strips any hallucinated attribute names the model returned.
+  const allowedAttrNames = new Set(chosen.attrs.map((a) => a.name.toLowerCase()));
+  const rawAttrs = (parsed.dynamic_attributes ?? {}) as Record<string, unknown>;
+  const dynamic_attributes: Record<string, string> = {};
+  for (const [k, v] of Object.entries(rawAttrs)) {
+    if (SELLER_REQUIRED_ATTR_KEYS.has(k.toLowerCase())) continue;
+    if (!allowedAttrNames.has(k.toLowerCase())) continue;
+    if (v == null || String(v).trim() === "" || String(v).toLowerCase() === "null") continue;
+    dynamic_attributes[k] = String(v).trim();
+  }
+
+  // Pad with the AI-defaulted attribute values (product_note, etc.)
+  // so every listing gets them — same convention as extractAttributesForCategory.
+  for (const [k, defaultVal] of Object.entries(AI_DYNAMIC_ATTR_DEFAULTS)) {
+    if (!dynamic_attributes[k] || dynamic_attributes[k].length === 0) {
+      dynamic_attributes[k] = defaultVal;
+    }
+  }
+
+  const field_sources:    Record<string, "ai">                                = {};
+  const field_confidence: AIProductAnalysis["field_confidence"]               = {};
+  for (const k of Object.keys(dynamic_attributes)) {
+    field_sources[`dynamic_attributes.${k}`]    = "ai";
+    field_confidence[`dynamic_attributes.${k}`] = { confidence: 0.8, source: "inferred" };
+  }
+
+  return {
+    primary,
+    alternates,
+    needsUserConfirmation,
+    dynamic_attributes,
+    field_sources,
+    field_confidence,
+    ok: true,
+  };
+}
+
 // ─── Main: analyse text description ──────────────────────────────────────────
 
 export async function analyzeProductDescription(
