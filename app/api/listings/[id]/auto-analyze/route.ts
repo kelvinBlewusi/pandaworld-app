@@ -575,13 +575,35 @@ export async function POST(
 
   const finalDynamicAttrs: Record<string, string> = { ...filled.dynamic_attributes };
 
+  // Product-aware defaults: prefer a product-specific value over the generic
+  // canned default. For "what_is_in_the_box" we substitute the product title
+  // into the placeholder so "1× Product unit …" becomes
+  // "1× Volcano Humidifier and any standard accessories shown in the images."
+  // — much more buyer-trust-worthy than a generic note.
+  function getProductAwareDefault(intent: string, fallback: string): string {
+    const title = (updates.title as string | undefined) ?? (listing?.title ?? "") as string;
+    if (intent === "what_is_in_the_box" && title && title.length > 0) {
+      // Take the first 6 words from the title for a tidy product name.
+      const productName = title.split(/\s+/).slice(0, 6).join(" ");
+      return `1× ${productName}. Please refer to the product description and highlights for full contents.`;
+    }
+    return fallback;
+  }
+
   // A) Inject defaults under the schema-resolved key.
   for (const [intent, defaultValue] of Object.entries(AI_DYNAMIC_ATTR_DEFAULTS)) {
     const resolvedKey = resolveSchemaKey(intent);
     const existing = finalDynamicAttrs[resolvedKey];
-    if (existing && existing.trim().length > 0) continue; // AI already set
+    // For what_is_in_the_box, also overwrite degenerate values like
+    // "1", "true", or anything shorter than 5 chars — the numeric
+    // scrub used to strip the AI's full list down to a single digit,
+    // so we treat short content as effectively-empty for this key.
+    const looksEmpty =
+      !existing || existing.trim().length === 0 ||
+      (intent === "what_is_in_the_box" && existing.trim().length < 5);
+    if (!looksEmpty) continue;                            // AI already set
     if (mergedSources[resolvedKey] === "user") continue;  // seller set explicitly
-    finalDynamicAttrs[resolvedKey] = defaultValue;
+    finalDynamicAttrs[resolvedKey] = getProductAwareDefault(intent, defaultValue);
     if (!mergedSources[resolvedKey]) mergedSources[resolvedKey] = "ai";
     if (!mergedConfidence[resolvedKey]) {
       mergedConfidence[resolvedKey] = {
@@ -595,8 +617,23 @@ export async function POST(
   // B) Numeric attribute scrub. Any value the AI put into a number-type
   //    attribute must parse cleanly to a number — otherwise drop it so
   //    Jumia's "should be a number" QC error doesn't fire.
+  //
+  //    EXCEPTION: certain attribute names are conceptually text even
+  //    when Jumia's schema occasionally types them as "number" (their
+  //    schema isn't always clean). For example `what_is_in_the_box`
+  //    sometimes comes back typed as number, and a list like
+  //    "1× Humidifier, 1× Adapter" would get scrubbed down to just "1".
+  //    The skip-set below preserves text formatting for those.
+  const SKIP_NUMERIC_SCRUB = new Set([
+    "what_is_in_the_box", "in_the_box", "package_contents", "package_includes",
+    "product_note", "note", "seller_note",
+    "from_the_manufacturer", "manufacturer_note",
+  ]);
   const numericAttrNames = new Set(
-    attrs.filter((a) => a.type === "number").map((a) => a.name.toLowerCase()),
+    attrs
+      .filter((a) => a.type === "number")
+      .map((a) => a.name.toLowerCase())
+      .filter((n) => !SKIP_NUMERIC_SCRUB.has(n)),
   );
   for (const key of Object.keys(finalDynamicAttrs)) {
     if (!numericAttrNames.has(key.toLowerCase())) continue;
