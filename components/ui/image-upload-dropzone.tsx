@@ -80,7 +80,7 @@ export function ImageUploadDropzone({
       >
         <input
           type="file"
-          accept="image/*"
+          accept="image/jpeg,image/png"
           multiple
           className="sr-only"
           onChange={handleInput}
@@ -134,7 +134,7 @@ export function ImageUploadDropzone({
             <label className="flex aspect-square cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-zinc-200 text-zinc-400 transition-colors hover:border-zinc-300 hover:text-zinc-500">
               <input
                 type="file"
-                accept="image/*"
+                accept="image/jpeg,image/png"
                 multiple
                 className="sr-only"
                 onChange={handleInput}

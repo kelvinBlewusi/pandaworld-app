@@ -516,33 +516,108 @@ export async function POST(
     }
   }
 
-  // ── Post-hoc default-fill on dynamic_attributes ─────────────────────────
-  // Pass C is told about AI_DYNAMIC_ATTR_DEFAULTS in its prompt, but the
-  // model doesn't reliably echo back keys the category schema doesn't
-  // explicitly list. The product_note (buyer review nudge) and
-  // from_the_manufacturer defaults SHOULD appear on every listing — they
-  // get silently stripped by Jumia on categories that don't accept them,
-  // so it's safe to set them universally.
+  // ── Post-hoc default-fill on dynamic_attributes (schema-aware) ──────────
   //
-  // Rules:
-  //   - Don't overwrite a value the AI already filled (it may have
-  //     legitimately customised the note based on userContext).
-  //   - Don't overwrite a user-edited value (mergedSources[k] === "user").
-  //   - Otherwise inject the canonical default from policy.ts.
+  // Two passes here:
+  //
+  // A) DEFAULT KEY RESOLUTION
+  //    AI_DYNAMIC_ATTR_DEFAULTS keys are intent names ("product_note",
+  //    "what_is_in_the_box") but Jumia uses different actual attribute
+  //    names per category — one category calls it `product_note`, another
+  //    calls it `note`, another calls it `seller_note`. If we write our
+  //    intent name and the schema doesn't have that exact key, the
+  //    review-page SchemaForm renders the field as empty (it reads by
+  //    schema-attribute-name, not by intent). To fix: for each intent,
+  //    search the category schema for an attribute whose name or label
+  //    matches the intent's keyword patterns, and write the default to
+  //    that resolved key. Falls back to the literal intent key if no
+  //    schema match is found (Jumia drops unknown keys silently anyway).
+  //
+  // B) NUMERIC ATTRIBUTE SCRUB
+  //    The AI sometimes returns a boolean ("true") or a string with text
+  //    ("0.5 (estimated)") for an attribute the schema declares as
+  //    number-type. That causes Jumia QC rejection like
+  //    "Attribute [capacity_liter] with the value [true] should be a number".
+  //    For every attribute whose schema type is `number`, parse the value
+  //    and either replace with a clean numeric string or drop it.
+
+  // Intent → keyword patterns that match the schema-attribute name OR label.
+  // First match wins. Order from most-specific to most-general.
+  const DEFAULT_INTENT_PATTERNS: Record<string, RegExp[]> = {
+    product_note:          [/^product[_\s-]?note$/i, /^seller[_\s-]?note$/i, /^note$/i, /thank.*review/i],
+    what_is_in_the_box:    [
+      /what.*in.*box/i,
+      /^in.*the.*box$/i,
+      /^in[_\s-]?the[_\s-]?box$/i,
+      /package[_\s-]?contents?/i,
+      /package[_\s-]?includes?/i,
+      /^contents?$/i,
+      /what.*included/i,
+    ],
+    from_the_manufacturer: [/from.*manufacturer/i, /^manufacturer[_\s-]?note$/i, /^manufacturer[_\s-]?message$/i],
+  };
+
+  function resolveSchemaKey(intent: string): string {
+    // Exact-name match wins (the schema literally has the intent key).
+    const exact = attrs.find((a) => a.name === intent);
+    if (exact) return exact.name;
+    // Pattern-based match against attribute name + label.
+    const patterns = DEFAULT_INTENT_PATTERNS[intent] ?? [];
+    for (const pattern of patterns) {
+      const match = attrs.find((a) => pattern.test(a.name) || pattern.test(a.label));
+      if (match) return match.name;
+    }
+    // No schema match — use the literal intent name. Jumia will drop it
+    // silently on push if the category doesn't recognise it; the local
+    // review UI may also drop it but at least the data is preserved.
+    return intent;
+  }
+
   const finalDynamicAttrs: Record<string, string> = { ...filled.dynamic_attributes };
-  for (const [k, v] of Object.entries(AI_DYNAMIC_ATTR_DEFAULTS)) {
-    const existing = finalDynamicAttrs[k];
+
+  // A) Inject defaults under the schema-resolved key.
+  for (const [intent, defaultValue] of Object.entries(AI_DYNAMIC_ATTR_DEFAULTS)) {
+    const resolvedKey = resolveSchemaKey(intent);
+    const existing = finalDynamicAttrs[resolvedKey];
     if (existing && existing.trim().length > 0) continue; // AI already set
-    if (mergedSources[k] === "user") continue;            // seller set explicitly
-    finalDynamicAttrs[k] = v;
-    if (!mergedSources[k]) mergedSources[k] = "ai";
-    if (!mergedConfidence[k]) {
-      mergedConfidence[k] = {
+    if (mergedSources[resolvedKey] === "user") continue;  // seller set explicitly
+    finalDynamicAttrs[resolvedKey] = defaultValue;
+    if (!mergedSources[resolvedKey]) mergedSources[resolvedKey] = "ai";
+    if (!mergedConfidence[resolvedKey]) {
+      mergedConfidence[resolvedKey] = {
         confidence: 0.6,
         source:     "inferred",
-        reasoning:  `Default '${k}' applied — override per-listing if needed.`,
+        reasoning:  `Default '${intent}' applied to '${resolvedKey}' — override per-listing if needed.`,
       };
     }
+  }
+
+  // B) Numeric attribute scrub. Any value the AI put into a number-type
+  //    attribute must parse cleanly to a number — otherwise drop it so
+  //    Jumia's "should be a number" QC error doesn't fire.
+  const numericAttrNames = new Set(
+    attrs.filter((a) => a.type === "number").map((a) => a.name.toLowerCase()),
+  );
+  for (const key of Object.keys(finalDynamicAttrs)) {
+    if (!numericAttrNames.has(key.toLowerCase())) continue;
+    const raw   = String(finalDynamicAttrs[key]);
+    const match = raw.match(/-?\d+(?:\.\d+)?/);
+    if (match) {
+      const n = parseFloat(match[0]);
+      if (Number.isFinite(n)) {
+        finalDynamicAttrs[key] = String(n); // canonical numeric string
+        continue;
+      }
+    }
+    // Couldn't extract a real number ("true", "yes", "unknown") — drop it.
+    // Leaving the field empty is better than failing Jumia QC.
+    console.warn(
+      `[auto-analyze] dropping non-numeric value for numeric attr '${key}': '${raw.slice(0, 40)}'`,
+    );
+    delete finalDynamicAttrs[key];
+    // Also clear any field_sources / field_confidence tracking for it.
+    if (mergedSources[key] !== "user") delete mergedSources[key];
+    delete mergedConfidence[key];
   }
 
   await db.from("listings").update({

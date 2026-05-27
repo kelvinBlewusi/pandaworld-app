@@ -23,10 +23,14 @@ const BUCKET = "product-images";
 const MAX_BYTES = 5 * 1024 * 1024;
 const MIN_BYTES = 50;
 
+// Jumia accepts ONLY JPEG/JPG/PNG. WebP, HEIC, GIF, AVIF etc. trigger the
+// "Product Image extension [webp] is not allowed" rejection at push time —
+// so we reject them at upload to save the seller a wasted submission.
+// The server is the authoritative gate; the file inputs also restrict
+// accept= to the same list as a UX hint.
 const ALLOWED_MIMES = new Set([
   "image/jpeg",
   "image/png",
-  "image/webp",
 ]);
 
 /** Magic-byte validation. Returns the detected MIME or null when invalid. */

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { resolveRejection } from "@/lib/actions/ai";
+import { getCategoryAttributes } from "@/lib/jumia/categories";
 
 // ─── POST /api/listings/[id]/resolve-rejection ────────────────────────────────
 //
@@ -43,6 +44,7 @@ interface ListingForResolve {
   production_country:  string | null;
   selling_price:       number | null;
   category_path:       string | null;
+  category_code:       string | null;
   warranty_text:       string | null;
   warranty_address:    string | null;
   dynamic_attributes:  Record<string, string> | null;
@@ -79,7 +81,7 @@ export async function POST(
       "id, user_id, status, jumia_error, " +
       "title, description, highlights, brand, color, color_family, " +
       "weight_kg, main_material, material_family, production_country, " +
-      "selling_price, category_path, warranty_text, warranty_address, " +
+      "selling_price, category_path, category_code, warranty_text, warranty_address, " +
       "dynamic_attributes, images, field_sources",
     )
     .eq("id", params.id)
@@ -141,6 +143,7 @@ export async function POST(
         production_country: listing.production_country,
         selling_price:      listing.selling_price,
         category_path:      listing.category_path,
+        category_code:      listing.category_code ? Number(listing.category_code) : null,
         warranty_text:      listing.warranty_text,
         warranty_address:   listing.warranty_address,
         dynamic_attributes: listing.dynamic_attributes,
@@ -163,6 +166,50 @@ export async function POST(
       if (typeof v === "string") dynamicMergedKeys[dynKey] = v;
     } else {
       columnUpdate[k] = v;
+    }
+  }
+
+  // Belt-and-braces: server-side scrub numeric attributes before saving.
+  // The AI is told (in the resolveRejection prompt) about the schema's
+  // numeric types, but a stubborn model might still return "true" or
+  // "yes" for a number field. Walk the schema and either canonicalise
+  // or drop any non-numeric value pretending to be numeric.
+  if (listing.category_code) {
+    try {
+      const schema = await getCategoryAttributes(Number(listing.category_code));
+      const numericNames = new Set(
+        schema.filter((a) => a.type === "number").map((a) => a.name.toLowerCase()),
+      );
+      for (const key of Object.keys(dynamicMergedKeys)) {
+        if (!numericNames.has(key.toLowerCase())) continue;
+        const raw   = String(dynamicMergedKeys[key]);
+        const match = raw.match(/-?\d+(?:\.\d+)?/);
+        if (match) {
+          const n = parseFloat(match[0]);
+          if (Number.isFinite(n)) {
+            dynamicMergedKeys[key] = String(n);
+            continue;
+          }
+        }
+        console.warn(
+          `[resolve-rejection] dropping non-numeric value for numeric attr '${key}': '${raw.slice(0, 40)}'`,
+        );
+        delete dynamicMergedKeys[key];
+      }
+    } catch (e) {
+      console.warn(`[resolve-rejection] schema fetch for scrub failed: ${(e as Error).message}`);
+    }
+  }
+
+  // Same scrub for top-level weight_kg (it's a number column too).
+  if (columnUpdate.weight_kg != null) {
+    const raw   = String(columnUpdate.weight_kg);
+    const match = raw.match(/-?\d+(?:\.\d+)?/);
+    if (match) {
+      const n = parseFloat(match[0]);
+      columnUpdate.weight_kg = Number.isFinite(n) && n > 0 && n < 1000 ? n : null;
+    } else {
+      columnUpdate.weight_kg = null;
     }
   }
 

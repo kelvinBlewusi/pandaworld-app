@@ -229,7 +229,7 @@ STRICT RULES — violations will cause the submission to be rejected:
 4. For dynamic_attributes: include any field you can determine from the product OR that has a default below. Omit fields you genuinely can't determine — do NOT guess on category-specific specs.
 5. Description: 80–3000 characters. May be plain prose, bullets, tables, HTML, or a mix — use whichever fits the product. Inline <img> tags are allowed for product diagrams / size charts / spec sheets. Promotional / marketing language is allowed.
 6. Title MUST be 15–70 characters. Lead with the MODEL or identifier + product type + 1–2 key specs. DO NOT include the brand name in the title — Jumia stores brand separately and rejects titles that repeat it ("Product name contains Brand name [X]"). The brand goes in the brand field, not the title.
-7. Highlights: free-form (plain prose, bullets, tables, HTML, or mixed). No word limit per line. When bullets are used, start each with "• ". Inline images are permitted.
+7. Highlights: free-form (plain prose, bullets, tables, HTML, or mixed). No word limit per line. When bullets are used, EVERY bullet MUST be on its own line — separate with "\\n" between bullets, never run them all into one paragraph. Prefer HTML lists for clean rendering: <ul><li>…</li><li>…</li></ul>. Inline images are permitted.
 ${brandRule}
 
 9. FIELD-FILLING DEFAULTS — fill these even though sellers used to do them manually. Use the defaults below UNLESS the SELLER AI-CHAT CONTEXT above overrides them:
@@ -1107,7 +1107,7 @@ Rules:
 - keywords: 5-10 single-word lower-case keywords (no quotes, no underscores). Think of what a buyer would search for.
 - summary: One sentence describing what the product is and its key visible features.
 - description: 80-3000 characters. May be plain prose, bullet points, tables, HTML, or a mix. Use whatever formatting best showcases the product (bold, line breaks, short paragraphs, bullets, tables — all allowed). Safe HTML tags (<p>, <ul>, <li>, <table>, <tr>, <td>, <br>, <strong>, <em>, <img>) are permitted; inline <img> with full URLs is allowed for spec diagrams or size charts. Marketing/promotional language is permitted ("premium", "best-in-class", "perfect for"). Jumia rejects anything under 50 chars.
-- highlights: Free-form. May be prose, bullets, or mixed. No word limit per line. When bullets are used, start each with "• ".
+- highlights: Free-form. May be prose, bullets, tables, HTML, or mixed. No word limit per line. CRITICAL: when bullets are used, EVERY bullet MUST be on its OWN LINE — separate bullets with the newline character "\\n", never run them together in one paragraph. Prefer HTML lists for clean rendering: wrap bullets in <ul><li>…</li><li>…</li></ul>. Examples of CORRECT: "• Item 1\\n• Item 2\\n• Item 3" OR "<ul><li>Item 1</li><li>Item 2</li><li>Item 3</li></ul>". Example of WRONG (do not produce): "• Item 1 • Item 2 • Item 3" all on one line.
 - color: Specific visible colour(s). Multiple colours separated by commas (e.g. "Blue, Black"). Null if uncertain.
 - color_family: Base colour family from {Black, White, Grey, Brown, Beige, Red, Orange, Yellow, Green, Blue, Purple, Pink, Multicolour}. Null if uncertain.
 - weight_kg: STRICTLY a number — nothing else. Examples of VALID values: 0.5, 1.2, 12.5. Examples of INVALID values you must NEVER return: "0.5 (estimated)", "approx 0.5", "0.5 kg", "0.5kg", "around 1.2", "unknown". If you can't see or confidently infer the weight, return null — not a guess wrapped in parentheses. The downstream form is a number-only input; any text you put here will be stripped or break the field.
@@ -1949,6 +1949,7 @@ export async function resolveRejection(
     production_country?: string | null;
     selling_price?:      number | null;
     category_path?:      string | null;
+    category_code?:      number | null;     // NEW: needed to fetch attribute schema
     warranty_text?:      string | null;
     warranty_address?:   string | null;
     dynamic_attributes?: Record<string, string> | null;
@@ -1988,6 +1989,34 @@ export async function resolveRejection(
     dynamic_attributes: listing.dynamic_attributes ?? {},
   };
 
+  // ── Fetch the category's attribute schema so the AI knows the EXPECTED
+  // TYPE of each dynamic_attribute it's being asked to fix. Without this,
+  // a rejection like "Attribute [capacity_liter] with the value [true]
+  // should be a number" gets "fixed" with another invalid value because
+  // the AI guesses at the field's shape.
+  const categorySchemaLines: string[] = [];
+  if (listing.category_code != null) {
+    try {
+      const schema = await getCategoryAttributes(listing.category_code);
+      for (const a of schema) {
+        const typeLabel =
+          a.type === "number"   ? " (NUMBER — value must be numeric, e.g. 1.5, 12, 250 — never 'true', 'yes', or text)" :
+          a.type === "boolean"  ? " (BOOLEAN — value must be 'true' or 'false')" :
+          a.type === "enum"     ? ` (ENUM — value must be one of: ${a.allowed_values.slice(0, 10).join(", ")}${a.allowed_values.length > 10 ? ", …" : ""})` :
+          a.type === "multi"    ? ` (MULTI-SELECT — comma-separated values from: ${a.allowed_values.slice(0, 8).join(", ")}${a.allowed_values.length > 8 ? ", …" : ""})` :
+          a.type === "date"     ? " (DATE — YYYY-MM-DD)" :
+          a.type === "datetime" ? " (DATETIME — ISO 8601)" :
+          "";
+        categorySchemaLines.push(`  - ${a.name}: ${a.label}${typeLabel}${a.required ? " [REQUIRED]" : ""}`);
+      }
+    } catch (e) {
+      console.warn(`[resolveRejection] failed to fetch schema for category ${listing.category_code}: ${(e as Error).message}`);
+    }
+  }
+  const categorySchemaBlock = categorySchemaLines.length > 0
+    ? `\n\nCATEGORY ATTRIBUTE SCHEMA — every dynamic_attributes.<key> change MUST respect the TYPE shown below:\n${categorySchemaLines.join("\n")}\n`
+    : "";
+
   const prompt = `
 You are an expert Jumia vendor assistant. A listing was REJECTED by Jumia's quality check. Your job is to propose specific, concrete field changes that will pass on the next submission.
 
@@ -1996,14 +2025,16 @@ ${rejectionReason}
 
 CURRENT LISTING DATA (JSON):
 ${JSON.stringify(currentFields, null, 2)}
-
+${categorySchemaBlock}
 YOUR TASK:
 1. Identify which fields are likely causing the rejection.
 2. Propose specific corrected values for ONLY those fields. Don't echo unchanged fields.
 3. Keep changes minimal and concrete. Sellers can fine-tune after.
 4. For "brand": if the rejection suggests the brand isn't recognised, suggest the closest well-known equivalent (e.g. "Generic" if you can't identify a brand).
 5. For "description": Jumia requires 50–9,000 characters, focusing on product features only. No testimonials, no promotional language.
-6. For "highlights": 4+ bullets is ideal.
+6. For "highlights": 4+ bullets is ideal. EVERY bullet on its own line (separate with "\\n") or use <ul><li>…</li></ul>. NEVER run bullets together in one paragraph.
+7. NUMERIC ATTRIBUTES — if the rejection says "should be a number" for an attribute (e.g. capacity_liter, battery_capacity, screen_size), your new value MUST be a plain number — NEVER strings, NEVER booleans like "true", NEVER text like "0.5 (estimated)" or "approx 1.5". Read the image (or use general knowledge of the product/brand) to give a real numeric estimate. If you cannot give a number with any confidence, omit the field entirely — null is better than a bad value that triggers the same rejection again.
+8. Respect the attribute TYPES shown in the schema block above (when present). NUMBER → number only. ENUM → exact value from the allowed list. BOOLEAN → "true" or "false". DATE → YYYY-MM-DD.
 
 ${restrictedInstruction}
 
@@ -2021,13 +2052,15 @@ Valid field names:
   title | description | highlights | brand | color | color_family |
   weight_kg | main_material | material_family | production_country |
   selling_price | warranty_text | warranty_address |
-  dynamic_attributes.<any_key>  (for category-specific attributes)
+  dynamic_attributes.<any_key>  (for category-specific attributes — see schema block)
 
 Examples:
-- If Jumia says "brand not recognised", set "brand" to a known equivalent.
-- If Jumia says "description too short", expand the description (50+ chars).
-- If Jumia says "weight missing", set "weight_kg" to a numeric estimate.
-- If Jumia complains about a dynamic attribute, set "dynamic_attributes.<key>".
+- "Attribute [capacity_liter] with the value [true] should be a number." → set "dynamic_attributes.capacity_liter" to a number like 0.5 or 1.2 based on the image (humidifier tank size).
+- "Attribute [battery_capacity] should be a number." → set "dynamic_attributes.battery_capacity" to the milliamp-hour or watt-hour value (e.g. 5000).
+- "brand not recognised" → set "brand" to a known equivalent or "Generic".
+- "description too short" → expand the description (50+ chars).
+- "weight missing" → set "weight_kg" to a numeric estimate (number only — never "0.5 (estimated)").
+- "bullet formatting" → rewrite highlights with \\n-separated bullets.
 `.trim();
 
   // Use first image only — context for "image quality" rejections.

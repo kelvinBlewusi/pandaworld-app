@@ -324,7 +324,15 @@ HIGHLIGHTS RULES (free-form, any format that fits the product):
     illustrate a highlight (e.g. an icon-style feature graphic).
   - No word limit per bullet or per line — write as much or as little as
     the product warrants. A single great sentence beats five forced ones.
-  - When bullets are used, start each line with "• " (bullet + space).
+  - CRITICAL FORMAT — when bullets are used, EACH bullet MUST be on its
+    OWN LINE. Separate bullets with the newline character \\n, or wrap
+    them in an HTML <ul><li>…</li><li>…</li></ul> list. NEVER run all
+    bullets together into one paragraph; the review-page editor and
+    Jumia both render them as a single line of text otherwise, which
+    looks unprofessional.
+      CORRECT (line-separated): "• Item 1\\n• Item 2\\n• Item 3"
+      CORRECT (HTML list):       "<ul><li>Item 1</li><li>Item 2</li></ul>"
+      WRONG (one paragraph):     "• Item 1 • Item 2 • Item 3"
   - Order bullets / paragraphs by buyer importance: headline feature
     first, then specs, then usability / fit / care, then warranty.
   - No inline emoji rows, no decorative symbols outside the bullet
