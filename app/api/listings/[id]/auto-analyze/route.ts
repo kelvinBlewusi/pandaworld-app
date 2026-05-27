@@ -6,6 +6,8 @@ import {
   aiPassB_rankCategory,
   extractAttributesForCategory,
   aiPassBC_pickAndFill,
+  aiFillGaps,
+  aiExpandDescription,
   type CandidateWithSchema,
 } from "@/lib/actions/ai";
 import {
@@ -23,7 +25,7 @@ import {
 import { searchJumiaProductsByTitle } from "@/lib/jumia/catalog-search";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
-import { AI_DYNAMIC_ATTR_DEFAULTS } from "@/lib/ai/policy";
+import { AI_DYNAMIC_ATTR_DEFAULTS, resolvePatternDefault } from "@/lib/ai/policy";
 
 // ─── POST /api/listings/[id]/auto-analyze ────────────────────────────────────
 //
@@ -91,7 +93,7 @@ export async function POST(
   // ── Load listing + verify ownership ───────────────────────────────────────
   const { data: listing } = await db
     .from("listings")
-    .select("id, user_id, sku, images, title, brand, selling_price, quantity, dynamic_attributes, field_sources, field_confidence, user_prompt")
+    .select("id, user_id, sku, images, title, brand, description, highlights, selling_price, quantity, dynamic_attributes, field_sources, field_confidence, user_prompt")
     .eq("id", params.id)
     .eq("user_id", userId)
     .maybeSingle();
@@ -655,6 +657,128 @@ export async function POST(
     // Also clear any field_sources / field_confidence tracking for it.
     if (mergedSources[key] !== "user") delete mergedSources[key];
     delete mergedConfidence[key];
+  }
+
+  // ── C) PATTERN DEFAULTS for still-empty required attributes ─────────────
+  //
+  // Phase 1 of the "user enters price → submits" plan. For attributes
+  // whose name or label matches a common pattern (Skin Type / Season /
+  // Gender / Size / Style / ...), inject a sensible default — from the
+  // schema's allowed_values when present, otherwise a generic string.
+  // Cheap: pure pattern match, no AI call.
+  for (const a of attrs) {
+    if (!a.required) continue;
+    const existing = finalDynamicAttrs[a.name];
+    if (existing && existing.trim().length > 0) continue;
+    if (mergedSources[a.name] === "user") continue;
+    const patternValue = resolvePatternDefault({
+      name:           a.name,
+      label:          a.label,
+      allowed_values: a.allowed_values,
+    });
+    if (patternValue) {
+      finalDynamicAttrs[a.name] = patternValue;
+      if (!mergedSources[a.name]) mergedSources[a.name] = "ai";
+      mergedConfidence[a.name] = {
+        confidence: 0.55,
+        source:     "inferred",
+        reasoning:  `Pattern default applied — change if you have a specific value.`,
+      };
+    }
+  }
+
+  // ── D) GAP-FILL AI PASS for remaining empty required attributes ─────────
+  //
+  // Phase 1+3: after pattern defaults, anything still empty + required
+  // gets sent to a focused Gemini call that fills with confident
+  // inferences from general knowledge + the image. Skips cleanly if
+  // there are no gaps (no extra AI cost on the happy path).
+  const stillEmptyRequired = attrs.filter(
+    (a) =>
+      a.required &&
+      (!finalDynamicAttrs[a.name] || String(finalDynamicAttrs[a.name]).trim().length === 0) &&
+      mergedSources[a.name] !== "user",
+  );
+
+  if (stillEmptyRequired.length > 0) {
+    const tGap = Date.now();
+    try {
+      const titleForGap   = String(updates.title       ?? listing.title       ?? "");
+      const brandForGap   = String(updates.brand       ?? listing.brand       ?? "");
+      const descForGap    = String(updates.description ?? listing.description ?? "");
+      const gap = await aiFillGaps(
+        {
+          title:        titleForGap,
+          brand:        brandForGap || null,
+          description:  descForGap,
+          categoryPath: chosen.path,
+          images,
+        },
+        stillEmptyRequired.map((a) => ({
+          name:           a.name,
+          label:          a.label,
+          type:           String(a.type),
+          allowed_values: a.allowed_values,
+        })),
+        { forceBestModel: true },
+      );
+      for (const [k, v] of Object.entries(gap.filled)) {
+        if (mergedSources[k] === "user") continue;
+        finalDynamicAttrs[k] = v;
+        if (!mergedSources[k]) mergedSources[k] = "ai";
+        mergedConfidence[k] = {
+          confidence: 0.65,
+          source:     "inferred",
+          reasoning:  "AI gap-fill — confident default based on product class.",
+        };
+      }
+      console.info(
+        `[auto-analyze] gap-fill: requested=${stillEmptyRequired.length} filled=${Object.keys(gap.filled).length} ms=${Date.now() - tGap}`,
+      );
+    } catch (e) {
+      console.warn(`[auto-analyze] gap-fill failed (non-fatal): ${(e as Error).message}`);
+    }
+  }
+
+  // ── E) DESCRIPTION AUTO-EXPAND ──────────────────────────────────────────
+  //
+  // Phase 2: Jumia rejects descriptions under 50 chars. If Pass A
+  // returned something short, run a focused expand call that grows
+  // it to 150-400 words using the title / brand / highlights as
+  // context. Doesn't expand if the seller has already edited the
+  // description (source === "user") or if it's already long enough.
+  const currentDescription = String(updates.description ?? listing.description ?? "");
+  const descSource = mergedSources["description"];
+  if (
+    currentDescription.length > 0 &&
+    currentDescription.length < 150 &&
+    descSource !== "user"
+  ) {
+    const tExpand = Date.now();
+    try {
+      const expanded = await aiExpandDescription(
+        currentDescription,
+        {
+          title:      String(updates.title ?? listing.title ?? ""),
+          brand:      (updates.brand as string | null) ?? listing.brand ?? null,
+          keywords:   description.keywords ?? [],
+          highlights: String(updates.highlights ?? listing.highlights ?? ""),
+        },
+        { forceBestModel: true },
+      );
+      if (expanded && expanded.length > currentDescription.length) {
+        updates.description = expanded;
+        mergedSources["description"] = "ai";
+        mergedConfidence["description"] = {
+          confidence: 0.8,
+          source:     "inferred",
+          reasoning:  "Expanded from a short AI-generated description.",
+        };
+      }
+      console.info(`[auto-analyze] description-expand ms=${Date.now() - tExpand}`);
+    } catch (e) {
+      console.warn(`[auto-analyze] description-expand failed (non-fatal): ${(e as Error).message}`);
+    }
   }
 
   await db.from("listings").update({

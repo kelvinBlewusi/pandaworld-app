@@ -1773,6 +1773,205 @@ Return ONLY valid JSON, no markdown:
   };
 }
 
+// ─── Phase 1 / Phase 3: gap-fill pass ──────────────────────────────────────
+//
+// After the main pipeline (Pass A + combined B+C + post-hoc defaults +
+// pattern defaults), some REQUIRED attributes can still be empty —
+// usually category-specific fields the AI couldn't determine and that
+// don't match any of our pattern defaults. This single focused call
+// asks the AI to fill ONLY those gaps with confident, sensible values
+// drawn from general knowledge of the product class.
+//
+// Output is filter-validated server-side: enum fields must pick from
+// allowed_values, number fields must parse to a number, others
+// pass-through.
+
+export interface GapField {
+  name:           string;
+  label:          string;
+  type:           string;
+  allowed_values: string[];
+}
+
+export interface GapFillResult {
+  filled:    Record<string, string>;
+  reasoning?: string;
+}
+
+export async function aiFillGaps(
+  context: {
+    title:        string;
+    brand:        string | null;
+    description:  string;
+    categoryPath: string;
+    images:       string[];
+  },
+  emptyFields: GapField[],
+  opts: { forceBestModel?: boolean } = {},
+): Promise<GapFillResult> {
+  if (emptyFields.length === 0) return { filled: {} };
+  if (USE_MOCK_AI) return { filled: {} };
+  if (!process.env.GOOGLE_API_KEY) return { filled: {} };
+
+  const fieldsBlock = emptyFields.map((f) => {
+    const typeNote =
+      f.type === "number"   ? " [NUMBER — return a real number]" :
+      f.type === "boolean"  ? " [BOOLEAN — true/false]" :
+      f.type === "enum"     ? ` [ENUM — pick one of: ${f.allowed_values.slice(0, 12).join(", ")}${f.allowed_values.length > 12 ? ", …" : ""}]` :
+      f.type === "multi"    ? ` [MULTI-SELECT — comma-separated from: ${f.allowed_values.slice(0, 8).join(", ")}]` :
+      "";
+    return `  - ${f.name} (${f.label})${typeNote}`;
+  }).join("\n");
+
+  const prompt = `You are a Jumia listing assistant. Fill the empty REQUIRED attribute fields below with confident, sensible values for this product. The seller cannot submit until every required field has a value, so DO NOT return null or empty — pick the most reasonable default you can from general knowledge of the brand / product class.
+
+PRODUCT CONTEXT:
+  Title:       ${context.title}
+  Brand:       ${context.brand ?? "Generic"}
+  Category:    ${context.categoryPath}
+  Description: ${context.description.slice(0, 600)}
+
+EMPTY REQUIRED FIELDS:
+${fieldsBlock}
+
+Rules for each field:
+- NEVER leave a field null or empty. The seller is blocked from submitting otherwise.
+- For NUMBER fields: return a real numeric value (estimate from product class if no visible data). Never "true", "yes", "unknown", or text.
+- For ENUM fields: pick exactly one value from the allowed list — typically prefer "all", "unisex", "standard", "classic", "regular" or similar most-inclusive option when in doubt.
+- For BOOLEAN fields: pick the most-common-case value for this product class.
+- For free-text fields: write a short, neutral value (e.g. "Standard", "Refer to product label", "Adult", "Unisex").
+- Use the images + general online knowledge of the brand to be as accurate as possible. Only fall back to neutral defaults when you really have no basis.
+
+Output ONLY this JSON shape, no markdown, no prose:
+{
+  "filled": {
+    "<field_name>": "<value>",
+    ...
+  },
+  "reasoning": "one short line"
+}`;
+
+  const { userId } = await auth();
+  const visionModel = await resolveModel(userId, "vision", { forceBestModel: opts.forceBestModel });
+
+  let raw: string;
+  try {
+    raw = await callGemini(prompt, context.images.slice(0, 2), visionModel);
+  } catch (e) {
+    console.warn(`[aiFillGaps] gemini call failed: ${(e as Error).message}`);
+    return { filled: {} };
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = parseAIResponse(raw);
+  } catch (e) {
+    console.warn(`[aiFillGaps] parse failed: ${(e as Error).message}`);
+    return { filled: {} };
+  }
+
+  // Validate each filled value against its field's type / allowed_values.
+  const inputByName = new Map(emptyFields.map((f) => [f.name, f]));
+  const rawFilled = (parsed.filled ?? {}) as Record<string, unknown>;
+  const filled: Record<string, string> = {};
+
+  for (const [k, v] of Object.entries(rawFilled)) {
+    const field = inputByName.get(k);
+    if (!field) continue;          // model invented a field name; drop it
+    if (v == null) continue;
+    const value = String(v).trim();
+    if (value.length === 0) continue;
+
+    if (field.type === "number") {
+      const m = value.match(/-?\d+(?:\.\d+)?/);
+      if (m) {
+        filled[k] = String(parseFloat(m[0]));
+      }
+      continue;
+    }
+    if (field.type === "enum" && field.allowed_values.length > 0) {
+      const lower = value.toLowerCase();
+      const match = field.allowed_values.find((a) => a.toLowerCase() === lower);
+      if (match) filled[k] = match;
+      continue;
+    }
+    if (field.type === "boolean") {
+      if (/^(true|yes|1)$/i.test(value)) filled[k] = "true";
+      else if (/^(false|no|0)$/i.test(value)) filled[k] = "false";
+      continue;
+    }
+    // text / textarea / date / multi — pass through trimmed value
+    filled[k] = value;
+  }
+
+  return {
+    filled,
+    reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : undefined,
+  };
+}
+
+// ─── Phase 2: description auto-expand ──────────────────────────────────────
+//
+// Jumia rejects descriptions under 50 characters. Pass A's prompt asks
+// for 80+ chars but the model sometimes returns a 20-30 char summary
+// when it can't find much to say about a product. This is a focused
+// rewrite call that takes a too-short description and produces a
+// 150-400 word marketing-quality expansion, using the title / brand /
+// keywords / highlights as context.
+
+export async function aiExpandDescription(
+  current: string,
+  context: {
+    title:      string;
+    brand:      string | null;
+    keywords:   string[];
+    highlights: string;
+  },
+  opts: { forceBestModel?: boolean } = {},
+): Promise<string> {
+  if (USE_MOCK_AI) return current + " — (mock expansion)";
+  if (!process.env.GOOGLE_API_KEY) return current;
+  // Already long enough — no need to spend tokens.
+  if (current.trim().length >= 150) return current;
+
+  const policyBlock = buildContentPolicyInstructions({ includeImageRules: false });
+
+  const prompt = `Rewrite the following Jumia product description so that it is 150-400 words. Keep it factual + sales-friendly. May use plain prose, HTML, bullet lists or tables — whatever fits the product best.
+
+ORIGINAL DESCRIPTION (may be empty or too short):
+"${current}"
+
+PRODUCT CONTEXT:
+- Title: ${context.title}
+- Brand: ${context.brand ?? "Generic"}
+- Keywords: ${context.keywords.join(", ")}
+- Highlights: ${context.highlights.slice(0, 400)}
+
+${policyBlock}
+
+Rules:
+- 150-400 words. 50 char minimum is non-negotiable (Jumia rejects shorter).
+- Lead with what the product IS and its headline feature.
+- May use bold / italics / bullets / tables / HTML. Inline <img> is allowed.
+- No banned words, no condition descriptors ("brand new", "original" etc.), no URLs or social handles, no prices.
+- Marketing language permitted ("premium", "perfect for", "best-in-class").
+
+Output ONLY the expanded description text. No JSON wrapper, no markdown fences, no quotes around the output, no explanation.`;
+
+  const { userId } = await auth();
+  const textModel = await resolveModel(userId, "text", { forceBestModel: opts.forceBestModel });
+
+  try {
+    const raw = await callGemini(prompt, [], textModel);
+    const cleaned = raw.trim().replace(/^"+|"+$/g, "").trim();
+    if (cleaned.length >= 50) return cleaned;
+    return current;            // fallback if the model returned garbage
+  } catch (e) {
+    console.warn(`[aiExpandDescription] failed: ${(e as Error).message}`);
+    return current;
+  }
+}
+
 // ─── Main: analyse text description ──────────────────────────────────────────
 
 export async function analyzeProductDescription(

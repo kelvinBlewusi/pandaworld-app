@@ -101,3 +101,147 @@ export const AI_DYNAMIC_ATTR_DEFAULTS: Record<string, string> = {
     "Please refer to the product description and highlights for full details.",
   from_the_manufacturer: "N/A",
 };
+
+// ─── Pattern-based universal attribute defaults ─────────────────────────────
+//
+// Phase 1 of the "user enters price → submits" plan.
+//
+// After Pass C / combined B+C fills the category-specific attributes,
+// we walk the category's schema. For any REQUIRED attribute that's STILL
+// empty after the AI pass, we try to match its name or label against the
+// pattern list below. If a pattern matches, we pick a default value —
+// either a literal string OR (when the attribute has an allowed_values
+// enum) the best-matching enum value picked by the `resolve` function.
+//
+// Order matters — first matching pattern wins.
+//
+// Why this exists: the AI is conservative; it leaves "Skin Type", "Season",
+// "Gender" etc. empty whenever it can't 100% determine the right answer
+// from the image. For most cosmetics / clothing / general products there's
+// a sensible "all" / "unisex" / "standard" option in the allowed list that
+// keeps Jumia happy and lets the seller bypass another form field.
+
+export interface PatternDefault {
+  patterns: RegExp[];
+  /**
+   * Pick a default value. Receives the attribute's allowed_values list
+   * (empty array if the attribute is free-text) and returns either a
+   * string default OR null to skip this pattern.
+   */
+  resolve: (allowedValues: string[]) => string | null;
+}
+
+export const AI_DYNAMIC_ATTR_PATTERN_DEFAULTS: PatternDefault[] = [
+  {
+    patterns: [/skin[\s_-]?type/i],
+    resolve: (allowed) =>
+      allowed.find((v) => /^all/i.test(v)) ??
+      allowed.find((v) => /normal/i.test(v)) ??
+      (allowed.length === 0 ? "All Skin Types" : null),
+  },
+  {
+    patterns: [/hair[\s_-]?type/i],
+    resolve: (allowed) =>
+      allowed.find((v) => /^all/i.test(v)) ??
+      (allowed.length === 0 ? "All Hair Types" : null),
+  },
+  {
+    patterns: [/season/i],
+    resolve: (allowed) =>
+      allowed.find((v) => /all\s*seasons?/i.test(v)) ??
+      allowed.find((v) => /year.*round/i.test(v)) ??
+      (allowed.length === 0 ? "All Seasons" : null),
+  },
+  {
+    patterns: [/^gender$/i, /target[\s_-]?gender/i],
+    resolve: (allowed) =>
+      allowed.find((v) => /unisex/i.test(v)) ??
+      (allowed.length === 0 ? "Unisex" : null),
+  },
+  {
+    patterns: [/age[\s_-]?group/i, /target[\s_-]?age/i, /^age$/i],
+    resolve: (allowed) =>
+      allowed.find((v) => /^adults?$/i.test(v)) ??
+      allowed.find((v) => /adult/i.test(v)) ??
+      (allowed.length === 0 ? "Adults" : null),
+  },
+  {
+    patterns: [/^size$/i, /^sizes$/i, /clothing[\s_-]?size/i, /apparel[\s_-]?size/i],
+    resolve: (allowed) =>
+      allowed.find((v) => /one\s*size/i.test(v)) ??
+      allowed.find((v) => /^(m|medium|standard)$/i.test(v)) ??
+      (allowed.length === 0 ? "Standard" : null),
+  },
+  {
+    patterns: [/size[\s_-]?(l|w|h|width|length|height|depth)/i, /dimensions?/i, /^(l_w_h|lwh)$/i],
+    resolve: () => "Standard",       // free-text size fields → "Standard"
+  },
+  {
+    patterns: [/^product[\s_-]?line$/i],
+    resolve: (allowed) =>
+      allowed.find((v) => /^standard$/i.test(v)) ??
+      allowed.find((v) => /^classic$/i.test(v)) ??
+      (allowed[0] ?? "Standard"),
+  },
+  {
+    patterns: [/^style$/i, /design[\s_-]?style/i],
+    resolve: (allowed) =>
+      allowed.find((v) => /^classic$/i.test(v)) ??
+      allowed.find((v) => /^standard$/i.test(v)) ??
+      (allowed[0] ?? "Classic"),
+  },
+  {
+    patterns: [/^pattern$/i],
+    resolve: (allowed) =>
+      allowed.find((v) => /^plain$/i.test(v)) ??
+      allowed.find((v) => /^solid$/i.test(v)) ??
+      (allowed[0] ?? "Plain"),
+  },
+  {
+    patterns: [/^occasion$/i, /event[\s_-]?type/i],
+    resolve: (allowed) =>
+      allowed.find((v) => /casual/i.test(v)) ??
+      allowed.find((v) => /everyday/i.test(v)) ??
+      (allowed[0] ?? "Casual"),
+  },
+  {
+    patterns: [/^fit$/i, /^cut$/i],
+    resolve: (allowed) =>
+      allowed.find((v) => /regular/i.test(v)) ??
+      allowed.find((v) => /^standard$/i.test(v)) ??
+      (allowed[0] ?? "Regular"),
+  },
+  {
+    patterns: [/finish/i, /^texture$/i],
+    resolve: (allowed) =>
+      allowed.find((v) => /matte/i.test(v)) ??
+      allowed.find((v) => /smooth/i.test(v)) ??
+      (allowed[0] ?? null),
+  },
+  {
+    patterns: [/care[\s_-]?instructions?/i],
+    resolve: () => "Refer to product label",
+  },
+  {
+    patterns: [/origin[\s_-]?country/i, /country[\s_-]?of[\s_-]?origin/i],
+    resolve: () => "China",          // safest neutral default for unbranded electronics
+  },
+];
+
+/**
+ * Resolve a pattern-based default for the given attribute.
+ * Returns null if no pattern matches OR the resolver returns null.
+ */
+export function resolvePatternDefault(
+  attr: { name: string; label: string; allowed_values: string[] },
+): string | null {
+  const name = attr.name;
+  const label = attr.label;
+  for (const def of AI_DYNAMIC_ATTR_PATTERN_DEFAULTS) {
+    const hit = def.patterns.some((p) => p.test(name) || p.test(label));
+    if (!hit) continue;
+    const value = def.resolve(attr.allowed_values);
+    if (value) return value;
+  }
+  return null;
+}
