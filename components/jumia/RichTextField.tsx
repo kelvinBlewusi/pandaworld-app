@@ -20,7 +20,7 @@
  * bullets render as real list items instead of literal "• " characters.
  */
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useEditor, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
@@ -291,58 +291,81 @@ export function RichTextField({
   rows = 4,
   id,
 }: RichTextFieldProps) {
-  const editor = useEditor({
-    // Required in Next.js App Router (Tiptap v3) — defer initial render
-    // to the client so SSR + hydration don't disagree on contents.
-    immediatelyRender: false,
-    extensions: [
-      StarterKit.configure({
-        // Heading levels capped at 3 to match the Paragraph dropdown
-        heading: { levels: [1, 2, 3] },
-      }),
-      Link.configure({
-        openOnClick: false,
-        autolink: true,
-        HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" },
-      }),
-      Image,
-      Table.configure({ resizable: true }),
-      TableRow,
-      TableHeader,
-      TableCell,
-      Youtube.configure({ HTMLAttributes: { class: "rounded" } }),
-      ListKeymap, // Tab/Shift-Tab inside lists
-    ],
-    content: normaliseIncoming(value),
-    onUpdate({ editor }) {
-      const html = editor.getHTML();
-      // Tiptap emits "<p></p>" for an empty document — collapse that
-      // back to "" so length-based required-field checks behave.
-      onChange(html === "<p></p>" ? "" : html);
-    },
-    editorProps: {
-      attributes: {
-        id: id ?? "",
-        class: cn(
-          "tiptap focus:outline-none px-3 py-2 text-sm",
-          // Light prose-ish styling so headings + lists don't look broken
-          "[&_h1]:text-lg [&_h1]:font-semibold [&_h1]:mb-2",
-          "[&_h2]:text-base [&_h2]:font-semibold [&_h2]:mb-2",
-          "[&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mb-1",
-          "[&_p]:my-1",
-          "[&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5",
-          "[&_li]:my-0.5",
-          "[&_blockquote]:border-l-2 [&_blockquote]:border-zinc-300 [&_blockquote]:pl-3 [&_blockquote]:text-zinc-600 [&_blockquote]:italic",
-          "[&_table]:border-collapse [&_table]:w-full",
-          "[&_th]:border [&_th]:border-zinc-300 [&_th]:px-2 [&_th]:py-1 [&_th]:bg-zinc-50",
-          "[&_td]:border [&_td]:border-zinc-200 [&_td]:px-2 [&_td]:py-1",
-          "[&_a]:text-blue-600 [&_a]:underline",
-          "[&_img]:max-w-full [&_img]:rounded",
-        ),
-        "data-placeholder": placeholder ?? "",
+  // Hold the latest onChange in a ref so we never need to recreate the
+  // editor when the parent passes a new callback identity. Tiptap v3's
+  // useEditor refreshes the editor whenever any option in the config
+  // changes — including the onUpdate closure — so without this ref we
+  // hit an infinite remount loop the moment the parent re-renders.
+  const onChangeRef = useRef(onChange);
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
+
+  // Snapshot the initial value at mount only. Later value changes are
+  // pushed in via the useEffect-with-setContent below — NOT via the
+  // useEditor `content` option, which would trigger a refresh.
+  const initialValueRef = useRef(normaliseIncoming(value));
+
+  const editor = useEditor(
+    {
+      // Required in Next.js App Router (Tiptap v3) — defer initial render
+      // to the client so SSR + hydration don't disagree on contents.
+      immediatelyRender: false,
+      extensions: [
+        StarterKit.configure({
+          // Heading levels capped at 3 to match the Paragraph dropdown
+          heading: { levels: [1, 2, 3] },
+        }),
+        Link.configure({
+          openOnClick: false,
+          autolink: true,
+          HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" },
+        }),
+        Image,
+        Table.configure({ resizable: true }),
+        TableRow,
+        TableHeader,
+        TableCell,
+        Youtube.configure({ HTMLAttributes: { class: "rounded" } }),
+        ListKeymap, // Tab/Shift-Tab inside lists
+      ],
+      content: initialValueRef.current,
+      onUpdate({ editor }) {
+        const html = editor.getHTML();
+        // Tiptap emits "<p></p>" for an empty document — collapse that
+        // back to "" so length-based required-field checks behave.
+        onChangeRef.current(html === "<p></p>" ? "" : html);
+      },
+      editorProps: {
+        attributes: {
+          id: id ?? "",
+          class: cn(
+            "tiptap focus:outline-none px-3 py-2 text-sm",
+            // Light prose-ish styling so headings + lists don't look broken
+            "[&_h1]:text-lg [&_h1]:font-semibold [&_h1]:mb-2",
+            "[&_h2]:text-base [&_h2]:font-semibold [&_h2]:mb-2",
+            "[&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mb-1",
+            "[&_p]:my-1",
+            "[&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5",
+            "[&_li]:my-0.5",
+            "[&_blockquote]:border-l-2 [&_blockquote]:border-zinc-300 [&_blockquote]:pl-3 [&_blockquote]:text-zinc-600 [&_blockquote]:italic",
+            "[&_table]:border-collapse [&_table]:w-full",
+            "[&_th]:border [&_th]:border-zinc-300 [&_th]:px-2 [&_th]:py-1 [&_th]:bg-zinc-50",
+            "[&_td]:border [&_td]:border-zinc-200 [&_td]:px-2 [&_td]:py-1",
+            "[&_a]:text-blue-600 [&_a]:underline",
+            "[&_img]:max-w-full [&_img]:rounded",
+          ),
+          "data-placeholder": placeholder ?? "",
+        },
       },
     },
-  });
+    // CRITICAL: empty deps array pins the editor instance for the
+    // component's lifetime. Without this, Tiptap v3 watches every
+    // option for changes and refreshes the editor on every parent
+    // re-render — including each keystroke when value is controlled
+    // from above — which causes the infinite-remount loop the stack
+    // trace shows (createExtensionManager → refreshEditorInstance →
+    // commit → re-render → refreshEditorInstance → …).
+    [],
+  );
 
   // Keep the editor's content in sync if the parent replaces `value`
   // (e.g. AI regenerate overwrites the description). We compare against
