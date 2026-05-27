@@ -239,7 +239,7 @@ ${brandRule}
    - warranty_address:  "${AI_FIELD_DEFAULTS.warranty_address}" (unless seller specifies a real warranty address)
    - production_country: Pick based on general knowledge — country of likely manufacture for this product/brand (e.g. "China" for unbranded electronics, "Ghana" for hand-made local, "Vietnam" for many sneakers). Use the country name in English. If seller specifies a country in their AI-chat context, use that instead.
    - dynamic_attributes.product_note: ALWAYS include the customer-feedback note below (sellers can override via AI-chat context). NEVER omit.
-   - dynamic_attributes.what_is_in_the_box: ALWAYS include. Write a real product-specific item list like "1× Smartphone, 1× USB-C cable, 1× User manual, 1× Box" — NOT a generic placeholder. Read the images for clues (charger? case? cable? manual visible?). If nothing visible beyond the product, default to "1× [product type] and any standard accessories shown in the images." NEVER omit this field.
+   - dynamic_attributes.what_is_in_the_box: ALWAYS include. A MULTI-LINE list — EACH item on its OWN line, separated by \\n, starting with a count like "1x" / "2x". NEVER all on one line, NEVER just a digit. Format Jumia expects:\n         1x Smartphone\\n1x USB-C Charger\\n1x USB Cable\\n1x User Manual\n       For a drone:\n         1x Drone\\n1x Remote Controller\\n2x Batteries\\n4x Spare Propellers\\n1x Carrying Case\n       If only the product is visible with no accessories, default to:\n         1x [Product Name]\\n1x User Manual (if applicable)\\n1x Original Packaging\n       NEVER omit this field. NEVER write just "1".
    - dynamic_attributes.from_the_manufacturer: "${AI_DYNAMIC_ATTR_DEFAULTS.from_the_manufacturer}" (unless seller provides manufacturer copy in AI-chat context).
 
 10. NEVER fill (seller-required, legal/commercial risk): selling_price, warranty_type, certifications, GTIN, SKU, stock, quantity.${attributeSection}
@@ -1667,7 +1667,18 @@ OUTPUT RULES:
 6. Confidence is 0..1. Be honest. Set needsConfirmation=true if your top pick is below 0.75 OR within 0.15 of your second choice.
 7. ALWAYS include these dynamic_attributes keys, even if the chosen category's schema doesn't list them (Jumia silently drops unknown keys; the cost of including is zero, the cost of omitting is a missed buyer-trust signal):
    - product_note: A short, friendly note thanking the buyer and asking for a review once they receive the item. The default is fine: "Dear Customer, once you receive your item, please take a moment to share your feedback and leave a review. Thank you for shopping with us!"
-   - what_is_in_the_box: A real, product-specific item list — read the images for clues (charger? case? cable? manual?). Examples: "1× Smartphone, 1× USB-C charger, 1× User manual, 1× Protective case" / "1× Drone, 1× Remote controller, 2× Batteries, 1× Charger, 4× Spare propellers, 1× Carrying case". NEVER omit. If you can't tell from the images, default to "1× [product type] and any standard accessories shown in the images."
+   - what_is_in_the_box: A real, product-specific MULTI-LINE LIST in Jumia's preferred format. EACH item is on its OWN LINE, starting with a count like "1x", "2x", etc. NEVER a single line / paragraph. NEVER just a number like "1". Read the images for clues (charger? case? cable? manual?).
+       CORRECT format examples (newline-separated, one item per line):
+         "1x Smartphone\\n1x USB-C Charger\\n1x USB Cable\\n1x User Manual"
+         "1x Drone\\n1x Remote Controller\\n2x Batteries\\n1x Charger\\n4x Spare Propellers\\n1x Carrying Case"
+         "1x Volcano Humidifier\\n1x Power Adapter\\n1x User Manual"
+       WRONG (do not produce):
+         "1"                                      — just a digit
+         "1x Smartphone 1x Charger 1x Manual"     — all on one line
+         "Smartphone, charger, manual"            — missing counts
+       If the image only shows the product itself with no accessories, default to:
+         "1x [Product Name]\\n1x User Manual (if applicable)\\n1x Original Packaging"
+       NEVER omit this field.
 ${ctxSection}
 Return ONLY valid JSON, no markdown:
 {

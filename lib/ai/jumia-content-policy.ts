@@ -371,12 +371,19 @@ ALWAYS-INCLUDED DYNAMIC ATTRIBUTES (never omit, write a real product-specific va
   - product_note: A buyer-feedback nudge (the standard "thanks, please leave
     a review when you receive your order" message). The default is fine
     unless the seller has a more specific message to convey.
-  - what_is_in_the_box: A real item list based on the images. Examples:
-      * Phone: "1× Smartphone, 1× USB-C charger, 1× User manual"
-      * Drone: "1× Drone, 1× Remote, 2× Batteries, 4× Spare propellers, 1× Case"
-      * Kettle: "1× Electric Kettle, 1× User manual"
-    NEVER omit this. If only the product is visible, default to
-    "1× [product type] and any standard accessories shown in the images."
+  - what_is_in_the_box: A real item list based on the images, formatted
+    as a MULTI-LINE list with each item on its OWN line, starting with
+    a count like "1x" or "2x". This is the format Jumia displays on the
+    product page — a comma-joined paragraph or just a digit do NOT
+    render correctly. Examples (each item on its own line, \\n between):
+      Phone:   "1x Smartphone\\n1x USB-C Charger\\n1x USB Cable\\n1x User Manual"
+      Drone:   "1x Drone\\n1x Remote Controller\\n2x Batteries\\n1x Charger\\n4x Spare Propellers\\n1x Carrying Case"
+      Kettle:  "1x Electric Kettle\\n1x User Manual"
+    NEVER omit this. If only the product is visible with no accessories,
+    default to:
+      "1x [Product Name]\\n1x User Manual (if applicable)\\n1x Original Packaging"
+    NEVER write just "1" or a count number alone — that's a parse error,
+    not a value.
 
 CATEGORY & ATTRIBUTE DISCIPLINE:
   - Always pick the most specific LISTABLE category (the candidate pool

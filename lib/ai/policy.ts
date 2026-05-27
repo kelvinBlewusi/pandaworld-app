@@ -92,13 +92,21 @@ export const AI_DYNAMIC_ATTR_DEFAULTS: Record<string, string> = {
     "Thank you for shopping with us!",
   // ALWAYS populated — Jumia's "What's in the Box" field is a buyer-trust
   // signal that converts. Sellers forget to fill it; the AI shouldn't.
-  // The Pass A / combined prompt is instructed to override this default
-  // with a real, product-specific item list (e.g. "1× Smartphone, 1× USB-C
-  // cable, 1× User manual"). This generic fallback only ships when the
-  // model fails to fill it for whatever reason — better than empty.
+  //
+  // Jumia's preferred format is a multi-line "1x Item" list (NOT a prose
+  // paragraph and NOT just a count number). The Pass A / combined prompt
+  // is told to write a real product-specific list like:
+  //     1x Smartphone
+  //     1x USB-C charger
+  //     1x User manual
+  //     1x Protective case
+  //
+  // This canned fallback only fires when the model returns nothing usable.
+  // The route's post-hoc filler also substitutes the listing title into
+  // the placeholder so it reads "1x Volcano Humidifier" instead of just
+  // "1x Product unit".
   what_is_in_the_box:
-    "1× Product unit and any standard accessories shown in the images. " +
-    "Please refer to the product description and highlights for full details.",
+    "1x Product unit\n1x User manual (if applicable)\n1x Original packaging",
   from_the_manufacturer: "N/A",
 };
 

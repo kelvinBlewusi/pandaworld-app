@@ -578,16 +578,19 @@ export async function POST(
   const finalDynamicAttrs: Record<string, string> = { ...filled.dynamic_attributes };
 
   // Product-aware defaults: prefer a product-specific value over the generic
-  // canned default. For "what_is_in_the_box" we substitute the product title
-  // into the placeholder so "1× Product unit …" becomes
-  // "1× Volcano Humidifier and any standard accessories shown in the images."
-  // — much more buyer-trust-worthy than a generic note.
+  // canned default. For "what_is_in_the_box" we write a clean multi-line
+  // "1x Item" list (Jumia's preferred format), substituting the listing
+  // title for the main product so it reads:
+  //     1x Volcano Humidifier
+  //     1x User manual (if applicable)
+  //     1x Original packaging
+  // — much more buyer-trust-worthy than a generic prose note.
   function getProductAwareDefault(intent: string, fallback: string): string {
     const title = (updates.title as string | undefined) ?? (listing?.title ?? "") as string;
     if (intent === "what_is_in_the_box" && title && title.length > 0) {
       // Take the first 6 words from the title for a tidy product name.
       const productName = title.split(/\s+/).slice(0, 6).join(" ");
-      return `1× ${productName}. Please refer to the product description and highlights for full contents.`;
+      return `1x ${productName}\n1x User manual (if applicable)\n1x Original packaging`;
     }
     return fallback;
   }
@@ -596,13 +599,21 @@ export async function POST(
   for (const [intent, defaultValue] of Object.entries(AI_DYNAMIC_ATTR_DEFAULTS)) {
     const resolvedKey = resolveSchemaKey(intent);
     const existing = finalDynamicAttrs[resolvedKey];
-    // For what_is_in_the_box, also overwrite degenerate values like
-    // "1", "true", or anything shorter than 5 chars — the numeric
-    // scrub used to strip the AI's full list down to a single digit,
-    // so we treat short content as effectively-empty for this key.
+    // For what_is_in_the_box, also overwrite degenerate values — the
+    // legacy numeric-scrub stripped full item lists down to a single
+    // digit, and re-runs need to repair those. Anything that:
+    //   * is shorter than 15 chars (a real list is at least one
+    //     "1x Product Name" line)
+    //   * is just digits / whitespace
+    //   * contains no "1x" / "1×" / "•" / newline markers
+    // counts as junk and gets the multi-line default.
+    const looksJunk = intent === "what_is_in_the_box" && existing && (
+      existing.trim().length < 15 ||
+      /^[\s\d.,]+$/.test(existing.trim()) ||
+      !/(\d+\s*[x×]|[•\n])/i.test(existing)
+    );
     const looksEmpty =
-      !existing || existing.trim().length === 0 ||
-      (intent === "what_is_in_the_box" && existing.trim().length < 5);
+      !existing || existing.trim().length === 0 || Boolean(looksJunk);
     if (!looksEmpty) continue;                            // AI already set
     if (mergedSources[resolvedKey] === "user") continue;  // seller set explicitly
     finalDynamicAttrs[resolvedKey] = getProductAwareDefault(intent, defaultValue);
