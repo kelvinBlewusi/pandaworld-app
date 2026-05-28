@@ -172,27 +172,57 @@ export async function POST(
   //   2. Semantic embedding search (pgvector, ~$0.0001 per call)
   //   3. Jumia catalog lookup (their search API)
   //
-  // Embedding search is the new addition — it catches non-English
-  // product names (e.g. "Kente cloth"), brand-specific terms
-  // ("AirPods Pro"), and vague descriptions where lexical overlap
-  // with the category tree is poor. Failure-tolerant: if the
-  // embedding RPC isn't set up, this returns [] and the pipeline
-  // still works on lexical + Jumia signals.
+  // Embedding search catches non-English product names (e.g. "Kente
+  // cloth"), brand-specific terms ("AirPods Pro"), and vague descriptions
+  // where lexical overlap with the category tree is poor. It's a QUALITY
+  // BOOSTER — fuzzy + Jumia are already strong on their own — so it
+  // gets a hard per-source timeout: if Google's embedding endpoint is
+  // having a slow day, we proceed without it rather than letting the
+  // whole analyze blow past Vercel's 60s function limit.
   //
-  // Run all three in parallel — independent network calls.
+  // withTimeout(promise, ms, fallback) — race a promise against a
+  // timeout, returning the fallback on timeout. Used to keep each
+  // retrieval source from holding up the whole pipeline.
+  function withTimeout<T>(p: Promise<T>, ms: number, fallback: T, label: string): Promise<T> {
+    return Promise.race([
+      p,
+      new Promise<T>((resolve) =>
+        setTimeout(() => {
+          console.warn(`[auto-analyze] ${label} timed out after ${ms}ms — using fallback`);
+          resolve(fallback);
+        }, ms),
+      ),
+    ]);
+  }
+
   const fuzzyPromise: Promise<CategoryCandidate[]> = Promise.resolve(
     searchCategoriesByText(retrievalQuery, listableCategories, 6),
   );
+  // 8s ceiling — embedding call should complete in 1-3s when healthy.
+  // 42s outliers (cold starts on gemini-embedding-001) used to push the
+  // whole function past 60s and cause Vercel runtime timeouts.
   const embeddingPromise: Promise<CategoryCandidate[]> =
-    searchCategoriesByEmbedding(retrievalQuery, 6);
-  const jumiaPromise: Promise<CategoryCandidate[]> = (async () => {
-    try {
-      const { accessToken } = await getValidJumiaCredentials(userId);
-      return await searchJumiaProductsByTitle(accessToken, description.title, 3);
-    } catch {
-      return [];
-    }
-  })();
+    withTimeout(
+      searchCategoriesByEmbedding(retrievalQuery, 6),
+      8_000,
+      [],
+      "embedding-retrieval",
+    );
+  // 6s ceiling on the Jumia catalog API — they sometimes go slow during
+  // their own incidents. We have fuzzy + embedding to fall back on.
+  const jumiaPromise: Promise<CategoryCandidate[]> = withTimeout(
+    (async () => {
+      try {
+        const { accessToken } = await getValidJumiaCredentials(userId);
+        return await searchJumiaProductsByTitle(accessToken, description.title, 3);
+      } catch {
+        return [];
+      }
+    })(),
+    6_000,
+    [],
+    "jumia-retrieval",
+  );
 
   const [fuzzyHits, embeddingHits, jumiaHits] = await Promise.all([
     fuzzyPromise,
