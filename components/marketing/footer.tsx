@@ -1,7 +1,35 @@
 import Link from "next/link";
 import { Mail, Users } from "lucide-react";
 import { Wordmark } from "./wordmark";
-import { SUPPORT_EMAIL, SUPPORT_MAILTO, COMMUNITY_WHATSAPP_URL } from "@/lib/constants/support";
+import {
+  SUPPORT_EMAIL,
+  SUPPORT_MAILTO,
+  COMMUNITY_WHATSAPP_URL,
+  SOCIAL_LINKS,
+} from "@/lib/constants/support";
+
+// Lightweight inline X (Twitter) + Instagram glyphs — the lucide-react
+// `Twitter` icon still ships the bird; we want the X mark. No new dep.
+function XIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 1200 1227" aria-hidden="true" className={className} fill="currentColor">
+      <path d="M714.163 519.284 1160.89 0H1055.03L667.137 450.887 357.328 0H0L468.492 681.821 0 1226.37H105.866L515.491 750.218 842.672 1226.37H1200L714.137 519.284h.026ZM569.165 687.828l-47.468-67.894-377.7-540.24h162.604l304.797 435.991 47.468 67.894 396.2 566.721H892.476L569.165 687.854v-.026Z"/>
+    </svg>
+  );
+}
+
+function InstagramIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className={className} fill="currentColor">
+      <path d="M12 2.163c3.204 0 3.584.012 4.85.07 1.366.062 2.633.336 3.608 1.311.975.975 1.249 2.242 1.311 3.608.058 1.266.069 1.646.069 4.85s-.012 3.584-.07 4.85c-.062 1.366-.336 2.633-1.311 3.608-.975.975-2.242 1.249-3.608 1.311-1.266.058-1.646.07-4.85.07s-3.584-.012-4.85-.07c-1.366-.062-2.633-.336-3.608-1.311-.975-.975-1.249-2.242-1.311-3.608C2.175 15.747 2.163 15.367 2.163 12s.012-3.584.07-4.85c.062-1.366.336-2.633 1.311-3.608.975-.975 2.242-1.249 3.608-1.311C8.416 2.175 8.796 2.163 12 2.163ZM12 0C8.741 0 8.332.014 7.052.072 5.776.13 4.904.333 4.14.63a5.876 5.876 0 0 0-2.126 1.384A5.876 5.876 0 0 0 .63 4.14C.333 4.904.131 5.776.072 7.052.014 8.332 0 8.741 0 12s.014 3.668.072 4.948c.058 1.276.261 2.148.558 2.912.305.789.717 1.459 1.384 2.126.667.667 1.337 1.079 2.126 1.384.764.297 1.636.499 2.912.558C8.332 23.986 8.741 24 12 24s3.668-.014 4.948-.072c1.276-.058 2.148-.261 2.912-.558a5.876 5.876 0 0 0 2.126-1.384 5.876 5.876 0 0 0 1.384-2.126c.297-.764.499-1.636.558-2.912C23.986 15.668 24 15.259 24 12s-.014-3.668-.072-4.948c-.058-1.276-.261-2.148-.558-2.912a5.876 5.876 0 0 0-1.384-2.126A5.876 5.876 0 0 0 19.86.63c-.764-.297-1.636-.499-2.912-.558C15.668.014 15.259 0 12 0Zm0 5.838a6.162 6.162 0 1 0 0 12.324 6.162 6.162 0 0 0 0-12.324ZM12 16a4 4 0 1 1 0-8 4 4 0 0 1 0 8Zm6.406-11.845a1.44 1.44 0 1 0 0 2.881 1.44 1.44 0 0 0 0-2.881Z"/>
+    </svg>
+  );
+}
+
+const SOCIAL_ICON_MAP: Record<string, (p: { className?: string }) => JSX.Element> = {
+  "X (Twitter)": XIcon,
+  "Instagram":   InstagramIcon,
+};
 
 /**
  * Shared footer for public marketing pages (/, /pricing, /terms,
@@ -67,6 +95,28 @@ export function MarketingFooter() {
             <Users className="h-3 w-3" />
             Join our community
           </a>
+
+          {/* Social channels — driven by SOCIAL_LINKS in lib/constants/support.ts
+              so JSON-LD `sameAs`, the footer, and any other surface stay in
+              sync from one source. Add new platforms by appending to that
+              array; the icon map above gates which glyph renders. */}
+          {SOCIAL_LINKS.map((s) => {
+            const Icon = SOCIAL_ICON_MAP[s.name];
+            if (!Icon) return null;
+            return (
+              <a
+                key={s.url}
+                href={s.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={`Follow PandaWorld on ${s.name}`}
+                className="inline-flex items-center justify-center rounded-full p-1.5 text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-900"
+                title={`${s.name} — ${s.handle}`}
+              >
+                <Icon className="h-3.5 w-3.5" />
+              </a>
+            );
+          })}
         </div>
       </div>
     </footer>

@@ -176,7 +176,11 @@ const organizationLd = {
     ],
   },
   sameAs: [
-    // Add socials here once they exist (Twitter, LinkedIn, etc.)
+    // Linked socials — surfaces these as verified channels in Google's
+    // knowledge panel + helps disambiguate "pandaworld" brand searches.
+    // Single source of truth: lib/constants/support.ts SOCIAL_LINKS.
+    "https://x.com/pandaworldai",
+    "https://www.instagram.com/pandaworldai",
   ],
 } as const;
 
