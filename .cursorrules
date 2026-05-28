@@ -1,0 +1,12 @@
+# Cursor: read AGENTS.md first.
+#
+# The full project context, file map, decisions, gotchas, and outstanding
+# work live in ./AGENTS.md — single source of truth for any AI working on
+# this codebase.
+#
+# Style hints for Cursor specifically:
+# - Use TypeScript, no `any` unless absolutely necessary
+# - Match the existing 2-space indent
+# - Co-locate logic-heavy comments above the relevant block
+# - Prefer small focused commits with body text explaining WHY
+# - Run `npx tsc --noEmit` before committing
