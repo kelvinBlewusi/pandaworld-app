@@ -17,11 +17,25 @@
  * pgvector's vector(768) column.
  */
 
-/** All produce 768-dim vectors compatible with our pgvector column. */
+/**
+ * All produce 768-dim vectors compatible with our pgvector column.
+ *
+ * Order matters: the FIRST name in this list is tried first on every
+ * cold-start until one succeeds. On the user's current API key
+ * `text-embedding-004` returns 404 → we waste a ~2s fallback round-trip
+ * on every fresh Vercel invocation. `gemini-embedding-001` is the one
+ * that resolves on their key, so it goes first. The legacy `embedding-001`
+ * sits last as a safety net for old keys we haven't seen.
+ *
+ * Operationally: cache hits skip this list entirely (see
+ * `_resolvedEmbeddingModel` below). This order only matters on the
+ * first call of a new serverless process — but with Vercel's cold
+ * starts, that's frequent enough to be worth optimising.
+ */
 const EMBEDDING_MODELS_TO_TRY = [
-  "text-embedding-004",      // current public name as of late 2024
-  "gemini-embedding-001",    // newer alias on some accounts
-  "embedding-001",           // legacy name still working on older keys
+  "gemini-embedding-001",    // works on current key — try first
+  "text-embedding-004",      // older public name; 404s on some keys
+  "embedding-001",           // legacy fallback
 ];
 
 const EMBED_TIMEOUT_MS = 20_000;

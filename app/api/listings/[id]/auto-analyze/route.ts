@@ -631,26 +631,44 @@ export async function POST(
   //    attribute must parse cleanly to a number — otherwise drop it so
   //    Jumia's "should be a number" QC error doesn't fire.
   //
-  //    EXCEPTION: certain attribute names are conceptually text even
-  //    when Jumia's schema occasionally types them as "number" (their
-  //    schema isn't always clean). For example `what_is_in_the_box`
-  //    sometimes comes back typed as number, and a list like
-  //    "1× Humidifier, 1× Adapter" would get scrubbed down to just "1".
-  //    The skip-set below preserves text formatting for those.
+  //    EXCEPTIONS — schema's `type` field is unreliable for these:
+  //
+  //    a) Explicit text-attribute allowlist: Jumia's schema sometimes
+  //       types prose attributes (description / what_is_in_the_box /
+  //       manufacturer_txt) as "number". Scrub would mangle them.
+  //
+  //    b) Heuristic — name suggests prose: any attribute whose name
+  //       includes "desc", "note", "text", "title", "label", "name",
+  //       or whose value contains alphabetic characters AND spaces.
+  //       This catches future schema oddities we haven't allowlisted.
   const SKIP_NUMERIC_SCRUB = new Set([
     "what_is_in_the_box", "in_the_box", "package_contents", "package_includes",
     "product_note", "note", "seller_note",
-    "from_the_manufacturer", "manufacturer_note",
+    "from_the_manufacturer", "manufacturer_note", "manufacturer_txt", "manufacturer",
+    "description", "product_description", "long_description", "short_description",
+    "title", "product_title", "name", "product_name", "label",
   ]);
+  const TEXTY_NAME_RE = /(desc|note|text|title|label|name|comment|message|copy|tagline)/i;
+
   const numericAttrNames = new Set(
     attrs
       .filter((a) => a.type === "number")
       .map((a) => a.name.toLowerCase())
-      .filter((n) => !SKIP_NUMERIC_SCRUB.has(n)),
+      .filter((n) => !SKIP_NUMERIC_SCRUB.has(n) && !TEXTY_NAME_RE.test(n)),
   );
   for (const key of Object.keys(finalDynamicAttrs)) {
     if (!numericAttrNames.has(key.toLowerCase())) continue;
     const raw   = String(finalDynamicAttrs[key]);
+
+    // Last-resort heuristic: if the value contains spaces AND letters,
+    // it's prose — leave it alone regardless of schema type.
+    if (/[a-zA-Z]/.test(raw) && /\s/.test(raw)) {
+      console.warn(
+        `[auto-analyze] skipping numeric-scrub for '${key}' — value contains prose: '${raw.slice(0, 40)}'`,
+      );
+      continue;
+    }
+
     const match = raw.match(/-?\d+(?:\.\d+)?/);
     if (match) {
       const n = parseFloat(match[0]);

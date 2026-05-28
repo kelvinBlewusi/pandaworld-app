@@ -403,6 +403,14 @@ async function attemptImageFetch(url: string, timeoutMs: number): Promise<ImageP
   return { inlineData: { data: base64, mimeType } };
 }
 
+// Process-level circuit breaker: once the Supabase `/render/image/`
+// endpoint returns 403 for this project, it'll return 403 for every
+// other image too (it's a Supabase plan setting, not per-image). Flip
+// this flag on the first 403 and skip the resize path entirely until
+// the serverless process restarts. Saves a wasted ~50ms per image
+// fetch — at 3 images × 3 passes × N analyses, this adds up.
+let _resizeDisabled = false;
+
 async function fetchImagePart(url: string): Promise<ImageFetchResult> {
   // Resize-at-CDN: ~5× fewer image tokens for Gemini, ~2× faster inference.
   // Cache key is the RESIZED URL so we get cache hits across passes
@@ -414,6 +422,20 @@ async function fetchImagePart(url: string): Promise<ImageFetchResult> {
   const cached = _imagePartCache.get(resizedUrl);
   if (cached && cached.expires > Date.now()) {
     return { ok: true, part: cached.part };
+  }
+
+  // Circuit-breaker tripped on a prior 403? Skip the resize attempt
+  // entirely and go straight to the original URL. The Supabase image
+  // transform endpoint is gated behind a Pro plan; if the project
+  // doesn't have it, no amount of retries will help.
+  if (_resizeDisabled && resizedUrl !== url) {
+    try {
+      const part = await attemptImageFetch(url, 15_000);
+      _imagePartCache.set(resizedUrl, { part, expires: Date.now() + IMAGE_CACHE_TTL_MS });
+      return { ok: true, part };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
   }
 
   // 1) Try the resized URL first (fast path).
@@ -430,6 +452,15 @@ async function fetchImagePart(url: string): Promise<ImageFetchResult> {
     //    "ok: false" and the analyze silently failed for the listing).
     if (resizedUrl === url) {
       return { ok: false, error: (resizeErr as Error).message };
+    }
+    // Trip the circuit-breaker on 403 (image transformations not
+    // enabled on this Supabase project). Future fetches skip straight
+    // to the original URL.
+    if (/HTTP\s*403/i.test((resizeErr as Error).message)) {
+      _resizeDisabled = true;
+      console.warn(
+        "[AI] image-resize disabled for this process (Supabase project doesn't have image transformations enabled). Falling back to original URLs.",
+      );
     }
     console.warn(
       `[AI] image-resize failed (${(resizeErr as Error).message.slice(0, 80)}) — falling back to original URL`,
