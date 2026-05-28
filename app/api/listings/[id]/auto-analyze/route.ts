@@ -26,6 +26,7 @@ import { searchJumiaProductsByTitle } from "@/lib/jumia/catalog-search";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { AI_DYNAMIC_ATTR_DEFAULTS, resolvePatternDefault } from "@/lib/ai/policy";
+import { webSearch, formatSearchSnippetsForPrompt, isWebSearchEnabled } from "@/lib/ai/web-search";
 
 // ─── Process-level embedding circuit breaker ────────────────────────────────
 //
@@ -800,6 +801,25 @@ export async function POST(
       const titleForGap   = String(updates.title       ?? listing.title       ?? "");
       const brandForGap   = String(updates.brand       ?? listing.brand       ?? "");
       const descForGap    = String(updates.description ?? listing.description ?? "");
+
+      // ── Web search boost (Google Custom Search) ────────────────────────
+      // Before asking the AI to fill the gaps, search Google for
+      // "{brand} {title}" and feed the top snippets in as ground truth.
+      // The model now has real product-page data (specs, capacities,
+      // dimensions) instead of guessing from the image alone.
+      //
+      // Skipped entirely when:
+      //   - GOOGLE_CSE_ID isn't set (free fallback behaviour)
+      //   - we don't have at least a title to build a query from
+      //
+      // Hard 6s ceiling inside webSearch() — never stalls the analyze.
+      let webSearchContext = "";
+      if (isWebSearchEnabled() && titleForGap.trim().length > 0) {
+        const query = [brandForGap, titleForGap].filter(Boolean).join(" ").slice(0, 200);
+        const results = await webSearch(query);
+        webSearchContext = formatSearchSnippetsForPrompt(results, 3);
+      }
+
       const gap = await aiFillGaps(
         {
           title:        titleForGap,
@@ -807,6 +827,7 @@ export async function POST(
           description:  descForGap,
           categoryPath: chosen.path,
           images,
+          webSearchContext,
         },
         stillEmptyRequired.map((a) => ({
           name:           a.name,
@@ -821,13 +842,15 @@ export async function POST(
         finalDynamicAttrs[k] = v;
         if (!mergedSources[k]) mergedSources[k] = "ai";
         mergedConfidence[k] = {
-          confidence: 0.65,
+          confidence: webSearchContext ? 0.75 : 0.65,
           source:     "inferred",
-          reasoning:  "AI gap-fill — confident default based on product class.",
+          reasoning:  webSearchContext
+            ? "AI gap-fill backed by web-search ground truth."
+            : "AI gap-fill — confident default based on product class.",
         };
       }
       console.info(
-        `[auto-analyze] gap-fill: requested=${stillEmptyRequired.length} filled=${Object.keys(gap.filled).length} ms=${Date.now() - tGap}`,
+        `[auto-analyze] gap-fill: requested=${stillEmptyRequired.length} filled=${Object.keys(gap.filled).length} web_search=${webSearchContext ? "yes" : "no"} ms=${Date.now() - tGap}`,
       );
     } catch (e) {
       console.warn(`[auto-analyze] gap-fill failed (non-fatal): ${(e as Error).message}`);

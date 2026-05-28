@@ -1847,6 +1847,13 @@ export async function aiFillGaps(
     description:  string;
     categoryPath: string;
     images:       string[];
+    /**
+     * Optional ground-truth context block, typically formatted Google
+     * Custom Search snippets from lib/ai/web-search.ts. When present
+     * the model is told to prefer this real-world data over generic
+     * inferences when filling gaps. Empty string = no boost.
+     */
+    webSearchContext?: string;
   },
   emptyFields: GapField[],
   opts: { forceBestModel?: boolean } = {},
@@ -1865,6 +1872,8 @@ export async function aiFillGaps(
     return `  - ${f.name} (${f.label})${typeNote}`;
   }).join("\n");
 
+  const webBlock = context.webSearchContext ?? "";
+
   const prompt = `You are a Jumia listing assistant. Fill the empty REQUIRED attribute fields below with confident, sensible values for this product. The seller cannot submit until every required field has a value, so DO NOT return null or empty — pick the most reasonable default you can from general knowledge of the brand / product class.
 
 PRODUCT CONTEXT:
@@ -1872,7 +1881,7 @@ PRODUCT CONTEXT:
   Brand:       ${context.brand ?? "Generic"}
   Category:    ${context.categoryPath}
   Description: ${context.description.slice(0, 600)}
-
+${webBlock}
 EMPTY REQUIRED FIELDS:
 ${fieldsBlock}
 
@@ -1882,7 +1891,8 @@ Rules for each field:
 - For ENUM fields: pick exactly one value from the allowed list — typically prefer "all", "unisex", "standard", "classic", "regular" or similar most-inclusive option when in doubt.
 - For BOOLEAN fields: pick the most-common-case value for this product class.
 - For free-text fields: write a short, neutral value (e.g. "Standard", "Refer to product label", "Adult", "Unisex").
-- Use the images + general online knowledge of the brand to be as accurate as possible. Only fall back to neutral defaults when you really have no basis.
+- Use the images + general online knowledge of the brand to be as accurate as possible. When the WEB SEARCH RESULTS block above is present, PREFER concrete specs from those snippets over generic estimates — they reflect the real product page.
+- Only fall back to neutral defaults when you really have no basis.
 
 Output ONLY this JSON shape, no markdown, no prose:
 {
