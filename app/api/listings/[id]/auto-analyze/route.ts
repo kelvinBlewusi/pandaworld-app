@@ -27,6 +27,32 @@ import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { AI_DYNAMIC_ATTR_DEFAULTS, resolvePatternDefault } from "@/lib/ai/policy";
 
+// ─── Process-level embedding circuit breaker ────────────────────────────────
+//
+// `gemini-embedding-001` has shown 30–40s cold-start latencies in
+// production. The retrieval timeout caps each single call at 4s, but
+// if the same Vercel serverless instance hits TWO consecutive timeouts,
+// the underlying service is clearly stuck — every subsequent analyze
+// in this process would pay the same 4s wait for the same fallback.
+//
+// Open the breaker on the second timeout and short-circuit straight
+// to the fallback for the rest of the process lifetime. The breaker
+// resets when Vercel rotates the instance (next cold start gets a
+// fresh chance).
+let _embeddingTimeoutCount = 0;
+let _embeddingCircuitOpen = false;
+
+function _onEmbeddingTimeout(label: string): void {
+  if (label !== "embedding-retrieval") return;
+  _embeddingTimeoutCount++;
+  if (!_embeddingCircuitOpen && _embeddingTimeoutCount >= 2) {
+    _embeddingCircuitOpen = true;
+    console.warn(
+      "[auto-analyze] embedding circuit breaker OPEN — skipping embedding retrieval for the rest of this process",
+    );
+  }
+}
+
 // ─── POST /api/listings/[id]/auto-analyze ────────────────────────────────────
 //
 // One-button category detection + attribute fill.
@@ -189,6 +215,7 @@ export async function POST(
       new Promise<T>((resolve) =>
         setTimeout(() => {
           console.warn(`[auto-analyze] ${label} timed out after ${ms}ms — using fallback`);
+          _onEmbeddingTimeout(label);
           resolve(fallback);
         }, ms),
       ),
@@ -198,16 +225,24 @@ export async function POST(
   const fuzzyPromise: Promise<CategoryCandidate[]> = Promise.resolve(
     searchCategoriesByText(retrievalQuery, listableCategories, 6),
   );
-  // 8s ceiling — embedding call should complete in 1-3s when healthy.
-  // 42s outliers (cold starts on gemini-embedding-001) used to push the
-  // whole function past 60s and cause Vercel runtime timeouts.
+  // 4s ceiling on the embedding call. The Google `gemini-embedding-001`
+  // model has shown 30–40s cold-start latency in production — way past
+  // anything useful for an interactive analyze flow. Healthy warm calls
+  // complete in <1s, so 4s is generous. Past that, fuzzy + Jumia are
+  // strong enough on their own.
+  //
+  // We also short-circuit BEFORE issuing the call if the process-level
+  // breaker has been tripped (two consecutive timeouts) so we don't even
+  // pay the 4s wait when we already know embedding is dead today.
   const embeddingPromise: Promise<CategoryCandidate[]> =
-    withTimeout(
-      searchCategoriesByEmbedding(retrievalQuery, 6),
-      8_000,
-      [],
-      "embedding-retrieval",
-    );
+    _embeddingCircuitOpen
+      ? Promise.resolve([])
+      : withTimeout(
+          searchCategoriesByEmbedding(retrievalQuery, 6),
+          4_000,
+          [],
+          "embedding-retrieval",
+        );
   // 6s ceiling on the Jumia catalog API — they sometimes go slow during
   // their own incidents. We have fuzzy + embedding to fall back on.
   const jumiaPromise: Promise<CategoryCandidate[]> = withTimeout(
