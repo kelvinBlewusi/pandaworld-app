@@ -18,25 +18,26 @@
  */
 
 /**
- * All produce 768-dim vectors compatible with our pgvector column.
+ * Embedding-model fallback chain for the AI Studio backend.
  *
  * Order matters: the FIRST name in this list is tried first on every
- * cold-start until one succeeds. On the user's current API key
- * `text-embedding-004` returns 404 → we waste a ~2s fallback round-trip
- * on every fresh Vercel invocation. `gemini-embedding-001` is the one
- * that resolves on their key, so it goes first. The legacy `embedding-001`
- * sits last as a safety net for old keys we haven't seen.
- *
+ * cold-start until one succeeds. `gemini-embedding-001` is the one
+ * that resolves on the user's current AI Studio key, so it goes first.
  * Operationally: cache hits skip this list entirely (see
  * `_resolvedEmbeddingModel` below). This order only matters on the
- * first call of a new serverless process — but with Vercel's cold
- * starts, that's frequent enough to be worth optimising.
+ * first call of a new serverless process when AI Studio is the backend.
+ *
+ * On Vertex AI, we hit `text-embedding-005` directly — no fallback list
+ * needed because the model catalogue is predictable per project.
  */
 const EMBEDDING_MODELS_TO_TRY = [
   "gemini-embedding-001",    // works on current key — try first
   "text-embedding-004",      // older public name; 404s on some keys
   "embedding-001",           // legacy fallback
 ];
+
+/** Vertex AI's stable, fast embedding model. Provisioned-warm — no cold start. */
+const VERTEX_EMBEDDING_MODEL = "text-embedding-005";
 
 const EMBED_TIMEOUT_MS = 20_000;
 
@@ -49,13 +50,157 @@ export interface EmbedTextResult {
   vector: number[];
   /** Model used (lets callers spot drift if we ever swap models). */
   model: string;
+  /** Which backend served the call — useful in Vercel logs. */
+  backend?: "vertex" | "ai-studio";
+}
+
+// ─── Backend selection ──────────────────────────────────────────────────────
+
+/**
+ * True iff this process is configured to use Vertex AI for embeddings.
+ * Mirrors the same condition as lib/ai/gemini-client.ts so vision and
+ * embeddings stay on the same backend.
+ */
+function isVertexEmbeddingsEnabled(): boolean {
+  return Boolean(
+    process.env.GCP_PROJECT_ID &&
+      process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON,
+  );
+}
+
+// ─── Vertex AI access-token cache ───────────────────────────────────────────
+//
+// The Vertex predict endpoint uses Bearer auth (OAuth2 access token derived
+// from the service account JSON). Tokens last 1 hour. Caching here avoids
+// re-signing a JWT on every embed call — a single token serves thousands
+// of requests in the same process.
+
+let _vertexAuthClient: import("google-auth-library").GoogleAuth | null = null;
+let _vertexAccessToken: { token: string; expires: number } | null = null;
+
+async function getVertexAccessToken(): Promise<string> {
+  // 60-second safety buffer — refresh before expiry.
+  const now = Date.now();
+  if (_vertexAccessToken && _vertexAccessToken.expires > now + 60_000) {
+    return _vertexAccessToken.token;
+  }
+
+  if (!_vertexAuthClient) {
+    const credsRaw = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
+    if (!credsRaw) {
+      throw new Error("GOOGLE_APPLICATION_CREDENTIALS_JSON is required for Vertex embeddings.");
+    }
+    const credentials = JSON.parse(credsRaw);
+    // Dynamic import — google-auth-library ships with @google-cloud/vertexai.
+    // Lazy-import so AI-Studio-only deployments don't pay the cost of loading it.
+    const { GoogleAuth } = await import("google-auth-library");
+    _vertexAuthClient = new GoogleAuth({
+      credentials,
+      scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+    });
+  }
+
+  const client = await _vertexAuthClient.getClient();
+  const tokenResp = await client.getAccessToken();
+  if (!tokenResp.token) {
+    throw new Error("Vertex auth returned no access token");
+  }
+  // tokenResp.res?.data?.expires_in is in seconds; default to 50 min if absent
+  const expiresInSec =
+    (tokenResp.res?.data as { expires_in?: number } | undefined)?.expires_in ?? 3000;
+  _vertexAccessToken = {
+    token:   tokenResp.token,
+    expires: now + expiresInSec * 1000,
+  };
+  return tokenResp.token;
+}
+
+// ─── Per-backend embed implementations ──────────────────────────────────────
+
+/**
+ * Vertex AI `text-embedding-005:predict` call.
+ *
+ * Request shape (different from AI Studio's `embedContent`):
+ *   POST .../publishers/google/models/text-embedding-005:predict
+ *   {
+ *     instances:  [{ task_type: "RETRIEVAL_QUERY", content: "..." }],
+ *     parameters: { outputDimensionality: 768 }
+ *   }
+ *
+ * Response shape:
+ *   { predictions: [{ embeddings: { values: [...] } }] }
+ *
+ * task_type matters for retrieval quality — using RETRIEVAL_QUERY for
+ * the auto-analyze use case (matches "search the category tree for this
+ * product description"). For indexing the categories themselves we'd
+ * use RETRIEVAL_DOCUMENT — but the backfill route does that elsewhere.
+ */
+async function embedViaVertex(text: string): Promise<EmbedTextResult> {
+  const project  = process.env.GCP_PROJECT_ID!;
+  const location = process.env.VERTEX_AI_LOCATION ?? "us-central1";
+  const token    = await getVertexAccessToken();
+
+  const url =
+    `https://${location}-aiplatform.googleapis.com/v1/projects/${project}` +
+    `/locations/${location}/publishers/google/models/${VERTEX_EMBEDDING_MODEL}:predict`;
+
+  const res = await fetch(url, {
+    method:  "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type":  "application/json",
+    },
+    body: JSON.stringify({
+      instances:  [{ task_type: "RETRIEVAL_QUERY", content: text }],
+      parameters: { outputDimensionality: 768 },
+    }),
+    signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `Vertex embed ${VERTEX_EMBEDDING_MODEL} failed: ${res.status} ${body.slice(0, 300)}`,
+    );
+  }
+
+  const data = (await res.json()) as {
+    predictions?: Array<{ embeddings?: { values?: number[] } }>;
+  };
+  const values = data.predictions?.[0]?.embeddings?.values;
+
+  if (!Array.isArray(values) || values.length === 0) {
+    throw new Error(
+      `Vertex embed empty vector. response=${JSON.stringify(data).slice(0, 300)}`,
+    );
+  }
+
+  // text-embedding-005 returns 768-dim by default when outputDimensionality
+  // is requested. Belt-and-braces: clip to 768 if anything else came back.
+  let vector = values;
+  if (vector.length > 768) vector = vector.slice(0, 768);
+  if (vector.length !== 768) {
+    throw new Error(
+      `Vertex embed: expected 768-dim vector, got ${values.length}`,
+    );
+  }
+
+  // Re-normalise to unit length (same convention as the AI Studio path —
+  // pgvector cosine-distance only behaves correctly with unit-norm vectors).
+  const sumSq = vector.reduce((s, x) => s + x * x, 0);
+  const norm  = Math.sqrt(sumSq);
+  if (norm > 0 && Math.abs(norm - 1) > 1e-4) {
+    vector = vector.map((x) => x / norm);
+  }
+
+  return { vector, model: VERTEX_EMBEDDING_MODEL, backend: "vertex" };
 }
 
 /**
- * Attempt the embed call against ONE specific model. Returns null
- * on a "model not available" error so the caller can try the next
- * one. Throws on real errors (auth, network, malformed response)
- * because retrying with a different model won't fix those.
+ * Attempt the embed call against ONE specific AI Studio model. Returns
+ * a skipReason on a "model not available" error so the caller can try
+ * the next one. Throws on real errors (auth, network, malformed
+ * response) because retrying with a different model won't fix those.
  */
 async function tryEmbedOneModel(
   modelName: string,
@@ -136,17 +281,21 @@ async function tryEmbedOneModel(
     vector = vector.map((x) => x / norm);
   }
 
-  return { vector, model: modelName };
+  return { vector, model: modelName, backend: "ai-studio" };
 }
 
 /**
- * Embed a single piece of text. Tries each model in
- * EMBEDDING_MODELS_TO_TRY until one returns a vector. Caches the
- * working model for subsequent calls.
+ * Embed a single piece of text. Routes through Vertex AI when configured
+ * (GCP_PROJECT_ID + GOOGLE_APPLICATION_CREDENTIALS_JSON set) — Vertex's
+ * text-embedding-005 is provisioned-warm and returns in <1s consistently,
+ * eliminating the 30-40s cold-start outliers we hit on AI Studio's
+ * gemini-embedding-001.
  *
- * Throws on real errors (auth, rate limit, network) so the caller
- * can decide whether to retry. Throws only with the LAST error
- * encountered after exhausting the fallback list.
+ * Falls back to the AI Studio model-fallback chain when Vertex isn't
+ * configured (preserves zero-config local dev + safe rollback).
+ *
+ * Throws on real errors (auth, rate limit, network) so the caller can
+ * decide whether to retry.
  */
 export async function embedText(text: string): Promise<EmbedTextResult> {
   const clean = text.trim();
@@ -155,7 +304,13 @@ export async function embedText(text: string): Promise<EmbedTextResult> {
   }
   const truncated = clean.length > 2000 ? clean.slice(0, 2000) : clean;
 
-  // Fast path: we've already resolved a working model
+  // Vertex path — predictable model, no fallback chain needed because
+  // text-embedding-005 is always GA on Vertex projects with billing.
+  if (isVertexEmbeddingsEnabled()) {
+    return embedViaVertex(truncated);
+  }
+
+  // AI Studio fast path: we've already resolved a working model
   if (_resolvedEmbeddingModel) {
     const result = await tryEmbedOneModel(_resolvedEmbeddingModel, truncated);
     if ("vector" in result) return result;
@@ -166,12 +321,13 @@ export async function embedText(text: string): Promise<EmbedTextResult> {
     _resolvedEmbeddingModel = null;
   }
 
+  // AI Studio model-discovery loop.
   const skipReasons: string[] = [];
   for (const modelName of EMBEDDING_MODELS_TO_TRY) {
     const result = await tryEmbedOneModel(modelName, truncated);
     if ("vector" in result) {
       _resolvedEmbeddingModel = modelName;
-      console.info(`[embeddings] using model: ${modelName}`);
+      console.info(`[embeddings] using model: ${modelName} backend=ai-studio`);
       return result;
     }
     skipReasons.push(`${modelName}: ${result.skipReason}`);
