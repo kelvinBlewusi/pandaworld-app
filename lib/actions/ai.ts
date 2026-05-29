@@ -290,11 +290,17 @@ Return ONLY valid JSON. No markdown fences, no explanation, no trailing text:
 // Preferred models in order. The first one that's available on the user's
 // API key will be used. If none of these resolve, we discover the live model
 // list from Google's API and pick whatever vision-capable model is available.
+//
+// Order matters: lite variants first because they're ~3-5× faster on
+// vision/text calls (smaller params, lower latency per token) while still
+// returning Jumia-acceptable quality output for structured-JSON tasks.
+// Full Flash sits behind as a higher-quality fallback if the lite tier
+// is unavailable on the backend.
 const PREFERRED_MODELS = [
-  "gemini-2.5-flash",
-  "gemini-2.0-flash",
   "gemini-2.5-flash-lite",
   "gemini-2.0-flash-lite",
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
   "gemini-flash-latest",
 ];
 

@@ -53,11 +53,16 @@ const MODEL_PREMIUM    = "gemini-2.5-pro";                 // Business / Admin
 // edit re-routes every Free / Starter / Pro / Business analyze call
 // without touching the per-tier ladder above.
 //
-// May 2026: pinned to gemini-3.1-flash-lite for speed + cost on the
-// only active flow (rebuild + text-to-image are disabled). If this
-// model is not enabled on the API key, callGemini's fallback chain
-// drops back to PREFERRED_MODELS / discovered models automatically.
-const MODEL_OWN_IMAGES_FLOW = "gemini-3.1-flash-lite";
+// May 2026 (rev. post-Vertex migration): pinned to gemini-2.5-flash-lite.
+// We previously used "gemini-3.1-flash-lite" — a string that 404s on
+// both AI Studio and Vertex AI (Vertex's catalogue exposes the 2.5
+// generation; 3.x is not GA). The fallback chain was silently
+// catching the 404 and dropping to gemini-2.5-flash, which is slower
+// (~15s/call vs ~3s/call on flash-lite). 3 passes × 15s pushed us
+// past Vercel's 60s function ceiling. Switching to 2.5-flash-lite as
+// the primary fixes the 404 outright and gives the fast inference
+// we wanted in the first place.
+const MODEL_OWN_IMAGES_FLOW = "gemini-2.5-flash-lite";
 
 // Image editing — currently only one viable Gemini model. Used by
 // the "Polish" and "Rebuild as studio shot" buttons (which take an
