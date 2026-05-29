@@ -10,7 +10,7 @@
  */
 
 import { createServerClient } from "@/lib/supabase/server";
-import { selectAllPaginated } from "@/lib/supabase/paginate";
+import { selectAllPaginated, selectAllPaginatedParallel } from "@/lib/supabase/paginate";
 import { JUMIA_API_BASE } from "@/lib/jumia/oauth";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -86,13 +86,44 @@ export async function getLeafCategories(): Promise<JumiaCategoryRow[]> {
  * UI layer decide selectability (CategoryRow.isSelectable based on
  * hasChildren) but include intermediate-listable parents in the tree.
  */
+// ─── Process-level cache for getListableCategories ─────────────────────────
+//
+// The listable categories table is ~27k rows on a fully-synced GH
+// project. Paginating it server-side (Supabase max_rows=1000) takes
+// 28 sequential queries × ~500ms each = ~14 SECONDS per analyze. With
+// 10 products in a batch this used to burn 140 seconds just on
+// Supabase paging.
+//
+// Categories change infrequently (sync runs nightly via cron). Caching
+// the result at module scope for 1 hour is safe: stale-by-up-to-an-hour
+// is fine for category selection — the worst case is the AI rank pass
+// not seeing a category Jumia added in the last hour, and the seller
+// can re-run analyze after the cache expires.
+//
+// Invalidation: the sync endpoint can call invalidateListableCategoriesCache()
+// to bust the cache immediately after a successful sync. The TTL is the
+// safety net.
+
+let _listableCache: { data: JumiaCategoryRow[]; expires: number } | null = null;
+const LISTABLE_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+/** Bust the in-memory cache. Call after a successful jumia_categories sync. */
+export function invalidateListableCategoriesCache(): void {
+  _listableCache = null;
+}
+
 export async function getListableCategories(): Promise<JumiaCategoryRow[]> {
+  // Fast path: warm cache.
+  if (_listableCache && _listableCache.expires > Date.now()) {
+    return _listableCache.data;
+  }
+
   const db = createServerClient();
   // Page through in 1000-row chunks — see getLeafCategories for the cap
   // rationale. The AI's candidate pool and Vendor-Center picker both
   // depend on getting the FULL listable set, not just the first 1000.
   const query = () =>
-    selectAllPaginated<JumiaCategoryRow>((from, to) =>
+    selectAllPaginatedParallel<JumiaCategoryRow>((from, to) =>
       db
         .from("jumia_categories")
         .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name")
@@ -103,6 +134,7 @@ export async function getListableCategories(): Promise<JumiaCategoryRow[]> {
 
   let rows = await query();
   if (rows.length > 0) {
+    _listableCache = { data: rows, expires: Date.now() + LISTABLE_CACHE_TTL_MS };
     return rows;
   }
 
@@ -113,6 +145,9 @@ export async function getListableCategories(): Promise<JumiaCategoryRow[]> {
   if (inserted === 0) return [];
 
   rows = await query();
+  if (rows.length > 0) {
+    _listableCache = { data: rows, expires: Date.now() + LISTABLE_CACHE_TTL_MS };
+  }
   return rows;
 }
 

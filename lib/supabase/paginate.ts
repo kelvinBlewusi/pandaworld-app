@@ -59,3 +59,58 @@ export async function selectAllPaginated<T>(
 
   return out;
 }
+
+/**
+ * Like `selectAllPaginated` but fires the pages in parallel batches.
+ * Reduces wall-clock time for big tables (jumia_categories at ~30k rows)
+ * from ~14s (28 sequential pages × ~500ms) to ~1-2s (one parallel batch).
+ *
+ * Trade-off: we don't know how many pages we need up front, so we
+ * speculatively fetch a batch of N pages at a time. When ALL pages in
+ * the batch come back full, we fire another batch; when any page comes
+ * back short, we know we're done.
+ *
+ * For the jumia_categories table at ~28 pages, a batch size of 32
+ * means one round-trip total instead of 28 sequential.
+ */
+export async function selectAllPaginatedParallel<T>(
+  buildQuery: RangedQuery<T>,
+  pageSize: number = PAGE_SIZE,
+  batchSize: number = 32,
+): Promise<T[]> {
+  const out: T[] = [];
+  let batchStart = 0;
+
+  for (let batch = 0; batch < 10; batch++) {
+    // Fire `batchSize` pages in parallel.
+    const promises = Array.from({ length: batchSize }, (_, i) => {
+      const from = (batchStart + i) * pageSize;
+      const to   = from + pageSize - 1;
+      return buildQuery(from, to);
+    });
+    const responses = await Promise.all(promises);
+
+    // Stitch results in page order, watch for the first short page.
+    let hitShortPage = false;
+    for (const response of responses) {
+      const { data, error } = response;
+      if (error) {
+        throw new Error(
+          `selectAllPaginatedParallel: page failed (${error.message ?? "unknown error"})`,
+        );
+      }
+      if (!data || data.length === 0) {
+        hitShortPage = true;
+        continue;
+      }
+      out.push(...data);
+      if (data.length < pageSize) {
+        hitShortPage = true;
+      }
+    }
+    if (hitShortPage) break;
+    batchStart += batchSize;
+  }
+
+  return out;
+}
