@@ -1,7 +1,15 @@
 "use server";
 
 import { auth } from "@clerk/nextjs/server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+// Gemini-client abstraction — picks Vertex AI or AI Studio based on env.
+// Replaces the previous direct `new GoogleGenerativeAI(apiKey)` instantiation.
+// See lib/ai/gemini-client.ts for backend-selection details + roll-back path.
+import {
+  callGeminiBackend,
+  isVertexEnabled,
+  logActiveBackendOnce,
+  type GeminiPart,
+} from "@/lib/ai/gemini-client";
 import {
   getListableCategories,
   getCategoryAttributes,
@@ -486,10 +494,17 @@ async function callGemini(
   // lib/billing/ai-models.ts → pickModelForPlan().
   preferredModel?: string,
 ): Promise<string> {
-  const apiKey = process.env.GOOGLE_API_KEY;
-  if (!apiKey) throw new Error("GOOGLE_API_KEY not set");
-
-  const genAI = new GoogleGenerativeAI(apiKey);
+  // Backend selection (Vertex AI vs AI Studio) is resolved per-call via
+  // env vars in callGeminiBackend(). We don't construct the backend
+  // client here — it's cached at module scope inside gemini-client.ts.
+  // Surface which backend is live exactly once per process so Vercel
+  // logs make the migration state legible.
+  logActiveBackendOnce();
+  if (!isVertexEnabled() && !process.env.GOOGLE_API_KEY) {
+    throw new Error(
+      "Neither Vertex AI nor GOOGLE_API_KEY is configured — Gemini calls will fail.",
+    );
+  }
 
   // Periodically clear out cache entries we no longer need. Cheap
   // because we only do this on the way INTO an analyze call, not
@@ -511,16 +526,19 @@ async function callGemini(
     throw new Error(`Could not download any of the ${imageUrls.length} images for analysis: ${errors}`);
   }
 
+  // Build the canonical parts array: text prompt first, then image
+  // parts. Both backends accept this shape via the abstraction.
+  const parts: GeminiPart[] = [{ text: prompt }, ...validImageParts];
+
   // tryModel returns the text + how long the Gemini call took. We log the
   // duration prominently so Vercel logs surface which model + how slow
   // each pass actually is — critical for diagnosing the "why is this 5×
   // slower than expected" question without ad-hoc instrumentation.
-  const tryModel = async (name: string): Promise<{ text: string; ms: number }> => {
-    const model = genAI.getGenerativeModel({ model: name });
+  const tryModel = async (name: string): Promise<{ text: string; ms: number; backend: string }> => {
     const t0 = Date.now();
-    const result = await model.generateContent([prompt, ...validImageParts]);
+    const { text, backend } = await callGeminiBackend(name, parts);
     const ms = Date.now() - t0;
-    return { text: result.response.text(), ms };
+    return { text, ms, backend };
   };
 
   // 1. Caller passed a tier-aware preferred model (e.g. Free → 2.0 Flash,
@@ -529,8 +547,8 @@ async function callGemini(
   //    to the global cache + preference list.
   if (preferredModel) {
     try {
-      const { text, ms } = await tryModel(preferredModel);
-      console.info(`[AI] Model=${preferredModel} call_ms=${ms} images=${validImageParts.length}`);
+      const { text, ms, backend } = await tryModel(preferredModel);
+      console.info(`[AI] Model=${preferredModel} backend=${backend} call_ms=${ms} images=${validImageParts.length}`);
       return text;
     } catch (e) {
       console.warn(
@@ -542,8 +560,8 @@ async function callGemini(
   // 2. If we previously resolved a working model, try it first
   if (_resolvedModel) {
     try {
-      const { text, ms } = await tryModel(_resolvedModel);
-      console.info(`[AI] Model=${_resolvedModel} (cached) call_ms=${ms} images=${validImageParts.length}`);
+      const { text, ms, backend } = await tryModel(_resolvedModel);
+      console.info(`[AI] Model=${_resolvedModel} (cached) backend=${backend} call_ms=${ms} images=${validImageParts.length}`);
       return text;
     } catch (e) {
       console.warn(`[AI] Cached model ${_resolvedModel} failed: ${(e as Error).message}`);
@@ -555,20 +573,32 @@ async function callGemini(
   const errors: string[] = [];
   for (const modelName of PREFERRED_MODELS) {
     try {
-      const { text, ms } = await tryModel(modelName);
+      const { text, ms, backend } = await tryModel(modelName);
       _resolvedModel = modelName;
-      console.info(`[AI] Model=${modelName} (fallback) call_ms=${ms} images=${validImageParts.length}`);
+      console.info(`[AI] Model=${modelName} (fallback) backend=${backend} call_ms=${ms} images=${validImageParts.length}`);
       return text;
     } catch (e) {
       errors.push(`${modelName}: ${(e as Error).message.slice(0, 100)}`);
     }
   }
 
-  // 3. None of the preferred models worked — discover what's actually live
+  // 3. None of the preferred models worked — discover what's actually live.
+  //    Discovery uses the AI Studio v1beta ListModels endpoint, which only
+  //    works with a `GOOGLE_API_KEY`. On Vertex AI we skip discovery and
+  //    surface a clean error — Vertex's available models are predictable
+  //    from the published model catalogue, so PREFERRED_MODELS exhausting
+  //    means something else is wrong (auth, region, billing).
+  const apiKeyForDiscovery = process.env.GOOGLE_API_KEY;
+  if (!apiKeyForDiscovery) {
+    throw new Error(
+      `No Gemini model worked on Vertex AI. Tried: ${PREFERRED_MODELS.join(", ")}. ` +
+        `Earlier failures: ${errors.join(" | ")}`,
+    );
+  }
   console.warn(`[AI] All preferred models failed. Discovering available models for this API key…`);
   let discovered: string;
   try {
-    discovered = await discoverWorkingModel(apiKey);
+    discovered = await discoverWorkingModel(apiKeyForDiscovery);
   } catch (e) {
     throw new Error(
       `No Gemini model worked. Tried: ${PREFERRED_MODELS.join(", ")}. ` +
@@ -577,9 +607,9 @@ async function callGemini(
   }
 
   try {
-    const { text, ms } = await tryModel(discovered);
+    const { text, ms, backend } = await tryModel(discovered);
     _resolvedModel = discovered;
-    console.info(`[AI] Model=${discovered} (discovered) call_ms=${ms} images=${validImageParts.length}`);
+    console.info(`[AI] Model=${discovered} (discovered) backend=${backend} call_ms=${ms} images=${validImageParts.length}`);
     return text;
   } catch (e) {
     throw new Error(
