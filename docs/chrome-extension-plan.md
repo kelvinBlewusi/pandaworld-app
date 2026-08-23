@@ -84,13 +84,13 @@ the AI does the tedious, error-prone typing.
 │  └ status / credits                      ├ harvest uploaded image   │
 │                                          ├ harvest rendered fields  │
 │  Background service worker               └ write values into DOM    │
-│  └ holds Clerk session, calls API                                   │
+│  └ holds API key (storage.local), calls API                         │
 └───────────────────────────────┬─────────────────────────────────────┘
-                                 │ HTTPS + Clerk session token
+                                 │ HTTPS + PandaWorld API key (Bearer)
                                  ▼
 ┌────────────── PandaWorld backend (Next.js on Vercel) ───────────────┐
 │  NEW  app/api/extension/fill/route.ts                               │
-│   1. auth (Clerk) + quota check (lib/billing/quota.ts)             │
+│   1. auth (API key → userId) + quota check (lib/billing/quota.ts)  │
 │   2. aiPassA_describeProduct(image)        [reuse, lib/actions/ai] │
 │   3. NEW fill pass: given the rendered field schema, return a       │
 │      value per field, applying:                                     │
@@ -130,10 +130,11 @@ Seller: clicks Autofill
   │                            type:"richtext", required:true}, ...]
   │     • seller notes string
   │
-  ├─ background worker → POST /api/extension/fill  (Clerk token)
-  │     body: { image, fields:[...descriptors], notes, market:"GH" }
+  ├─ background worker → POST /api/extension/fill
+  │     header: Authorization: Bearer pw_live_...   (from chrome.storage.local)
+  │     body:   { image, fields:[...descriptors], notes, market:"GH" }
   │
-  ├─ server: quota check → Gemini describe → fill-to-schema pass → policy scrub
+  ├─ server: key → userId → quota check → Gemini describe → fill-to-schema → policy scrub
   │     returns: { values: { "Brand":"Casio", "Product description":"<p>…</p>",
   │                          "Highlights":["…","…"], ... },
   │               dropdownPicks: { "Color family":"Black" },
@@ -148,6 +149,7 @@ Seller: clicks Autofill
 ## 5. Backend endpoint contract
 
 `POST /api/extension/fill` — new, thin wrapper over the existing pipeline.
+Authenticated with `Authorization: Bearer pw_live_...` (see §9).
 
 **Request**
 ```jsonc
@@ -256,16 +258,54 @@ instead of API attribute names.
 
 ---
 
-## 9. Auth
+## 9. Auth — PandaWorld-issued API key (not Clerk-in-extension)
 
-Use **`@clerk/chrome-extension`** (official MV3 support). The extension authenticates
-against the same Clerk instance as the web app, so one PandaWorld account works in both
-places. The background worker attaches the Clerk session token to every `/api/extension/*`
-call; the endpoint authorizes with the same Clerk middleware pattern as the rest of the app.
+**Decision: the extension authenticates with a PandaWorld-issued API key the seller
+generates in the web dashboard and pastes into the extension** (the ListsGenie pattern).
+Clerk stays the login for the *web dashboard*; the *extension* uses the key. This is
+simpler to build than `@clerk/chrome-extension` (no MV3 OAuth redirects / session sync) and
+matches what sellers already expect from AI extensions.
 
-For the **POC only**, auth can be stubbed (hardcode a dev user / skip the check behind an env
-flag) so we can prove the DOM mechanics first. Real Clerk-in-extension is the biggest *new*
-build cost and should be phase 2.
+**Critical distinction — what kind of key this is:**
+- ✅ It's a **PandaWorld key** that only authorizes calls to *our* `/api/extension/*`
+  endpoints. Those endpoints call Gemini/Vertex server-side. The key **cannot** call an AI
+  provider directly and **cannot** touch billing or account settings.
+- ❌ It is NOT the seller's own Google/OpenAI key, and NOT our Google/Vertex key. Those
+  never go near the extension (see §11).
+
+So shipping this key into the extension does **not** violate "no keys in the extension" —
+that rule is about *AI-provider* keys. A scoped, revocable PandaWorld key is safe to hold
+client-side.
+
+### How it works
+1. Seller signs in to the dashboard (Clerk) → **Settings → API Keys → Generate key.**
+2. Dashboard shows the full key **once**: `pw_live_<keyId>_<secret>`. Seller copies it.
+3. Seller pastes it into the extension panel → stored in `chrome.storage.local`.
+4. Every autofill call sends `Authorization: Bearer pw_live_...`. The endpoint looks the key
+   up, resolves the Clerk `userId`, and runs the same quota check as the web app.
+
+### Doing it securely (industry standard)
+- **Store only a hash.** Key = `pw_live_<keyId>_<secret>`. Persist `keyId` in plaintext
+  (for O(1) lookup) + `sha256(secret)` (HMAC'd with a server pepper). Never store the raw
+  key; show it once at creation. We **hash**, not encrypt — we never need to read it back,
+  only compare. (Contrast `lib/security/token-crypto.ts`, which *encrypts* Jumia tokens
+  because those must be replayed to Jumia.)
+- **Scope narrowly:** autofill + check-credits only. No billing, no account mutation, no
+  reading other users' data.
+- **Client storage:** `chrome.storage.local` (per-extension, on-device). **Not**
+  `chrome.storage.sync` — that would replicate the key to Google's cloud across the seller's
+  devices, widening exposure.
+- **Rotate / revoke / observe:** dashboard lists keys with `last_used_at`; seller can revoke
+  or regenerate; optional `expires_at`.
+- **Per-key rate limit** (reuse `lib/rate-limit.ts`, keyed by `keyId`). HTTPS bearer header
+  only — never the key in a URL query (avoids access logs).
+- **Honest UI copy.** "Encrypted & stored locally" (ListsGenie's phrasing) is mostly
+  reassurance — `chrome.storage.local` isn't a vault against local malware. The real
+  protection is **scope + revocability + server-side hashing**. Say that plainly.
+
+For the **POC only**, auth can be stubbed behind an env flag so we prove the DOM mechanics
+first; the key system lands in Phase 1 and is a much smaller build than Clerk-in-extension
+would have been.
 
 ---
 
@@ -283,13 +323,17 @@ Reuse the existing tier + quota system (`lib/billing/quota.ts`) — **no new bil
 
 ## 11. Security & permissions
 
-- 🔒 **No API keys in the extension. Ever.** All Gemini/Vertex calls server-side.
+- 🔒 **No AI-provider keys in the extension. Ever.** The Google/Vertex key stays
+  server-side; all Gemini calls happen on our backend. (The *PandaWorld* key the extension
+  holds is a different thing — scoped, revocable, endpoint-only — see §9.)
+- **PandaWorld key handling:** hash-at-rest server-side, scope to `/api/extension/*` only,
+  `chrome.storage.local` (never `sync`), rotate/revoke from the dashboard, per-key rate
+  limit. Full detail in §9.
 - **Minimal host permissions:** `https://vendorcenter.jumia.com/*` (to read/fill the form)
   and `https://pandaworldai.site/*` (to call our API). Nothing broader.
 - **Content script scoped** to the Add-Products URL, not all of Jumia.
-- Send only the product image + field labels to our server — never the seller's Jumia
-  session cookies or credentials.
-- Store nothing sensitive in the extension beyond the Clerk session Clerk itself manages.
+- Send only the product image + field labels + the PandaWorld key to our server — never the
+  seller's Jumia session cookies or credentials.
 
 ---
 
@@ -314,8 +358,9 @@ Reuse the existing tier + quota system (`lib/billing/quota.ts`) — **no new bil
 | `lib/ai/restricted-words.ts` | Content script: DOM writers (input/combobox/richtext) |
 | Brand → Generic fallback (`resolveBrand`) | `app/api/extension/fill/route.ts` (thin) |
 | What's-in-box "1x Item" formatter | A "fill exactly these fields" Gemini pass in `lib/actions/ai.ts` |
-| `lib/billing/quota.ts` (metering) | Clerk-in-extension wiring (`@clerk/chrome-extension`) |
-| Clerk (same instance) | Panel UI (notes box, autofill button, credits, warnings) |
+| `lib/billing/quota.ts` (metering) | API-key system: `extension_api_keys` table + dashboard UI + `authenticateExtensionKey()` helper |
+| `lib/rate-limit.ts` (per-key limit) | Panel UI (paste-key screen, notes box, autofill button, credits, warnings) |
+| Clerk (dashboard login only) | — |
 
 The genuinely new AI work is small: one prompt that takes `{image describe result, field
 labels, seller notes}` and returns values keyed by label.
@@ -352,7 +397,7 @@ one subscription, two surfaces. Reduces churn (more ways to get value from one p
 | Image unreadable (shadow DOM / iframe) | Medium | Fallback drop zone in the panel |
 | Jumia ships native AI autofill | Medium (strategic) | Compete on QC-compliance + local tuning, not generic copy |
 | Jumia ToS anti-automation clause | Medium | Human-submits model; read ToS before launch |
-| Clerk-in-extension complexity | Low | Official `@clerk/chrome-extension`; stub for POC |
+| PandaWorld API key leaked (shared screen, malware) | Low–Medium | Scope to autofill only; hash at rest; rotate/revoke + last-used in dashboard; per-key rate limit; optional expiry |
 
 ---
 
@@ -366,8 +411,10 @@ to end against a real Add-Products page.
 - `app/api/extension/fill/route.ts` (auth stubbed) wrapping `aiPassA` + a fill pass
 
 **Phase 1 — v1 (shippable). ~1–1.5 weeks.**
-- Real Clerk auth (`@clerk/chrome-extension`)
-- Quota wiring (`checkQuota`/`incrementUsage`)
+- API-key auth: `extension_api_keys` migration, dashboard **Settings → API Keys**
+  (generate / show-once / revoke), `authenticateExtensionKey()` helper, paste-key screen in
+  the panel
+- Quota wiring (`checkQuota`/`incrementUsage`) + per-key rate limit
 - Combobox writers (Brand/Color) + all rich-text fields across steps 1 & 3
 - `warnings[]` surfaced in the panel; per-field ✓
 - Multi-category (harvest-by-label makes this mostly free)
@@ -397,13 +444,18 @@ to end against a real Add-Products page.
 ```
 extension/
   manifest.json              # MV3, sidePanel, host_permissions (vendorcenter + pandaworldai)
-  panel/                     # side-panel UI (notes box, Autofill, credits, warnings)
+  panel/                     # side-panel UI (paste-key, notes box, Autofill, credits, warnings)
   content/
     harvest.ts               # read uploaded image + rendered field descriptors
     writers.ts               # input / combobox / richtext DOM writers
   background/
-    worker.ts                # Clerk session + calls /api/extension/fill
+    worker.ts                # reads key from chrome.storage.local; calls /api/extension/fill
 
-app/api/extension/fill/route.ts   # thin wrapper over existing pipeline
-lib/actions/ai.ts                 # + aiFillRenderedFields() pass (small addition)
+app/api/extension/fill/route.ts        # thin wrapper over existing pipeline
+app/(main)/settings/api-keys/          # dashboard: generate / show-once / revoke keys
+app/api/extension/keys/route.ts        # create/list/revoke keys (Clerk-authed, dashboard only)
+lib/security/extension-keys.ts         # generate + hash + authenticateExtensionKey(req)
+lib/actions/ai.ts                      # + aiFillRenderedFields() pass (small addition)
+supabase/migrations/XXXX_extension_api_keys.sql   # id, user_id, key_id, key_hash, key_prefix,
+                                                  # name, last_used_at, revoked_at, expires_at
 ```
