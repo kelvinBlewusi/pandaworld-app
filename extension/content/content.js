@@ -228,6 +228,10 @@
     const first = raw.split("\n")[0].trim();
     if (first.length < 1 || first.length > 40) return null;
     if (/^(ex:|e\.g\.)|required to increase|recommended|maximum|pixels|watermark/i.test(first)) return null;
+    // Reject the editor's own generic captions so we keep climbing to the real
+    // field label (e.g. "Product description") sitting above the toolbar.
+    if (/^(rich ?text editor|editor|paragraph|normal text|heading \d)$/i.test(first)) return null;
+    if (/editor editing area/i.test(first)) return null;
     return clean(first);
   }
 
