@@ -65,6 +65,26 @@
       diagnostics.push(`Raw controls (first 20): ${raw.length ? raw.join(" | ") : "none found"}`);
     }
 
+    // If we found no rich-text field, dump the first editor's ancestry so we can
+    // see exactly how Jumia attaches the label above it.
+    if (!fields.some((f) => f.type === "richtext")) {
+      const ed = document.querySelector('.ProseMirror, [contenteditable="true"]');
+      if (ed) {
+        const chain = [];
+        let n = ed;
+        for (let up = 0; n && up < 6; up++) {
+          const cls = (n.className || "").toString().split(/\s+/).filter(Boolean).slice(0, 2).join(".");
+          const prev = n.previousElementSibling;
+          const prevTxt = prev ? (prev.innerText || "").trim().split("\n")[0].slice(0, 30) : "";
+          chain.push(`${n.tagName.toLowerCase()}${cls ? "." + cls : ""}⟨prev:"${prevTxt}"⟩`);
+          n = n.parentElement;
+        }
+        diagnostics.push(`Editor ancestry: ${chain.join(" ▸ ")}`);
+      } else {
+        diagnostics.push("No contenteditable/.ProseMirror editor found at all.");
+      }
+    }
+
     let image = null;
     let imageUrl = null;
     try {
@@ -168,7 +188,14 @@
     const wrap = el.closest("label");
     if (wrap && wrap.innerText.trim()) return clean(wrap.innerText);
 
-    // 4. Find the field's "cell" — climb while the parent still holds just this
+    // 4. Walk backwards in document (reading) order until we hit a label-like
+    // snippet. Most structure-agnostic match; stops if it reaches another form
+    // control, so it never steals the previous field's label. This is what
+    // reliably finds "Product description" above a ProseMirror toolbar.
+    const docOrder = previousLabelInDocOrder(el);
+    if (docOrder) return docOrder;
+
+    // 5. Find the field's "cell" — climb while the parent still holds just this
     // one control — then take the closest label-like text before the control.
     // This keeps each field's label to itself (fixes Color vs Color family) and
     // walks a ProseMirror editor up past its toolbar to "Product description".
@@ -179,12 +206,38 @@
     const inside = closestLabelBefore(cell, el);
     if (inside) return inside;
 
-    // 5. Nearest preceding sibling of the cell.
+    // 6. Nearest preceding sibling of the cell.
     let sib = cell.previousElementSibling;
     for (let hop = 0; sib && hop < 4; hop++) {
       const txt = labelTextOf(sib);
       if (txt) return txt;
       sib = sib.previousElementSibling;
+    }
+    return null;
+  }
+
+  /** Previous element in whole-document reading order (deepest-last descent). */
+  function prevEl(node) {
+    if (node.previousElementSibling) {
+      let n = node.previousElementSibling;
+      while (n.lastElementChild) n = n.lastElementChild;
+      return n;
+    }
+    return node.parentElement;
+  }
+
+  /**
+   * Walk backwards from `el` in document order, returning the first label-like
+   * text. Stops (returns null) on reaching another form control, so a field
+   * never borrows the previous field's label.
+   */
+  function previousLabelInDocOrder(el) {
+    let node = prevEl(el);
+    for (let steps = 0; node && steps < 300; steps++) {
+      if (node.matches && node.matches(CONTROL_SEL) && node !== el) return null;
+      const t = labelTextOf(node);
+      if (t) return t;
+      node = prevEl(node);
     }
     return null;
   }
@@ -222,6 +275,8 @@
   function labelTextOf(elm) {
     if (!elm || !elm.querySelector) return null;
     if (elm.matches('input, textarea, select, [contenteditable="true"]')) return null;
+    // Reject anything that is part of a button, link, or editor toolbar.
+    if (elm.closest('button, a, [role="button"], [role="toolbar"]')) return null;
     if (elm.querySelector('input, textarea, select, [contenteditable="true"], button, svg, [role="toolbar"]')) return null;
     const raw = (elm.innerText || elm.textContent || "").trim();
     if (!raw) return null;
