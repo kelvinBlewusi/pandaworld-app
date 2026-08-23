@@ -55,7 +55,7 @@ export function PublicLanding({ isAuthenticated = false }: PublicLandingProps) {
             </div>
             <div className="mt-10 flex w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:items-center">
               <Link
-                href={isAuthenticated ? "/dashboard" : "/sign-up"}
+                href={isAuthenticated ? "/extension/dashboard" : "/sign-up"}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-orange-500 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-orange-500/20 transition-all hover:bg-orange-600 hover:shadow-lg sm:w-auto"
               >
                 {isAuthenticated ? "Open dashboard" : "Start free"}
@@ -152,7 +152,7 @@ export function PublicLanding({ isAuthenticated = false }: PublicLandingProps) {
             5 free listings every month. No credit card. Cancel any time.
           </p>
           <Link
-            href={isAuthenticated ? "/dashboard" : "/sign-up"}
+            href={isAuthenticated ? "/extension/dashboard" : "/sign-up"}
             className="mt-8 inline-flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-orange-500/20 transition-all hover:bg-orange-600"
           >
             {isAuthenticated ? "Back to dashboard" : "Get started"}
@@ -220,7 +220,7 @@ function MarketingNav({ isAuthenticated }: { isAuthenticated: boolean }) {
           </Link>
           {isAuthenticated ? (
             <Link
-              href="/dashboard"
+              href="/extension/dashboard"
               className="inline-flex items-center gap-1.5 rounded-md bg-orange-500 px-3 py-1.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-orange-600"
             >
               <LayoutDashboard className="h-3.5 w-3.5" />
