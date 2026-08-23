@@ -26,6 +26,7 @@ import {
   Database,
   Tags,
   Globe,
+  Chrome,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -101,6 +102,38 @@ function NavItem({ href, label, icon: Icon, count }: NavItemProps) {
 }
 
 // ─── New Listing link (single-flow batch upload) ────────────────────────────
+
+// ─── Extension link — visually promoted, not folded into the regular nav ────
+//
+// The extension (docs/chrome-extension-plan.md) is a distinct product
+// surface with its own control room at /extension/dashboard (outside the
+// (main) route group — it deliberately skips the Jumia-connection gate,
+// since reaching sellers who haven't done that OAuth flow is the point).
+// Styled with an accent border + "New" pill so it reads as its own thing
+// rather than blending into Workflows/Settings.
+
+function ExtensionLink() {
+  const pathname = usePathname();
+  const isActive = pathname.startsWith("/extension");
+
+  return (
+    <Link
+      href="/extension/dashboard"
+      className={cn(
+        "flex items-center gap-2.5 rounded-lg border px-3 py-2 text-sm transition-all duration-150",
+        isActive
+          ? "border-orange-200 bg-orange-50 font-medium text-orange-700"
+          : "border-orange-100 bg-orange-50/40 text-orange-700 hover:bg-orange-50",
+      )}
+    >
+      <Chrome className="h-4 w-4 shrink-0" />
+      <span className="flex-1">Extension</span>
+      <span className="rounded-full bg-orange-500 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
+        New
+      </span>
+    </Link>
+  );
+}
 
 function NewListingLink() {
   const pathname = usePathname();
@@ -275,6 +308,10 @@ export function Sidebar({
         {primaryNav.map((item) => (
           <NavItem key={item.href} {...item} />
         ))}
+
+        <div className="py-1.5">
+          <ExtensionLink />
+        </div>
 
         {/* New listing with dropdown */}
         <NewListingLink />

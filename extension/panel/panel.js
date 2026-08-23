@@ -76,6 +76,12 @@ $("autofill").addEventListener("click", async () => {
   $("results").innerHTML = "";
   $("warnings").innerHTML = "";
   try {
+    const settingsPreCheck = await chrome.storage.local.get(["apiKey"]);
+    if (!settingsPreCheck.apiKey || !settingsPreCheck.apiKey.trim()) {
+      setStatus("Add your API key in Settings above — generate one on your PandaWorld dashboard's Extension page.", "err");
+      return;
+    }
+
     const tab = await activeJumiaTab();
     if (!tab) {
       setStatus("Open a Jumia Vendor Center Add-Products page first.", "err");
@@ -124,7 +130,9 @@ $("autofill").addEventListener("click", async () => {
     ]);
 
     const okCount = (apply?.results || []).filter((r) => r.ok).length;
-    setStatus(`Filled ${okCount}/${Object.keys(fill.data.values).length} fields. Review, then submit on Jumia.`, "ok");
+    const credits = fill.data.creditsRemaining;
+    const creditsNote = fill.data.mock ? "" : credits != null ? ` (${credits} left this period)` : "";
+    setStatus(`Filled ${okCount}/${Object.keys(fill.data.values).length} fields${creditsNote}. Review, then submit on Jumia.`, "ok");
   } catch (e) {
     setStatus(`Error: ${e.message}`, "err");
   } finally {

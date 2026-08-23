@@ -425,17 +425,29 @@ rendered fields, and writes clean copy into the CKEditor 5 rich-text editors (10
   + `__tests__/extension-fill.test.ts` (10 tests)
 - ✅ `app/extension/page.tsx` — public marketing/onboarding page for the flow
 
-**Phase 1 — v1 (shippable). ~1–1.5 weeks.** ← next
-- **Real AI**: replace the mock — upload the harvested image to storage → URL → `aiPassA`
-  (or extend it to accept base64), so it fills category-specific attributes on any category.
-- API-key auth: `extension_api_keys` migration, dashboard **Settings → API Keys**
-  (generate / show-once / revoke), `authenticateExtensionKey()` helper, paste-key screen in
-  the panel; wire the `app/extension/page.tsx` CTA to it.
-- Quota wiring (`checkQuota`/`incrementUsage`) + per-key rate limit
-- **Combobox / click-only dropdown writers** (Color family + step-3 selects) — the remaining
-  field type the POC left unfilled
-- `warnings[]` surfaced in the panel; per-field ✓ (done in POC)
-- Multi-category (harvest-by-label already generic — proven in POC)
+**Phase 1 — v1 (shippable). ✅ Auth + real AI + dashboard DONE. Remaining: comboboxes.**
+- ✅ **Real AI**: `lib/ai/extension-fill.ts` sends the harvested image inline (base64, no
+  storage round-trip) + the exact rendered fields to Gemini, reusing the existing backend,
+  content policy, and restricted-words rules. Fills category-specific attributes on any
+  category. Mock is the fallback (no creds, no image, or AI error), not the default.
+- ✅ **API-key auth**: `extension_api_keys` + `extension_fill_events` migration
+  (`supabase/migrations/2026-08-23_extension-api-keys.sql`), `lib/security/extension-keys.ts`
+  (generate `pw_live_<keyId>_<secret>`, sha256+pepper hash, `authenticateExtensionKey()` via
+  `Authorization: Bearer`, `timingSafeEqual` compare), `app/api/extension/keys` (Clerk-authed
+  CRUD). `/api/extension/fill` now requires a valid key (401 otherwise) instead of the stub.
+- ✅ **Dedicated dashboard**: `app/extension/dashboard/` — its own page OUTSIDE `(main)`
+  (deliberately skips the Jumia-connection redirect gate in `(main)/layout.tsx`, since
+  reaching sellers who haven't done that OAuth dance is the point), with key
+  generate/show-once/revoke (`keys-panel.tsx`), a status strip (connected? / autofills in
+  30 days / listings left), and an embedded setup guide. Linked from the main app's Sidebar
+  as a visually distinct "Extension · New" entry, and from `/extension`'s CTA when signed in.
+- ✅ **Quota wiring**: `checkQuota`/`incrementUsage` — the SAME per-period listing quota as
+  the web app (no separate SKU). Only a real (non-mock) autofill spends a credit.
+- ⬜ **Combobox / click-only dropdown writers** (Color family + step-3 selects) — the one
+  field type still unfilled from the POC. Next up.
+- ⬜ Per-key rate limiting (reuse `lib/rate-limit.ts`) — not yet wired.
+- ✅ `warnings[]` in the panel; per-field ✓ (done in POC)
+- ✅ Multi-category (harvest-by-label already generic — proven in POC)
 
 **Phase 2 — polish & moat. Later.**
 - Packaging OCR (Cloud Vision) for spec accuracy
@@ -456,23 +468,43 @@ rendered fields, and writes clean copy into the CKEditor 5 rich-text editors (10
 
 ---
 
-## 18. New files (when we build)
+## 18. Files (as built)
 
 ```
 extension/
-  manifest.json              # MV3, sidePanel, host_permissions (vendorcenter + pandaworldai)
-  panel/                     # side-panel UI (paste-key, notes box, Autofill, credits, warnings)
+  manifest.json                     # MV3, sidePanel, content scripts (isolated + MAIN world),
+                                     # host_permissions (vendorcenter, localhost, pandaworldai, *.vercel.app)
+  panel/                            # side-panel UI — API key + base URL settings, notes box,
+                                     # Autofill, per-field results, warnings, "what we saw" diagnostics
   content/
-    harvest.ts               # read uploaded image + rendered field descriptors
-    writers.ts               # input / combobox / richtext DOM writers
+    content.js                      # harvest (image + rendered field descriptors, label resolution)
+                                     # + DOM writers (input/select/combobox)
+    mainworld.js                    # MAIN-world bridge — calls CKEditor's real setData()
   background/
-    worker.ts                # reads key from chrome.storage.local; calls /api/extension/fill
+    worker.js                       # reads key from chrome.storage.local; calls /api/extension/fill
 
-app/api/extension/fill/route.ts        # thin wrapper over existing pipeline
-app/(main)/settings/api-keys/          # dashboard: generate / show-once / revoke keys
-app/api/extension/keys/route.ts        # create/list/revoke keys (Clerk-authed, dashboard only)
-lib/security/extension-keys.ts         # generate + hash + authenticateExtensionKey(req)
-lib/actions/ai.ts                      # + aiFillRenderedFields() pass (small addition)
-supabase/migrations/XXXX_extension_api_keys.sql   # id, user_id, key_id, key_hash, key_prefix,
-                                                  # name, last_used_at, revoked_at, expires_at
+app/extension/page.tsx              # public marketing/onboarding page (CTA adapts if signed in)
+app/extension/dashboard/
+  page.tsx                          # the extension's own control room — OUTSIDE (main), so it
+                                     # skips the Jumia-connection redirect gate
+  keys-panel.tsx                    # client component: generate / show-once / revoke keys
+app/api/extension/fill/route.ts     # API-key-authed autofill endpoint (real AI + quota)
+app/api/extension/keys/route.ts     # Clerk-authed CRUD for the dashboard
+
+lib/extension/fill.ts               # pure mapper: mock product, label→field mapping,
+                                     # finalizeAiValues() (post-processes the real-AI output)
+lib/ai/extension-fill.ts            # aiFillRenderedFields() — the real Gemini vision pass
+lib/security/extension-keys.ts      # generate/hash keys, authenticateExtensionKey(),
+                                     # usage-event logging for the dashboard
+
+supabase/migrations/2026-08-23_extension-api-keys.sql   # extension_api_keys + extension_fill_events
+
+components/layout/Sidebar.tsx       # + "Extension · New" nav entry → /extension/dashboard
+middleware.ts                       # + /extension, /api/extension/fill public (dashboard +
+                                     # /api/extension/keys stay Clerk-protected as normal)
+
+__tests__/extension-fill.test.ts    # 16 tests — pure mapper + finalizeAiValues + isSellerOwned
 ```
+
+**Not yet built**: combobox/click-only-dropdown writers (Color family + step-3 selects),
+per-key rate limiting.

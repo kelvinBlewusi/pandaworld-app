@@ -4,15 +4,21 @@
  * Takes the fields the extension harvested from Jumia's Add-Products form + the
  * product image + optional seller notes, and returns a value per field.
  *
- * Auth is STUBBED in this phase (see `authenticateStub`). Phase 1 replaces it
- * with the PandaWorld API-key check (docs/chrome-extension-plan.md §9) and
- * wires real quota metering.
+ * Auth: a PandaWorld API key (`Authorization: Bearer pw_live_...`) generated
+ * on /extension/dashboard — see lib/security/extension-keys.ts. This is NOT a
+ * Clerk session; the extension calls this endpoint from Jumia's origin, which
+ * has no PandaWorld cookies. A missing/invalid key returns 401.
+ *
+ * Quota: one successful autofill = one listing credit, the SAME per-period
+ * quota the web app uses (lib/billing/quota.ts) — no separate SKU. Checked
+ * BEFORE the AI call, incremented AFTER success, same pattern as the rest of
+ * the app.
  *
  * AI: when a Gemini backend is configured (Vertex or AI Studio key) AND an
  * image is supplied, the real vision pass (lib/ai/extension-fill) fills the
  * exact rendered fields — category-specific attributes included. If that's
  * unavailable or fails, we fall back to a deterministic mock so the extension
- * loop never hard-fails. Set EXTENSION_FORCE_MOCK=true to always use the mock.
+ * loop never hard-fails (and doesn't consume quota — see below).
  */
 
 import { NextResponse } from "next/server";
@@ -25,6 +31,11 @@ import {
   type FillResponse,
 } from "@/lib/extension/fill";
 import { aiFillRenderedFields, aiConfigured } from "@/lib/ai/extension-fill";
+import {
+  authenticateExtensionKey,
+  logExtensionFillEvent,
+} from "@/lib/security/extension-keys";
+import { checkQuota, incrementUsage } from "@/lib/billing/quota";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -37,11 +48,6 @@ const CORS = {
 
 export function OPTIONS() {
   return new Response(null, { status: 204, headers: CORS });
-}
-
-/** Phase-0 auth stub. Phase 1: hash the Bearer key → userId → quota gate. */
-function authenticateStub(_req: Request): { userId: string | null } {
-  return { userId: null };
 }
 
 /** Parse a data: URL into { base64, mimeType }, or null if not a data URL. */
@@ -87,6 +93,12 @@ function applyBrandDefault(
 }
 
 export async function POST(req: Request) {
+  const authResult = await authenticateExtensionKey(req.headers.get("authorization"));
+  if (!authResult.ok) {
+    return NextResponse.json({ error: authResult.error }, { status: 401, headers: CORS });
+  }
+  const { userId, keyId } = authResult;
+
   let body: FillRequest;
   try {
     body = (await req.json()) as FillRequest;
@@ -100,7 +112,16 @@ export async function POST(req: Request) {
     );
   }
 
-  authenticateStub(req); // Phase 1: real key check + quota gate
+  const quota = await checkQuota(userId, "listing");
+  if (!quota.allowed) {
+    return NextResponse.json(
+      {
+        error: `You've used all ${quota.limit} listings on your ${quota.plan} plan this period. Upgrade to keep autofilling.`,
+        creditsRemaining: 0,
+      },
+      { status: 402, headers: CORS },
+    );
+  }
 
   const market = body.market || "GH";
   const notes = body.notes || "";
@@ -143,15 +164,30 @@ export async function POST(req: Request) {
     warnings.push(...mapped.warnings);
   }
 
+  // Only a REAL (non-mock) autofill spends a quota credit — a mock fallback
+  // (missing image, AI down) shouldn't cost the seller a listing.
+  if (!mock) {
+    await incrementUsage(userId, "listing");
+  }
+  // Log every attempt (mock or not) for the dashboard's usage view.
+  logExtensionFillEvent({
+    userId,
+    keyId,
+    fieldsFilled: Object.keys(values).length,
+    mock,
+  }).catch(() => {});
+
   const response: FillResponse = {
     values,
     warnings,
-    creditsRemaining: null, // Phase 1: from quota after incrementUsage()
+    creditsRemaining: mock
+      ? (Number.isFinite(quota.limit) ? quota.limit - quota.used : null)
+      : (Number.isFinite(quota.limit) ? quota.limit - quota.used - 1 : null),
     mock,
   };
 
   console.info(
-    `[ext/fill] market=${market} mock=${mock} fields=${body.fields.length} ` +
+    `[ext/fill] user=${userId} key=${keyId} market=${market} mock=${mock} fields=${body.fields.length} ` +
       `filled=${Object.keys(values).length} warnings=${warnings.length}`,
   );
 

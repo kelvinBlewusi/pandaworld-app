@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   Lock,
 } from "lucide-react";
+import { auth } from "@clerk/nextjs/server";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { Wordmark } from "@/components/marketing/wordmark";
 
@@ -113,7 +114,13 @@ const YOU_SET = [
   "The final Submit",
 ];
 
-export default function ExtensionPage() {
+export default async function ExtensionPage() {
+  const { userId } = await auth();
+  // Signed-in visitors skip straight to the real key-generation screen;
+  // logged-out visitors sign up first (the dashboard requires an account).
+  const ctaHref  = userId ? "/extension/dashboard" : "/sign-up";
+  const ctaLabel = userId ? "Open your extension dashboard" : "Get your API key";
+
   return (
     <div className="min-h-screen bg-white text-zinc-900">
       <MarketingNav />
@@ -134,10 +141,10 @@ export default function ExtensionPage() {
           </p>
           <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <Link
-              href="/sign-up"
+              href={ctaHref}
               className="inline-flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-orange-500/20 transition-all hover:bg-orange-600"
             >
-              Get your API key
+              {ctaLabel}
               <ArrowRight className="h-4 w-4" />
             </Link>
             <a
@@ -311,13 +318,15 @@ export default function ExtensionPage() {
         <div className="mx-auto max-w-3xl px-6 py-20 text-center">
           <h2 className="text-2xl font-bold sm:text-3xl">Ready to list faster?</h2>
           <p className="mt-3 text-sm text-zinc-600">
-            Create a free account, grab your API key, and start autofilling on Jumia.
+            {userId
+              ? "Grab your API key and start autofilling on Jumia."
+              : "Create a free account, grab your API key, and start autofilling on Jumia."}
           </p>
           <Link
-            href="/sign-up"
+            href={ctaHref}
             className="mt-8 inline-flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-orange-500/20 transition-all hover:bg-orange-600"
           >
-            Get started free
+            {userId ? "Open your extension dashboard" : "Get started free"}
             <ArrowRight className="h-4 w-4" />
           </Link>
         </div>
