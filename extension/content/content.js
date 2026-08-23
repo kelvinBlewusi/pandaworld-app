@@ -145,45 +145,72 @@
     return out;
   }
 
+  const CONTROL_SEL = 'input, textarea, select, .ProseMirror';
+  // A rich-text editor's own aria-label ("Editor editing area: main") is NOT
+  // the field label — ignore these so we find the real one above it.
+  const BAD_ARIA = /editor editing area|rich.?text|prosemirror/i;
+
   /** Best-effort label resolution for a control. */
   function findLabel(el) {
+    const isRich = el.classList.contains("ProseMirror") || el.getAttribute("contenteditable") === "true";
+
     // 1. <label for> association
     if (el.labels && el.labels[0] && el.labels[0].innerText.trim()) return clean(el.labels[0].innerText);
-    // 2. aria-label / aria-labelledby
+    // 2. aria-label / aria-labelledby — but never a rich-text editor's own aria.
     const aria = el.getAttribute("aria-label");
-    if (aria) return clean(aria);
+    if (aria && !(isRich && BAD_ARIA.test(aria))) return clean(aria);
     const labelledby = el.getAttribute("aria-labelledby");
     if (labelledby) {
       const ref = document.getElementById(labelledby);
-      if (ref && ref.innerText.trim()) return clean(ref.innerText);
+      if (ref && ref.innerText.trim() && !BAD_ARIA.test(ref.innerText)) return clean(ref.innerText);
     }
     // 3. Wrapping <label>
     const wrap = el.closest("label");
     if (wrap && wrap.innerText.trim()) return clean(wrap.innerText);
 
-    // 4. The label text usually sits just BEFORE the field (or its wrapper).
-    // Walk up the ancestor chain; at each level scan preceding siblings for a
-    // short, label-like snippet. Handles both <label><input> and
-    // <div class=label>…</div><div><input></div> layouts, and skips the
-    // rich-text toolbar that sits between a label and a ProseMirror editor.
-    let node = el;
-    for (let up = 0; up < 6 && node; up++) {
-      let sib = node.previousElementSibling;
-      for (let hop = 0; sib && hop < 5; hop++) {
-        const txt = labelTextOf(sib);
-        if (txt) return txt;
-        sib = sib.previousElementSibling;
-      }
-      node = node.parentElement;
+    // 4. Find the field's "cell" — climb while the parent still holds just this
+    // one control — then take the closest label-like text before the control.
+    // This keeps each field's label to itself (fixes Color vs Color family) and
+    // walks a ProseMirror editor up past its toolbar to "Product description".
+    let cell = el;
+    while (cell.parentElement && countControls(cell.parentElement) <= 1) {
+      cell = cell.parentElement;
     }
+    const inside = closestLabelBefore(cell, el);
+    if (inside) return inside;
 
-    // 5. Any label-ish descendant in the nearest container.
-    const cont = el.closest("div, section, fieldset");
-    if (cont) {
-      const cand = cont.querySelector('label, legend, [class*="label" i], [class*="title" i]');
-      if (cand && labelTextOf(cand)) return labelTextOf(cand);
+    // 5. Nearest preceding sibling of the cell.
+    let sib = cell.previousElementSibling;
+    for (let hop = 0; sib && hop < 4; hop++) {
+      const txt = labelTextOf(sib);
+      if (txt) return txt;
+      sib = sib.previousElementSibling;
     }
     return null;
+  }
+
+  /** Count distinct form controls under a node (ProseMirror counts as one). */
+  function countControls(node) {
+    let n = 0;
+    node.querySelectorAll(CONTROL_SEL).forEach((c) => {
+      if (c.getAttribute("contenteditable") === "true" && !c.classList.contains("ProseMirror")) return;
+      n++;
+    });
+    return n;
+  }
+
+  /** The label-like element inside `cell` that sits closest before `el`. */
+  function closestLabelBefore(cell, el) {
+    const cands = cell.querySelectorAll("label, legend, span, div, p, h1, h2, h3, h4, h5, h6, strong, b");
+    let best = null;
+    for (const c of cands) {
+      // Keep only candidates that appear BEFORE the control in document order.
+      if (c.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) {
+        const t = labelTextOf(c);
+        if (t) best = t; // last match before el = closest
+      }
+    }
+    return best;
   }
 
   /**
