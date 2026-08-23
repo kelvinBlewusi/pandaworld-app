@@ -166,6 +166,8 @@
   }
 
   const CONTROL_SEL = 'input, textarea, select, .ProseMirror';
+  // Neighbours whose presence, when visible, ends the backward label walk.
+  const STOP_SEL = 'input, textarea, select, .ProseMirror, [contenteditable="true"]';
   // A rich-text editor's own aria-label ("Editor editing area: main") is NOT
   // the field label — ignore these so we find the real one above it.
   const BAD_ARIA = /editor editing area|rich.?text|prosemirror/i;
@@ -233,8 +235,18 @@
    */
   function previousLabelInDocOrder(el) {
     let node = prevEl(el);
-    for (let steps = 0; node && steps < 300; steps++) {
-      if (node.matches && node.matches(CONTROL_SEL) && node !== el) return null;
+    for (let steps = 0; node && steps < 400; steps++) {
+      // Stop only at a VISIBLE neighbouring field (control or editor) — hidden
+      // source textareas that editors keep around must not stop the walk.
+      if (
+        node !== el &&
+        node.matches &&
+        node.matches(STOP_SEL) &&
+        !node.contains(el) &&
+        isVisible(node)
+      ) {
+        return null;
+      }
       const t = labelTextOf(node);
       if (t) return t;
       node = prevEl(node);
@@ -272,9 +284,16 @@
    * icon (i.e. field wrappers and editor toolbars), and skips helper/example
    * text ("Ex: …", "Required to increase listing quality", size hints).
    */
+  function isVisible(elm) {
+    if (!elm || !elm.getClientRects) return false;
+    return elm.getClientRects().length > 0;
+  }
+
   function labelTextOf(elm) {
     if (!elm || !elm.querySelector) return null;
     if (elm.matches('input, textarea, select, [contenteditable="true"]')) return null;
+    // A real label is visible — rejects hidden source textareas / stray nodes.
+    if (!isVisible(elm)) return null;
     // Reject anything that is part of a button, link, or editor toolbar.
     if (elm.closest('button, a, [role="button"], [role="toolbar"]')) return null;
     if (elm.querySelector('input, textarea, select, [contenteditable="true"], button, svg, [role="toolbar"]')) return null;
@@ -351,52 +370,37 @@
   }
 
   /**
-   * Write HTML into a ProseMirror/contenteditable editor.
-   * Primary: select-all + execCommand('insertHTML') — ProseMirror's DOM
-   * observer picks up the mutation. Fallback: simulate a paste event carrying
-   * text/html, which routes through PM's own paste parser.
+   * Write HTML into a rich-text editor.
+   *
+   * Jumia uses CKEditor 5, which ignores DOM writes — so we hand the job to the
+   * MAIN-world bridge (content/mainworld.js): tag the editable with the HTML,
+   * dispatch a synchronous event, and read the outcome the bridge writes back.
+   * The bridge calls the real `editor.setData()`; for any non-CKEditor editor it
+   * falls back to a page-context execCommand write.
    */
   function writeRichText(el, html) {
-    el.focus();
-    selectAll(el);
-
-    // Primary — execCommand insertHTML (still supported in Chrome for CE).
-    let changed = false;
-    try {
-      changed = document.execCommand("insertHTML", false, html);
-    } catch {
-      changed = false;
-    }
-
-    // Fallback — synthetic paste with text/html.
-    if (!changed || isEditorEmpty(el)) {
-      try {
-        selectAll(el);
-        const dt = new DataTransfer();
-        dt.setData("text/html", html);
-        dt.setData("text/plain", htmlToText(html));
-        const ev = new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true });
-        el.dispatchEvent(ev);
-      } catch {
-        /* last resort below */
-      }
-    }
-
-    // Last resort — direct innerHTML (some editors sync via MutationObserver).
+    el.setAttribute("data-pw-html", encodeURIComponent(html));
+    // Synchronous dispatch — the MAIN-world listener runs before this returns.
+    document.dispatchEvent(new CustomEvent("pw-apply-richtext"));
+    const done = el.getAttribute("data-pw-done") || "";
+    el.removeAttribute("data-pw-done");
+    if (done === "ck" || done === "dom") return true;
+    // Bridge missing or failed — last-resort DOM write from the isolated world.
     if (isEditorEmpty(el)) {
-      el.innerHTML = html;
+      try {
+        el.focus();
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        document.execCommand("insertHTML", false, html);
+      } catch {
+        el.innerHTML = html;
+      }
+      el.dispatchEvent(new Event("input", { bubbles: true }));
     }
-
-    el.dispatchEvent(new Event("input", { bubbles: true }));
     return !isEditorEmpty(el);
-  }
-
-  function selectAll(el) {
-    const sel = window.getSelection();
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    sel.removeAllRanges();
-    sel.addRange(range);
   }
 
   function isEditorEmpty(el) {
@@ -424,14 +428,6 @@
       r.onerror = () => reject(new Error("blob read failed"));
       r.readAsDataURL(blob);
     });
-  }
-
-  function htmlToText(html) {
-    const d = document.createElement("div");
-    d.innerHTML = html;
-    d.querySelectorAll("li").forEach((li) => (li.textContent = `• ${li.textContent}\n`));
-    d.querySelectorAll("p, br, div").forEach((n) => n.insertAdjacentText("afterend", "\n"));
-    return (d.innerText || d.textContent || "").trim();
   }
 
   console.debug(LOG, "content script ready on", location.href);

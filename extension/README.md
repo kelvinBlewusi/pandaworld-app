@@ -83,11 +83,18 @@ real page.
 ## Files
 
 ```
-manifest.json          MV3 manifest (side panel, host permissions, content script)
+manifest.json          MV3 manifest (side panel, host permissions, content scripts)
 background/worker.js   opens the panel; owns the API call
-content/content.js     harvest (image + fields) + DOM writers
+content/content.js     harvest (image + fields) + DOM writers (isolated world)
+content/mainworld.js   MAIN-world bridge: calls CKEditor's setData() for rich text
 panel/                 side-panel UI (html/css/js)
 ```
+
+**Rich-text note:** Jumia Vendor Center uses **CKEditor 5**, which ignores DOM
+writes. `content/mainworld.js` runs in the page's own JS context (manifest
+`"world": "MAIN"`) to call the real `editor.setData()`. The isolated content
+script tags the editable with the HTML and dispatches `pw-apply-richtext`; the
+bridge writes it and reports back via a `data-pw-done` attribute.
 Backend: [`app/api/extension/fill/route.ts`](../app/api/extension/fill/route.ts),
 logic in [`lib/extension/fill.ts`](../lib/extension/fill.ts),
 tests in [`__tests__/extension-fill.test.ts`](../__tests__/extension-fill.test.ts).

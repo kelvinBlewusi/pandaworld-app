@@ -17,6 +17,12 @@
       "matches": ["https://vendorcenter.jumia.com/*"],
       "js": ["content/content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://vendorcenter.jumia.com/*"],
+      "js": ["content/mainworld.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
     }
   ]
 }
