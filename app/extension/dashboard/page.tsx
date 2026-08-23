@@ -1,19 +1,24 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { auth } from "@clerk/nextjs/server";
+import { auth, currentUser } from "@clerk/nextjs/server";
 import { UserButton } from "@clerk/nextjs";
 import {
   ArrowLeft,
   Chrome,
   Wand2,
   Gauge,
+  Clock,
   UploadCloud,
   ScanSearch,
-  CheckCircle2,
-  XCircle,
+  CheckCircle,
   KeyRound,
+  AlertCircle,
+  CreditCard,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { StatCard } from "@/components/ui/stat-card";
 import { Wordmark } from "@/components/marketing/wordmark";
+import { cn } from "@/lib/utils";
 import { listExtensionApiKeys, countRecentFills } from "@/lib/security/extension-keys";
 import { getQuotaSummary } from "@/lib/billing/quota";
 import { ExtensionKeysPanel } from "./keys-panel";
@@ -27,6 +32,14 @@ import { ExtensionKeysPanel } from "./keys-panel";
 // gets its own minimal shell: real Clerk auth (redirect to /sign-in if
 // logged out), but no Jumia-connection gate.
 //
+// Visual language deliberately mirrors app/(main)/dashboard/page.tsx (the
+// "{greeting}, {firstName}" header, the gradient StatCard component, a
+// colored connection-status strip modeled on that page's Jumia-health bar)
+// so it reads as the same product family, not a bolted-on side surface —
+// with the header button cluster + API-key card shaped by patterns from
+// competitor extension dashboards (plan/credit pills, a prominent install
+// CTA, an inline "how to use your key" + do-not-share warning).
+//
 // Not in middleware's public-route list, so the default Clerk
 // auth.protect() gate already covers it — the explicit check below is
 // just a defensive belt-and-braces (also gives us `userId` for the data
@@ -37,20 +50,36 @@ export const metadata: import("next").Metadata = {
   robots: { index: false }, // logged-in tool, not a marketing surface
 };
 
+/** Conservative estimate — a manual Jumia listing typically runs 15–30 min;
+ *  reviewing an autofilled one runs a couple of minutes. Labelled "Est." in
+ *  the UI so it's never presented as a measured number. */
+function estimateTimeSaved(autofillCount: number): string {
+  const minutes = autofillCount * 13; // ~15min manual - ~2min review, rounded down for safety
+  if (minutes <= 0) return "0m";
+  if (minutes < 60) return `${minutes}m`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
 export default async function ExtensionDashboardPage() {
   const { userId } = await auth();
   if (!userId) redirect("/sign-in?redirect_url=/extension/dashboard");
 
-  const [keys, quota, recentFills] = await Promise.all([
+  const [user, keys, quota, recentFills] = await Promise.all([
+    currentUser(),
     listExtensionApiKeys(userId),
     getQuotaSummary(userId),
     countRecentFills(userId, 30),
   ]);
 
+  const firstName = user?.firstName ?? user?.username ?? "there";
   const hasActiveKey = keys.some((k) => !k.revokedAt);
-  const listingsLeft = Number.isFinite(quota.listings.limit)
+  const hasFiniteLimit = Number.isFinite(quota.listings.limit);
+  const listingsLeft = hasFiniteLimit
     ? Math.max(0, quota.listings.limit - quota.listings.used)
     : null;
+  const planLabel = quota.plan.charAt(0).toUpperCase() + quota.plan.slice(1);
 
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-900">
@@ -82,47 +111,113 @@ export default async function ExtensionDashboardPage() {
       </header>
 
       <main className="mx-auto max-w-5xl px-6 py-10">
-        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-orange-600">
-          <Chrome className="h-3.5 w-3.5" /> Chrome Extension
-        </div>
-        <h1 className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">
-          Your extension control room
-        </h1>
-        <p className="mt-2 max-w-2xl text-sm text-zinc-600">
-          Generate the key that connects the extension to your account, see how
-          it&apos;s being used, and get set up on Jumia — all separate from the
-          web-app dashboard, since this flow works without connecting Jumia&apos;s
-          OAuth at all.
-        </p>
+        {/* Page header — greeting on the left (matches the main dashboard's
+            "{greeting}, {firstName}" pattern); a Plan/Listings-left pill
+            pair + Upgrade + Install Extension on the right (the extension-
+            specific action cluster). */}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-orange-600">
+              <Chrome className="h-3.5 w-3.5" /> Chrome Extension
+            </div>
+            <h1 className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">
+              Welcome, {firstName} — your extension control room
+            </h1>
+            <p className="mt-2 max-w-xl text-sm text-zinc-600">
+              Generate the key that connects the extension, see how it&apos;s
+              being used, and get set up on Jumia — separate from the web-app
+              dashboard, since this flow skips Jumia&apos;s OAuth entirely.
+            </p>
+          </div>
 
-        {/* Status strip */}
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+            <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs font-semibold text-zinc-700">
+              Plan: {planLabel}
+            </span>
+            <span className="rounded-full bg-orange-50 px-3 py-1 text-xs font-semibold text-orange-700">
+              {listingsLeft == null ? "Unlimited listings" : `${listingsLeft} listings left`}
+            </span>
+            <Button asChild variant="outline" size="sm" className="gap-1.5">
+              <Link href="/settings/billing">
+                <CreditCard className="h-3.5 w-3.5" /> Upgrade
+              </Link>
+            </Button>
+            {/* No public Chrome Web Store listing yet — this jumps straight
+                to the install steps below rather than an external link. */}
+            <Button asChild size="sm" className="gap-1.5">
+              <a href="#setup-guide">
+                <Chrome className="h-3.5 w-3.5" /> Install Extension
+              </a>
+            </Button>
+          </div>
+        </div>
+
+        {/* Stat cards — reuses the same gradient StatCard as the main
+            dashboard so this reads as the same product, not a bolt-on. */}
         <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
           <StatCard
-            label="Connection"
-            value={hasActiveKey ? "Connected" : "Not connected"}
-            tone={hasActiveKey ? "good" : "warn"}
-            Icon={hasActiveKey ? CheckCircle2 : XCircle}
+            title="Listings left"
+            value={listingsLeft == null ? "∞" : listingsLeft}
+            subtitle={hasFiniteLimit ? `${quota.listings.used} of ${quota.listings.limit} used this period` : "Unlimited on your plan"}
+            icon={<Gauge className="h-5 w-5" />}
+            gradient="green"
           />
           <StatCard
-            label="Autofills (30 days)"
-            value={String(recentFills)}
-            tone="neutral"
-            Icon={Wand2}
+            title="Autofills"
+            value={recentFills}
+            subtitle="Last 30 days"
+            icon={<Wand2 className="h-5 w-5" />}
+            gradient="orange"
           />
           <StatCard
-            label="Listings left this period"
-            value={listingsLeft == null ? "Unlimited" : String(listingsLeft)}
-            sub={`${quota.plan.charAt(0).toUpperCase()}${quota.plan.slice(1)} plan — shared with the web app`}
-            tone="neutral"
-            Icon={Gauge}
+            title="Time saved (est.)"
+            value={estimateTimeSaved(recentFills)}
+            subtitle="Last 30 days"
+            icon={<Clock className="h-5 w-5" />}
+            gradient="lavender"
           />
+        </div>
+
+        {/* Connection status strip — modeled directly on the main
+            dashboard's Jumia-connection health bar (colored border/bg by
+            state, icon chip, title + status line, action on the right). */}
+        <div
+          className={cn(
+            "mt-6 flex items-center justify-between rounded-2xl border px-5 py-4",
+            hasActiveKey ? "border-emerald-100 bg-emerald-50" : "border-amber-100 bg-amber-50",
+          )}
+        >
+          <div className="flex items-center gap-3">
+            <div className={cn("flex h-8 w-8 items-center justify-center rounded-lg", hasActiveKey ? "bg-emerald-100" : "bg-amber-100")}>
+              <KeyRound className={cn("h-4 w-4", hasActiveKey ? "text-emerald-600" : "text-amber-600")} />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-zinc-800">Extension connection</p>
+              <p className={cn("text-xs", hasActiveKey ? "text-emerald-600" : "text-amber-600")}>
+                {hasActiveKey
+                  ? `Connected — ${keys.filter((k) => !k.revokedAt).length} active key${keys.filter((k) => !k.revokedAt).length === 1 ? "" : "s"}`
+                  : "Not connected — generate a key below and paste it into the extension"}
+              </p>
+            </div>
+          </div>
+          {hasActiveKey ? (
+            <CheckCircle className="h-4 w-4 text-emerald-500" />
+          ) : (
+            <Button asChild size="sm" variant="outline" className="gap-1.5 text-xs">
+              <a href="#api-keys">
+                <AlertCircle className="h-3 w-3" /> Generate key
+              </a>
+            </Button>
+          )}
         </div>
 
         <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[1.3fr_1fr]">
-          <ExtensionKeysPanel initialKeys={keys} />
+          <div id="api-keys">
+            <ExtensionKeysPanel initialKeys={keys} />
+          </div>
 
           {/* Setup guide */}
-          <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+          <div id="setup-guide" className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
             <h2 className="text-lg font-bold text-zinc-900">Get set up</h2>
             <ol className="mt-4 space-y-4">
               <GuideStep
@@ -161,36 +256,6 @@ export default async function ExtensionDashboardPage() {
 
 // ─── Small presentational helpers ────────────────────────────────────────────
 
-function StatCard({
-  label,
-  value,
-  sub,
-  tone,
-  Icon,
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-  tone: "good" | "warn" | "neutral";
-  Icon: React.ElementType;
-}) {
-  const toneClasses = {
-    good:    "bg-emerald-50 text-emerald-600",
-    warn:    "bg-amber-50 text-amber-600",
-    neutral: "bg-orange-50 text-orange-600",
-  }[tone];
-  return (
-    <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
-      <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${toneClasses}`}>
-        <Icon className="h-4.5 w-4.5" />
-      </div>
-      <p className="mt-3 text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</p>
-      <p className="mt-0.5 text-xl font-bold text-zinc-900">{value}</p>
-      {sub && <p className="mt-0.5 text-xs text-zinc-400">{sub}</p>}
-    </div>
-  );
-}
-
 function GuideStep({
   Icon,
   title,
@@ -212,4 +277,3 @@ function GuideStep({
     </li>
   );
 }
-

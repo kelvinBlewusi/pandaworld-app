@@ -112,6 +112,17 @@ export function ExtensionKeysPanel({ initialKeys }: { initialKeys: ExtensionApiK
               {copied ? "Copied" : "Copy"}
             </Button>
           </div>
+
+          <p className="mt-3 text-xs font-semibold text-zinc-700">How to use it</p>
+          <ol className="mt-1 list-decimal space-y-0.5 pl-4 text-xs text-zinc-600">
+            <li>Copy the key above.</li>
+            <li>Install the PandaWorld extension in Chrome (see the guide on the right).</li>
+            <li>Open the extension, paste the key into Settings, and it connects.</li>
+          </ol>
+          <p className="mt-3 text-xs font-semibold text-red-600">
+            Important: don&apos;t share this key with anyone — anyone who has it can run
+            autofills against your quota.
+          </p>
         </div>
       )}
 
