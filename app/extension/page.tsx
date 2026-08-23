@@ -114,11 +114,20 @@ const YOU_SET = [
   "The final Submit",
 ];
 
+// Every auth link on this page carries this so a NEW sign-up lands directly on
+// the extension dashboard — never the old Jumia-OAuth onboarding gate
+// (app/page.tsx / (main)/layout.tsx), which is a separate flow for the main
+// web app and structurally unreachable from /extension/dashboard anyway
+// (that route lives outside the (main) group). Without redirect_url, Clerk's
+// default post-auth destination is "/", whose own gate sends any brand-new
+// user straight into /onboarding/channel.
+const DASHBOARD_REDIRECT = "/extension/dashboard";
+
 export default async function ExtensionPage() {
   const { userId } = await auth();
   // Signed-in visitors skip straight to the real key-generation screen;
   // logged-out visitors sign up first (the dashboard requires an account).
-  const ctaHref  = userId ? "/extension/dashboard" : "/sign-up";
+  const ctaHref  = userId ? DASHBOARD_REDIRECT : `/sign-up?redirect_url=${DASHBOARD_REDIRECT}`;
   const ctaLabel = userId ? "Open your extension dashboard" : "Get your API key";
 
   return (
@@ -339,6 +348,8 @@ export default async function ExtensionPage() {
 
 // ─── Components ──────────────────────────────────────────────────────────────
 
+// Local to this page (not the shared marketing nav), so its auth links can
+// safely carry redirect_url — see DASHBOARD_REDIRECT above.
 function MarketingNav() {
   return (
     <header className="sticky top-0 z-20 border-b border-zinc-100 bg-white/80 backdrop-blur">
@@ -360,13 +371,13 @@ function MarketingNav() {
             Pricing
           </Link>
           <Link
-            href="/sign-in"
+            href={`/sign-in?redirect_url=${DASHBOARD_REDIRECT}`}
             className="rounded-md px-3 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
           >
             Sign in
           </Link>
           <Link
-            href="/sign-up"
+            href={`/sign-up?redirect_url=${DASHBOARD_REDIRECT}`}
             className="rounded-md bg-orange-500 px-3 py-1.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-orange-600"
           >
             Get started
