@@ -12,11 +12,12 @@
       <div class="sub">Jumia Vendor Center autofill</div>
     </header>
 
-    <details class="settings">
+    <details class="settings" open>
       <summary>Settings</summary>
       <label class="fld">
         <span>API base URL</span>
-        <input id="apiBase" type="text" placeholder="http://localhost:3002" />
+        <input id="apiBase" type="text" placeholder="https://your-branch-xxxx.vercel.app" />
+        <span class="hint">Local dev: http://localhost:3002 · Vercel preview: paste the deployment URL (no trailing slash)</span>
       </label>
       <label class="fld">
         <span>API key <em>(stubbed in POC)</em></span>
