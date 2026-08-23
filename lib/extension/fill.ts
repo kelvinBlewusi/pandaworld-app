@@ -147,6 +147,9 @@ export function buildMockProduct(notes: string | undefined, category = "Watches"
 
 const norm = (s: string) => s.toLowerCase().replace(/\*/g, "").replace(/\s+/g, " ").trim();
 
+/** Fields the seller owns — never AI-filled, never warned about. */
+const SELLER_OWNED = ["category", "price", "stock", "quantity", "sku"];
+
 /** Wrap plain text as a <p> if it carries no HTML tags. */
 function asHtml(text: string): string {
   if (/<[a-z][\s\S]*>/i.test(text)) return text;
@@ -219,6 +222,10 @@ export function mapProductToFields(
       value = product.warranty_address ?? "N/A";
     } else if (label.includes("warranty")) {
       value = product.warranty_text ?? "N/A";
+    } else if (SELLER_OWNED.some((k) => label.includes(k))) {
+      // Category, price, stock, quantity, SKU — the seller sets these. Skip
+      // silently; don't nag even though some are required.
+      continue;
     } else {
       // Unknown field — leave for the seller. Only nag if it's required.
       if (field.required) {

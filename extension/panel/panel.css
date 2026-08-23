@@ -70,6 +70,15 @@ button { cursor: pointer; border: none; border-radius: 8px; font: inherit; font-
   border-radius: 8px; padding: 8px 10px; font-size: 12px; margin-bottom: 6px;
 }
 
+.diag { margin-top: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+.diag summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.diagline {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; color: var(--fg); background: var(--card);
+  padding: 6px 8px; border-radius: 6px; margin-top: 6px;
+  word-break: break-word; white-space: pre-wrap;
+}
+
 footer { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 10px; }
 footer ol { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
 footer li { margin: 3px 0; }

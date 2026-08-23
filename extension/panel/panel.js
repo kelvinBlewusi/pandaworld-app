@@ -52,6 +52,22 @@ function renderWarnings(warnings) {
   }
 }
 const escapeHtml = (s) => (s || "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function renderDiag(diagnostics) {
+  const wrap = document.getElementById("diagWrap");
+  const box = $("diag");
+  if (!diagnostics || !diagnostics.length) {
+    wrap.hidden = true;
+    return;
+  }
+  box.innerHTML = "";
+  for (const d of diagnostics) {
+    const p = document.createElement("div");
+    p.className = "diagline";
+    p.textContent = d;
+    box.appendChild(p);
+  }
+  wrap.hidden = false;
+}
 
 // ── Main action ──────────────────────────────────────────────────────────────
 $("autofill").addEventListener("click", async () => {
@@ -72,9 +88,9 @@ $("autofill").addEventListener("click", async () => {
       setStatus("Could not read the page. Reload the Jumia tab and try again.", "err");
       return;
     }
+    renderDiag(harvest.diagnostics); // always show what we saw
     if (!harvest.fields.length) {
       setStatus("No fields found — did you pick a category to open the form?", "err");
-      renderWarnings(harvest.diagnostics);
       return;
     }
     setStatus(`Found ${harvest.fields.length} fields${harvest.image ? " + image" : " (no image detected)"}. Asking AI…`);

@@ -49,7 +49,21 @@
       required: f.required,
       options: f.options,
     }));
-    diagnostics.push(`Found ${fields.length} fields: ${fields.map((f) => `${f.label}[${f.type}]`).join(", ") || "none"}`);
+    diagnostics.push(`Found ${fields.length} fields: ${fields.map((f) => `${f.label}[${f.type}]${f.required ? "*" : ""}`).join(", ") || "none"}`);
+
+    // When we recognise few/no fields, dump the raw controls on the page so we
+    // can see what's actually there and tune the label heuristics.
+    if (fields.length < 3) {
+      const raw = [...document.querySelectorAll('input, textarea, select, [contenteditable="true"], .ProseMirror')]
+        .slice(0, 20)
+        .map((el) => {
+          const tag = el.tagName.toLowerCase();
+          const t = el.getAttribute("type") || (el.isContentEditable ? "contenteditable" : "");
+          const ph = el.getAttribute("placeholder") || "";
+          return `${tag}${t ? "/" + t : ""}${el.id ? "#" + el.id : ""}${ph ? ` ph="${ph.slice(0, 24)}"` : ""} → label:"${findLabel(el) || "?"}"`;
+        });
+      diagnostics.push(`Raw controls (first 20): ${raw.length ? raw.join(" | ") : "none found"}`);
+    }
 
     let image = null;
     let imageUrl = null;
@@ -134,33 +148,60 @@
   /** Best-effort label resolution for a control. */
   function findLabel(el) {
     // 1. <label for> association
-    if (el.labels && el.labels[0]) return clean(el.labels[0].innerText);
+    if (el.labels && el.labels[0] && el.labels[0].innerText.trim()) return clean(el.labels[0].innerText);
     // 2. aria-label / aria-labelledby
     const aria = el.getAttribute("aria-label");
     if (aria) return clean(aria);
     const labelledby = el.getAttribute("aria-labelledby");
     if (labelledby) {
       const ref = document.getElementById(labelledby);
-      if (ref) return clean(ref.innerText);
+      if (ref && ref.innerText.trim()) return clean(ref.innerText);
     }
     // 3. Wrapping <label>
     const wrap = el.closest("label");
-    if (wrap) return clean(wrap.innerText);
-    // 4. A label-ish element within the field's container (walk up a few levels)
+    if (wrap && wrap.innerText.trim()) return clean(wrap.innerText);
+
+    // 4. The label text usually sits just BEFORE the field (or its wrapper).
+    // Walk up the ancestor chain; at each level scan preceding siblings for a
+    // short, label-like snippet. Handles both <label><input> and
+    // <div class=label>…</div><div><input></div> layouts, and skips the
+    // rich-text toolbar that sits between a label and a ProseMirror editor.
     let node = el;
-    for (let i = 0; i < 4 && node; i++) {
+    for (let up = 0; up < 6 && node; up++) {
+      let sib = node.previousElementSibling;
+      for (let hop = 0; sib && hop < 5; hop++) {
+        const txt = labelTextOf(sib);
+        if (txt) return txt;
+        sib = sib.previousElementSibling;
+      }
       node = node.parentElement;
-      if (!node) break;
-      const cand = node.querySelector("label, .label, [class*='label'], .field-label");
-      if (cand && cand.innerText.trim()) return clean(cand.innerText);
     }
-    // 5. Nearest previous sibling text (last resort)
-    let sib = el.previousElementSibling;
-    for (let i = 0; i < 3 && sib; i++) {
-      if (sib.innerText && sib.innerText.trim().length <= 40) return clean(sib.innerText);
-      sib = sib.previousElementSibling;
+
+    // 5. Any label-ish descendant in the nearest container.
+    const cont = el.closest("div, section, fieldset");
+    if (cont) {
+      const cand = cont.querySelector('label, legend, [class*="label" i], [class*="title" i]');
+      if (cand && labelTextOf(cand)) return labelTextOf(cand);
     }
     return null;
+  }
+
+  /**
+   * Return trimmed label text from an element, or null if it isn't label-like:
+   * skips anything that contains a form control, a button, a toolbar, or an
+   * icon (i.e. field wrappers and editor toolbars), and skips helper/example
+   * text ("Ex: …", "Required to increase listing quality", size hints).
+   */
+  function labelTextOf(elm) {
+    if (!elm || !elm.querySelector) return null;
+    if (elm.matches('input, textarea, select, [contenteditable="true"]')) return null;
+    if (elm.querySelector('input, textarea, select, [contenteditable="true"], button, svg, [role="toolbar"]')) return null;
+    const raw = (elm.innerText || elm.textContent || "").trim();
+    if (!raw) return null;
+    const first = raw.split("\n")[0].trim();
+    if (first.length < 1 || first.length > 40) return null;
+    if (/^(ex:|e\.g\.)|required to increase|recommended|maximum|pixels|watermark/i.test(first)) return null;
+    return clean(first);
   }
 
   function labelIsRequired(el) {

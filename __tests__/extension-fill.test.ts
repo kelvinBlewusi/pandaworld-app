@@ -75,6 +75,19 @@ describe("mapProductToFields — Watches POC", () => {
     );
   });
 
+  it("does not warn about seller-owned fields (Category, price, stock)", () => {
+    const withSellerFields: HarvestedField[] = [
+      ...fields,
+      { label: "Category", type: "combobox", required: true },
+      { label: "Stock", type: "text", required: true },
+    ];
+    const product = buildMockProduct("", "Watches");
+    const { values, warnings } = mapProductToFields(product, withSellerFields, "");
+    expect(values["Category"]).toBeUndefined();
+    expect(values["Stock"]).toBeUndefined();
+    expect(warnings.some((w) => /Category|Stock/.test(w))).toBe(false);
+  });
+
   it("warns on an unmappable required field", () => {
     const extra: HarvestedField[] = [
       ...fields,
