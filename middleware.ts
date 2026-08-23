@@ -16,6 +16,12 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 //   /api/webhooks/clerk    — incoming Clerk webhook
 //   /api/jumia/callback    — Jumia OAuth post-redirect
 //   /api/cron/(.*)         — Vercel cron, bearer-token authorised
+//   /extension             — Chrome extension marketing/onboarding page
+//   /api/extension/(.*)    — Chrome extension endpoints. The extension has no
+//                            Clerk browser session (it runs from Jumia's
+//                            origin) — Phase 0 auth is stubbed, Phase 1 auths
+//                            via a PandaWorld API key checked inside the route,
+//                            not Clerk middleware. See docs/chrome-extension-plan.md §9.
 //
 // SEO convention routes — Next.js renders these as dynamic server
 // routes (NOT static files), so they're caught by the matcher below
@@ -38,6 +44,8 @@ const isPublicRoute = createRouteMatcher([
   '/api/webhooks/clerk',
   '/api/jumia/callback',
   '/api/cron/(.*)',
+  '/extension',
+  '/api/extension/(.*)',
   // SEO + crawler routes — keep these PUBLIC or Google rejects the
   // sitemap and the OG link previews render as broken images.
   '/sitemap.xml',
