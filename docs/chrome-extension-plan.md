@@ -29,9 +29,16 @@ own page; our AI rides shotgun and fills the form for them.
 Jumia content policy + restricted-word filter + brand/attribute defaults) already exists.
 The extension is a **thin DOM client** over that pipeline, not a new AI system.
 
-⚠️ **Two hard technical problems** gate the whole thing (reading the uploaded image off
-Jumia's DOM; writing into Jumia's rich-text editors). A one-category POC must prove both
-before we invest in auth + full category coverage.
+✅ **Phase 0 POC complete (validated on the live page).** Both hard problems are proven end
+to end on `vendorcenter.jumia.com` for the Watches category: the extension harvested all 28
+rendered fields with correct labels and filled 10/10 mappable fields — including the six
+**CKEditor 5** rich-text editors (Description, Highlights, From the Manufacturer, What's in
+the box, Product warranty, Warranty Address). See §7 for how, and §16 for what's next.
+
+⚠️ **The two hard problems it had to clear** (now cleared): reading the fields off Jumia's
+DOM; writing into Jumia's rich-text editors. Reality check from the POC — Jumia uses
+**CKEditor 5 in Angular**, not ProseMirror, which needed a MAIN-world `setData()` bridge
+(§7).
 
 ⚠️ **One strategic risk**: Jumia is adding native AI ("AI will suggest the category…",
 "Ask Gemini" in-browser). We compete on **Ghana-market tuning + QC-compliance**, not on
@@ -219,18 +226,24 @@ DOM.
 
 ---
 
-## 7. Hard problem #2 — writing values into Jumia's fields
+## 7. Hard problem #2 — writing values into Jumia's fields ✅ SOLVED
 
-Jumia's form is React + a ProseMirror-family rich-text editor. Naive `el.value = x` or
-`el.innerHTML = x` **will not work** — React/ProseMirror overwrite it. Per widget:
+Jumia's form is an **Angular app using CKEditor 5** for rich text (not ProseMirror as
+originally assumed — confirmed from the live DOM: `div.ck-editor__main`, `<ckeditor>`,
+`.editor-wrapper`). Naive `el.value = x` / `el.innerHTML = x` **do not work** — Angular and
+CKEditor own their state. Per widget, as shipped in the POC:
 
-| Widget | Fields | Write strategy |
+| Widget | Fields | Write strategy (implemented) |
 |---|---|---|
-| **Plain input** | Name, Weight | Use the **native setter** — `Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el, val)` then dispatch `input` + `change`. (React tracks its own value; the native setter is the known workaround.) |
-| **Combobox / autocomplete** | Brand, Color, Color family | Focus → type the value → wait for the option list → click the option whose text matches. Match AI value against `options[]`; if no match, fall back (Brand → "Generic", same rule as `resolveBrand`). |
-| **Rich text (ProseMirror)** | Description, Highlights, What's in box, From Manufacturer, Warranty | Focus the editor → clear → **simulate a paste** of HTML via a synthetic `ClipboardEvent` with a `DataTransfer` carrying `text/html`, or `document.execCommand('insertHTML', …)`. This routes through the editor's own input handling so its internal model updates. Needs real per-editor testing — this is the single fiddliest piece. |
+| **Plain input** | Name, Weight | Native setter — `Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el, val)` then dispatch `input` + `change`. |
+| **Native `<select>`** | (category-dependent) | Match the value to an `<option>` and dispatch `change`. |
+| **Rich text (CKEditor 5)** | Description, Highlights, What's in box, From the Manufacturer, Product warranty, Warranty Address | **MAIN-world bridge** (`extension/content/mainworld.js`, manifest `"world": "MAIN"`): the isolated content script tags the editable with the HTML and dispatches `pw-apply-richtext`; the bridge, running in the page's JS context, grabs the real `editor.ckeditorInstance` and calls **`editor.setData(html)`**. This is the only reliable way to set CKEditor content, and it bypasses page CSP. Falls back to a page-context `execCommand` write for any non-CKEditor editor. |
+| **Combobox / custom dropdown** | Color family, and step-3 selects | ▶️ **Phase 1** — click to open, click the matching option. Currently unfilled (a typed value doesn't stick in a click-only widget). |
 
-Each writer fires a small visual ✓ so the seller sees what changed.
+**POC result (Watches, live page):** 10/10 mappable fields filled, all six CKEditor
+rich-text fields populated. Label resolution walks backwards in document reading order
+(`previousLabelInDocOrder`), skipping the editor's own captions and stopping at the previous
+visible field, so each editor resolves to its true label ("Product description", etc.).
 
 ---
 
@@ -403,21 +416,26 @@ one subscription, two surfaces. Reduces churn (more ways to get value from one p
 
 ## 16. Build plan
 
-**Phase 0 — POC (de-risk the two hard problems). ~2–3 days.** One category (Watches, from
-the screenshot). Auth stubbed. Goal: prove we can (a) read the uploaded image off Jumia's
-form and (b) write clean SEO copy into the Description + Highlights ProseMirror editors, end
-to end against a real Add-Products page.
-- `extension/manifest.json`, side panel, content script (harvest + writers), background worker
-- `app/api/extension/fill/route.ts` (auth stubbed) wrapping `aiPassA` + a fill pass
+**Phase 0 — POC (de-risk the two hard problems). ✅ DONE.** Watches category, auth stubbed,
+mock AI. Proven on the live page: reads the uploaded image off Jumia's DOM, harvests all
+rendered fields, and writes clean copy into the CKEditor 5 rich-text editors (10/10 filled).
+- ✅ `extension/` — manifest, side panel, content script (harvest + writers), background
+  worker, `content/mainworld.js` CKEditor bridge
+- ✅ `app/api/extension/fill/route.ts` (auth stubbed) + `lib/extension/fill.ts` (pure mapper)
+  + `__tests__/extension-fill.test.ts` (10 tests)
+- ✅ `app/extension/page.tsx` — public marketing/onboarding page for the flow
 
-**Phase 1 — v1 (shippable). ~1–1.5 weeks.**
+**Phase 1 — v1 (shippable). ~1–1.5 weeks.** ← next
+- **Real AI**: replace the mock — upload the harvested image to storage → URL → `aiPassA`
+  (or extend it to accept base64), so it fills category-specific attributes on any category.
 - API-key auth: `extension_api_keys` migration, dashboard **Settings → API Keys**
   (generate / show-once / revoke), `authenticateExtensionKey()` helper, paste-key screen in
-  the panel
+  the panel; wire the `app/extension/page.tsx` CTA to it.
 - Quota wiring (`checkQuota`/`incrementUsage`) + per-key rate limit
-- Combobox writers (Brand/Color) + all rich-text fields across steps 1 & 3
-- `warnings[]` surfaced in the panel; per-field ✓
-- Multi-category (harvest-by-label makes this mostly free)
+- **Combobox / click-only dropdown writers** (Color family + step-3 selects) — the remaining
+  field type the POC left unfilled
+- `warnings[]` surfaced in the panel; per-field ✓ (done in POC)
+- Multi-category (harvest-by-label already generic — proven in POC)
 
 **Phase 2 — polish & moat. Later.**
 - Packaging OCR (Cloud Vision) for spec accuracy
@@ -426,16 +444,15 @@ to end against a real Add-Products page.
 
 ---
 
-## 17. Open decisions (need founder input)
+## 17. Open decisions
 
-1. **First POC category** — Watches (matches screenshot) or Phones (richer attribute set →
-   harder but more impressive)?
-2. **Image source default** — auto-hook Jumia's uploader (smoother) vs. our own drop zone
-   (more robust) as the primary?
+1. ~~First POC category~~ — ✅ Watches (done).
+2. ~~Image source default~~ — ✅ POC captures Jumia's file input, with a preview-image
+   fallback. Phase 1: decide whether to also offer an in-panel drop zone.
 3. **Chrome Web Store distribution** — public listing, or unlisted/self-hosted `.crx` for a
-   controlled beta with early sellers?
+   controlled beta with early sellers? (Still open.)
 4. **ToS check** — who reads Jumia's seller agreement for anti-automation language before
-   public launch?
+   public launch? (Still open.)
 
 ---
 
