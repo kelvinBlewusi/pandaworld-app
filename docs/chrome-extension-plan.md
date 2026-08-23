@@ -441,6 +441,11 @@ rendered fields, and writes clean copy into the CKEditor 5 rich-text editors (10
   generate/show-once/revoke (`keys-panel.tsx`), a status strip (connected? / autofills in
   30 days / listings left), and an embedded setup guide. Linked from the main app's Sidebar
   as a visually distinct "Extension · New" entry, and from `/extension`'s CTA when signed in.
+  Every sign-up/sign-in link on `/extension` carries `redirect_url=/extension/dashboard` so a
+  seller entering through the extension never touches the classic Jumia-OAuth onboarding gate
+  by accident. The dashboard's own header stays self-contained (its Wordmark links to
+  `/extension`, not `/dashboard`) — the ONE deliberate bridge into the classic flow is a
+  "Push Listings from here" button, styled as a distinct action, not a plain nav link.
 - ✅ **Quota wiring**: `checkQuota`/`incrementUsage` — the SAME per-period listing quota as
   the web app (no separate SKU). Only a real (non-mock) autofill spends a credit.
 - ⬜ **Combobox / click-only dropdown writers** (Color family + step-3 selects) — the one

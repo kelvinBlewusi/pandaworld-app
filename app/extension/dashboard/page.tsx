@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { UserButton } from "@clerk/nextjs";
 import {
-  ArrowLeft,
+  ArrowRight,
   Chrome,
   Wand2,
   Gauge,
@@ -90,7 +90,11 @@ export default async function ExtensionDashboardPage() {
       <header className="border-b border-zinc-200 bg-white">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
           <div className="flex items-center gap-4">
-            <Link href="/dashboard" aria-label="pandaworld home">
+            {/* Points at /extension, not /dashboard — this whole page stays
+                self-contained inside the extension flow. The ONLY deliberate
+                bridge into the classic Jumia-OAuth flow is the "Push Listings
+                from here" button below, not incidental chrome navigation. */}
+            <Link href="/extension" aria-label="pandaworld home">
               <Wordmark size={24} />
             </Link>
             <span className="hidden h-5 w-px bg-zinc-200 sm:block" />
@@ -99,11 +103,20 @@ export default async function ExtensionDashboardPage() {
             </span>
           </div>
           <div className="flex items-center gap-3">
+            {/* Explicit, opt-in bridge into the classic flow — deliberately
+                styled as a distinct action (bordered pill), not a plain nav
+                link, so it reads as "leave the extension flow and go set up
+                Jumia OAuth", not "here's the rest of the same dashboard".
+                /dashboard's own gate (app/page.tsx / (main)/layout.tsx)
+                handles routing a new seller through onboarding, or an
+                already-connected one straight to their listings — that's
+                the "Jumia connection flow" this link is meant to enter. */}
             <Link
               href="/dashboard"
-              className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100"
+              title="Push listings the classic way — connects Jumia via OAuth in PandaWorld's main app"
+              className="flex items-center gap-1.5 rounded-full border border-zinc-200 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:border-zinc-300 hover:bg-zinc-50"
             >
-              <ArrowLeft className="h-4 w-4" /> Main dashboard
+              Push Listings from here <ArrowRight className="h-3.5 w-3.5" />
             </Link>
             <UserButton appearance={{ elements: { avatarBox: "h-7 w-7" } }} />
           </div>
