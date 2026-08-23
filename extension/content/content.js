@@ -104,10 +104,11 @@
     if (lastFile) {
       return { dataUrl: await fileToDataUrl(lastFile), httpUrl: null, source: "file input" };
     }
-    // Fallback: read a preview <img> from the upload area.
+    // Fallback: read a freshly-uploaded preview. Restrict to blob:/data: URLs
+    // (what an upload preview uses) so we never grab Jumia's logo or a CDN icon.
     const imgs = [...document.querySelectorAll("img")].filter((img) => {
       const src = img.currentSrc || img.src || "";
-      return /^blob:|^data:|jumia|cloudfront|akamai/i.test(src) && (img.naturalWidth || 0) > 60;
+      return /^blob:|^data:/i.test(src) && (img.naturalWidth || 0) > 120;
     });
     for (const img of imgs) {
       const src = img.currentSrc || img.src;

@@ -2,6 +2,8 @@ import {
   parseNotes,
   buildMockProduct,
   mapProductToFields,
+  finalizeAiValues,
+  isSellerOwned,
   type HarvestedField,
 } from "@/lib/extension/fill";
 
@@ -96,5 +98,59 @@ describe("mapProductToFields — Watches POC", () => {
     const product = buildMockProduct("", "Watches");
     const { warnings } = mapProductToFields(product, extra, "");
     expect(warnings.some((w) => /Sport\/activity/.test(w))).toBe(true);
+  });
+});
+
+describe("isSellerOwned", () => {
+  it("flags seller-owned fields", () => {
+    ["Price", "Sale Price", "Stock", "Quantity", "Seller SKU", "Category"].forEach((l) =>
+      expect(isSellerOwned(l)).toBe(true),
+    );
+  });
+  it("does not flag AI fields", () => {
+    ["Name", "Brand", "Product description", "Weight (kg)"].forEach((l) =>
+      expect(isSellerOwned(l)).toBe(false),
+    );
+  });
+});
+
+describe("finalizeAiValues (real-AI post-processing)", () => {
+  const fields: HarvestedField[] = [
+    { label: "Name", type: "text" },
+    { label: "Product description", type: "richtext" },
+    { label: "Highlights", type: "richtext" },
+    { label: "Watch Type", type: "select", options: ["Analog", "Digital", "Smart"] },
+    { label: "Price", type: "text" },
+  ];
+
+  it("wraps rich-text as HTML and bulletizes highlights", () => {
+    const raw = {
+      Name: "Casio Analog Watch",
+      "Product description": "A dependable everyday watch.",
+      Highlights: "Water resistant\nLeather strap",
+    };
+    const { values } = finalizeAiValues(raw, fields, "");
+    expect(values["Name"]).toBe("Casio Analog Watch");
+    expect(values["Product description"]).toBe("<p>A dependable everyday watch.</p>");
+    expect(values["Highlights"]).toBe("<ul><li>Water resistant</li><li>Leather strap</li></ul>");
+  });
+
+  it("keeps HTML the AI already returned", () => {
+    const raw = { "Product description": "<p>Already <strong>html</strong>.</p>" };
+    const { values } = finalizeAiValues(raw, fields, "");
+    expect(values["Product description"]).toBe("<p>Already <strong>html</strong>.</p>");
+  });
+
+  it("snaps a select to an allowed option and drops invalid ones", () => {
+    const ok = finalizeAiValues({ "Watch Type": "analog" }, fields, "");
+    expect(ok.values["Watch Type"]).toBe("Analog");
+    const bad = finalizeAiValues({ "Watch Type": "Sundial" }, fields, "");
+    expect(bad.values["Watch Type"]).toBeUndefined();
+    expect(bad.warnings.some((w) => /Watch Type/.test(w))).toBe(true);
+  });
+
+  it("never fills seller-owned fields even if the AI returned them", () => {
+    const { values } = finalizeAiValues({ Price: "250" }, fields, "");
+    expect(values["Price"]).toBeUndefined();
   });
 });

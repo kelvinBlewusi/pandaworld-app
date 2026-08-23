@@ -117,7 +117,9 @@ $("autofill").addEventListener("click", async () => {
     const apply = await sendToTab(tab.id, { type: "APPLY", values: fill.data.values });
     renderResults(apply?.results);
     renderWarnings([
-      ...(fill.data.mock ? ["Running in MOCK mode (no real AI). Set EXTENSION_POC_REAL_AI=true on the server for live AI."] : []),
+      ...(fill.data.mock
+        ? ["Mock fill this run — the note below says why (usually: no product photo uploaded, or AI creds missing on the server)."]
+        : []),
       ...(fill.data.warnings || []),
     ]);
 

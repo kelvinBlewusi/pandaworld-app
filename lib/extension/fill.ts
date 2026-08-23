@@ -256,3 +256,52 @@ export function mapProductToFields(
 
   return { values, warnings };
 }
+
+/** True for fields the seller owns — never AI-filled (price, stock, SKU, category). */
+export function isSellerOwned(label: string): boolean {
+  const l = norm(label);
+  return SELLER_OWNED.some((k) => l.includes(k));
+}
+
+/**
+ * Structural finalizer for a raw label→value map produced by the real AI pass.
+ * Skips seller-owned fields, ensures rich-text is HTML, snaps select/combobox
+ * values to an allowed option, and drops empties. Content-policy cleanup
+ * (restricted words, brand-in-title) already happened in the AI pass.
+ */
+export function finalizeAiValues(
+  raw: Record<string, string>,
+  fields: HarvestedField[],
+  notes?: string,
+): { values: Record<string, string>; warnings: string[] } {
+  const values: Record<string, string> = {};
+  const warnings: string[] = [];
+  const { price } = parseNotes(notes);
+
+  for (const field of fields) {
+    if (isSellerOwned(field.label)) continue;
+    let value = (raw[field.label] ?? "").trim();
+    if (!value) continue;
+
+    if (field.type === "richtext") {
+      value = norm(field.label).includes("highlight") ? bulletsToHtml(value) : asHtml(value);
+    }
+
+    if ((field.type === "select" || field.type === "combobox") && field.options?.length) {
+      const snapped = snapToOption(value, field.options);
+      if (!snapped) {
+        warnings.push(`"${value}" isn't an option for "${field.label}" — left blank, please pick one.`);
+        continue;
+      }
+      value = snapped;
+    }
+
+    values[field.label] = value;
+  }
+
+  if (price != null) {
+    warnings.push(`Detected price ${price} in your notes — set it on the Variants step (price lives there, not here).`);
+  }
+
+  return { values, warnings };
+}

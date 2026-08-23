@@ -1,35 +1,34 @@
 /**
  * POST /api/extension/fill  — Jumia Vendor Center autofill endpoint
  *
- * Phase 0 (POC). Takes the fields the extension harvested from Jumia's
- * Add-Products form + optional seller notes, and returns a value per field.
+ * Takes the fields the extension harvested from Jumia's Add-Products form + the
+ * product image + optional seller notes, and returns a value per field.
  *
  * Auth is STUBBED in this phase (see `authenticateStub`). Phase 1 replaces it
  * with the PandaWorld API-key check (docs/chrome-extension-plan.md §9) and
  * wires real quota metering.
  *
- * AI is MOCK by default so the extension loop runs with zero external deps.
- * Set EXTENSION_POC_REAL_AI=true (and supply an http(s) imageUrl) to route
- * through the real `aiPassA_describeProduct()` pipeline; any failure falls
- * back to the mock so the POC never hard-fails.
+ * AI: when a Gemini backend is configured (Vertex or AI Studio key) AND an
+ * image is supplied, the real vision pass (lib/ai/extension-fill) fills the
+ * exact rendered fields — category-specific attributes included. If that's
+ * unavailable or fails, we fall back to a deterministic mock so the extension
+ * loop never hard-fails. Set EXTENSION_FORCE_MOCK=true to always use the mock.
  */
 
 import { NextResponse } from "next/server";
 import {
   buildMockProduct,
   mapProductToFields,
-  parseNotes,
+  finalizeAiValues,
+  isSellerOwned,
   type FillRequest,
   type FillResponse,
-  type ProductLike,
 } from "@/lib/extension/fill";
+import { aiFillRenderedFields, aiConfigured } from "@/lib/ai/extension-fill";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-// Permissive CORS for the POC. The endpoint carries no cookies (auth is a
-// Bearer key in Phase 1), so "*" is safe here. Tighten to the extension's
-// origin once the extension ID is stable.
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -40,12 +39,51 @@ export function OPTIONS() {
   return new Response(null, { status: 204, headers: CORS });
 }
 
-/**
- * Phase-0 auth stub. Accepts anything. Phase 1: hash the Bearer key, look it
- * up in extension_api_keys, resolve the Clerk userId, enforce quota.
- */
+/** Phase-0 auth stub. Phase 1: hash the Bearer key → userId → quota gate. */
 function authenticateStub(_req: Request): { userId: string | null } {
   return { userId: null };
+}
+
+/** Parse a data: URL into { base64, mimeType }, or null if not a data URL. */
+function parseDataUrl(s: string | undefined): { base64: string; mimeType: string } | null {
+  if (!s) return null;
+  const m = /^data:([^;,]+)(;base64)?,([\s\S]*)$/.exec(s);
+  if (!m || !m[2]) return null; // require base64 encoding
+  return { mimeType: m[1] || "image/jpeg", base64: m[3] };
+}
+
+/** Fetch an http(s) image to base64 (used when only a preview URL was harvested). */
+async function fetchToBase64(url: string): Promise<{ base64: string; mimeType: string }> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+  if (!res.ok) throw new Error(`image fetch HTTP ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  return { base64: buf.toString("base64"), mimeType: res.headers.get("content-type") || "image/jpeg" };
+}
+
+async function resolveImage(body: FillRequest): Promise<{ base64: string; mimeType: string } | null> {
+  const fromData = parseDataUrl(body.image);
+  if (fromData) return fromData;
+  if (body.imageUrl && /^https?:\/\//.test(body.imageUrl)) {
+    try {
+      return await fetchToBase64(body.imageUrl);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Ensure a Brand field is filled — default to "Generic" like the API push does. */
+function applyBrandDefault(
+  values: Record<string, string>,
+  fields: FillRequest["fields"],
+  warnings: string[],
+) {
+  const brand = fields.find((f) => /brand/i.test(f.label) && !/store/i.test(f.label));
+  if (brand && !values[brand.label]) {
+    values[brand.label] = "Generic";
+    warnings.push(`Brand not detected — filled "Generic". Change it if you know the brand.`);
+  }
 }
 
 export async function POST(req: Request) {
@@ -55,7 +93,6 @@ export async function POST(req: Request) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400, headers: CORS });
   }
-
   if (!Array.isArray(body.fields) || body.fields.length === 0) {
     return NextResponse.json(
       { error: "No fields provided — harvest the form first." },
@@ -67,68 +104,56 @@ export async function POST(req: Request) {
 
   const market = body.market || "GH";
   const notes = body.notes || "";
-
-  let product: ProductLike;
-  let mock = true;
   const warnings: string[] = [];
 
-  const realAI = process.env.EXTENSION_POC_REAL_AI === "true";
-  const canRunRealAI = realAI && !!body.imageUrl && /^https?:\/\//.test(body.imageUrl);
+  const forceMock = process.env.EXTENSION_FORCE_MOCK === "true";
+  const image = forceMock ? null : await resolveImage(body);
 
-  if (canRunRealAI) {
+  let values: Record<string, string> = {};
+  let mock = true;
+
+  if (!forceMock && aiConfigured() && image) {
     try {
-      // Dynamic import keeps Clerk/Supabase/Gemini out of the mock path.
-      const { aiPassA_describeProduct } = await import("@/lib/actions/ai");
-      const desc = await aiPassA_describeProduct([body.imageUrl!], notes, { forceBestModel: true });
-      product = {
-        title:            desc.title,
-        brand:            desc.brand,
-        description:      desc.description,
-        highlights:       desc.highlights,
-        color:            desc.color,
-        color_family:     desc.color_family,
-        weight_kg:        desc.weight_kg,
-        warranty_text:    desc.warranty_text,
-        warranty_address: desc.warranty_address,
-        summary:          desc.summary,
-        // Phase 1: derive a real "what's in the box" from the category schema.
-        whats_in_box:     undefined,
-      };
+      const fillable = body.fields.filter((f) => !isSellerOwned(f.label));
+      const { raw } = await aiFillRenderedFields({
+        imageBase64: image.base64,
+        mimeType: image.mimeType,
+        fields: fillable,
+        notes,
+        market,
+      });
+      const finalized = finalizeAiValues(raw, body.fields, notes);
+      values = finalized.values;
+      warnings.push(...finalized.warnings);
+      applyBrandDefault(values, body.fields, warnings);
       mock = false;
     } catch (e) {
-      warnings.push(`Real AI pass failed (${(e as Error).message}) — used a mock fill instead.`);
-      product = buildMockProduct(notes, guessCategory(body));
+      warnings.push(`AI fill failed (${(e as Error).message}) — used a mock fill instead.`);
     }
-  } else {
-    if (realAI && !canRunRealAI) {
-      warnings.push("Real AI enabled but no usable image URL was supplied — used a mock fill.");
-    }
-    product = buildMockProduct(notes, guessCategory(body));
+  } else if (!forceMock && !image) {
+    warnings.push("No product image detected — upload a photo on Jumia first for AI copy. Used a mock fill.");
+  } else if (!forceMock && !aiConfigured()) {
+    warnings.push("No Gemini backend configured on the server — used a mock fill.");
   }
 
-  const mapped = mapProductToFields(product, body.fields, notes);
+  if (mock) {
+    const product = buildMockProduct(notes, "Watches");
+    const mapped = mapProductToFields(product, body.fields, notes);
+    values = mapped.values;
+    warnings.push(...mapped.warnings);
+  }
 
   const response: FillResponse = {
-    values:           mapped.values,
-    warnings:         [...warnings, ...mapped.warnings],
+    values,
+    warnings,
     creditsRemaining: null, // Phase 1: from quota after incrementUsage()
     mock,
   };
 
-  // Log a compact summary so the founder can trace it in Vercel logs.
   console.info(
     `[ext/fill] market=${market} mock=${mock} fields=${body.fields.length} ` +
-      `filled=${Object.keys(mapped.values).length} warnings=${response.warnings.length} ` +
-      `price=${parseNotes(notes).price ?? "-"}`,
+      `filled=${Object.keys(values).length} warnings=${warnings.length}`,
   );
 
   return NextResponse.json(response, { status: 200, headers: CORS });
-}
-
-/** Best-effort category name from a harvested "Category" field, else Watches. */
-function guessCategory(body: FillRequest): string {
-  const cat = body.fields.find((f) => /category/i.test(f.label));
-  // The Category field value isn't harvested as a value in Phase 0; default to
-  // the POC target category.
-  return (cat && (cat as { value?: string }).value) || "Watches";
 }

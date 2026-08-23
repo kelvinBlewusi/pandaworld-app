@@ -15,28 +15,32 @@ No build step — it's plain JS/HTML/CSS and loads unpacked as-is.
 
 - Side panel UI (notes box, Autofill button, per-field results, warnings).
 - Content script that harvests the rendered fields + the uploaded image.
-- DOM writers: React-safe inputs, native `<select>`, and ProseMirror rich-text.
+- DOM writers: React-safe inputs, native `<select>`, and CKEditor 5 rich-text.
 - Backend endpoint `POST /api/extension/fill` returning a value per field.
-- **Mock AI by default** so the whole loop runs with zero external deps.
+- **Live AI** (real Gemini reading the uploaded photo) when creds + a photo are
+  present; deterministic **mock** fallback otherwise.
 
 ## What's deliberately deferred to Phase 1
 
 - Real auth (the API key box is present but **stubbed** server-side).
 - Real quota metering.
-- Real AI is behind a flag (see below) because `aiPassA_describeProduct()` needs
-  an image **URL** (Phase 1 uploads the harvested image to storage first).
-- Combobox option-picking (Brand/Color autocompletes) — Phase 0 writes text.
+- Combobox / click-only dropdown option-picking (e.g. Color family) — Phase 0
+  writes typed inputs, native selects, and rich text.
 
 ## Run it
 
 ### 1. Start the backend
 ```bash
-npm run dev          # http://localhost:3002 (mock AI, no keys needed)
+npm run dev          # http://localhost:3002
 ```
-Mock mode needs nothing. To try live AI later:
-```bash
-EXTENSION_POC_REAL_AI=true npm run dev   # also needs a valid image URL + Google creds
-```
+**Live AI turns on automatically** when (a) a Gemini backend is configured
+(Vertex service account or `GOOGLE_API_KEY` in `.env.local`) and (b) a product
+photo was uploaded on Jumia so the extension can read it. Otherwise it falls
+back to a deterministic **mock** so the loop never hard-fails. Force mock with
+`EXTENSION_FORCE_MOCK=true npm run dev`.
+
+> For real AI, **upload an actual product photo on the Jumia page first** — the
+> extension reads that image; without it you'll get a mock fill.
 
 ### 2. Load the extension
 1. Go to `chrome://extensions`, enable **Developer mode**.
