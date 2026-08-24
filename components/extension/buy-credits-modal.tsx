@@ -11,22 +11,24 @@
 import { useState } from "react";
 import { X, Check, Loader2, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CREDIT_PACKS } from "@/lib/billing/credit-packs";
+import { CREDIT_PACKS, POPULAR_PACK_ID } from "@/lib/billing/credit-packs";
 
 interface Tier {
   id: string;
   credits: number;
   price: string;
+  popular?: boolean;
 }
 
 const TIERS: Tier[] = CREDIT_PACKS.map((p) => ({
   id: p.id,
   credits: p.credits,
   price: `GHS ${p.amountGhs}`,
+  popular: p.id === POPULAR_PACK_ID,
 }));
 
 export function BuyCreditsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [selected, setSelected] = useState("medium");
+  const [selected, setSelected] = useState(POPULAR_PACK_ID);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -83,7 +85,14 @@ export function BuyCreditsModal({ open, onClose }: { open: boolean; onClose: () 
               )}
             >
               <div>
-                <span className="text-sm font-semibold text-zinc-900">{t.credits} credits</span>
+                <span className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
+                  {t.credits} credits
+                  {t.popular && (
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700">
+                      Popular
+                    </span>
+                  )}
+                </span>
                 <p className="mt-0.5 text-xs text-zinc-500">{t.price}</p>
               </div>
               <span

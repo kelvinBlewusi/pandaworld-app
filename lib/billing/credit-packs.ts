@@ -11,9 +11,13 @@ export interface CreditPack {
 }
 
 export const CREDIT_PACKS: CreditPack[] = [
-  { id: "small",  credits: 130, amountGhs: 100 },
-  { id: "medium", credits: 200, amountGhs: 150 },
+  { id: "starter", credits: 50,  amountGhs: 50 },
+  { id: "small",   credits: 130, amountGhs: 100 },
+  { id: "medium",  credits: 200, amountGhs: 150 },
 ];
+
+/** Pack id shown with the "Popular" badge in the Buy Credits modal. */
+export const POPULAR_PACK_ID = "small";
 
 export function getCreditPack(id: string): CreditPack | undefined {
   return CREDIT_PACKS.find((p) => p.id === id);
