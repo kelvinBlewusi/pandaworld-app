@@ -47,10 +47,8 @@ function hintFor(label: string): string {
     return " — concise product title (type + key specs). OMIT the brand name; Jumia rejects titles containing the brand.";
   }
   if (l.includes("brand")) return " — ONLY if a logo/wordmark is clearly visible; otherwise omit.";
-  if (l.includes("description")) {
-    return " — 200–450 words of well-STRUCTURED HTML, not a wall of text: a short opening <p>, then a <ul><li> feature list (bold the key spec at the start of each item with <strong>), a <table> for technical specs when the category has them (dimensions, material, capacity — <table><tr><td>Spec</td><td>Value</td></tr></table>), and italics (<em>) for a closing note. Marketing tone OK. No prices, no contact info.";
-  }
-  if (l.includes("highlight")) return " — at least 4 key features as <ul><li>…</li></ul>; bold (<strong>) the standout word or number in each item.";
+  if (l.includes("description")) return " — see CONTENT STYLE below for the exact structure and tone.";
+  if (l.includes("highlight")) return " — see CONTENT STYLE below for the exact bullet format.";
   if (l.includes("box")) return " — one item per line as <p>1x Item<br>1x Item</p> — a real line break between each item, never all on one line (Jumia's format).";
   if (l.includes("manufacturer")) return " — a short manufacturer blurb about the product.";
   if (l.includes("weight")) return " — your best estimate in kg (e.g. 0.2) for a product like this, even if you can't be exact from the photo alone — only omit if the category makes weight meaningless.";
@@ -105,18 +103,31 @@ export async function aiFillRenderedFields(args: {
     ? `\n\nSELLER-CONTROLLED FIELDS — ${notesOnlyFields.map((l) => `"${l}"`).join(", ")}: fill these ONLY if the seller notes above state them explicitly. Never infer or guess these from the photo. No seller notes (or the notes don't mention it) → omit the field.\n`
     : "";
 
+  // Modeled on real high-performing Jumia listings (Kelvin's own examples,
+  // Aug 2026) — only included when the fields that need it are on the page.
+  const hasDescription = fields.some((f) => norm(f.label).includes("description"));
+  const hasHighlights = fields.some((f) => norm(f.label).includes("highlight"));
+  const styleGuideBlock = hasDescription || hasHighlights
+    ? `\n\nCONTENT STYLE:\n${[
+        hasDescription &&
+          `- Description: 2–4 short <p> paragraphs, not one dense block. Open with a one-sentence hook naming the product (you may bold it inline). Weave <strong>key spec/feature phrases</strong> naturally into the sentences as you go — including as a bold micro-heading directly followed by more prose in the same paragraph (e.g. "<strong>Effortless Slicing.</strong> The large, smooth-rolling wheel glides through..."). If the product clearly suits distinct use-cases or buyer types, you may close with a short "Perfect for:" <ul> where each <li> starts with a bold audience/use-case and a colon.`,
+        hasHighlights &&
+          `- Highlights: a <ul><li>, 4–6 items, EVERY item shaped exactly like <li><strong>Short Feature Label</strong>: one clear sentence on the benefit.</li> (label 2–4 words). When the product has clear technical specs (dimensions, ingredients, materials, capacity, servings), lead with a 2-column <table> (<tr><td>Spec</td><td>Value</td></tr> per row) before the bullets.`,
+      ].filter(Boolean).join("\n")}\n- Never end description or highlights with a request for reviews/feedback/ratings — keep the content to the product itself.\n`
+    : "";
+
   const prompt = `You are a product-listing assistant for Jumia (market: ${market}). Look at the product image and fill the EXACT form fields listed below so the listing is accurate, SEO-friendly, and passes Jumia QC.
 
 ${policy}
 
 ${restricted}
-${notesBlock}${notesOnlyBlock}
+${notesBlock}${notesOnlyBlock}${styleGuideBlock}
 FIELDS TO FILL (return a value only for the ones you can confidently fill; omit the rest):
 ${fields.map(fieldLine).join("\n")}
 
 RULES:
 - Return ONLY a JSON object mapping each field label EXACTLY as written above (including punctuation and capitalisation) to a string value.
-- Rich-text fields: return HTML, well-structured (see each field's own instruction above) — not a single flat paragraph.
+- Rich-text fields: return HTML, well-structured (see CONTENT STYLE above) — not a single flat paragraph.
 - Fields listing options: return exactly one of the given options, or omit.
 - Numbers: digits only, no units or words.
 - NEVER invent price or stock.
