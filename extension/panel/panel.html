@@ -53,11 +53,16 @@
     <div id="mainForm" hidden>
       <label class="fld">
         <span>About this listing <em>(optional)</em>
-          <button type="button" class="helpIcon" id="notesHelp" aria-label="What is this field for?">
-            !
-            <span class="tooltip" role="tooltip">Anything typed here is sent to the AI and takes priority over its own guesses — use it for exact SKU, GTIN/barcode, quantity, sale dates, size/variation, or any other details you want reflected in this listing.</span>
-          </button>
+          <button
+            type="button"
+            class="helpIcon"
+            id="notesHelp"
+            aria-label="What is this field for?"
+            aria-expanded="false"
+            aria-describedby="notesHelpText"
+          >!</button>
         </span>
+        <p class="fieldHelp" id="notesHelpText" hidden>Anything typed here is sent to the AI and takes priority over its own guesses — use it for exact SKU, GTIN/barcode, quantity, sale dates, size/variation, or any other details you want reflected in this listing.</p>
         <textarea id="notes" rows="3" placeholder="e.g. price 250, water resistant, leather strap"></textarea>
       </label>
 
@@ -86,7 +91,7 @@
 
       <label class="checkRow">
         <input type="checkbox" id="overwriteExisting" />
-        <span>Overwrite existing content <em>(off = only fills empty fields — safe for an already-listed product)</em></span>
+        <span>Overwrite existing content</span>
       </label>
 
       <button id="autofill" class="primary big">✨ Autofill this listing</button>

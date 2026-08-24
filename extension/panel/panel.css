@@ -97,30 +97,26 @@ select {
 .fld > span em { color: var(--muted); font-weight: 400; }
 .fld > .hint { display: block; font-size: 11px; font-weight: 400; color: var(--muted); margin-top: 4px; }
 
-/* ── Field help icon + tooltip (hover/focus via CSS, click-toggle via JS) ─── */
+/* ── Field help icon + reveal (click only — no hover trigger) ───────────────
+   A floating absolutely-positioned tooltip clips against the side panel's
+   own narrow width and can get "stuck" open since the pointer stays inside
+   the button's DOM subtree while over the overflowing tooltip. An in-flow
+   block avoids both: it always has the panel's full width to render in, and
+   visibility is driven purely by JS toggling `hidden`, nothing CSS-hover. */
 .helpIcon {
-  position: relative;
   display: inline-flex; align-items: center; justify-content: center;
   vertical-align: middle; margin-left: 4px;
   width: 15px; height: 15px; padding: 0;
   border-radius: 999px; border: none;
   background: var(--line); color: var(--muted);
   font-size: 10px; font-weight: 800; line-height: 1;
-  cursor: help;
+  cursor: pointer;
 }
-.helpIcon:hover, .helpIcon:focus-visible, .helpIcon.open { background: var(--pw-blue); color: #fff; }
-.helpIcon .tooltip {
-  position: absolute; z-index: 5; left: 0; top: 20px; width: 220px;
-  background: var(--fg); color: var(--bg); font-size: 11px; font-weight: 400;
-  line-height: 1.4; padding: 8px 10px; border-radius: 8px;
-  opacity: 0; visibility: hidden; transform: translateY(-4px);
-  transition: opacity .12s ease, transform .12s ease;
-  text-align: left; pointer-events: none;
-}
-.helpIcon:hover .tooltip,
-.helpIcon:focus-visible .tooltip,
-.helpIcon.open .tooltip {
-  opacity: 1; visibility: visible; transform: translateY(0);
+.helpIcon:hover, .helpIcon.open { background: var(--pw-blue); color: #fff; }
+.fieldHelp {
+  margin: 6px 0 0; padding: 8px 10px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+  font-size: 11px; font-weight: 400; color: var(--muted); line-height: 1.4;
 }
 input, textarea {
   width: 100%; padding: 8px 10px; border: 1px solid var(--line);

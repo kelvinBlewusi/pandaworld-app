@@ -144,17 +144,23 @@ async function refreshView() {
   else hideMainForm();
 }
 
-// ── Field help tooltip — hover/focus show it via CSS; this adds tap-to-toggle
-// (and tap-outside-to-close) for anyone who clicks the icon instead. ────────
+// ── Field help — click-only reveal of an in-flow text block (no hover
+// trigger, nothing that can clip against the panel's own width). ──────────
+function setHelpOpen(btn, open) {
+  btn.classList.toggle("open", open);
+  btn.setAttribute("aria-expanded", String(open));
+  const text = document.getElementById(btn.getAttribute("aria-describedby"));
+  if (text) text.hidden = !open;
+}
 document.querySelectorAll(".helpIcon").forEach((btn) => {
   btn.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
-    btn.classList.toggle("open");
+    setHelpOpen(btn, !btn.classList.contains("open"));
   });
 });
 document.addEventListener("click", () => {
-  document.querySelectorAll(".helpIcon.open").forEach((b) => b.classList.remove("open"));
+  document.querySelectorAll(".helpIcon.open").forEach((b) => setHelpOpen(b, false));
 });
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
