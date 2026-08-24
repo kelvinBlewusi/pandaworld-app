@@ -53,7 +53,6 @@ export default async function ExtensionDashboardPage() {
         <StatCard
           title="Remaining credit"
           value={balance}
-          subtitle="1 autofill = 2.5 credits"
           icon={<Gauge className="h-5 w-5" />}
           gradient="green"
         />

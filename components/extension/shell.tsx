@@ -15,10 +15,11 @@ import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useUser } from "@clerk/nextjs";
-import { Menu, Plus, Bell, Chrome } from "lucide-react";
+import { Menu, Plus, Bell } from "lucide-react";
 import { ExtensionSidebar } from "./sidebar";
 import { Wordmark } from "@/components/marketing/wordmark";
 import { BuyCreditsModal } from "./buy-credits-modal";
+import { GoogleIcon } from "./google-icon";
 
 const PAGE_TITLES: Record<string, string> = {
   "/extension/dashboard": "Dashboard",
@@ -119,9 +120,12 @@ export function ExtensionShell({
             </button>
             <a
               href="/extension/dashboard#setup-guide"
-              className="flex items-center gap-1.5 rounded-full bg-zinc-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-zinc-800"
+              className="flex items-center gap-2 rounded-full bg-zinc-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-zinc-800"
             >
-              <Chrome className="h-4 w-4" /> Install Extension
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-white">
+                <GoogleIcon className="h-3.5 w-3.5" />
+              </span>
+              Install Extension
             </a>
           </div>
         </div>

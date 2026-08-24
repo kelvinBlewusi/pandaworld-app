@@ -17,17 +17,12 @@ interface Tier {
   id: string;
   credits: number;
   price: string;
-  perCredit: string;
-  popular?: boolean;
 }
 
-// Flat rate — 1 GHS = 1 credit, no per-tier discount.
-const TIERS: Tier[] = CREDIT_PACKS.map((p, i) => ({
+const TIERS: Tier[] = CREDIT_PACKS.map((p) => ({
   id: p.id,
   credits: p.credits,
   price: `GHS ${p.amountGhs}`,
-  perCredit: `GHS ${(p.amountGhs / p.credits).toFixed(2)}/credit`,
-  popular: i === 1,
 }));
 
 export function BuyCreditsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -88,17 +83,8 @@ export function BuyCreditsModal({ open, onClose }: { open: boolean; onClose: () 
               )}
             >
               <div>
-                <span className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
-                  {t.credits} credits
-                  {t.popular && (
-                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700">
-                      Popular
-                    </span>
-                  )}
-                </span>
-                <p className="mt-0.5 text-xs text-zinc-500">
-                  {t.price} · {t.perCredit}
-                </p>
+                <span className="text-sm font-semibold text-zinc-900">{t.credits} credits</span>
+                <p className="mt-0.5 text-xs text-zinc-500">{t.price}</p>
               </div>
               <span
                 className={cn(
