@@ -71,7 +71,11 @@ const STEPS = [
 // user straight into /onboarding/channel.
 const DASHBOARD_REDIRECT = "/extension/dashboard";
 
-export default async function ExtensionPage() {
+// Named export (in addition to the default below) so app/page.tsx can
+// render the exact same component for logged-out root visitors — the root
+// landing page is meant to be identical to /extension, not a second copy
+// of this markup that could drift out of sync.
+export async function ExtensionPage() {
   const { userId } = await auth();
   // Signed-in visitors skip straight to the real key-generation screen;
   // logged-out visitors sign up first (the dashboard requires an account).
@@ -128,3 +132,5 @@ export default async function ExtensionPage() {
     </div>
   );
 }
+
+export default ExtensionPage;

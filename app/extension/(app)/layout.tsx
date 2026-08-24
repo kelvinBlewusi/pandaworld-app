@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 import { getQuotaSummary } from "@/lib/billing/quota";
+import { getOrCreateCreditBalance } from "@/lib/billing/extension-credits";
 import { ExtensionShell } from "@/components/extension/shell";
 
 // ─── Shared shell for the extension's own app pages ──────────────────────────
@@ -23,11 +24,12 @@ export default async function ExtensionAppLayout({
   const { userId } = await auth();
   if (!userId) redirect("/sign-in?redirect_url=/extension/dashboard");
 
-  const quota = await getQuotaSummary(userId);
+  const [quota, balance] = await Promise.all([
+    getQuotaSummary(userId),
+    getOrCreateCreditBalance(userId),
+  ]);
   const planLabel = quota.plan.charAt(0).toUpperCase() + quota.plan.slice(1);
-  const creditsLabel = Number.isFinite(quota.listings.limit)
-    ? String(Math.max(0, quota.listings.limit - quota.listings.used))
-    : "Unlimited";
+  const creditsLabel = String(balance);
 
   return (
     <ExtensionShell planLabel={planLabel} creditsLabel={creditsLabel}>

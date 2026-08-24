@@ -39,6 +39,7 @@ const spaceGrotesk = Space_Grotesk({
 });
 
 const ACCENT = "#f97316"; // Tailwind orange-500 — PandaWorld's brand orange
+const JUMIA_COLOR = "#F55203"; // Jumia's own brand orange — used only on the word "Jumia"/"Vendor Center" so it reads as their brand, not ours
 
 interface ExtensionHeroBackdropProps {
   signInHref: string;
@@ -311,16 +312,17 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
                 color: "#f7f4ee",
               }}
             >
-              Automate your Jumia Listings with AI
+              Automate your <span style={{ color: JUMIA_COLOR }}>Jumia</span> Listings with AI
             </h1>
             <p
               className="mt-6 max-w-[520px] text-[17px] font-light leading-relaxed"
               style={{ color: "rgba(239,236,230,0.62)" }}
             >
               Do your listing on{" "}
-              <span style={{ color: ACCENT, fontWeight: 500 }}>Vendor Center</span> like
-              always. Upload a photo, pick a category, and PandaWorld&apos;s AI fills the
-              whole form for you. SEO-optimised. You review and submit.
+              <span style={{ color: JUMIA_COLOR, fontWeight: 500 }}>Vendor Center</span> like
+              always but this time automatically. Upload a photo, pick a category, and
+              PandaWorld&apos;s AI fills the whole form for you. SEO-optimised. You review
+              and submit.
             </p>
             <div className="mt-9 flex flex-wrap items-center justify-center gap-3.5">
               <Link
