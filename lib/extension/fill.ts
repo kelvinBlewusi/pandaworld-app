@@ -153,8 +153,14 @@ const norm = (s: string) => s.toLowerCase().replace(/\*/g, "").replace(/\s+/g, "
  * SKU used to be here too; they're now AI-fillable (quantity falls back to a
  * random value in the route when neither the AI nor the seller's notes give
  * one — see app/api/extension/fill/route.ts's applyQuantityDefault).
+ *
+ * "Country" and "Currency" (Variants section, next to Price) are the
+ * seller's fixed account/market settings, not product content — writing an
+ * AI guess into them threw a real DOMException in production
+ * ("The specified value 'Ghana' cannot be parsed, or is out of range."),
+ * since they're constrained native inputs, not free text.
  */
-const SELLER_OWNED = ["category", "price", "stock"];
+const SELLER_OWNED = ["category", "price", "stock", "currency"];
 
 /** Wrap plain text as a <p> if it carries no HTML tags. */
 function asHtml(text: string): string {
@@ -247,9 +253,10 @@ export function mapProductToFields(
       value = product.warranty_address ?? "N/A";
     } else if (label.includes("warranty")) {
       value = product.warranty_text ?? "N/A";
-    } else if (SELLER_OWNED.some((k) => label.includes(k))) {
-      // Category, price, stock, quantity, SKU — the seller sets these. Skip
-      // silently; don't nag even though some are required.
+    } else if (isSellerOwned(field.label)) {
+      // Category, price, stock, currency, country — fixed by the seller's
+      // account/market, never AI-filled. Skip silently; don't nag even
+      // though some are required.
       continue;
     } else {
       // Unknown field — leave for the seller. Only nag if it's required.
@@ -282,9 +289,13 @@ export function mapProductToFields(
   return { values, warnings };
 }
 
-/** True for fields the seller owns — never AI-filled (price, stock, SKU, category). */
+/** True for fields the seller owns — never AI-filled (price, stock, category, currency, country). */
 export function isSellerOwned(label: string): boolean {
   const l = norm(label);
+  // Exact match only — a substring match on "country" would also catch a
+  // legitimate "Country of origin" product attribute some categories ask
+  // for, which SHOULD stay AI/notes-fillable like Brand.
+  if (l === "country") return true;
   return SELLER_OWNED.some((k) => l.includes(k));
 }
 

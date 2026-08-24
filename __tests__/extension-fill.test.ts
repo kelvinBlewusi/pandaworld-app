@@ -103,7 +103,7 @@ describe("mapProductToFields — Watches POC", () => {
 
 describe("isSellerOwned", () => {
   it("flags seller-owned fields", () => {
-    ["Price", "Sale Price", "Stock", "Category"].forEach((l) =>
+    ["Price", "Sale Price", "Stock", "Category", "Country", "Currency"].forEach((l) =>
       expect(isSellerOwned(l)).toBe(true),
     );
   });
@@ -111,6 +111,9 @@ describe("isSellerOwned", () => {
     ["Name", "Brand", "Product description", "Weight (kg)", "Quantity", "Seller SKU"].forEach((l) =>
       expect(isSellerOwned(l)).toBe(false),
     );
+  });
+  it("does not flag 'Country of origin' — exact 'Country' match only, so this legitimate product attribute stays AI-fillable", () => {
+    expect(isSellerOwned("Country of origin")).toBe(false);
   });
 });
 
