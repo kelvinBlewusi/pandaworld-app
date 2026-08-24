@@ -1,10 +1,12 @@
+import { Suspense } from "react";
 import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { Gauge, Wand2, Clock, Chrome, KeyRound, UploadCloud, ScanSearch } from "lucide-react";
 import { getOrCreateExtensionApiKey, countRecentFills } from "@/lib/security/extension-keys";
-import { getQuotaSummary } from "@/lib/billing/quota";
+import { getOrCreateCreditBalance } from "@/lib/billing/extension-credits";
 import { StatCard } from "@/components/ui/stat-card";
 import { ApiKeyCard } from "@/components/extension/api-key-card";
+import { CreditsPurchaseHandler } from "@/components/extension/credits-purchase-handler";
 
 // ─── /extension/dashboard — the Chrome extension's own control room ─────────
 //
@@ -34,25 +36,24 @@ export default async function ExtensionDashboardPage() {
   const { userId } = await auth();
   if (!userId) redirect("/sign-in?redirect_url=/extension/dashboard");
 
-  const [keyResult, quota, recentFills] = await Promise.all([
+  const [keyResult, balance, recentFills] = await Promise.all([
     getOrCreateExtensionApiKey(userId),
-    getQuotaSummary(userId),
+    getOrCreateCreditBalance(userId),
     countRecentFills(userId, 30),
   ]);
 
-  const hasFiniteLimit = Number.isFinite(quota.listings.limit);
-  const listingsLeft = hasFiniteLimit
-    ? Math.max(0, quota.listings.limit - quota.listings.used)
-    : null;
-
   return (
     <div className="mx-auto max-w-5xl">
+      <Suspense fallback={null}>
+        <CreditsPurchaseHandler />
+      </Suspense>
+
       {/* Stat cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCard
           title="Remaining credit"
-          value={listingsLeft == null ? "∞" : listingsLeft}
-          subtitle={hasFiniteLimit ? `${quota.listings.used} of ${quota.listings.limit} used this period` : "Unlimited on your plan"}
+          value={balance}
+          subtitle="1 autofill = 2.5 credits"
           icon={<Gauge className="h-5 w-5" />}
           gradient="green"
         />

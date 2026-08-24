@@ -2,19 +2,16 @@
 
 /**
  * "Buy Credits" modal for the extension dashboard — one-time credit-pack
- * top-ups, separate from the classic app's plan-based monthly quota
- * (lib/billing/quota.ts) and its Paystack checkout (app/api/paystack/*).
- *
- * Checkout is intentionally NOT wired to a real payment provider yet — see
- * docs/chrome-extension-plan.md §10 update. Submitting calls
- * /api/extension/credits/checkout, which currently always returns "not
- * configured" until the provider, pricing, and currency are decided and a
- * live secret key exists. This modal is the agreed UI shell for that flow.
+ * top-ups via Paystack (app/api/extension/credits/checkout), separate from
+ * the classic app's plan-based monthly quota (lib/billing/quota.ts) and its
+ * own Paystack subscription checkout (app/api/paystack/*). Credits never
+ * expire and are spent 2.5 per autofill (lib/billing/credit-packs.ts).
  */
 
 import { useState } from "react";
 import { X, Check, Loader2, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CREDIT_PACKS } from "@/lib/billing/credit-packs";
 
 interface Tier {
   id: string;
@@ -24,13 +21,14 @@ interface Tier {
   popular?: boolean;
 }
 
-// Placeholder tiers — pricing/currency not yet decided (GHS vs USD) and
-// this is a stand-in until that's settled with real numbers.
-const TIERS: Tier[] = [
-  { id: "small",  credits: 50,  price: "GHS 60",  perCredit: "GHS 1.20/credit" },
-  { id: "medium", credits: 150, price: "GHS 150", perCredit: "GHS 1.00/credit", popular: true },
-  { id: "large",  credits: 500, price: "GHS 400", perCredit: "GHS 0.80/credit" },
-];
+// Flat rate — 1 GHS = 1 credit, no per-tier discount.
+const TIERS: Tier[] = CREDIT_PACKS.map((p, i) => ({
+  id: p.id,
+  credits: p.credits,
+  price: `GHS ${p.amountGhs}`,
+  perCredit: `GHS ${(p.amountGhs / p.credits).toFixed(2)}/credit`,
+  popular: i === 1,
+}));
 
 export function BuyCreditsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [selected, setSelected] = useState("medium");
@@ -125,7 +123,7 @@ export function BuyCreditsModal({ open, onClose }: { open: boolean; onClose: () 
           Buy {tier.credits} credits · {tier.price}
         </button>
         <p className="mt-2.5 flex items-center justify-center gap-1 text-[11px] text-zinc-400">
-          <Lock className="h-3 w-3" /> Secure checkout
+          <Lock className="h-3 w-3" /> Secure checkout by Paystack
         </p>
       </div>
     </div>

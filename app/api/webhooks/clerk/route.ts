@@ -3,6 +3,7 @@ import { Webhook } from "svix";
 import * as Sentry from "@sentry/nextjs";
 import { sendEmail } from "@/lib/email/send";
 import { welcomeEmail } from "@/lib/email/templates";
+import { getOrCreateCreditBalance } from "@/lib/billing/extension-credits";
 
 // ─── POST /api/webhooks/clerk ────────────────────────────────────────────────
 //
@@ -75,6 +76,15 @@ export async function POST(req: NextRequest) {
 // ─── user.created handler ────────────────────────────────────────────────────
 
 async function handleUserCreated(user: ClerkUserData): Promise<void> {
+  // Pre-warm the extension credit ledger with the 5 free sign-up credits.
+  // Not strictly required here — getOrCreateCreditBalance() also grants
+  // them lazily the first time the dashboard or a fill request touches a
+  // new user — but doing it on signup means the balance is already there
+  // the moment they first look, rather than "created on first read".
+  getOrCreateCreditBalance(user.id).catch((e) =>
+    console.warn(`[clerk-webhook] extension credit grant failed for ${user.id}: ${(e as Error).message}`),
+  );
+
   const email = user.email_addresses?.[0]?.email_address;
   if (!email) {
     console.warn(`[clerk-webhook] user.created without email: ${user.id}`);

@@ -11,6 +11,7 @@ import {
   findTierByPaystackPageSlug,
 } from "@/lib/billing/plans";
 import { parsePaystackReference } from "@/lib/billing/paystack-reference";
+import { creditPurchase } from "@/lib/billing/extension-credits";
 
 // Valid tier names the webhook is allowed to upsert into the plan
 // column. We refuse anything else so a malformed metadata field can't
@@ -49,6 +50,38 @@ export async function POST(request: Request) {
     // ── Successful charge (initial payment OR monthly renewal) ────────────
     case "charge.success": {
       const tx = event.data;
+
+      // ── Extension credit-pack purchases branch off first ────────────────
+      // Separate flow from the plan-subscription logic below — see
+      // app/api/extension/credits/checkout/route.ts. Metadata is reliable
+      // here (API-driven transaction/initialize, not a Payment Page), so
+      // no reference-parsing fallback is needed.
+      if (tx.metadata?.type === "extension_credits") {
+        const creditUserId = tx.metadata?.user_id as string | undefined;
+        const credits = Number(tx.metadata?.credits) || 0;
+        if (!creditUserId || credits <= 0) {
+          console.error(
+            "[Paystack webhook] extension_credits charge.success missing user_id/credits",
+            { reference: tx.reference, metadata: tx.metadata },
+          );
+          break;
+        }
+        const result = await creditPurchase({
+          userId: creditUserId,
+          credits,
+          reference: tx.reference,
+          description: `Purchased ${credits} credits (${tx.metadata?.pack ?? "custom"} pack)`,
+        });
+        if (!result.ok) {
+          console.error("[Paystack webhook] extension_credits credit failed:", result.error);
+        } else {
+          console.info(
+            `[Paystack webhook] credited ${credits} extension credits to ${creditUserId} ` +
+              `(reference ${tx.reference})${result.alreadyProcessed ? " — already processed" : ""}`,
+          );
+        }
+        break;
+      }
 
       // ── User + tier resolution (May 2026 Payment Pages fix) ───────────
       // Three-tier fallback identical to /verify:

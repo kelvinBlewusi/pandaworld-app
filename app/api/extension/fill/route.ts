@@ -9,16 +9,18 @@
  * Clerk session; the extension calls this endpoint from Jumia's origin, which
  * has no PandaWorld cookies. A missing/invalid key returns 401.
  *
- * Quota: one successful autofill = one listing credit, the SAME per-period
- * quota the web app uses (lib/billing/quota.ts) — no separate SKU. Checked
- * BEFORE the AI call, incremented AFTER success, same pattern as the rest of
- * the app.
+ * Credits: the extension runs on its own credit ledger (lib/billing/
+ * extension-credits.ts), separate from the web app's plan-based monthly
+ * quota (lib/billing/quota.ts) — new sign-ups get 5 free credits, one real
+ * autofill costs 2.5, purchased credits never expire. Balance checked
+ * BEFORE the AI call, deducted AFTER success, same before/after shape as
+ * the quota check it replaced.
  *
  * AI: when a Gemini backend is configured (Vertex or AI Studio key) AND an
  * image is supplied, the real vision pass (lib/ai/extension-fill) fills the
  * exact rendered fields — category-specific attributes included. If that's
  * unavailable or fails, we fall back to a deterministic mock so the extension
- * loop never hard-fails (and doesn't consume quota — see below).
+ * loop never hard-fails (and doesn't spend a credit — see below).
  */
 
 import { NextResponse } from "next/server";
@@ -35,7 +37,8 @@ import {
   authenticateExtensionKey,
   logExtensionFillEvent,
 } from "@/lib/security/extension-keys";
-import { checkQuota, incrementUsage } from "@/lib/billing/quota";
+import { getOrCreateCreditBalance, deductCredits } from "@/lib/billing/extension-credits";
+import { LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -112,12 +115,12 @@ export async function POST(req: Request) {
     );
   }
 
-  const quota = await checkQuota(userId, "listing");
-  if (!quota.allowed) {
+  const balance = await getOrCreateCreditBalance(userId);
+  if (balance < LISTING_CREDIT_COST) {
     return NextResponse.json(
       {
-        error: `You've used all ${quota.limit} listings on your ${quota.plan} plan this period. Upgrade to keep autofilling.`,
-        creditsRemaining: 0,
+        error: `You have ${balance} credits left — an autofill costs ${LISTING_CREDIT_COST}. Buy more credits on your dashboard.`,
+        creditsRemaining: balance,
       },
       { status: 402, headers: CORS },
     );
@@ -164,10 +167,12 @@ export async function POST(req: Request) {
     warnings.push(...mapped.warnings);
   }
 
-  // Only a REAL (non-mock) autofill spends a quota credit — a mock fallback
-  // (missing image, AI down) shouldn't cost the seller a listing.
+  // Only a REAL (non-mock) autofill spends credits — a mock fallback
+  // (missing image, AI down) shouldn't cost the seller anything.
+  let creditsRemaining = balance;
   if (!mock) {
-    await incrementUsage(userId, "listing");
+    const deducted = await deductCredits(userId, LISTING_CREDIT_COST, "Extension autofill");
+    creditsRemaining = deducted.balance;
   }
   // Log every attempt (mock or not) for the dashboard's usage view.
   logExtensionFillEvent({
@@ -180,9 +185,7 @@ export async function POST(req: Request) {
   const response: FillResponse = {
     values,
     warnings,
-    creditsRemaining: mock
-      ? (Number.isFinite(quota.limit) ? quota.limit - quota.used : null)
-      : (Number.isFinite(quota.limit) ? quota.limit - quota.used - 1 : null),
+    creditsRemaining,
     mock,
   };
 

@@ -320,8 +320,9 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
             >
               Do your listing on{" "}
               <span style={{ color: JUMIA_COLOR, fontWeight: 500 }}>Vendor Center</span> like
-              always. Upload a photo, pick a category, and PandaWorld&apos;s AI fills the
-              whole form for you. SEO-optimised. You review and submit.
+              always but this time automatically. Upload a photo, pick a category, and
+              PandaWorld&apos;s AI fills the whole form for you. SEO-optimised. You review
+              and submit.
             </p>
             <div className="mt-9 flex flex-wrap items-center justify-center gap-3.5">
               <Link
