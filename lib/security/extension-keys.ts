@@ -11,12 +11,16 @@
  *
  * Key format: `pw_live_<keyId>_<secret>`
  *   - keyId: 12 hex chars, stored in plaintext — O(1) lookup.
- *   - secret: 32 url-safe base64 chars, high-entropy — NEVER stored raw.
+ *   - secret: 32 url-safe base64 chars, high-entropy.
  *
- * We store sha256(secret + pepper), not encrypt() — unlike the Jumia OAuth
- * tokens in lib/security/token-crypto.ts, we never need to read the key
- * back, only compare a hash. Hashing (one-way) is the right primitive here;
- * encryption (two-way) is for token-crypto's use case, not this one.
+ * Every seller gets exactly ONE fixed key (getOrCreateExtensionApiKey),
+ * shown on /extension/dashboard behind a reveal/copy control — not a
+ * generate-on-demand multi-key list. That means the secret has to be
+ * redisplayable on every visit, so unlike a typical one-time-reveal API
+ * key we store it in `key_secret` (plaintext) alongside `key_hash`
+ * (sha256(secret + pepper)), which authenticateExtensionKey still uses
+ * for verification. `key_secret` exists purely so the dashboard can show
+ * the key again later — it plays no role in auth.
  */
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -68,8 +72,9 @@ function hashSecret(secret: string): string {
 // ─── Generation ───────────────────────────────────────────────────────────────
 
 interface GeneratedKey {
-  fullKey: string; // shown to the seller exactly once
+  fullKey: string;
   keyId:   string;
+  secret:  string; // stored in key_secret so it can be redisplayed later
   hash:    string;
   suffix:  string;
 }
@@ -78,7 +83,7 @@ function generateKey(): GeneratedKey {
   const keyId  = randomBytes(6).toString("hex");                    // 12 hex chars
   const secret = randomBytes(24).toString("base64url");             // 32 url-safe chars
   const fullKey = `${PREFIX}${keyId}_${secret}`;
-  return { fullKey, keyId, hash: hashSecret(secret), suffix: secret.slice(-4) };
+  return { fullKey, keyId, secret, hash: hashSecret(secret), suffix: secret.slice(-4) };
 }
 
 // ─── CRUD ─────────────────────────────────────────────────────────────────────
@@ -137,6 +142,7 @@ export async function createExtensionApiKey(
       user_id:    userId,
       key_id:     gen.keyId,
       key_hash:   gen.hash,
+      key_secret: gen.secret,
       key_suffix: gen.suffix,
       name:       name.slice(0, 80) || "Chrome Extension",
     })
@@ -148,6 +154,54 @@ export async function createExtensionApiKey(
     return { error: "Could not create the key — please try again." };
   }
   return { fullKey: gen.fullKey, row: mapRow(data) };
+}
+
+/**
+ * Every seller gets exactly one fixed key — this is what the dashboard's
+ * API-key card calls. Returns the seller's existing active key (rebuilt
+ * from `key_id` + `key_secret`) if they have one, otherwise creates the
+ * first one. A key from before the fixed-key model (key_secret NULL) can't
+ * be redisplayed, so it's revoked and replaced rather than shown broken.
+ */
+export async function getOrCreateExtensionApiKey(
+  userId: string,
+): Promise<{ fullKey: string; row: ExtensionApiKeyRow } | { error: string }> {
+  const db = createServerClient();
+
+  const { data: existing, error } = await db
+    .from("extension_api_keys")
+    .select("id, key_id, key_secret, name, key_suffix, created_at, last_used_at, revoked_at, expires_at")
+    .eq("user_id", userId)
+    .is("revoked_at", null)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error("[extension-keys] getOrCreate lookup failed:", error.message);
+    return { error: "Could not load your API key — please try again." };
+  }
+
+  if (existing?.key_secret) {
+    return { fullKey: `${PREFIX}${existing.key_id}_${existing.key_secret}`, row: mapRow(existing) };
+  }
+  if (existing) {
+    await db.from("extension_api_keys").update({ revoked_at: new Date().toISOString() }).eq("id", existing.id);
+  }
+  return createExtensionApiKey(userId);
+}
+
+/** Revoke the seller's current key(s) and issue a fresh fixed key. */
+export async function regenerateExtensionApiKey(
+  userId: string,
+): Promise<{ fullKey: string; row: ExtensionApiKeyRow } | { error: string }> {
+  const db = createServerClient();
+  await db
+    .from("extension_api_keys")
+    .update({ revoked_at: new Date().toISOString() })
+    .eq("user_id", userId)
+    .is("revoked_at", null);
+  return createExtensionApiKey(userId);
 }
 
 /** Revoke a key. Scoped to the owning user so one seller can't revoke another's. */
@@ -253,6 +307,39 @@ export async function logExtensionFillEvent(args: {
     mock:          args.mock,
   });
   if (error) console.warn("[extension-keys] failed to log fill event:", error.message);
+}
+
+export interface ExtensionFillEventRow {
+  id: string;
+  createdAt: string;
+  fieldsFilled: number;
+  mock: boolean;
+}
+
+/**
+ * Recent autofill activity for the "My listings" page. The extension writes
+ * straight into Jumia's own form — we never learn the final listing (title,
+ * price, etc.), only that a fill happened and how many fields it touched —
+ * so this is an activity log, not a listings table.
+ */
+export async function listRecentFillEvents(userId: string, limit = 30): Promise<ExtensionFillEventRow[]> {
+  const db = createServerClient();
+  const { data, error } = await db
+    .from("extension_fill_events")
+    .select("id, created_at, fields_filled, mock")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) {
+    console.warn("[extension-keys] listRecentFillEvents failed:", error.message);
+    return [];
+  }
+  return (data ?? []).map((r) => ({
+    id: r.id as string,
+    createdAt: r.created_at as string,
+    fieldsFilled: r.fields_filled as number,
+    mock: r.mock as boolean,
+  }));
 }
 
 /** Count of autofills in the last N days, for the dashboard's usage stat. */
