@@ -67,6 +67,7 @@ function hintFor(label: string): string {
   if (l.includes("warranty") && l.includes("address")) return " — a warranty address, or \"N/A\".";
   if (l.includes("warranty")) return " — warranty terms, or \"N/A\".";
   if (l.includes("color") || l.includes("colour")) return " — the product's visible colour.";
+  if (l.includes("variation")) return " — the specific variant identifier for this listing (e.g. colour + material/size, like \"Brown Leather\" or \"Red - Large\"), your best read from the image. If the seller's notes explicitly state the variation, use that instead — it always overrides your own guess.";
   return " — infer from the image; keep it short and accurate, or omit if unknown.";
 }
 
