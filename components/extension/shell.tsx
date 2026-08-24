@@ -14,9 +14,18 @@
 import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
+import { useUser } from "@clerk/nextjs";
 import { Menu, Plus, Bell, Chrome } from "lucide-react";
 import { ExtensionSidebar } from "./sidebar";
 import { Wordmark } from "@/components/marketing/wordmark";
+import { BuyCreditsModal } from "./buy-credits-modal";
+
+const PAGE_TITLES: Record<string, string> = {
+  "/extension/dashboard": "Dashboard",
+  "/extension/calculator": "Calculator",
+  "/extension/listings": "My listings",
+  "/extension/settings": "Settings",
+};
 
 export function ExtensionShell({
   children,
@@ -28,7 +37,10 @@ export function ExtensionShell({
   creditsLabel: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [buyOpen, setBuyOpen] = useState(false);
   const pathname = usePathname();
+  const { user } = useUser();
+  const pageTitle = PAGE_TITLES[pathname] ?? "Dashboard";
 
   useEffect(() => { setOpen(false); }, [pathname]);
 
@@ -76,40 +88,50 @@ export function ExtensionShell({
           <Wordmark size={20} />
         </header>
 
-        {/* Utility bar — Buy Credits / Plan / Credits / notifications / Install,
-            same left-to-right order across every page in this shell. */}
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-b bg-white px-4 py-3 sm:px-6">
-          <Link
-            href="/settings/billing"
-            className="flex items-center gap-1 rounded-full bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
-          >
-            <Plus className="h-3.5 w-3.5" /> Buy Credits
-          </Link>
-          <span className="rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-600">
-            Plan: {planLabel}
-          </span>
-          <span className="flex items-center gap-1 rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-600">
-            <span className="h-1.5 w-1.5 rounded-full bg-orange-500" /> Credits: {creditsLabel}
-          </span>
-          <button
-            className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600"
-            aria-label="Notifications (coming soon)"
-            title="Coming soon"
-          >
-            <Bell className="h-4 w-4" />
-          </button>
-          <a
-            href="/extension/dashboard#setup-guide"
-            className="flex items-center gap-1.5 rounded-full bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-zinc-800"
-          >
-            <Chrome className="h-3.5 w-3.5" /> Install Extension
-          </a>
+        {/* Utility bar — page title + greeting on the left (changes per
+            page), Buy Credits / Plan / Credits / notifications / Install on
+            the right, same order across every page in this shell. */}
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-4 border-b bg-white px-4 py-4 sm:px-6">
+          <div>
+            <h1 className="text-xl font-bold text-zinc-900 sm:text-2xl">{pageTitle}</h1>
+            <p className="text-sm text-zinc-500">Welcome, {user?.firstName ?? user?.username ?? "there"}</p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              onClick={() => setBuyOpen(true)}
+              className="flex items-center gap-1.5 rounded-full bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
+            >
+              <Plus className="h-4 w-4" /> Buy Credits
+            </button>
+            <span className="rounded-full border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-600">
+              Plan: {planLabel}
+            </span>
+            <span className="flex items-center gap-1.5 rounded-full border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-600">
+              <span className="h-1.5 w-1.5 rounded-full bg-orange-500" /> Credits: {creditsLabel}
+            </span>
+            <button
+              className="flex h-10 w-10 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600"
+              aria-label="Notifications (coming soon)"
+              title="Coming soon"
+            >
+              <Bell className="h-4.5 w-4.5" />
+            </button>
+            <a
+              href="/extension/dashboard#setup-guide"
+              className="flex items-center gap-1.5 rounded-full bg-zinc-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-zinc-800"
+            >
+              <Chrome className="h-4 w-4" /> Install Extension
+            </a>
+          </div>
         </div>
 
         <main className="flex-1 overflow-y-auto">
           <div className="min-h-full p-4 sm:p-6 lg:p-8">{children}</div>
         </main>
       </div>
+
+      <BuyCreditsModal open={buyOpen} onClose={() => setBuyOpen(false)} />
     </div>
   );
 }

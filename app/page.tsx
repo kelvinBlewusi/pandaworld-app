@@ -1,17 +1,22 @@
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
-import { PublicLanding } from "@/components/marketing/public-landing";
+import { ExtensionPage } from "@/app/extension/page";
 
 // ─── Root route ──────────────────────────────────────────────────────────────
 //
-// Logged-out visitors see the marketing landing (PublicLanding —
-// shared with /landing). Authenticated users are auto-redirected
-// straight to the extension dashboard — the extension is the default
-// product experience now (see docs/chrome-extension-plan.md); the
-// classic Jumia-OAuth flow is reached only via the explicit "Push
-// Listings from here" button on that dashboard (→ /dashboard, whose
-// own (main)/layout.tsx gate handles onboarding for a new seller or
-// takes an already-connected one straight to their listings).
+// Logged-out visitors see the SAME page as /extension (the extension is the
+// default product experience now — see docs/chrome-extension-plan.md), not
+// the older PublicLanding marketing page. Renders the /extension route's
+// own component directly (named export from app/extension/page.tsx) so the
+// two stay identical by construction rather than as two copies of the same
+// markup that could drift. PublicLanding is still used by /landing and
+// /push-listings — this only changes the root path.
+//
+// Authenticated users are auto-redirected straight to the extension
+// dashboard. The classic Jumia-OAuth flow is reached only via the explicit
+// "Push Listings from here" button on that dashboard (→ /dashboard, whose
+// own (main)/layout.tsx gate handles onboarding for a new seller or takes
+// an already-connected one straight to their listings).
 //
 // This used to check jumia_connections and route into /onboarding/channel
 // for anyone without a connection — that made the classic OAuth flow the
@@ -35,5 +40,5 @@ export default async function Home() {
     redirect("/extension/dashboard");
   }
 
-  return <PublicLanding />;
+  return <ExtensionPage />;
 }
