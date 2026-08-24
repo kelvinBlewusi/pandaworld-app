@@ -41,8 +41,9 @@ function renderResults(results) {
   ul.innerHTML = "";
   for (const r of results || []) {
     const li = document.createElement("li");
-    li.className = r.ok ? "ok" : "bad";
-    li.innerHTML = `<span class="mark">${r.ok ? "✓" : "✕"}</span>
+    li.className = r.skipped ? "skip" : r.ok ? "ok" : "bad";
+    const mark = r.skipped ? "–" : r.ok ? "✓" : "✕";
+    li.innerHTML = `<span class="mark">${mark}</span>
       <span><b>${escapeHtml(r.label)}</b>${r.why || r.reason ? ` <span class="why">${escapeHtml(r.why || r.reason)}</span>` : ""}</span>`;
     ul.appendChild(li);
   }
@@ -295,15 +296,22 @@ $("autofill").addEventListener("click", async () => {
     }
 
     setStatus("Filling the form…");
-    const apply = await sendToTab(tab.id, { type: "APPLY", values: fill.data.values });
+    const apply = await sendToTab(tab.id, {
+      type: "APPLY",
+      values: fill.data.values,
+      overwrite: $("overwriteExisting").checked,
+    });
     renderResults(apply?.results);
     renderWarnings(fill.data.warnings || []);
 
-    const okCount = (apply?.results || []).filter((r) => r.ok).length;
+    const results = apply?.results || [];
+    const okCount = results.filter((r) => r.ok).length;
+    const skippedCount = results.filter((r) => r.skipped).length;
     if (fill.data.creditsRemaining != null || fill.data.unlimitedCredits) {
       setCreditsText(fill.data.creditsRemaining, fill.data.unlimitedCredits);
     }
-    setStatus(`Filled ${okCount}/${Object.keys(fill.data.values).length} fields. Review, then submit on Jumia.`, "ok");
+    const skipNote = skippedCount ? ` (${skippedCount} already had content, left as-is)` : "";
+    setStatus(`Filled ${okCount}/${Object.keys(fill.data.values).length} fields${skipNote}. Review, then submit on Jumia.`, "ok");
   } catch (e) {
     console.error("[PandaWorld] autofill failed:", e);
     setStatus("Something went wrong — please try again.", "err");

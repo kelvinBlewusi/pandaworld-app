@@ -33,7 +33,7 @@
       return true;
     }
     if (msg?.type === "APPLY") {
-      applyValues(msg.values || {}).then(sendResponse);
+      applyValues(msg.values || {}, { overwrite: !!msg.overwrite }).then(sendResponse);
       return true;
     }
     return false;
@@ -93,7 +93,7 @@
       const got = await harvestImage();
       image = got.dataUrl;
       imageUrl = got.httpUrl;
-      diagnostics.push(got.dataUrl ? `Image harvested via ${got.source}` : "No image found — use the fallback drop zone");
+      diagnostics.push(got.dataUrl || got.httpUrl ? `Image harvested via ${got.source}` : "No image found — use the fallback drop zone");
     } catch (e) {
       diagnostics.push(`Image harvest error: ${e.message}`);
     }
@@ -102,17 +102,24 @@
     return { ok: true, image, imageUrl, fields, diagnostics };
   }
 
+  // Matches Jumia's Edit-Product URL (…/products/edit/<id>) — the only place
+  // the CDN-photo fallback below runs. On Add-Products a plain https:// <img>
+  // is far more likely to be Jumia's own chrome (logo, nav icons) than a real
+  // product photo, so that fallback only makes sense once we know we're on
+  // an existing listing.
+  const EDIT_PAGE_RE = /\/products\/edit\//i;
+
   async function harvestImage() {
     if (lastFile) {
       return { dataUrl: await fileToDataUrl(lastFile), httpUrl: null, source: "file input" };
     }
-    // Fallback: read a freshly-uploaded preview. Restrict to blob:/data: URLs
+    // Fallback 1: a freshly-uploaded preview. Restrict to blob:/data: URLs
     // (what an upload preview uses) so we never grab Jumia's logo or a CDN icon.
-    const imgs = [...document.querySelectorAll("img")].filter((img) => {
+    const preview = [...document.querySelectorAll("img")].filter((img) => {
       const src = img.currentSrc || img.src || "";
       return /^blob:|^data:/i.test(src) && (img.naturalWidth || 0) > 120;
     });
-    for (const img of imgs) {
+    for (const img of preview) {
       const src = img.currentSrc || img.src;
       try {
         return { dataUrl: await urlToDataUrl(src), httpUrl: /^https?:/.test(src) ? src : null, source: "preview img" };
@@ -120,6 +127,30 @@
         /* try next */
       }
     }
+
+    // Fallback 2: an Edit-Product page's already-uploaded photo. There's no
+    // blob:/data: preview here — it's already hosted on Jumia's own image
+    // CDN as a normal https:// <img src>, on a different origin than ours,
+    // so fetching it from here would hit that origin's CORS policy. We don't
+    // need to: the fill route already knows how to fetch a plain imageUrl
+    // server-side (no browser CORS involved there), so just hand back the
+    // URL and skip the local fetch entirely. Scoped to naturalWidth > 120 and
+    // outside nav/header/footer/aside so we don't pick up Jumia's own logo.
+    if (EDIT_PAGE_RE.test(location.pathname)) {
+      const existing = [...document.querySelectorAll("img")].find((img) => {
+        const src = img.currentSrc || img.src || "";
+        return (
+          /^https?:/i.test(src) &&
+          (img.naturalWidth || 0) > 120 &&
+          !img.closest("nav, header, footer, aside")
+        );
+      });
+      if (existing) {
+        const src = existing.currentSrc || existing.src;
+        return { dataUrl: null, httpUrl: src, source: "existing product photo" };
+      }
+    }
+
     return { dataUrl: null, httpUrl: null, source: "none" };
   }
 
@@ -368,7 +399,21 @@
 
   // ── Apply values ─────────────────────────────────────────────────────────
 
-  async function applyValues(values) {
+  /** True if the field already carries a value on the page. */
+  function fieldHasValue(field) {
+    const { el, type } = field;
+    if (type === "richtext") return !isEditorEmpty(el);
+    return !!(el.value && el.value.trim());
+  }
+
+  /**
+   * `overwrite` defaults to false: on an already-listed product (Edit page)
+   * every field may already hold real, possibly hand-tuned seller content,
+   * so the default is "complete what's missing," not "rewrite what's
+   * there." On a fresh Add-Products form every field starts empty anyway,
+   * so this is a no-op there — nothing to skip.
+   */
+  async function applyValues(values, { overwrite = false } = {}) {
     const fields = findFields();
     const byLabel = new Map(fields.map((f) => [f.label.toLowerCase(), f]));
     const results = [];
@@ -377,6 +422,10 @@
       const f = byLabel.get(label.toLowerCase());
       if (!f) {
         results.push({ label, ok: false, reason: "field not found on page" });
+        continue;
+      }
+      if (!overwrite && fieldHasValue(f)) {
+        results.push({ label, ok: false, skipped: true, reason: "already has a value — left as-is" });
         continue;
       }
       try {
