@@ -98,6 +98,19 @@ function applyBrandDefault(
   }
 }
 
+/**
+ * Quantity: the AI only fills this from explicit seller notes (see the
+ * SELLER-CONTROLLED block in lib/ai/extension-fill.ts's prompt) — if it's
+ * still missing after that, give it a plausible random stock count rather
+ * than leaving the field empty for the seller to notice and fix.
+ */
+function applyQuantityDefault(values: Record<string, string>, fields: FillRequest["fields"]) {
+  const qty = fields.find((f) => /quantity/i.test(f.label));
+  if (qty && !values[qty.label]) {
+    values[qty.label] = String(10 + Math.floor(Math.random() * 41)); // 10-50
+  }
+}
+
 export async function POST(req: Request) {
   const authResult = await authenticateExtensionKey(req.headers.get("authorization"));
   if (!authResult.ok) {
@@ -182,6 +195,7 @@ export async function POST(req: Request) {
     values = finalized.values;
     warnings.push(...finalized.warnings);
     applyBrandDefault(values, body.fields, warnings);
+    applyQuantityDefault(values, body.fields);
   } catch (e) {
     console.error(`[ext/fill] AI call failed for user=${userId}:`, e);
     return NextResponse.json(

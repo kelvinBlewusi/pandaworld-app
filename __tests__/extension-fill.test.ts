@@ -103,12 +103,12 @@ describe("mapProductToFields — Watches POC", () => {
 
 describe("isSellerOwned", () => {
   it("flags seller-owned fields", () => {
-    ["Price", "Sale Price", "Stock", "Quantity", "Seller SKU", "Category"].forEach((l) =>
+    ["Price", "Sale Price", "Stock", "Category"].forEach((l) =>
       expect(isSellerOwned(l)).toBe(true),
     );
   });
-  it("does not flag AI fields", () => {
-    ["Name", "Brand", "Product description", "Weight (kg)"].forEach((l) =>
+  it("does not flag AI fields — Quantity and SKU are now AI-fillable", () => {
+    ["Name", "Brand", "Product description", "Weight (kg)", "Quantity", "Seller SKU"].forEach((l) =>
       expect(isSellerOwned(l)).toBe(false),
     );
   });
@@ -119,6 +119,7 @@ describe("finalizeAiValues (real-AI post-processing)", () => {
     { label: "Name", type: "text" },
     { label: "Product description", type: "richtext" },
     { label: "Highlights", type: "richtext" },
+    { label: "What's in the box", type: "richtext" },
     { label: "Watch Type", type: "select", options: ["Analog", "Digital", "Smart"] },
     { label: "Price", type: "text" },
   ];
@@ -133,6 +134,20 @@ describe("finalizeAiValues (real-AI post-processing)", () => {
     expect(values["Name"]).toBe("Casio Analog Watch");
     expect(values["Product description"]).toBe("<p>A dependable everyday watch.</p>");
     expect(values["Highlights"]).toBe("<ul><li>Water resistant</li><li>Leather strap</li></ul>");
+  });
+
+  it("splits box contents onto separate lines even with no newlines from the AI", () => {
+    const raw = { "What's in the box": "1x SLIN SF-G20 Chronograph Watch 1x User Manual 1x Packaging" };
+    const { values } = finalizeAiValues(raw, fields, "");
+    expect(values["What's in the box"]).toBe(
+      "<p>1x SLIN SF-G20 Chronograph Watch<br>1x User Manual<br>1x Packaging</p>",
+    );
+  });
+
+  it("keeps a newline-separated box list as-is (just wraps it)", () => {
+    const raw = { "What's in the box": "1x Watch\n1x Manual" };
+    const { values } = finalizeAiValues(raw, fields, "");
+    expect(values["What's in the box"]).toBe("<p>1x Watch<br>1x Manual</p>");
   });
 
   it("keeps HTML the AI already returned", () => {

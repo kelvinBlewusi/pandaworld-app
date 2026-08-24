@@ -148,8 +148,13 @@ export function buildMockProduct(notes: string | undefined, category = "Watches"
 
 const norm = (s: string) => s.toLowerCase().replace(/\*/g, "").replace(/\s+/g, " ").trim();
 
-/** Fields the seller owns — never AI-filled, never warned about. */
-const SELLER_OWNED = ["category", "price", "stock", "quantity", "sku"];
+/**
+ * Fields the seller owns — never AI-filled, never warned about. Quantity and
+ * SKU used to be here too; they're now AI-fillable (quantity falls back to a
+ * random value in the route when neither the AI nor the seller's notes give
+ * one — see app/api/extension/fill/route.ts's applyQuantityDefault).
+ */
+const SELLER_OWNED = ["category", "price", "stock"];
 
 /** Wrap plain text as a <p> if it carries no HTML tags. */
 function asHtml(text: string): string {
@@ -166,6 +171,25 @@ function bulletsToHtml(text: string): string {
     .filter(Boolean);
   if (!items.length) return asHtml(text);
   return `<ul>${items.map((i) => `<li>${i}</li>`).join("")}</ul>`;
+}
+
+/**
+ * "What's in the box" — Jumia's own convention is one item per line inside
+ * a single paragraph (`<p>1x Item<br>1x Item</p>`), not a bulleted list. The
+ * AI sometimes returns this as one space-separated line with no newlines at
+ * all ("1x Watch 1x Manual 1x Box"), which would otherwise render as one
+ * unbroken line — so if there's nothing to split on newlines, fall back to
+ * splitting right before each "Nx " occurrence (the box-contents format
+ * itself), which reliably recovers the item boundaries either way.
+ */
+function boxItemsToHtml(text: string): string {
+  if (/<br\s*\/?>/i.test(text) || /<ul[\s>]/i.test(text) || /<li[\s>]/i.test(text)) return text;
+  let items = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  if (items.length <= 1) {
+    items = text.split(/(?=\d+\s*x\s+)/i).map((s) => s.trim()).filter(Boolean);
+  }
+  if (items.length <= 1) return asHtml(text);
+  return `<p>${items.join("<br>")}</p>`;
 }
 
 /** Snap a value to the closest allowed option (case-insensitive), or null. */
@@ -285,7 +309,10 @@ export function finalizeAiValues(
     if (!value) continue;
 
     if (field.type === "richtext") {
-      value = norm(field.label).includes("highlight") ? bulletsToHtml(value) : asHtml(value);
+      const l = norm(field.label);
+      value = l.includes("highlight") ? bulletsToHtml(value)
+        : l.includes("box") ? boxItemsToHtml(value)
+        : asHtml(value);
     }
 
     if ((field.type === "select" || field.type === "combobox") && field.options?.length) {
