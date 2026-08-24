@@ -1,18 +1,23 @@
 /**
- * /api/extension/keys — manage the current user's Chrome-extension API keys.
+ * /api/extension/keys — the current user's fixed Chrome-extension API key.
  *
- * Called from the browser dashboard (app/extension/dashboard) with a normal
+ * Called from the browser dashboard (app/extension/(app)) with a normal
  * Clerk session — NOT called by the extension itself (the extension calls
  * /api/extension/fill with the key it already has). Protected by the default
  * Clerk middleware like any other app route (not in the public allowlist).
+ *
+ * Every seller has exactly one fixed key (lib/security/extension-keys.ts) —
+ * GET fetches or provisions it, POST replaces it (used by the dashboard's
+ * "Regenerate key" action). There's no create/list/revoke-by-id surface
+ * here anymore; the dashboard page fetches the key server-side on load, so
+ * GET mainly exists for the client-side regenerate flow to re-read state.
  */
 
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import {
-  listExtensionApiKeys,
-  createExtensionApiKey,
-  revokeExtensionApiKey,
+  getOrCreateExtensionApiKey,
+  regenerateExtensionApiKey,
 } from "@/lib/security/extension-keys";
 
 export const runtime = "nodejs";
@@ -21,38 +26,20 @@ export async function GET() {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const keys = await listExtensionApiKeys(userId);
-  return NextResponse.json({ keys });
-}
-
-export async function POST(req: Request) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  let name = "Chrome Extension";
-  try {
-    const body = await req.json();
-    if (typeof body?.name === "string" && body.name.trim()) name = body.name.trim();
-  } catch {
-    // no body — use the default name
-  }
-
-  const result = await createExtensionApiKey(userId, name);
+  const result = await getOrCreateExtensionApiKey(userId);
   if ("error" in result) {
-    return NextResponse.json({ error: result.error }, { status: 400 });
+    return NextResponse.json({ error: result.error }, { status: 500 });
   }
-  return NextResponse.json({ fullKey: result.fullKey, key: result.row }, { status: 201 });
+  return NextResponse.json({ fullKey: result.fullKey, key: result.row });
 }
 
-export async function DELETE(req: Request) {
+export async function POST() {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { searchParams } = new URL(req.url);
-  const keyId = searchParams.get("keyId");
-  if (!keyId) return NextResponse.json({ error: "Missing keyId" }, { status: 400 });
-
-  const revoked = await revokeExtensionApiKey(userId, keyId);
-  if (!revoked) return NextResponse.json({ error: "Key not found" }, { status: 404 });
-  return NextResponse.json({ ok: true });
+  const result = await regenerateExtensionApiKey(userId);
+  if ("error" in result) {
+    return NextResponse.json({ error: result.error }, { status: 500 });
+  }
+  return NextResponse.json({ fullKey: result.fullKey, key: result.row });
 }

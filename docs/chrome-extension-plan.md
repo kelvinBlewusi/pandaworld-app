@@ -320,6 +320,22 @@ For the **POC only**, auth can be stubbed behind an env flag so we prove the DOM
 first; the key system lands in Phase 1 and is a much smaller build than Clerk-in-extension
 would have been.
 
+### Update — fixed single key, not generate/revoke-on-demand (2026-08-24)
+
+The dashboard redesign (below) replaced the generate/revoke multi-key list above with a
+**single fixed key per seller**, auto-provisioned the first time they land on
+`/extension/dashboard` and shown behind a reveal/copy control — matching the "Your API Key"
+card pattern from competitor extension dashboards, not a "click to generate" flow.
+
+That required one change to "store only a hash": the secret now also lives in
+`extension_api_keys.key_secret` (plaintext) so it can be redisplayed on every visit, not just
+shown once at creation (`supabase/migrations/2026-08-24_extension-api-keys-fixed-key.sql`).
+`key_hash` is unchanged and still the only thing `authenticateExtensionKey` compares against —
+`key_secret` plays no role in auth, it exists purely for redisplay. Sellers can still
+regenerate (revokes the old key, issues a new one) from the Dashboard or Settings page if a
+key leaks. See `lib/security/extension-keys.ts`'s `getOrCreateExtensionApiKey` /
+`regenerateExtensionApiKey`.
+
 ---
 
 ## 10. Billing
@@ -512,27 +528,49 @@ extension/
     worker.js                       # reads key from chrome.storage.local; calls /api/extension/fill
 
 app/extension/page.tsx              # public marketing/onboarding page (CTA adapts if signed in)
-app/extension/dashboard/
-  page.tsx                          # the extension's own control room — OUTSIDE (main), so it
-                                     # skips the Jumia-connection redirect gate
-  keys-panel.tsx                    # client component: generate / show-once / revoke keys
+app/extension/(app)/                # route group (no URL segment) — shared sidebar + utility-
+                                     # bar shell, all OUTSIDE (main) so it skips the
+                                     # Jumia-connection redirect gate
+  layout.tsx                        # Clerk auth gate + ExtensionShell (plan/credits props)
+  dashboard/page.tsx                # stat cards (credit/autofills/time saved), API-key card,
+                                     # setup guide
+  calculator/page.tsx                # renders shared components/tools/price-calculator.tsx
+  listings/page.tsx                 # "My listings" — recent autofill activity log
+  settings/page.tsx                 # account info + regenerate-key danger zone
 app/api/extension/fill/route.ts     # API-key-authed autofill endpoint (real AI + quota)
-app/api/extension/keys/route.ts     # Clerk-authed CRUD for the dashboard
+app/api/extension/keys/route.ts     # Clerk-authed: GET = get-or-create the fixed key,
+                                     # POST = regenerate
+
+components/extension/
+  sidebar.tsx                       # Dashboard / Calculator / My listings / Settings (live) +
+                                     # FAQ / How to / Support (inert "Soon" placeholders) +
+                                     # "Push Listings from here" bridge to the classic OAuth flow
+  shell.tsx                         # desktop sidebar + mobile drawer + utility bar
+                                     # (Buy Credits / Plan / Credits / notifications / Install)
+  api-key-card.tsx                  # masked key + reveal/copy/regenerate — the Dashboard card
+  regenerate-key-button.tsx         # the Settings page's smaller regenerate action
+components/tools/price-calculator.tsx  # extracted from (main)/price-calculator so both that
+                                     # page and extension/(app)/calculator render the same
+                                     # component (it's pure client-side, no Jumia dependency)
 
 lib/extension/fill.ts               # pure mapper: mock product, label→field mapping,
                                      # finalizeAiValues() (post-processes the real-AI output)
 lib/ai/extension-fill.ts            # aiFillRenderedFields() — the real Gemini vision pass
-lib/security/extension-keys.ts      # generate/hash keys, authenticateExtensionKey(),
-                                     # usage-event logging for the dashboard
+lib/security/extension-keys.ts      # generate/hash keys, getOrCreateExtensionApiKey(),
+                                     # regenerateExtensionApiKey(), authenticateExtensionKey(),
+                                     # listRecentFillEvents() for "My listings"
 
-supabase/migrations/2026-08-23_extension-api-keys.sql   # extension_api_keys + extension_fill_events
+supabase/migrations/2026-08-23_extension-api-keys.sql              # extension_api_keys + extension_fill_events
+supabase/migrations/2026-08-24_extension-api-keys-fixed-key.sql    # + key_secret (see §9 update)
 
 components/layout/Sidebar.tsx       # + "Extension · New" nav entry → /extension/dashboard
-middleware.ts                       # + /extension, /api/extension/fill public (dashboard +
-                                     # /api/extension/keys stay Clerk-protected as normal)
+middleware.ts                       # + /extension, /api/extension/fill public (everything
+                                     # under extension/(app), plus /api/extension/keys, stay
+                                     # Clerk-protected as normal)
 
 __tests__/extension-fill.test.ts    # 16 tests — pure mapper + finalizeAiValues + isSellerOwned
 ```
 
 **Not yet built**: combobox/click-only-dropdown writers (Color family + step-3 selects),
-per-key rate limiting.
+per-key rate limiting, FAQ/How-to/Support page content (sidebar entries are intentionally
+inert placeholders until that content exists).
