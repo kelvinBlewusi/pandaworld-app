@@ -1,10 +1,8 @@
-import Link from "next/link";
 import {
   Chrome,
   KeyRound,
   UploadCloud,
   Wand2,
-  ArrowRight,
 } from "lucide-react";
 import { auth } from "@clerk/nextjs/server";
 import { MarketingFooter } from "@/components/marketing/footer";
@@ -127,26 +125,6 @@ export async function ExtensionPage() {
               </div>
             ))}
           </div>
-        </div>
-      </section>
-
-      {/* Try for free banner */}
-      <section className="bg-gradient-to-r from-orange-500 to-pink-500">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-6 px-6 py-12 text-center sm:flex-row sm:text-left">
-          <div>
-            <h2 className="text-2xl font-bold text-white sm:text-3xl">
-              Start listing faster today
-            </h2>
-            <p className="mt-2 text-sm text-white/85">
-              5 free credits on sign-up — no card required.
-            </p>
-          </div>
-          <Link
-            href={ctaHref}
-            className="inline-flex shrink-0 items-center gap-2 rounded-full bg-white px-6 py-3.5 text-sm font-semibold text-orange-600 shadow-md transition-transform hover:scale-[1.03]"
-          >
-            Try for free <ArrowRight className="h-4 w-4" />
-          </Link>
         </div>
       </section>
 

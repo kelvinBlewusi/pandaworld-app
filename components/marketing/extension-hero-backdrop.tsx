@@ -345,6 +345,13 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
               >
                 See how it works
               </a>
+              <Link
+                href={ctaHref}
+                className="inline-flex items-center gap-2 rounded-full border px-6 py-3.5 text-sm transition-colors hover:!border-white/45 hover:!text-white"
+                style={{ borderColor: "rgba(255,255,255,0.18)", color: "rgba(239,236,230,0.85)" }}
+              >
+                Try for free
+              </Link>
             </div>
           </div>
         </div>
