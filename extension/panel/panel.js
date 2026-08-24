@@ -59,6 +59,20 @@ function renderWarnings(warnings) {
 }
 const escapeHtml = (s) => (s || "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+let toastTimer = null;
+function showToast(text, kind = "ok", ms = 3000) {
+  const el = $("toast");
+  clearTimeout(toastTimer);
+  el.textContent = text;
+  el.className = `toast ${kind}`;
+  el.hidden = false;
+  requestAnimationFrame(() => el.classList.add("show"));
+  toastTimer = setTimeout(() => {
+    el.classList.remove("show");
+    setTimeout(() => { el.hidden = true; }, 200); // matches the CSS transition
+  }, ms);
+}
+
 function setCreditsText(credits, unlimited) {
   $("creditsText").textContent = unlimited ? "∞ credits" : credits == null ? "— credits" : `${credits} credits`;
 }
@@ -184,7 +198,10 @@ $("saveKey").addEventListener("click", async () => {
     await chrome.storage.local.set({ apiKey: key });
     showConnected();
     const ok = await refreshAccount(key);
-    if (ok) await refreshView();
+    if (ok) {
+      await refreshView();
+      showToast("Connected to PandaWorldAI");
+    }
   } finally {
     btn.disabled = false;
   }

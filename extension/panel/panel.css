@@ -168,3 +168,18 @@ footer.linksFooter a {
 }
 footer.linksFooter a:hover { color: var(--fg); text-decoration: underline; }
 footer.linksFooter .sep { color: var(--line); font-size: 11px; }
+
+/* ── Toast (transient confirmation, e.g. after a successful connect) ────── */
+.toast {
+  position: fixed; left: 14px; right: 14px; bottom: 14px; z-index: 10;
+  display: flex; align-items: center; gap: 8px;
+  background: var(--fg); color: var(--bg);
+  border-radius: 10px; padding: 10px 14px; font-size: 12.5px; font-weight: 600;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+  opacity: 0; transform: translateY(8px);
+  transition: opacity .18s ease, transform .18s ease;
+  pointer-events: none;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast.ok::before { content: "✓"; color: var(--ok); font-weight: 800; }
+.toast.err::before { content: "✕"; color: var(--err); font-weight: 800; }
