@@ -10,6 +10,8 @@
   --warn-bg: #fff7ed;
   --warn-line: #fed7aa;
   --card: #f9fafb;
+  --pw-blue: #2563eb;
+  --pw-blue-2: #4f46e5;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -19,6 +21,11 @@
 }
 
 * { box-sizing: border-box; }
+/* Some elements below (e.g. .statusRow) set their own `display`, which
+   otherwise beats the browser's default `[hidden] { display: none }` rule
+   since both are author-equal-specificity — this keeps `el.hidden = true`
+   reliable regardless of what else targets the element. */
+[hidden] { display: none !important; }
 body {
   margin: 0;
   padding: 14px;
@@ -27,17 +34,63 @@ body {
   color: var(--fg);
 }
 
-header { margin-bottom: 12px; }
-.brand { font-size: 18px; font-weight: 700; }
-.badge {
-  font-size: 10px; font-weight: 700; letter-spacing: .06em;
-  background: var(--accent); color: var(--accent-fg);
-  padding: 1px 6px; border-radius: 999px; vertical-align: middle;
+/* ── Status row (Plan · Credits · disconnect) ────────────────────────────── */
+.statusRow { display: flex; align-items: center; gap: 8px; margin: 10px 0 14px; }
+.pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 999px;
 }
-.sub { color: var(--muted); font-size: 12px; }
+.pill.plan { background: var(--pw-blue); color: #fff; }
+.pill.credits { background: var(--card); color: var(--fg); border: 1px solid var(--line); }
+.pill.credits .dot { width: 6px; height: 6px; border-radius: 999px; background: var(--accent); display: inline-block; }
+.iconBtn {
+  margin-left: auto; width: 26px; height: 26px; border-radius: 999px;
+  background: transparent; border: 1px solid var(--line); color: var(--muted);
+  display: flex; align-items: center; justify-content: center; font-size: 13px; cursor: pointer;
+}
+.iconBtn:hover { background: var(--card); color: var(--fg); }
 
-.settings { margin: 10px 0; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
-.settings summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+/* ── Banners (connect / open-jumia) ──────────────────────────────────────── */
+.banner {
+  border: 1px solid var(--line); background: var(--card);
+  border-radius: 12px; padding: 16px; margin: 10px 0 16px; text-align: center;
+}
+.banner.warn { background: var(--warn-bg); border-color: var(--warn-line); }
+.bannerIcon { font-size: 26px; line-height: 1; margin-bottom: 6px; }
+.bannerTitle { font-weight: 700; font-size: 14px; margin-bottom: 4px; }
+.bannerBody { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+.banner .fld { text-align: left; }
+.linkline {
+  display: block; margin-top: 10px; font-size: 12px; color: var(--pw-blue);
+  text-decoration: none; text-align: center;
+}
+.linkline:hover { text-decoration: underline; }
+
+/* ── Connect screen ───────────────────────────────────────────────────────── */
+.heroTitle { text-align: center; font-size: 19px; font-weight: 800; margin: 20px 0 6px; }
+.heroSub { text-align: center; color: var(--muted); font-size: 12.5px; margin: 0 0 10px; line-height: 1.5; }
+.heroStats {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  color: var(--muted); font-size: 11.5px; font-weight: 600; margin-bottom: 16px;
+}
+.heroStats .sep { color: var(--line); }
+
+.orDivider {
+  display: flex; align-items: center; gap: 10px; margin: 16px 0;
+  color: var(--muted); font-size: 11px;
+}
+.orDivider::before, .orDivider::after {
+  content: ""; flex: 1; height: 1px; background: var(--line);
+}
+
+.lockHint { font-size: 11px; color: var(--muted); text-align: center; margin: 8px 0 14px; }
+.lockHint a { color: var(--pw-blue); text-decoration: none; }
+.lockHint a:hover { text-decoration: underline; }
+
+select {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit;
+}
 
 .fld { display: block; margin: 12px 0; }
 .fld > span { display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px; }
@@ -50,8 +103,13 @@ input, textarea {
 textarea { resize: vertical; }
 
 button { cursor: pointer; border: none; border-radius: 8px; font: inherit; font-weight: 600; }
-.primary { width: 100%; padding: 12px; background: var(--accent); color: var(--accent-fg); font-size: 15px; }
+.primary { width: 100%; padding: 12px; background: var(--accent); color: var(--accent-fg); font-size: 14px; }
 .primary:disabled { opacity: .6; cursor: default; }
+.primary.big {
+  padding: 14px; font-size: 15px;
+  background: linear-gradient(135deg, var(--pw-blue), var(--pw-blue-2));
+  box-shadow: 0 6px 16px rgba(37, 99, 235, .35);
+}
 .secondary { padding: 6px 12px; background: var(--card); color: var(--fg); border: 1px solid var(--line); }
 
 .status { margin: 12px 0 4px; font-size: 13px; min-height: 18px; }
@@ -80,6 +138,15 @@ button { cursor: pointer; border: none; border-radius: 8px; font: inherit; font-
   word-break: break-word; white-space: pre-wrap;
 }
 
-footer { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 10px; }
-footer ol { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
-footer li { margin: 3px 0; }
+.advanced { margin: 14px 0; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.advanced summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+
+footer.linksFooter {
+  margin-top: 18px; border-top: 1px solid var(--line); padding-top: 12px;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+footer.linksFooter a {
+  color: var(--muted); font-size: 12px; text-decoration: none;
+}
+footer.linksFooter a:hover { color: var(--fg); text-decoration: underline; }
+footer.linksFooter .sep { color: var(--line); font-size: 11px; }

@@ -1,31 +1,34 @@
-# PandaWorld Jumia Autofill — Phase 0 POC
+# PandaWorld Jumia Autofill
 
 A Manifest V3 Chrome extension that autofills the **Jumia Vendor Center**
-Add-Products form from AI. This is the **Phase 0 proof-of-concept** described in
-[`docs/chrome-extension-plan.md`](../docs/chrome-extension-plan.md). Its only job
-is to de-risk the two hard problems before we invest further:
-
-1. **Read the uploaded image** off Jumia's DOM.
-2. **Write AI values into Jumia's fields** — including the ProseMirror rich-text
-   editors (Description, Highlights, What's in the box, etc.).
+Add-Products form from AI. Design background in
+[`docs/chrome-extension-plan.md`](../docs/chrome-extension-plan.md).
 
 No build step — it's plain JS/HTML/CSS and loads unpacked as-is.
 
-## What works in Phase 0
+## What works
 
-- Side panel UI (notes box, Autofill button, per-field results, warnings).
+- Side panel UI: a connect screen (paste your API key), an "open Jumia" prompt
+  when you're not on a Vendor Center tab, a status row (plan + credit balance,
+  disconnect), notes box, Autofill button, per-field results/warnings, and a
+  Dashboard/Help/Logout footer — see `panel/`.
 - Content script that harvests the rendered fields + the uploaded image.
 - DOM writers: React-safe inputs, native `<select>`, and CKEditor 5 rich-text.
-- Backend endpoint `POST /api/extension/fill` returning a value per field.
+- Real auth (`pw_live_...` API keys, see `lib/security/extension-keys.ts`) and
+  a credit ledger (`lib/billing/extension-credits.ts`) — 5 free credits on
+  sign-up, 2.5 spent per real autofill, top-ups via Paystack on the dashboard.
+- Backend endpoints: `POST /api/extension/fill` (autofill),
+  `GET /api/extension/account` (plan + credit balance for the panel's status
+  row).
 - **Live AI** (real Gemini reading the uploaded photo) when creds + a photo are
-  present; deterministic **mock** fallback otherwise.
+  present; deterministic **mock** fallback otherwise (mock fills don't spend
+  credits).
 
-## What's deliberately deferred to Phase 1
+## What's still deferred
 
-- Real auth (the API key box is present but **stubbed** server-side).
-- Real quota metering.
-- Combobox / click-only dropdown option-picking (e.g. Color family) — Phase 0
-  writes typed inputs, native selects, and rich text.
+- Combobox / click-only dropdown option-picking (e.g. Color family) — the
+  extension writes typed inputs, native selects, and rich text.
+- Chrome Web Store listing (currently load-unpacked only).
 
 ## Run it
 
@@ -46,12 +49,19 @@ back to a deterministic **mock** so the loop never hard-fails. Force mock with
 1. Go to `chrome://extensions`, enable **Developer mode**.
 2. **Load unpacked** → select this `extension/` folder.
 3. Click the extension's toolbar icon → the side panel opens.
-4. In the panel's **Settings**, confirm the API base URL (`http://localhost:3002`).
+4. The panel always calls the production site (`https://pandaworldai.site`) —
+   there's no in-panel override. For local dev: add `http://localhost:3002/*`
+   (or your Vercel preview origin) to `host_permissions` in `manifest.json`,
+   change the `apiBase` constant near the top of `panel/panel.js` to match,
+   then reload the extension.
+5. Paste an API key from `/extension/dashboard` (sign up if you don't have one)
+   and click **Connect**.
 
 ### 3. Try it on Jumia
-1. Open `https://vendorcenter.jumia.com/products/add/new`.
+1. Open `https://vendorcenter.jumia.com/products/add/new` — the panel switches
+   from the "open Jumia" prompt to the autofill form automatically.
 2. Upload a product photo and **pick a category** (this expands the form).
-3. Optionally type notes, e.g. `price 250, water resistant, leather strap`.
+3. Optionally type product details, e.g. `price 250, water resistant, leather strap`.
 4. Click **✨ Autofill this listing**.
 5. Watch the fields populate. **Review, then submit yourself** — the extension
    never submits for you.

@@ -1,8 +1,7 @@
 /**
  * Extension credit-pack pricing — the "Buy Credits" flow on
  * /extension/dashboard, separate from the classic app's plan tiers
- * (lib/billing/plans.ts). Flat rate: 1 GHS = 1 credit (Kelvin: "50 credits
- * for 50 GHS"), no per-tier discount.
+ * (lib/billing/plans.ts).
  */
 
 export interface CreditPack {
@@ -12,10 +11,13 @@ export interface CreditPack {
 }
 
 export const CREDIT_PACKS: CreditPack[] = [
-  { id: "small",  credits: 50,  amountGhs: 50 },
-  { id: "medium", credits: 150, amountGhs: 150 },
-  { id: "large",  credits: 500, amountGhs: 500 },
+  { id: "starter", credits: 50,  amountGhs: 50 },
+  { id: "small",   credits: 130, amountGhs: 100 },
+  { id: "medium",  credits: 200, amountGhs: 150 },
 ];
+
+/** Pack id shown with the "Popular" badge in the Buy Credits modal. */
+export const POPULAR_PACK_ID = "small";
 
 export function getCreditPack(id: string): CreditPack | undefined {
   return CREDIT_PACKS.find((p) => p.id === id);

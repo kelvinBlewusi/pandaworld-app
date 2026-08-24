@@ -22,6 +22,8 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 //                            origin) — it authenticates itself with a
 //                            PandaWorld API key checked inside the route (see
 //                            lib/security/extension-keys.ts), not Clerk.
+//   /api/extension/account   — same story: the panel's status row (plan +
+//                            credits), authed by the same API key.
 //   NOTE: /extension/dashboard and /api/extension/keys are intentionally NOT
 //   listed here — they're the logged-in dashboard + its API, called by the
 //   browser with a real Clerk session, so they go through the normal
@@ -50,6 +52,7 @@ const isPublicRoute = createRouteMatcher([
   '/api/cron/(.*)',
   '/extension',
   '/api/extension/fill',
+  '/api/extension/account',
   // SEO + crawler routes — keep these PUBLIC or Google rejects the
   // sitemap and the OG link previews render as broken images.
   '/sitemap.xml',

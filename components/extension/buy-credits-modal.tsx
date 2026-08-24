@@ -11,27 +11,24 @@
 import { useState } from "react";
 import { X, Check, Loader2, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CREDIT_PACKS } from "@/lib/billing/credit-packs";
+import { CREDIT_PACKS, POPULAR_PACK_ID } from "@/lib/billing/credit-packs";
 
 interface Tier {
   id: string;
   credits: number;
   price: string;
-  perCredit: string;
   popular?: boolean;
 }
 
-// Flat rate — 1 GHS = 1 credit, no per-tier discount.
-const TIERS: Tier[] = CREDIT_PACKS.map((p, i) => ({
+const TIERS: Tier[] = CREDIT_PACKS.map((p) => ({
   id: p.id,
   credits: p.credits,
   price: `GHS ${p.amountGhs}`,
-  perCredit: `GHS ${(p.amountGhs / p.credits).toFixed(2)}/credit`,
-  popular: i === 1,
+  popular: p.id === POPULAR_PACK_ID,
 }));
 
 export function BuyCreditsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [selected, setSelected] = useState("medium");
+  const [selected, setSelected] = useState(POPULAR_PACK_ID);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -96,9 +93,7 @@ export function BuyCreditsModal({ open, onClose }: { open: boolean; onClose: () 
                     </span>
                   )}
                 </span>
-                <p className="mt-0.5 text-xs text-zinc-500">
-                  {t.price} · {t.perCredit}
-                </p>
+                <p className="mt-0.5 text-xs text-zinc-500">{t.price}</p>
               </div>
               <span
                 className={cn(
