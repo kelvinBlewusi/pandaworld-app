@@ -443,9 +443,19 @@ rendered fields, and writes clean copy into the CKEditor 5 rich-text editors (10
   as a visually distinct "Extension · New" entry, and from `/extension`'s CTA when signed in.
   Every sign-up/sign-in link on `/extension` carries `redirect_url=/extension/dashboard` so a
   seller entering through the extension never touches the classic Jumia-OAuth onboarding gate
-  by accident. The dashboard's own header stays self-contained (its Wordmark links to
-  `/extension`, not `/dashboard`) — the ONE deliberate bridge into the classic flow is a
-  "Push Listings from here" button, styled as a distinct action, not a plain nav link.
+  by accident. Root `/` and `/landing` also default authenticated visitors to
+  `/extension/dashboard` now — it's the default post-auth landing everywhere, not just for the
+  extension's own entry point. The dashboard's own header stays self-contained (its Wordmark
+  links to `/extension`, not `/dashboard`) — the ONE deliberate bridge into the classic flow is
+  a "Push Listings from here" button, styled as a distinct action, not a plain nav link.
+- ✅ **`/push-listings` — intro page for the classic flow**: clicking "Push Listings from here"
+  no longer drops straight into `/dashboard`'s gate — it lands on `/push-listings` first, an
+  intro page (outside `(main)`, same reasoning as the extension dashboard) that reuses
+  `PublicLanding` via a new `variant="push-listings"` prop: same hero/feature/tutorial content
+  as the default landing, but Pricing + Sign-in stripped from the nav (replaced with a
+  "← Back to extension dashboard" link) and every CTA relabelled "Get Started" pointing at
+  `/dashboard`. One shared component, so editing the marketing copy keeps both landing
+  surfaces in sync — the default `/` and `/landing` render is untouched otherwise.
 - ✅ **Quota wiring**: `checkQuota`/`incrementUsage` — the SAME per-period listing quota as
   the web app (no separate SKU). Only a real (non-mock) autofill spends a credit.
 - ⬜ **Combobox / click-only dropdown writers** (Color family + step-3 selects) — the one

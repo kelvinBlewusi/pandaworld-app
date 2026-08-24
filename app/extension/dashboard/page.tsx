@@ -107,12 +107,13 @@ export default async function ExtensionDashboardPage() {
                 styled as a distinct action (bordered pill), not a plain nav
                 link, so it reads as "leave the extension flow and go set up
                 Jumia OAuth", not "here's the rest of the same dashboard".
-                /dashboard's own gate (app/page.tsx / (main)/layout.tsx)
-                handles routing a new seller through onboarding, or an
-                already-connected one straight to their listings — that's
-                the "Jumia connection flow" this link is meant to enter. */}
+                Lands on /push-listings first (an intro page, not the gate
+                itself) — only that page's own "Get Started" button actually
+                enters /dashboard's gate (app/page.tsx / (main)/layout.tsx),
+                which routes a new seller through onboarding or an
+                already-connected one straight to their listings. */}
             <Link
-              href="/dashboard"
+              href="/push-listings"
               title="Push listings the classic way — connects Jumia via OAuth in PandaWorld's main app"
               className="flex items-center gap-1.5 rounded-full border border-zinc-200 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:border-zinc-300 hover:bg-zinc-50"
             >

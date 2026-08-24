@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, LayoutDashboard } from "lucide-react";
+import { ArrowLeft, ArrowRight, LayoutDashboard } from "lucide-react";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { Wordmark } from "@/components/marketing/wordmark";
 import { ConnectTutorial } from "@/components/marketing/connect-tutorial";
@@ -19,12 +19,27 @@ import { AnimatedToastReel } from "@/components/marketing/animated-toast-reel";
 interface PublicLandingProps {
   /** True when the viewer is signed in. Switches the nav CTAs. */
   isAuthenticated?: boolean;
+  /**
+   * "push-listings": rendered at /push-listings, the intro page behind the
+   * extension dashboard's "Push Listings from here" button. Always reached
+   * while authenticated, so it hides Pricing + Sign-in from the nav and
+   * points every CTA at /dashboard ("Get Started") instead of
+   * /extension/dashboard or /sign-up — clicking through is what actually
+   * starts the classic Jumia-OAuth flow. Same content as the default
+   * variant otherwise, so editing the copy here updates both surfaces.
+   */
+  variant?: "default" | "push-listings";
 }
 
-export function PublicLanding({ isAuthenticated = false }: PublicLandingProps) {
+export function PublicLanding({ isAuthenticated = false, variant = "default" }: PublicLandingProps) {
+  const pushListings = variant === "push-listings";
+  const ctaHref  = pushListings ? "/dashboard" : isAuthenticated ? "/extension/dashboard" : "/sign-up";
+  const heroCtaLabel   = pushListings ? "Get Started" : isAuthenticated ? "Open dashboard" : "Start free";
+  const bottomCtaLabel = pushListings ? "Get Started" : isAuthenticated ? "Back to dashboard" : "Get started";
+
   return (
     <div className="min-h-screen bg-white text-zinc-900">
-      <MarketingNav isAuthenticated={isAuthenticated} />
+      <MarketingNav isAuthenticated={isAuthenticated} variant={variant} />
 
       {/* Hero — animated panda globe on the right, copy on the left */}
       <section className="relative overflow-hidden border-b border-zinc-100">
@@ -55,10 +70,10 @@ export function PublicLanding({ isAuthenticated = false }: PublicLandingProps) {
             </div>
             <div className="mt-10 flex w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:items-center">
               <Link
-                href={isAuthenticated ? "/extension/dashboard" : "/sign-up"}
+                href={ctaHref}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-orange-500 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-orange-500/20 transition-all hover:bg-orange-600 hover:shadow-lg sm:w-auto"
               >
-                {isAuthenticated ? "Open dashboard" : "Start free"}
+                {heroCtaLabel}
                 <ArrowRight className="h-4 w-4" />
               </Link>
               <Link
@@ -152,10 +167,10 @@ export function PublicLanding({ isAuthenticated = false }: PublicLandingProps) {
             5 free listings every month. No credit card. Cancel any time.
           </p>
           <Link
-            href={isAuthenticated ? "/extension/dashboard" : "/sign-up"}
+            href={ctaHref}
             className="mt-8 inline-flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-orange-500/20 transition-all hover:bg-orange-600"
           >
-            {isAuthenticated ? "Back to dashboard" : "Get started"}
+            {bottomCtaLabel}
             <ArrowRight className="h-4 w-4" />
           </Link>
         </div>
@@ -204,7 +219,44 @@ function TierTile({
 
 // ─── Marketing nav — adapts to logged-in state ───────────────────────────────
 
-function MarketingNav({ isAuthenticated }: { isAuthenticated: boolean }) {
+function MarketingNav({
+  isAuthenticated,
+  variant = "default",
+}: {
+  isAuthenticated: boolean;
+  variant?: "default" | "push-listings";
+}) {
+  // push-listings is always reached while authenticated (only linked from
+  // /extension/dashboard's "Push Listings from here" button) — no Pricing,
+  // no Sign-in, just a way back and the one deliberate CTA into the
+  // classic Jumia-OAuth flow.
+  if (variant === "push-listings") {
+    return (
+      <header className="sticky top-0 z-20 border-b border-zinc-100 bg-white/80 backdrop-blur">
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+          <Link href="/push-listings" aria-label="pandaworld home">
+            <Wordmark size={28} />
+          </Link>
+          <nav className="flex items-center gap-1 sm:gap-4">
+            <Link
+              href="/extension/dashboard"
+              className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" /> Back to extension dashboard
+            </Link>
+            <Link
+              href="/dashboard"
+              className="inline-flex items-center gap-1.5 rounded-md bg-orange-500 px-3 py-1.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-orange-600"
+            >
+              Get Started
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </nav>
+        </div>
+      </header>
+    );
+  }
+
   return (
     <header className="sticky top-0 z-20 border-b border-zinc-100 bg-white/80 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
