@@ -1,13 +1,13 @@
 "use client";
 
 /**
- * Dark, canvas-animated hero for /extension — ported from a Claude Design
- * export (`Hero Backdrop.dc.html`, project 18cd00f4-19b6-4d97-99df-f824a1b8281e).
- *
- * The design file's placeholder copy ("datafall", "Streaming engine v4",
- * "Every signal, in motion.") is swapped for PandaWorld's real extension copy;
- * the visual system (full-bleed animated canvas, radial vignette, serif
- * italic headline accent, pill nav/CTA, minimal footer line) is kept as-is.
+ * Dark, canvas-animated hero for /extension — the animated backdrop was
+ * ported from a Claude Design export (`Hero Backdrop.dc.html`, project
+ * 18cd00f4-19b6-4d97-99df-f824a1b8281e); the layout/copy/type treatment
+ * around it has since diverged from that source per direct feedback —
+ * centered content (was left-aligned), bold sans headline (was a serif
+ * italic accent line), liquid-glass CTA pills, a shaded "card" Sign-in
+ * link, no footer line.
  *
  * The canvas animation itself — a fan of drifting "ribbons" with a travelling
  * specular highlight, plus a subtle film-grain overlay — is a direct port of
@@ -17,27 +17,23 @@
  * export imports) turned out to be that runtime's generic harness — not
  * needed here since we already have real React.
  *
- * Ribbon accent colour uses PandaWorld's brand orange (#f97316 — Tailwind's
- * orange-500, matching every `bg-orange-500` elsewhere on the site) in place
- * of the design's generic peach (#ffb27a).
+ * Ribbon accent colour, and every orange highlight in the hero copy/CTAs,
+ * uses PandaWorld's brand orange (#f97316 — Tailwind's orange-500, matching
+ * every `bg-orange-500` elsewhere on the site) in place of the design's
+ * generic peach (#ffb27a).
  */
 
 import { useEffect, useRef } from "react";
 import Link from "next/link";
-import { Instrument_Serif, Space_Grotesk } from "next/font/google";
+import { Space_Grotesk } from "next/font/google";
 import { ArrowRight } from "lucide-react";
 import { Wordmark } from "@/components/marketing/wordmark";
 
-const instrumentSerif = Instrument_Serif({
-  subsets: ["latin"],
-  weight: ["400"],
-  style: ["normal", "italic"],
-  display: "swap",
-  variable: "--font-instrument-serif",
-});
+// Bold sans headline (700) unifies the type system with the nav/body, which
+// are already Space Grotesk — no separate serif face needed.
 const spaceGrotesk = Space_Grotesk({
   subsets: ["latin"],
-  weight: ["300", "400", "500"],
+  weight: ["300", "400", "500", "700"],
   display: "swap",
   variable: "--font-space-grotesk",
 });
@@ -46,11 +42,12 @@ const ACCENT = "#f97316"; // Tailwind orange-500 — PandaWorld's brand orange
 
 interface ExtensionHeroBackdropProps {
   signInHref: string;
+  signUpHref: string;
   ctaHref: string;
   ctaLabel: string;
 }
 
-export function ExtensionHeroBackdrop({ signInHref, ctaHref, ctaLabel }: ExtensionHeroBackdropProps) {
+export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabel }: ExtensionHeroBackdropProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -231,7 +228,7 @@ export function ExtensionHeroBackdrop({ signInHref, ctaHref, ctaLabel }: Extensi
 
   return (
     <section
-      className={`${instrumentSerif.variable} ${spaceGrotesk.variable} relative min-h-screen w-full overflow-hidden bg-[#050505]`}
+      className={`${spaceGrotesk.variable} relative min-h-screen w-full overflow-hidden bg-[#050505]`}
       style={{ fontFamily: "var(--font-space-grotesk), system-ui, sans-serif", color: "#efece6" }}
     >
       <canvas ref={canvasRef} className="absolute inset-0 block h-full w-full" />
@@ -244,26 +241,52 @@ export function ExtensionHeroBackdrop({ signInHref, ctaHref, ctaLabel }: Extensi
         }}
       />
 
-      <div className="relative z-10 box-border grid min-h-screen grid-rows-[auto_1fr_auto] px-7 pb-11 pt-10 sm:px-12 lg:px-24">
+      <div className="relative z-10 box-border grid min-h-screen grid-rows-[auto_1fr] px-7 pb-16 pt-10 sm:px-12 lg:px-24">
         <header className="flex items-center justify-between gap-8">
           <Link href="/extension" aria-label="pandaworld home">
-            <Wordmark size={26} color="#f4f1ea" />
+            {/* iconColor dark — the icon's head is a hardcoded white fill, so
+                the ears/eyes/nose need a DARK colour to read against it. The
+                letters stay light cream via `color` to read against the
+                page's near-black background. */}
+            <Wordmark size={26} color="#f4f1ea" iconColor="#161616" />
           </Link>
-          <nav
-            className="flex items-center gap-6 text-[13px] uppercase tracking-[0.08em]"
-            style={{ color: "rgba(239,236,230,0.6)" }}
-          >
-            <Link href="/pricing" className="transition-colors hover:!text-white" style={{ color: "inherit" }}>
+          <nav className="flex items-center gap-3 text-[13px] uppercase tracking-[0.08em]">
+            <Link
+              href="/pricing"
+              className="px-2 transition-colors hover:!text-white"
+              style={{ color: "rgba(239,236,230,0.6)" }}
+            >
               Pricing
             </Link>
-            <Link href={signInHref} className="transition-colors hover:!text-white" style={{ color: "inherit" }}>
+            {/* "Card" treatment — shaded pill background, distinguishing it
+                as a button rather than a plain nav link. */}
+            <Link
+              href={signInHref}
+              className="rounded-full px-4 py-2 transition-colors hover:!bg-white/[0.1]"
+              style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(239,236,230,0.85)" }}
+            >
               Sign in
+            </Link>
+            {/* Liquid-glass pill — frosted translucent layer with an inner
+                highlight/shadow for depth, echoing Apple's "Liquid Glass"
+                material rather than a flat fill. */}
+            <Link
+              href={signUpHref}
+              className="rounded-full px-4 py-2 font-medium normal-case tracking-normal text-white backdrop-blur-xl transition-transform hover:scale-[1.03]"
+              style={{
+                background: "linear-gradient(135deg, rgba(255,255,255,0.28), rgba(255,255,255,0.08))",
+                border: "1px solid rgba(255,255,255,0.35)",
+                boxShadow:
+                  "inset 0 1px 1px rgba(255,255,255,0.5), inset 0 -1px 2px rgba(0,0,0,0.15), 0 8px 20px rgba(0,0,0,0.25)",
+              }}
+            >
+              Get Started
             </Link>
           </nav>
         </header>
 
-        <div className="flex items-center">
-          <div className="max-w-[720px]">
+        <div className="flex items-center justify-center text-center">
+          <div className="flex max-w-[760px] flex-col items-center">
             <div
               className="inline-flex items-center gap-2.5 rounded-full border px-3.5 py-[7px] text-[12px] uppercase tracking-[0.1em] backdrop-blur-[6px]"
               style={{ borderColor: "rgba(255,255,255,0.14)", color: "rgba(239,236,230,0.72)" }}
@@ -274,33 +297,41 @@ export function ExtensionHeroBackdrop({ signInHref, ctaHref, ctaLabel }: Extensi
               />
               Chrome Extension · Beta
             </div>
+            {/* Bold sans headline (Space Grotesk 700) instead of the design's
+                serif italic — reads cleaner/punchier for a product headline,
+                and unifies the type system with the nav/body, which are
+                already Space Grotesk. */}
             <h1
-              className="mt-6 font-normal"
+              className="mt-6 font-bold"
               style={{
-                fontFamily: "var(--font-instrument-serif), serif",
-                fontSize: "clamp(44px, 6.8vw, 96px)",
-                lineHeight: 1.0,
+                fontFamily: "var(--font-space-grotesk), system-ui, sans-serif",
+                fontSize: "clamp(38px, 6vw, 72px)",
+                lineHeight: 1.08,
                 letterSpacing: "-0.02em",
                 color: "#f7f4ee",
               }}
             >
-              Fill Jumia listings
-              <br />
-              <em style={{ fontStyle: "italic", color: "#cfc7b8" }}>without leaving Jumia.</em>
+              Automate your Jumia Listings with AI
             </h1>
             <p
-              className="mt-6 max-w-[480px] text-[17px] font-light leading-relaxed"
+              className="mt-6 max-w-[520px] text-[17px] font-light leading-relaxed"
               style={{ color: "rgba(239,236,230,0.62)" }}
             >
-              Do your listing on Vendor Center like always. Upload a photo, pick a
-              category, and PandaWorld&apos;s AI fills the whole form — SEO-optimised
-              and built to pass QC. You review and submit.
+              Do your listing on{" "}
+              <span style={{ color: ACCENT, fontWeight: 500 }}>Vendor Center</span> like
+              always. Upload a photo, pick a category, and PandaWorld&apos;s AI fills the
+              whole form for you. SEO-optimised. You review and submit.
             </p>
-            <div className="mt-9 flex flex-wrap items-center gap-3.5">
+            <div className="mt-9 flex flex-wrap items-center justify-center gap-3.5">
               <Link
                 href={ctaHref}
-                className="inline-flex items-center gap-2 rounded-full px-6 py-3.5 text-sm transition-colors hover:!bg-white"
-                style={{ background: "#f4f1ea", color: "#0a0a0a" }}
+                className="inline-flex items-center gap-2 rounded-full px-6 py-3.5 text-sm font-medium text-white backdrop-blur-xl transition-transform hover:scale-[1.02]"
+                style={{
+                  background: "linear-gradient(135deg, rgba(255,255,255,0.28), rgba(255,255,255,0.08))",
+                  border: "1px solid rgba(255,255,255,0.35)",
+                  boxShadow:
+                    "inset 0 1px 1px rgba(255,255,255,0.5), inset 0 -1px 2px rgba(0,0,0,0.15), 0 8px 20px rgba(0,0,0,0.25)",
+                }}
               >
                 {ctaLabel}
                 <ArrowRight className="h-4 w-4" />
@@ -315,14 +346,6 @@ export function ExtensionHeroBackdrop({ signInHref, ctaHref, ctaLabel }: Extensi
             </div>
           </div>
         </div>
-
-        <footer
-          className="flex items-end justify-between gap-8 text-[12px] uppercase tracking-[0.09em]"
-          style={{ color: "rgba(239,236,230,0.38)" }}
-        >
-          <span>Scroll</span>
-          <span>Works alongside your PandaWorld plan</span>
-        </footer>
       </div>
     </section>
   );

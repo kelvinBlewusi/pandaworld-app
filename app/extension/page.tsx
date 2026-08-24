@@ -128,18 +128,20 @@ export default async function ExtensionPage() {
   // Signed-in visitors skip straight to the real key-generation screen;
   // logged-out visitors sign up first (the dashboard requires an account).
   const ctaHref  = userId ? DASHBOARD_REDIRECT : `/sign-up?redirect_url=${DASHBOARD_REDIRECT}`;
-  const ctaLabel = userId ? "Open your extension dashboard" : "Get your API key";
+  const ctaLabel = userId ? "Open your extension dashboard" : "Get Started";
 
   return (
     <div className="min-h-screen bg-white text-zinc-900">
       {/* Hero — dark, canvas-animated backdrop (components/marketing/extension-hero-backdrop.tsx).
-          Carries its own nav (logo, Pricing, Sign in) since it's visually a
-          different world from the light sections below — no separate
-          MarketingNav on this page. That means Pricing/Sign in aren't
-          persistently reachable while scrolled past the hero; the final CTA
-          section and MarketingFooter below still offer a way through. */}
+          Carries its own nav (logo, Pricing, Sign in, Get Started) since
+          it's visually a different world from the light sections below —
+          no separate MarketingNav on this page. That means Pricing/Sign in
+          aren't persistently reachable while scrolled past the hero; the
+          final CTA section and MarketingFooter below still offer a way
+          through. */}
       <ExtensionHeroBackdrop
         signInHref={`/sign-in?redirect_url=${DASHBOARD_REDIRECT}`}
+        signUpHref={`/sign-up?redirect_url=${DASHBOARD_REDIRECT}`}
         ctaHref={ctaHref}
         ctaLabel={ctaLabel}
       />

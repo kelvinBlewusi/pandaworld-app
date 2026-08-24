@@ -28,6 +28,15 @@ interface WordmarkProps {
   size?: number;
   /** Override the text colour. Defaults to brand black #111. */
   color?: string;
+  /**
+   * Override the panda icon's ears/eyes/nose/outline colour. Defaults to
+   * `color` (the historical behaviour). The icon's head is a HARDCODED
+   * white fill, so on a dark page passing `color` alone as a light value
+   * (e.g. cream, for the letters) makes the ears/eyes nearly invisible —
+   * light-on-white. Pass a dark `iconColor` (e.g. near-black) separately
+   * in that case so the face detail still contrasts against the white head.
+   */
+  iconColor?: string;
   /** Optional extra classes for layout (margin, alignment). */
   className?: string;
 }
@@ -35,6 +44,7 @@ interface WordmarkProps {
 export function Wordmark({
   size      = 28,
   color     = "#111111",
+  iconColor,
   className = "",
 }: WordmarkProps) {
   // Letter font-size mirrors the SVG height so the panda-o sits at
@@ -60,7 +70,7 @@ export function Wordmark({
       <span style={letterStyle}>d</span>
       <span style={letterStyle}>a</span>
       <span style={letterStyle}>w</span>
-      <PandaO size={size} color={color} />
+      <PandaO size={size} color={iconColor ?? color} />
       <span style={letterStyle}>r</span>
       <span style={letterStyle}>l</span>
       <span style={letterStyle}>d</span>
