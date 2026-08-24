@@ -10,6 +10,7 @@
 
 import { createServerClient } from "@/lib/supabase/server";
 import { FREE_SIGNUP_CREDITS } from "@/lib/billing/credit-packs";
+import { isAdmin } from "@/lib/auth/is-admin";
 
 /**
  * Reads the user's credit balance, provisioning the free sign-up grant the
@@ -17,8 +18,16 @@ import { FREE_SIGNUP_CREDITS } from "@/lib/billing/credit-packs";
  * user.created webhook — whichever happens first). The insert is guarded
  * by the table's primary key, so a race between two of those doesn't
  * double-grant: the loser's insert fails and we just re-read the winner's row.
+ *
+ * Admins (ADMIN_USER_IDS — same gate lib/billing/quota.ts uses for
+ * unlimited plan quota) get Infinity, never touching the ledger — safe to
+ * use directly in arithmetic (`balance < amount` is always false); routes
+ * that serialize this to JSON must guard it first, since JSON.stringify
+ * turns Infinity into null.
  */
 export async function getOrCreateCreditBalance(userId: string): Promise<number> {
+  if (isAdmin(userId)) return Infinity;
+
   const db = createServerClient();
   const { data: existing } = await db
     .from("extension_credits")
@@ -57,6 +66,8 @@ export async function deductCredits(
   amount: number,
   description: string,
 ): Promise<{ ok: true; balance: number } | { ok: false; error: string; balance: number }> {
+  if (isAdmin(userId)) return { ok: true, balance: Infinity };
+
   const db = createServerClient();
   const balance = await getOrCreateCreditBalance(userId);
   if (balance < amount) {

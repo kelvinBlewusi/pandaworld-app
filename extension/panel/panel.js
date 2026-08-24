@@ -58,25 +58,9 @@ function renderWarnings(warnings) {
   }
 }
 const escapeHtml = (s) => (s || "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-function renderDiag(diagnostics) {
-  const wrap = document.getElementById("diagWrap");
-  const box = $("diag");
-  if (!diagnostics || !diagnostics.length) {
-    wrap.hidden = true;
-    return;
-  }
-  box.innerHTML = "";
-  for (const d of diagnostics) {
-    const p = document.createElement("div");
-    p.className = "diagline";
-    p.textContent = d;
-    box.appendChild(p);
-  }
-  wrap.hidden = false;
-}
 
-function setCreditsText(credits) {
-  $("creditsText").textContent = credits == null ? "— credits" : `${credits} credits`;
+function setCreditsText(credits, unlimited) {
+  $("creditsText").textContent = unlimited ? "∞ credits" : credits == null ? "— credits" : `${credits} credits`;
 }
 function setPlanText(plan) {
   // Matches the reference's compact pill — just the plan name, no "Plan:" prefix.
@@ -112,13 +96,19 @@ function hideMainForm() {
 async function refreshAccount(apiKey) {
   const resp = await chrome.runtime.sendMessage({ type: "ACCOUNT", apiBase, apiKey });
   if (!resp?.ok) {
-    // Key is invalid/revoked — drop it and go back to the connect screen.
-    await chrome.storage.local.remove("apiKey");
-    showConnectScreen(resp?.error || "Your key is no longer valid — reconnect.");
+    // Only a genuine 401 (invalid/revoked key) should disconnect the seller —
+    // a network blip or a server hiccup (status 0 or 5xx) shouldn't wipe
+    // their saved key and boot them back to the connect screen.
+    if (resp?.status === 401) {
+      await chrome.storage.local.remove("apiKey");
+      showConnectScreen(resp?.error || "Your key is no longer valid — reconnect.");
+    } else {
+      $("creditsText").textContent = "couldn't load";
+    }
     return false;
   }
   setPlanText(resp.data.plan);
-  setCreditsText(resp.data.credits);
+  setCreditsText(resp.data.credits, resp.data.unlimitedCredits);
   return true;
 }
 
@@ -237,12 +227,15 @@ $("autofill").addEventListener("click", async () => {
       setStatus("Could not read the page. Reload the Jumia tab and try again.", "err");
       return;
     }
-    renderDiag(harvest.diagnostics); // always show what we saw
     if (!harvest.fields.length) {
       setStatus("No fields found — did you pick a category to open the form?", "err");
       return;
     }
-    setStatus(`Found ${harvest.fields.length} fields${harvest.image ? " + image" : " (no image detected)"}. Asking AI…`);
+    if (!harvest.image && !harvest.imageUrl) {
+      setStatus("No product photo detected — upload one on Jumia, then try again.", "err");
+      return;
+    }
+    setStatus(`Found ${harvest.fields.length} fields. Asking AI…`);
 
     // Writing style + refund policy ride along as extra freeform context,
     // same as the notes box — the AI fill pass already reads notes as
@@ -267,25 +260,23 @@ $("autofill").addEventListener("click", async () => {
       },
     });
     if (!fill?.ok) {
-      setStatus(`AI request failed: ${fill?.error || "unknown error"}`, "err");
+      setStatus(fill?.error || "Something went wrong — please try again.", "err");
       return;
     }
 
     setStatus("Filling the form…");
     const apply = await sendToTab(tab.id, { type: "APPLY", values: fill.data.values });
     renderResults(apply?.results);
-    renderWarnings([
-      ...(fill.data.mock
-        ? ["Mock fill this run — the note below says why (usually: no product photo uploaded, or AI creds missing on the server)."]
-        : []),
-      ...(fill.data.warnings || []),
-    ]);
+    renderWarnings(fill.data.warnings || []);
 
     const okCount = (apply?.results || []).filter((r) => r.ok).length;
-    if (fill.data.creditsRemaining != null) setCreditsText(fill.data.creditsRemaining);
+    if (fill.data.creditsRemaining != null || fill.data.unlimitedCredits) {
+      setCreditsText(fill.data.creditsRemaining, fill.data.unlimitedCredits);
+    }
     setStatus(`Filled ${okCount}/${Object.keys(fill.data.values).length} fields. Review, then submit on Jumia.`, "ok");
   } catch (e) {
-    setStatus(`Error: ${e.message}`, "err");
+    console.error("[PandaWorld] autofill failed:", e);
+    setStatus("Something went wrong — please try again.", "err");
   } finally {
     btn.disabled = false;
   }

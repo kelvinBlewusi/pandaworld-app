@@ -34,7 +34,8 @@ export interface FillRequest {
 export interface FillResponse {
   values:           Record<string, string>;  // keyed by field label
   warnings:         string[];
-  creditsRemaining: number | null;           // null in POC (auth stubbed)
+  creditsRemaining: number | null;           // null when unlimitedCredits, or unknown
+  unlimitedCredits?: boolean;                 // true for admin accounts — see lib/billing/extension-credits.ts
   mock:             boolean;                  // true when values came from the mock generator
 }
 
