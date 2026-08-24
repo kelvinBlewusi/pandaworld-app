@@ -204,6 +204,14 @@
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  // Mirrors lib/extension/fill.ts's SELLER_OWNED — the seller sets these
+  // themselves and the AI never touches them, so harvest has no reason to
+  // open them either. Category matters most here: its "dropdown" is actually
+  // Jumia's full category-browser MODAL, not a small attribute overlay —
+  // opening it mid-harvest was popping that whole modal up unprompted.
+  const SELLER_OWNED = ["category", "price", "stock"];
+  const isSellerOwnedLabel = (label) => SELLER_OWNED.some((k) => label.toLowerCase().includes(k));
+
   /**
    * Is this element a custom dropdown widget (as opposed to a plain text
    * input)? Jumia's category attribute pickers — Color family, Material
@@ -288,12 +296,23 @@
     el.click();
   }
 
-  /** Close any open overlay so the next field is reachable. */
-  function closeDropdown(el) {
+  /**
+   * Close any open overlay so the next field is reachable — and actually
+   * WAIT for it to be gone (poll, don't just fire-and-hope) before
+   * returning. A fixed sleep here let the next field's openDropdown() run
+   * while the previous overlay's close transition was still in flight,
+   * which is exactly what stacked multiple dropdowns open on screen at once
+   * during a single harvest pass.
+   */
+  async function closeDropdown(el) {
     el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
     document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     document.body.click();
     el.blur();
+    for (let attempt = 0; attempt < 6; attempt++) {
+      if (!collectOptionEls().length) return;
+      await sleep(80);
+    }
   }
 
   /**
@@ -303,10 +322,14 @@
    * appears, close it again. This lets the AI (and finalizeAiValues' snap-
    * to-option check) work with Jumia's real choices instead of guessing free
    * text that then has nothing to click during APPLY.
+   *
+   * Skips seller-owned fields entirely (see SELLER_OWNED above) — they're
+   * never AI-filled, so there's no reason to open them, and Category's
+   * "dropdown" is actually Jumia's full category-browser modal.
    */
   async function enrichComboboxOptions(fields) {
     for (const f of fields) {
-      if (f.type !== "combobox") continue;
+      if (f.type !== "combobox" || isSellerOwnedLabel(f.label)) continue;
       try {
         openDropdown(f.el);
         await sleep(180);
@@ -317,8 +340,7 @@
       } catch {
         /* best effort — leave options undefined, AI falls back to free text */
       } finally {
-        closeDropdown(f.el);
-        await sleep(60);
+        await closeDropdown(f.el);
       }
     }
   }
@@ -587,12 +609,12 @@
           try { box.click(); } catch { /* ignore */ }
         }
         await sleep(90);
-        closeDropdown(el);
+        await closeDropdown(el);
         return true;
       }
     }
 
-    closeDropdown(el);
+    await closeDropdown(el);
     return false;
   }
 

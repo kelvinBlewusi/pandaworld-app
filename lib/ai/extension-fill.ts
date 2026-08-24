@@ -47,8 +47,9 @@ function isNotesOnlyField(label: string): boolean {
 }
 
 /** Per-field guidance appended to the prompt for common labels. */
-function hintFor(label: string): string {
-  const l = norm(label);
+function hintFor(f: HarvestedField): string {
+  const l = norm(f.label);
+  const constrained = Boolean(f.options?.length); // a select/combobox with a fixed choice list
   if (l.includes("name") && !l.includes("brand")) {
     return " — concise product title (type + key specs). OMIT the brand name; Jumia rejects titles containing the brand.";
   }
@@ -64,8 +65,18 @@ function hintFor(label: string): string {
   if (l.includes("sale") && (l.includes("start") || l.includes("end"))) {
     return " — ONLY if the seller's notes explicitly give this date; otherwise omit entirely.";
   }
-  if (l.includes("warranty") && l.includes("address")) return " — a warranty address, or \"N/A\".";
-  if (l.includes("warranty")) return " — warranty terms, or \"N/A\".";
+  // "N/A" is a fine free-text answer but isn't a real choice in a constrained
+  // dropdown (e.g. Warranty Duration's own options are things like "1 Year",
+  // "2 Years" — never "N/A") — forcing it there just produces a value that
+  // gets rejected as invalid and left blank with a confusing warning.
+  if (l.includes("warranty") && l.includes("address")) {
+    return constrained ? " — pick the option matching the seller's notes, or omit if none fit." : " — a warranty address, or \"N/A\".";
+  }
+  if (l.includes("warranty")) {
+    return constrained
+      ? " — pick the option matching the seller's notes, or omit entirely if warranty info isn't given (do NOT force a value)."
+      : " — warranty terms, or \"N/A\".";
+  }
   if (l.includes("color") || l.includes("colour")) return " — the product's visible colour.";
   if (l.includes("variation")) return " — the specific variant identifier for this listing (e.g. colour + material/size, like \"Brown Leather\" or \"Red - Large\"), your best read from the image. If the seller's notes explicitly state the variation, use that instead — it always overrides your own guess.";
   return " — infer from the image; keep it short and accurate, or omit if unknown.";
@@ -73,7 +84,7 @@ function hintFor(label: string): string {
 
 function fieldLine(f: HarvestedField): string {
   const opts = f.options?.length ? `; choose ONE of: ${f.options.slice(0, 40).join(" | ")}` : "";
-  return `- "${f.label}" [${f.type}${opts}]${hintFor(f.label)}`;
+  return `- "${f.label}" [${f.type}${opts}]${hintFor(f)}`;
 }
 
 function parseJsonObject(text: string): Record<string, unknown> {
