@@ -33,7 +33,7 @@
       return true;
     }
     if (msg?.type === "APPLY") {
-      applyValues(msg.values || {}).then(sendResponse);
+      applyValues(msg.values || {}, { overwrite: !!msg.overwrite }).then(sendResponse);
       return true;
     }
     return false;
@@ -93,7 +93,7 @@
       const got = await harvestImage();
       image = got.dataUrl;
       imageUrl = got.httpUrl;
-      diagnostics.push(got.dataUrl ? `Image harvested via ${got.source}` : "No image found — use the fallback drop zone");
+      diagnostics.push(got.dataUrl || got.httpUrl ? `Image harvested via ${got.source}` : "No image found — use the fallback drop zone");
     } catch (e) {
       diagnostics.push(`Image harvest error: ${e.message}`);
     }
@@ -102,17 +102,24 @@
     return { ok: true, image, imageUrl, fields, diagnostics };
   }
 
+  // Matches Jumia's Edit-Product URL (…/products/edit/<id>) — the only place
+  // the CDN-photo fallback below runs. On Add-Products a plain https:// <img>
+  // is far more likely to be Jumia's own chrome (logo, nav icons) than a real
+  // product photo, so that fallback only makes sense once we know we're on
+  // an existing listing.
+  const EDIT_PAGE_RE = /\/products\/edit\//i;
+
   async function harvestImage() {
     if (lastFile) {
       return { dataUrl: await fileToDataUrl(lastFile), httpUrl: null, source: "file input" };
     }
-    // Fallback: read a freshly-uploaded preview. Restrict to blob:/data: URLs
+    // Fallback 1: a freshly-uploaded preview. Restrict to blob:/data: URLs
     // (what an upload preview uses) so we never grab Jumia's logo or a CDN icon.
-    const imgs = [...document.querySelectorAll("img")].filter((img) => {
+    const preview = [...document.querySelectorAll("img")].filter((img) => {
       const src = img.currentSrc || img.src || "";
       return /^blob:|^data:/i.test(src) && (img.naturalWidth || 0) > 120;
     });
-    for (const img of imgs) {
+    for (const img of preview) {
       const src = img.currentSrc || img.src;
       try {
         return { dataUrl: await urlToDataUrl(src), httpUrl: /^https?:/.test(src) ? src : null, source: "preview img" };
@@ -120,6 +127,30 @@
         /* try next */
       }
     }
+
+    // Fallback 2: an Edit-Product page's already-uploaded photo. There's no
+    // blob:/data: preview here — it's already hosted on Jumia's own image
+    // CDN as a normal https:// <img src>, on a different origin than ours,
+    // so fetching it from here would hit that origin's CORS policy. We don't
+    // need to: the fill route already knows how to fetch a plain imageUrl
+    // server-side (no browser CORS involved there), so just hand back the
+    // URL and skip the local fetch entirely. Scoped to naturalWidth > 120 and
+    // outside nav/header/footer/aside so we don't pick up Jumia's own logo.
+    if (EDIT_PAGE_RE.test(location.pathname)) {
+      const existing = [...document.querySelectorAll("img")].find((img) => {
+        const src = img.currentSrc || img.src || "";
+        return (
+          /^https?:/i.test(src) &&
+          (img.naturalWidth || 0) > 120 &&
+          !img.closest("nav, header, footer, aside")
+        );
+      });
+      if (existing) {
+        const src = existing.currentSrc || existing.src;
+        return { dataUrl: null, httpUrl: src, source: "existing product photo" };
+      }
+    }
+
     return { dataUrl: null, httpUrl: null, source: "none" };
   }
 
@@ -130,7 +161,10 @@
     const out = [];
     const seen = new Set();
     const nodes = document.querySelectorAll(
-      'input, textarea, select, [contenteditable="true"], .ProseMirror',
+      // The last two catch dropdown triggers built as a <div>/<button> rather
+      // than an <input> — Jumia's attribute pickers open an overlay from one
+      // of these when they aren't a plain text field.
+      'input, textarea, select, [contenteditable="true"], .ProseMirror, [role="combobox"], [role="listbox"]',
     );
 
     nodes.forEach((el) => {
@@ -151,7 +185,7 @@
       if (el.classList.contains("ProseMirror") || el.getAttribute("contenteditable") === "true") type = "richtext";
       else if (tag === "select") type = "select";
       else if (tag === "textarea") type = "textarea";
-      else if (el.getAttribute("role") === "combobox" || el.getAttribute("aria-autocomplete")) type = "combobox";
+      else if (isComboboxEl(el)) type = "combobox";
       else type = "text";
 
       const required =
@@ -168,19 +202,99 @@
     return out;
   }
 
-  // Overlay-portaled option list for a combobox/autocomplete-style dropdown —
-  // covers the common ARIA + Angular Material patterns Jumia's category
-  // attribute pickers (e.g. Color family) are most likely built on. Shared
-  // between harvest-time option scraping and APPLY-time option clicking.
-  const OPTION_SEL = [
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  /**
+   * Is this element a custom dropdown widget (as opposed to a plain text
+   * input)? Jumia's category attribute pickers — Color family, Material
+   * family, Production country, Warranty Duration, etc. — are NOT native
+   * <select>s: they're a text-styled trigger that opens an overlay of
+   * checkbox rows. They don't all carry role="combobox", so we also treat
+   * the usual popup ARIA hints, and a readonly input (you can't type into
+   * these — you can only pick), as combobox triggers.
+   */
+  function isComboboxEl(el) {
+    const role = el.getAttribute("role");
+    if (role === "combobox" || role === "listbox") return true;
+    if (el.getAttribute("aria-autocomplete")) return true;
+    if (el.hasAttribute("aria-haspopup")) return true;
+    if (el.hasAttribute("aria-expanded")) return true;
+    if (el.tagName === "INPUT" && el.readOnly) return true;
+    return false;
+  }
+
+  /**
+   * The rendered, clickable option rows of whatever dropdown is currently
+   * open. Jumia's attribute dropdowns render each choice as a CHECKBOX ROW
+   * (a <label>/<li>/<div> wrapping an <input type=checkbox> + its text) in an
+   * overlay — not the role="option"/mat-option pattern — so we match both.
+   * Restricted to visible elements so we only ever see the one open overlay,
+   * never every checkbox on the page.
+   */
+  const ARIA_OPTION_SEL = [
     '[role="option"]',
+    '[role="menuitemcheckbox"]',
+    '[role="menuitem"]',
     '[role="listbox"] li',
+    '[role="menu"] li',
     'mat-option',
     '.cdk-overlay-container [role="option"]',
     '.cdk-overlay-container li',
   ].join(",");
 
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  function collectOptionEls() {
+    const set = new Set();
+    document.querySelectorAll(ARIA_OPTION_SEL).forEach((o) => set.add(o));
+    // Checkbox/radio-row pattern: the row (label/li/div) that wraps the input.
+    document.querySelectorAll('label, li, [role="menuitemcheckbox"]').forEach((row) => {
+      if (row.querySelector('input[type="checkbox"], input[type="radio"]')) set.add(row);
+    });
+    return [...set].filter(isVisible);
+  }
+
+  const optText = (o) => (o.innerText || o.textContent || "").trim().toLowerCase();
+
+  /** The open-overlay option row matching `target` (exact text, then contains). */
+  function matchOption(target) {
+    const els = collectOptionEls();
+    return (
+      els.find((o) => optText(o) === target) ||
+      els.find((o) => {
+        const t = optText(o);
+        return t && (t.includes(target) || target.includes(t));
+      }) ||
+      null
+    );
+  }
+
+  /** Type into a search box inside the open overlay, if one exists (long lists). */
+  function filterOpenOverlay(value) {
+    const box = document.querySelector(
+      '.cdk-overlay-container input:not([type="checkbox"]):not([type="radio"]), ' +
+        '[role="listbox"] input, [role="dialog"] input, [role="menu"] input',
+    );
+    if (box && isVisible(box)) {
+      try { writeInput(box, value); } catch { /* ignore */ }
+      return true;
+    }
+    return false;
+  }
+
+  /** Open a dropdown trigger the way a real user click would. */
+  function openDropdown(el) {
+    el.focus();
+    el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    el.click();
+  }
+
+  /** Close any open overlay so the next field is reachable. */
+  function closeDropdown(el) {
+    el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
+    document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    document.body.click();
+    el.blur();
+  }
 
   /**
    * A combobox's option list renders lazily in an overlay only once it's
@@ -194,22 +308,17 @@
     for (const f of fields) {
       if (f.type !== "combobox") continue;
       try {
-        f.el.focus();
-        f.el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-        f.el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-        f.el.click();
-        await sleep(150);
-        const texts = [...document.querySelectorAll(OPTION_SEL)]
-          .filter(isVisible)
+        openDropdown(f.el);
+        await sleep(180);
+        const texts = collectOptionEls()
           .map((o) => (o.innerText || o.textContent || "").trim())
           .filter(Boolean);
-        if (texts.length) f.options = [...new Set(texts)].slice(0, 60);
+        if (texts.length) f.options = [...new Set(texts)].slice(0, 80);
       } catch {
         /* best effort — leave options undefined, AI falls back to free text */
       } finally {
-        f.el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
-        f.el.blur();
-        await sleep(50);
+        closeDropdown(f.el);
+        await sleep(60);
       }
     }
   }
@@ -368,7 +477,21 @@
 
   // ── Apply values ─────────────────────────────────────────────────────────
 
-  async function applyValues(values) {
+  /** True if the field already carries a value on the page. */
+  function fieldHasValue(field) {
+    const { el, type } = field;
+    if (type === "richtext") return !isEditorEmpty(el);
+    return !!(el.value && el.value.trim());
+  }
+
+  /**
+   * `overwrite` defaults to false: on an already-listed product (Edit page)
+   * every field may already hold real, possibly hand-tuned seller content,
+   * so the default is "complete what's missing," not "rewrite what's
+   * there." On a fresh Add-Products form every field starts empty anyway,
+   * so this is a no-op there — nothing to skip.
+   */
+  async function applyValues(values, { overwrite = false } = {}) {
     const fields = findFields();
     const byLabel = new Map(fields.map((f) => [f.label.toLowerCase(), f]));
     const results = [];
@@ -377,6 +500,10 @@
       const f = byLabel.get(label.toLowerCase());
       if (!f) {
         results.push({ label, ok: false, reason: "field not found on page" });
+        continue;
+      }
+      if (!overwrite && fieldHasValue(f)) {
+        results.push({ label, ok: false, skipped: true, reason: "already has a value — left as-is" });
         continue;
       }
       try {
@@ -420,60 +547,52 @@
   }
 
   /**
-   * Write into a click-driven combobox (role="combobox" / aria-autocomplete)
-   * — Jumia's category-specific attribute pickers (e.g. Color family) use
-   * this pattern, most likely an Angular Material-style autocomplete whose
-   * option list is a CDK overlay portaled onto <body>, not nested under the
-   * input. Just setting .value like a text input doesn't register a
-   * selection with the framework, so this: types into the input to open/
-   * filter the option list, waits for it to render, then dispatches a real
-   * click on the matching option (framework listens for that, not the
-   * input's value).
-   *
-   * Best-effort — built without a live DOM to test against, so the overlay
-   * selectors below cover the common ARIA/Angular Material patterns. If a
-   * given combobox doesn't match, this reports failure via its `results[]`
-   * entry rather than silently doing nothing, so it's visible in the panel
-   * for the seller to fill by hand.
+   * Write into a custom dropdown — Jumia's category attribute pickers (Color
+   * family, Material family, Production country, Warranty Duration, …). These
+   * are NOT native <select>s: clicking the trigger opens an overlay whose
+   * choices are CHECKBOX ROWS (a label/li/div wrapping an <input
+   * type=checkbox> + text). Setting .value on the trigger does nothing — the
+   * framework only registers a selection when the row (or its checkbox) is
+   * actually clicked. So: open the overlay, optionally type into an in-overlay
+   * search box to narrow a long list, find the row whose text matches, and
+   * click it (plus its checkbox as a fallback).
    */
   async function writeCombobox(el, value) {
-    // Some dropdowns only render their option list on click, before typed
-    // filtering does anything — open it the same way enrichComboboxOptions
-    // did at harvest time, then type to filter down to the target.
-    el.focus();
-    el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-    el.click();
-    await sleep(120);
-    writeInput(el, value); // types the target text to open/filter the list
+    const target = value.trim().toLowerCase();
+    openDropdown(el);
+    await sleep(160);
+
+    // If the trigger itself is a typeable input, or the overlay has a search
+    // box, type the target so a long list (e.g. Country) filters down to it.
+    if (el.tagName === "INPUT" && !el.readOnly) {
+      try { writeInput(el, value); } catch { /* ignore */ }
+    }
+    filterOpenOverlay(value);
     el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
 
-    const target = value.trim().toLowerCase();
-
-    // Poll briefly — the overlay renders asynchronously after the input event.
-    for (let attempt = 0; attempt < 8; attempt++) {
-      await sleep(120);
-      const candidates = [...document.querySelectorAll(OPTION_SEL)].filter(isVisible);
-      if (!candidates.length) continue;
-
-      let match =
-        candidates.find((o) => (o.innerText || o.textContent || "").trim().toLowerCase() === target) ||
-        candidates.find((o) => {
-          const t = (o.innerText || o.textContent || "").trim().toLowerCase();
-          return t && (t.includes(target) || target.includes(t));
-        });
-
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await sleep(130);
+      const match = matchOption(target);
       if (match) {
         match.scrollIntoView({ block: "nearest" });
+        const box = match.matches('input[type="checkbox"], input[type="radio"]')
+          ? match
+          : match.querySelector('input[type="checkbox"], input[type="radio"]');
+        // Click the row (toggles its checkbox), then the checkbox itself if it
+        // still didn't take — different widgets listen on one or the other.
         match.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
         match.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
         match.click();
-        await sleep(80);
+        if (box && !box.checked) {
+          try { box.click(); } catch { /* ignore */ }
+        }
+        await sleep(90);
+        closeDropdown(el);
         return true;
       }
     }
 
-    el.blur(); // close whatever overlay may still be open
+    closeDropdown(el);
     return false;
   }
 

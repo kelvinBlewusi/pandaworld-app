@@ -84,6 +84,11 @@
         </label>
       </details>
 
+      <label class="checkRow">
+        <input type="checkbox" id="overwriteExisting" />
+        <span>Overwrite existing content <em>(off = only fills empty fields — safe for an already-listed product)</em></span>
+      </label>
+
       <button id="autofill" class="primary big">✨ Autofill this listing</button>
 
       <div id="status" class="status" aria-live="polite"></div>
@@ -98,6 +103,9 @@
       <span class="sep">•</span>
       <a href="#" id="footerLogout">Logout</a>
     </footer>
+
+    <!-- Toast — transient confirmation banner (e.g. after a successful connect). -->
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
     <script src="panel.js"></script>
   </body>
