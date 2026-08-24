@@ -45,6 +45,7 @@
     const diagnostics = [];
     const rawFields = findFields();
     await enrichComboboxOptions(rawFields);
+    await closeAnyLingeringOverlay();
     const fields = rawFields.map((f) => ({
       label: f.label,
       type: f.type,
@@ -168,6 +169,14 @@
     );
 
     nodes.forEach((el) => {
+      // The [role="combobox"]/[role="listbox"] additions above match ANY
+      // such widget on the page, not just the product form — including
+      // Jumia's own site-wide chrome (e.g. its language switcher near the
+      // WhatsApp contact button), which was getting swept in and opened
+      // during harvest as if it were a real form field. Real product fields
+      // are never inside these regions, so this costs nothing to exclude.
+      if (el.closest("nav, header, footer, aside")) return;
+
       const tag = el.tagName.toLowerCase();
       if (tag === "input") {
         const t = (el.type || "text").toLowerCase();
@@ -296,22 +305,55 @@
     el.click();
   }
 
+  // The semi-transparent backdrop a framework's overlay system inserts to
+  // catch "click outside to close" — Angular Material's CDK is the pattern
+  // Jumia's checkbox-row dropdowns match. It is NOT a descendant of <body>,
+  // so a synthetic click dispatched at body never reaches a listener bound
+  // directly to the backdrop element itself — the overlay just silently
+  // never closes. That's the real cause behind three symptoms at once:
+  // dropdowns kept stacking open, options never got checked (matchOption()
+  // was hitting the wrong still-open overlay), and the page stayed frozen
+  // after a fill — an invisible, click-swallowing backdrop was still there
+  // until the seller happened to click directly on it.
+  const BACKDROP_SEL = '.cdk-overlay-backdrop, [class*="backdrop"], [class*="overlay-backdrop"]';
+  const visibleBackdrops = () => [...document.querySelectorAll(BACKDROP_SEL)].filter(isVisible);
+
   /**
    * Close any open overlay so the next field is reachable — and actually
    * WAIT for it to be gone (poll, don't just fire-and-hope) before
-   * returning. A fixed sleep here let the next field's openDropdown() run
-   * while the previous overlay's close transition was still in flight,
-   * which is exactly what stacked multiple dropdowns open on screen at once
-   * during a single harvest pass.
+   * returning. Clicks the real backdrop element directly (see above), with
+   * Escape + a body click as a fallback for anything that isn't CDK-based.
    */
   async function closeDropdown(el) {
     el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
+    await sleep(40);
+    for (const bd of visibleBackdrops()) {
+      bd.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      bd.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      bd.click();
+    }
     document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     document.body.click();
     el.blur();
-    for (let attempt = 0; attempt < 6; attempt++) {
-      if (!collectOptionEls().length) return;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      if (!collectOptionEls().length && !visibleBackdrops().length) return;
       await sleep(80);
+    }
+  }
+
+  /**
+   * Last-resort sweep, run once at the very end of a whole harvest or apply
+   * pass regardless of how each individual closeDropdown() call went — so a
+   * per-field close that silently failed can never leave the real page
+   * frozen behind a leftover backdrop after we're done.
+   */
+  async function closeAnyLingeringOverlay() {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const backdrops = visibleBackdrops();
+      if (!backdrops.length && !collectOptionEls().length) return;
+      document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
+      backdrops.forEach((bd) => bd.click());
+      await sleep(100);
     }
   }
 
@@ -535,6 +577,7 @@
         results.push({ label, ok: false, reason: e.message });
       }
     }
+    await closeAnyLingeringOverlay();
     console.debug(LOG, "apply results:", results);
     return { ok: true, results };
   }
