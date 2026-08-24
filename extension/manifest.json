@@ -1,15 +1,29 @@
 {
   "manifest_version": 3,
   "name": "PandaWorldAI - AI Jumia Listing Assistant",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "AI autofill for Jumia Vendor Center product listings — upload a photo, pick a category, and PandaWorld fills the form for you.",
   "permissions": ["sidePanel", "storage", "tabs"],
   "host_permissions": [
     "https://vendorcenter.jumia.com/*",
     "https://pandaworldai.site/*"
   ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "background": { "service_worker": "background/worker.js" },
-  "action": { "default_title": "PandaWorld Autofill" },
+  "action": {
+    "default_title": "PandaWorld Autofill",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
   "side_panel": { "default_path": "panel/panel.html" },
   "content_scripts": [
     {
