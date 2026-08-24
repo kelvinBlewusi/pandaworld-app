@@ -4,51 +4,85 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="stylesheet" href="panel.css" />
-    <title>PandaWorld Autofill</title>
+    <title>PandaWorldAI - AI Jumia Listing Assistant</title>
   </head>
   <body>
-    <header>
-      <div class="brand">🐼 PandaWorld</div>
-      <div class="sub">Jumia Vendor Center autofill</div>
-    </header>
-
     <!-- Connected status row — Plan · Credits · disconnect. Shown once an
-         API key is saved (replaces the connect banner below). -->
+         API key is saved (replaces the connect screen below). -->
     <div class="statusRow" id="statusRow" hidden>
-      <span class="pill plan" id="planPill">Plan: —</span>
+      <span class="pill plan" id="planPill">FREE</span>
       <span class="pill credits" id="creditsPill"><span class="dot"></span><span id="creditsText">— credits</span></span>
       <button id="logoutBtn" class="iconBtn" title="Disconnect" aria-label="Disconnect">⏻</button>
     </div>
 
-    <!-- Connect banner — shown until an API key is saved. -->
-    <div class="banner" id="connectBanner">
-      <div class="bannerIcon">🔑</div>
-      <div class="bannerTitle">Connect your PandaWorld account</div>
-      <div class="bannerBody">Paste the API key from your PandaWorld dashboard to get started.</div>
-      <label class="fld">
-        <span>API key</span>
-        <input id="apiKey" type="password" placeholder="pw_live_…" />
-      </label>
-      <div id="connectError" class="status err" hidden></div>
-      <button id="saveKey" class="primary">Connect</button>
-      <a id="getKeyLink" class="linkline" href="#" target="_blank" rel="noopener">Don&rsquo;t have a key? Get one on your dashboard →</a>
-    </div>
-
-    <!-- Jumia banner — shown when connected but the active tab isn't a
-         Jumia Vendor Center Add-Products page. -->
+    <!-- Jumia banner — shown whenever the active tab isn't Vendor Center,
+         connected or not (matches the reference: it sits above whichever
+         of the connect screen / main form applies). -->
     <div class="banner warn" id="jumiaBanner" hidden>
       <div class="bannerIcon">🛍️</div>
-      <div class="bannerTitle">Open Jumia to use PandaWorld</div>
+      <div class="bannerTitle">Open Jumia to use PandaWorldAI</div>
       <div class="bannerBody">Go to Vendor Center → Add Products → upload a photo &amp; pick a category to open the form.</div>
       <button id="openJumia" class="primary">Open Jumia Vendor Center →</button>
+    </div>
+
+    <!-- Connect screen — shown until an API key is saved. -->
+    <div id="connectScreen" hidden>
+      <div class="centerLogo">
+        <img src="logo.png" alt="" />
+        <span>PandaWorld</span>
+      </div>
+
+      <h1 class="heroTitle">Start for free today</h1>
+      <p class="heroSub">5 free AI-powered listing credits,<br />no credit card required.</p>
+      <div class="heroStats">
+        <span>5 free credits</span>
+        <span class="sep">•</span>
+        <span>SEO optimized</span>
+      </div>
+
+      <button id="tryFree" class="primary big">✨ Try for Free</button>
+
+      <div class="orDivider"><span>or sign in with API key</span></div>
+
+      <label class="fld">
+        <input id="apiKey" type="text" placeholder="Paste your API key here…" />
+      </label>
+      <p class="lockHint">🔒 Encrypted &amp; stored locally on your device. <a id="privacyLink" href="#" target="_blank" rel="noopener">Privacy Policy</a></p>
+
+      <div id="connectError" class="status err" hidden></div>
+      <button id="saveKey" class="primary">Connect to PandaWorldAI</button>
+      <a id="getKeyLink" class="linkline" href="#" target="_blank" rel="noopener">Don&rsquo;t have a key? Get one →</a>
     </div>
 
     <!-- Main form — shown when connected AND on a Jumia Add-Products tab. -->
     <div id="mainForm" hidden>
       <label class="fld">
-        <span>Product details <em>(optional)</em></span>
+        <span>Product features <em>(optional)</em></span>
         <textarea id="notes" rows="3" placeholder="e.g. price 250, water resistant, leather strap"></textarea>
       </label>
+
+      <details class="advanced" id="advancedDetails">
+        <summary>Advanced Options</summary>
+        <label class="fld">
+          <span>Writing style</span>
+          <select id="writingStyle">
+            <option value="SEO Optimized" selected>🎯 SEO Optimized (Recommended)</option>
+            <option value="Storytelling">📖 Storytelling</option>
+            <option value="Friendly & Conversational">😊 Friendly &amp; Conversational</option>
+            <option value="Professional & Clean">💼 Professional &amp; Clean</option>
+            <option value="Fun & Playful">🎉 Fun &amp; Playful</option>
+          </select>
+        </label>
+        <label class="fld">
+          <span>Refund policy</span>
+          <select id="refundPolicy">
+            <option value="">No Refund</option>
+            <option value="7 Days">7 Days</option>
+            <option value="14 Days" selected>14 Days</option>
+            <option value="30 Days">30 Days</option>
+          </select>
+        </label>
+      </details>
 
       <button id="autofill" class="primary big">✨ Autofill this listing</button>
 
@@ -63,11 +97,11 @@
     </div>
 
     <details class="advanced">
-      <summary>Advanced settings</summary>
+      <summary>Developer settings</summary>
       <label class="fld">
         <span>API base URL</span>
         <input id="apiBase" type="text" placeholder="https://pandaworldai.site" />
-        <span class="hint">Only change this for local dev or a Vercel preview deployment.</span>
+        <span class="hint">Only pandaworldai.site and vendorcenter.jumia.com are pre-authorized (manifest.json host_permissions). Pointing this at another origin (localhost, a Vercel preview) needs that origin added there temporarily first, or requests will be blocked.</span>
       </label>
       <button id="saveSettings" class="secondary">Save</button>
     </details>

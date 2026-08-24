@@ -2,8 +2,10 @@
  * Side panel orchestration.
  *
  * States:
- *   1. Not connected (no API key saved) → connect banner.
- *   2. Connected, not on a Jumia Add-Products tab → "open Jumia" banner.
+ *   1. Not connected (no API key saved) → connect screen (Try for Free /
+ *      paste an API key). The "open Jumia" banner sits above it whenever
+ *      the active tab isn't Vendor Center, connected or not.
+ *   2. Connected, not on a Jumia Add-Products tab → just the banner.
  *   3. Connected, on a Jumia tab → the autofill form.
  *
  * Flow on "Autofill":
@@ -77,14 +79,14 @@ function setCreditsText(credits) {
   $("creditsText").textContent = credits == null ? "— credits" : `${credits} credits`;
 }
 function setPlanText(plan) {
-  $("planPill").textContent = `Plan: ${plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : "—"}`;
+  // Matches the reference's compact pill — just the plan name, no "Plan:" prefix.
+  $("planPill").textContent = (plan || "free").toUpperCase();
 }
 
 // ── View state ───────────────────────────────────────────────────────────────
-function showConnectBanner(errorText) {
+function showConnectScreen(errorText) {
   $("statusRow").hidden = true;
-  $("connectBanner").hidden = false;
-  $("jumiaBanner").hidden = true;
+  $("connectScreen").hidden = false;
   $("mainForm").hidden = true;
   const err = $("connectError");
   if (errorText) {
@@ -96,24 +98,23 @@ function showConnectBanner(errorText) {
 }
 function showConnected() {
   $("statusRow").hidden = false;
-  $("connectBanner").hidden = true;
-}
-function showJumiaBanner() {
-  $("jumiaBanner").hidden = false;
-  $("mainForm").hidden = true;
+  $("connectScreen").hidden = true;
 }
 function showMainForm() {
   $("jumiaBanner").hidden = true;
   $("mainForm").hidden = false;
+}
+function hideMainForm() {
+  $("mainForm").hidden = true;
 }
 
 // ── Account status (Plan · Credits) ─────────────────────────────────────────
 async function refreshAccount(apiKey) {
   const resp = await chrome.runtime.sendMessage({ type: "ACCOUNT", apiBase, apiKey });
   if (!resp?.ok) {
-    // Key is invalid/revoked — drop it and go back to the connect banner.
+    // Key is invalid/revoked — drop it and go back to the connect screen.
     await chrome.storage.local.remove("apiKey");
-    showConnectBanner(resp?.error || "Your key is no longer valid — reconnect.");
+    showConnectScreen(resp?.error || "Your key is no longer valid — reconnect.");
     return false;
   }
   setPlanText(resp.data.plan);
@@ -128,42 +129,50 @@ async function activeJumiaTab() {
   const all = await chrome.tabs.query({ currentWindow: true });
   return all.find((t) => JUMIA_HOST_RE.test(t.url || "")) || null;
 }
-async function refreshJumiaState() {
-  const { apiKey } = await chrome.storage.local.get(["apiKey"]);
-  if (!apiKey) return; // not connected — connect banner already showing
+async function refreshView() {
   const tab = await activeJumiaTab();
+  $("jumiaBanner").hidden = !!tab;
+
+  const { apiKey } = await chrome.storage.local.get(["apiKey"]);
+  if (!apiKey) return; // connect screen stays as-is regardless of tab
   if (tab) showMainForm();
-  else showJumiaBanner();
+  else hideMainForm();
 }
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 async function boot() {
   const { apiKey } = await loadSettings();
   $("getKeyLink").href = `${apiBase}/extension/dashboard`;
+  $("privacyLink").href = `${apiBase}/privacy`;
   $("footerDashboard").dataset.href = `${apiBase}/extension/dashboard`;
   $("footerHelp").dataset.href = `${apiBase}/extension#how-it-works`;
 
   if (!apiKey) {
-    showConnectBanner();
-    return;
+    showConnectScreen();
+  } else {
+    showConnected();
+    await refreshAccount(apiKey);
   }
-  showConnected();
-  const ok = await refreshAccount(apiKey);
-  if (ok) await refreshJumiaState();
+  await refreshView();
 }
 boot();
 
 // Keep the banner/form in sync as the seller switches tabs while the panel
 // stays open — MV3 side panels persist per-window, so this is the only way
 // the view updates without the seller manually reopening the panel.
-chrome.tabs.onActivated.addListener(() => refreshJumiaState());
-chrome.tabs.onUpdated.addListener((_id, info) => { if (info.status === "complete") refreshJumiaState(); });
+chrome.tabs.onActivated.addListener(() => refreshView());
+chrome.tabs.onUpdated.addListener((_id, info) => { if (info.status === "complete") refreshView(); });
+
+// ── Try for Free — sends them to our own sign-up flow in a new tab ─────────
+$("tryFree").addEventListener("click", () => {
+  chrome.tabs.create({ url: `${apiBase}/sign-up?redirect_url=/extension/dashboard` });
+});
 
 // ── Connect ──────────────────────────────────────────────────────────────────
 $("saveKey").addEventListener("click", async () => {
   const key = $("apiKey").value.trim();
   if (!key) {
-    showConnectBanner("Paste your API key first.");
+    showConnectScreen("Paste your API key first.");
     return;
   }
   const btn = $("saveKey");
@@ -172,7 +181,7 @@ $("saveKey").addEventListener("click", async () => {
     await chrome.storage.local.set({ apiKey: key });
     showConnected();
     const ok = await refreshAccount(key);
-    if (ok) await refreshJumiaState();
+    if (ok) await refreshView();
   } finally {
     btn.disabled = false;
   }
@@ -182,7 +191,8 @@ $("saveKey").addEventListener("click", async () => {
 async function logout() {
   await chrome.storage.local.remove("apiKey");
   $("apiKey").value = "";
-  showConnectBanner();
+  showConnectScreen();
+  await refreshView();
 }
 $("logoutBtn").addEventListener("click", logout);
 $("footerLogout").addEventListener("click", (e) => { e.preventDefault(); logout(); });
@@ -208,6 +218,7 @@ $("saveSettings").addEventListener("click", async () => {
   await chrome.storage.local.set({ apiBase: newBase });
   apiBase = newBase;
   $("getKeyLink").href = `${apiBase}/extension/dashboard`;
+  $("privacyLink").href = `${apiBase}/privacy`;
   $("footerDashboard").dataset.href = `${apiBase}/extension/dashboard`;
   $("footerHelp").dataset.href = `${apiBase}/extension#how-it-works`;
   const { apiKey } = await chrome.storage.local.get(["apiKey"]);
@@ -223,13 +234,13 @@ $("autofill").addEventListener("click", async () => {
   try {
     const { apiKey } = await chrome.storage.local.get(["apiKey"]);
     if (!apiKey) {
-      showConnectBanner("Add your API key first.");
+      showConnectScreen("Add your API key first.");
       return;
     }
 
     const tab = await activeJumiaTab();
     if (!tab) {
-      showJumiaBanner();
+      await refreshView();
       return;
     }
 
@@ -246,13 +257,23 @@ $("autofill").addEventListener("click", async () => {
     }
     setStatus(`Found ${harvest.fields.length} fields${harvest.image ? " + image" : " (no image detected)"}. Asking AI…`);
 
+    // Writing style + refund policy ride along as extra freeform context,
+    // same as the notes box — the AI fill pass already reads notes as
+    // guidance (lib/ai/extension-fill.ts), no separate backend fields needed.
+    const extraNotes = [];
+    const writingStyle = $("writingStyle").value;
+    if (writingStyle && writingStyle !== "SEO Optimized") extraNotes.push(`Writing style: ${writingStyle}`);
+    const refundPolicy = $("refundPolicy").value;
+    if (refundPolicy) extraNotes.push(`Refund policy: ${refundPolicy}`);
+    const notes = [$("notes").value.trim(), ...extraNotes].filter(Boolean).join(". ");
+
     const fill = await chrome.runtime.sendMessage({
       type: "FILL",
       apiBase,
       apiKey,
       payload: {
         market: "GH",
-        notes: $("notes").value.trim(),
+        notes,
         image: harvest.image || undefined,
         imageUrl: harvest.imageUrl || undefined,
         fields: harvest.fields,
