@@ -28,3 +28,15 @@ export const FREE_SIGNUP_CREDITS = 5;
 
 /** One extension autofill costs this many credits. */
 export const LISTING_CREDIT_COST = 2.5;
+
+/**
+ * Prepares a balance for a JSON API response (app/api/extension/account,
+ * app/api/extension/fill) — `JSON.stringify(Infinity)` silently becomes
+ * `null`, which the extension panel can't tell apart from "unknown". This
+ * makes the unlimited case (admin accounts — see
+ * lib/billing/extension-credits.ts) explicit instead.
+ */
+export function serializeCredits(balance: number): { value: number | null; unlimited: boolean } {
+  if (!Number.isFinite(balance)) return { value: null, unlimited: true };
+  return { value: balance, unlimited: false };
+}

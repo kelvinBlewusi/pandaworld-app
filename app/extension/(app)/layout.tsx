@@ -29,7 +29,7 @@ export default async function ExtensionAppLayout({
     getOrCreateCreditBalance(userId),
   ]);
   const planLabel = quota.plan.charAt(0).toUpperCase() + quota.plan.slice(1);
-  const creditsLabel = String(balance);
+  const creditsLabel = Number.isFinite(balance) ? String(balance) : "∞";
 
   return (
     <ExtensionShell planLabel={planLabel} creditsLabel={creditsLabel}>

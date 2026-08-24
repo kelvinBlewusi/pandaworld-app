@@ -52,7 +52,7 @@ export default async function ExtensionDashboardPage() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCard
           title="Remaining credit"
-          value={balance}
+          value={Number.isFinite(balance) ? balance : "∞"}
           icon={<Gauge className="h-5 w-5" />}
           gradient="green"
         />

@@ -32,6 +32,14 @@ export function aiConfigured(): boolean {
 
 const norm = (s: string) => s.toLowerCase().replace(/\*/g, "").replace(/\s+/g, " ").trim();
 
+/** Fields whose value must come ONLY from the seller's notes, never guessed
+ *  or inferred from the image — see the SELLER-CONTROLLED block in the
+ *  prompt built below. */
+function isNotesOnlyField(label: string): boolean {
+  const l = norm(label);
+  return l.includes("quantity") || l.includes("sku") || (l.includes("sale") && (l.includes("start") || l.includes("end")));
+}
+
 /** Per-field guidance appended to the prompt for common labels. */
 function hintFor(label: string): string {
   const l = norm(label);
@@ -39,11 +47,18 @@ function hintFor(label: string): string {
     return " — concise product title (type + key specs). OMIT the brand name; Jumia rejects titles containing the brand.";
   }
   if (l.includes("brand")) return " — ONLY if a logo/wordmark is clearly visible; otherwise omit.";
-  if (l.includes("description")) return " — 150–400 words, HTML allowed (<p>, <ul>, <li>, <strong>). Marketing tone OK. No prices, no contact info.";
-  if (l.includes("highlight")) return " — at least 4 key features as <ul><li>…</li></ul>.";
-  if (l.includes("box")) return " — contents as <p>1x Item<br>1x Item</p> (Jumia's format).";
+  if (l.includes("description")) {
+    return " — 200–450 words of well-STRUCTURED HTML, not a wall of text: a short opening <p>, then a <ul><li> feature list (bold the key spec at the start of each item with <strong>), a <table> for technical specs when the category has them (dimensions, material, capacity — <table><tr><td>Spec</td><td>Value</td></tr></table>), and italics (<em>) for a closing note. Marketing tone OK. No prices, no contact info.";
+  }
+  if (l.includes("highlight")) return " — at least 4 key features as <ul><li>…</li></ul>; bold (<strong>) the standout word or number in each item.";
+  if (l.includes("box")) return " — one item per line as <p>1x Item<br>1x Item</p> — a real line break between each item, never all on one line (Jumia's format).";
   if (l.includes("manufacturer")) return " — a short manufacturer blurb about the product.";
-  if (l.includes("weight")) return " — a number only, in kg (e.g. 0.2). Omit if unknown.";
+  if (l.includes("weight")) return " — your best estimate in kg (e.g. 0.2) for a product like this, even if you can't be exact from the photo alone — only omit if the category makes weight meaningless.";
+  if (l.includes("quantity")) return " — ONLY if the seller's notes state an exact quantity; otherwise omit (never guess a stock count from the image).";
+  if (l.includes("sku")) return " — ONLY if the seller's notes give one; otherwise a short plausible SKU code (uppercase letters + digits, 6–10 chars).";
+  if (l.includes("sale") && (l.includes("start") || l.includes("end"))) {
+    return " — ONLY if the seller's notes explicitly give this date; otherwise omit entirely.";
+  }
   if (l.includes("warranty") && l.includes("address")) return " — a warranty address, or \"N/A\".";
   if (l.includes("warranty")) return " — warranty terms, or \"N/A\".";
   if (l.includes("color") || l.includes("colour")) return " — the product's visible colour.";
@@ -85,22 +100,28 @@ export async function aiFillRenderedFields(args: {
     ? `\n\nSELLER NOTES (authoritative for anything the image doesn't show):\n"${notes.trim()}"\n`
     : "";
 
+  const notesOnlyFields = fields.filter((f) => isNotesOnlyField(f.label)).map((f) => f.label);
+  const notesOnlyBlock = notesOnlyFields.length
+    ? `\n\nSELLER-CONTROLLED FIELDS — ${notesOnlyFields.map((l) => `"${l}"`).join(", ")}: fill these ONLY if the seller notes above state them explicitly. Never infer or guess these from the photo. No seller notes (or the notes don't mention it) → omit the field.\n`
+    : "";
+
   const prompt = `You are a product-listing assistant for Jumia (market: ${market}). Look at the product image and fill the EXACT form fields listed below so the listing is accurate, SEO-friendly, and passes Jumia QC.
 
 ${policy}
 
 ${restricted}
-${notesBlock}
+${notesBlock}${notesOnlyBlock}
 FIELDS TO FILL (return a value only for the ones you can confidently fill; omit the rest):
 ${fields.map(fieldLine).join("\n")}
 
 RULES:
 - Return ONLY a JSON object mapping each field label EXACTLY as written above (including punctuation and capitalisation) to a string value.
-- Rich-text fields: return HTML. Bulleted fields use <ul><li>…</li></ul>.
+- Rich-text fields: return HTML, well-structured (see each field's own instruction above) — not a single flat paragraph.
 - Fields listing options: return exactly one of the given options, or omit.
 - Numbers: digits only, no units or words.
-- NEVER invent price, stock, quantity, or SKU.
-- Omit any field you cannot fill confidently — do not guess.
+- NEVER invent price or stock.
+- For the seller-controlled fields listed above (if any): only from the seller's notes, never from the photo.
+- Omit any other field you cannot fill confidently — do not guess.
 
 Return ONLY the JSON object, no markdown, no commentary.`;
 

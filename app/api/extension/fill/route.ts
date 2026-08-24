@@ -18,9 +18,12 @@
  *
  * AI: when a Gemini backend is configured (Vertex or AI Studio key) AND an
  * image is supplied, the real vision pass (lib/ai/extension-fill) fills the
- * exact rendered fields — category-specific attributes included. If that's
- * unavailable or fails, we fall back to a deterministic mock so the extension
- * loop never hard-fails (and doesn't spend a credit — see below).
+ * exact rendered fields — category-specific attributes included. For a real
+ * seller we NEVER silently fall back to the deterministic mock generator
+ * (built-Watches, generic copy) — writing placeholder text into someone's
+ * actual Jumia listing is worse than just telling them what's missing and
+ * filling nothing. Mock mode only exists behind EXTENSION_FORCE_MOCK=true,
+ * for our own local/CI testing without needing Gemini creds or a real photo.
  */
 
 import { NextResponse } from "next/server";
@@ -38,7 +41,7 @@ import {
   logExtensionFillEvent,
 } from "@/lib/security/extension-keys";
 import { getOrCreateCreditBalance, deductCredits } from "@/lib/billing/extension-credits";
-import { LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
+import { LISTING_CREDIT_COST, serializeCredits } from "@/lib/billing/credit-packs";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -95,6 +98,19 @@ function applyBrandDefault(
   }
 }
 
+/**
+ * Quantity: the AI only fills this from explicit seller notes (see the
+ * SELLER-CONTROLLED block in lib/ai/extension-fill.ts's prompt) — if it's
+ * still missing after that, give it a plausible random stock count rather
+ * than leaving the field empty for the seller to notice and fix.
+ */
+function applyQuantityDefault(values: Record<string, string>, fields: FillRequest["fields"]) {
+  const qty = fields.find((f) => /quantity/i.test(f.label));
+  if (qty && !values[qty.label]) {
+    values[qty.label] = String(10 + Math.floor(Math.random() * 41)); // 10-50
+  }
+}
+
 export async function POST(req: Request) {
   const authResult = await authenticateExtensionKey(req.headers.get("authorization"));
   if (!authResult.ok) {
@@ -128,69 +144,80 @@ export async function POST(req: Request) {
 
   const market = body.market || "GH";
   const notes = body.notes || "";
-  const warnings: string[] = [];
 
-  const forceMock = process.env.EXTENSION_FORCE_MOCK === "true";
-  const image = forceMock ? null : await resolveImage(body);
-
-  let values: Record<string, string> = {};
-  let mock = true;
-
-  if (!forceMock && aiConfigured() && image) {
-    try {
-      const fillable = body.fields.filter((f) => !isSellerOwned(f.label));
-      const { raw } = await aiFillRenderedFields({
-        imageBase64: image.base64,
-        mimeType: image.mimeType,
-        fields: fillable,
-        notes,
-        market,
-      });
-      const finalized = finalizeAiValues(raw, body.fields, notes);
-      values = finalized.values;
-      warnings.push(...finalized.warnings);
-      applyBrandDefault(values, body.fields, warnings);
-      mock = false;
-    } catch (e) {
-      warnings.push(`AI fill failed (${(e as Error).message}) — used a mock fill instead.`);
-    }
-  } else if (!forceMock && !image) {
-    warnings.push("No product image detected — upload a photo on Jumia first for AI copy. Used a mock fill.");
-  } else if (!forceMock && !aiConfigured()) {
-    warnings.push("No Gemini backend configured on the server — used a mock fill.");
-  }
-
-  if (mock) {
+  // Test-only path — never reachable in production (no one sets this env var
+  // there). Lets us exercise the full extension loop without Gemini creds or
+  // a real product photo.
+  if (process.env.EXTENSION_FORCE_MOCK === "true") {
     const product = buildMockProduct(notes, "Watches");
     const mapped = mapProductToFields(product, body.fields, notes);
-    values = mapped.values;
-    warnings.push(...mapped.warnings);
+    logExtensionFillEvent({ userId, keyId, fieldsFilled: Object.keys(mapped.values).length, mock: true }).catch(() => {});
+    const credits = serializeCredits(balance);
+    const response: FillResponse = {
+      values: mapped.values,
+      warnings: [...mapped.warnings, "Test mode (EXTENSION_FORCE_MOCK) — not a real AI fill."],
+      creditsRemaining: credits.value,
+      unlimitedCredits: credits.unlimited,
+      mock: true,
+    };
+    return NextResponse.json(response, { status: 200, headers: CORS });
   }
 
-  // Only a REAL (non-mock) autofill spends credits — a mock fallback
-  // (missing image, AI down) shouldn't cost the seller anything.
-  let creditsRemaining = balance;
-  if (!mock) {
-    const deducted = await deductCredits(userId, LISTING_CREDIT_COST, "Extension autofill");
-    creditsRemaining = deducted.balance;
+  const image = await resolveImage(body);
+  if (!image) {
+    return NextResponse.json(
+      { error: "No product photo detected. Upload a photo on Jumia, then try Autofill again." },
+      { status: 400, headers: CORS },
+    );
   }
-  // Log every attempt (mock or not) for the dashboard's usage view.
-  logExtensionFillEvent({
-    userId,
-    keyId,
-    fieldsFilled: Object.keys(values).length,
-    mock,
-  }).catch(() => {});
+  if (!aiConfigured()) {
+    // A server misconfiguration, not the seller's fault — logged loudly for
+    // us, but they just see a plain "try again" rather than "no AI creds".
+    console.error("[ext/fill] no Gemini backend configured — refusing rather than mock-filling a real listing.");
+    return NextResponse.json(
+      { error: "AI is temporarily unavailable. Please try again shortly." },
+      { status: 503, headers: CORS },
+    );
+  }
 
+  let values: Record<string, string>;
+  const warnings: string[] = [];
+  try {
+    const fillable = body.fields.filter((f) => !isSellerOwned(f.label));
+    const { raw } = await aiFillRenderedFields({
+      imageBase64: image.base64,
+      mimeType: image.mimeType,
+      fields: fillable,
+      notes,
+      market,
+    });
+    const finalized = finalizeAiValues(raw, body.fields, notes);
+    values = finalized.values;
+    warnings.push(...finalized.warnings);
+    applyBrandDefault(values, body.fields, warnings);
+    applyQuantityDefault(values, body.fields);
+  } catch (e) {
+    console.error(`[ext/fill] AI call failed for user=${userId}:`, e);
+    return NextResponse.json(
+      { error: "AI couldn't process this photo right now. Please try again." },
+      { status: 502, headers: CORS },
+    );
+  }
+
+  const deducted = await deductCredits(userId, LISTING_CREDIT_COST, "Extension autofill");
+  logExtensionFillEvent({ userId, keyId, fieldsFilled: Object.keys(values).length, mock: false }).catch(() => {});
+
+  const credits = serializeCredits(deducted.balance);
   const response: FillResponse = {
     values,
     warnings,
-    creditsRemaining,
-    mock,
+    creditsRemaining: credits.value,
+    unlimitedCredits: credits.unlimited,
+    mock: false,
   };
 
   console.info(
-    `[ext/fill] user=${userId} key=${keyId} market=${market} mock=${mock} fields=${body.fields.length} ` +
+    `[ext/fill] user=${userId} key=${keyId} market=${market} fields=${body.fields.length} ` +
       `filled=${Object.keys(values).length} warnings=${warnings.length}`,
   );
 

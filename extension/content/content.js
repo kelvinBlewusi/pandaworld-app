@@ -33,8 +33,8 @@
       return true;
     }
     if (msg?.type === "APPLY") {
-      sendResponse(applyValues(msg.values || {}));
-      return false;
+      applyValues(msg.values || {}).then(sendResponse);
+      return true;
     }
     return false;
   });
@@ -320,7 +320,7 @@
 
   // ── Apply values ─────────────────────────────────────────────────────────
 
-  function applyValues(values) {
+  async function applyValues(values) {
     const fields = findFields();
     const byLabel = new Map(fields.map((f) => [f.label.toLowerCase(), f]));
     const results = [];
@@ -332,7 +332,7 @@
         continue;
       }
       try {
-        const ok = writeValue(f, value);
+        const ok = await writeValue(f, value);
         results.push({ label, ok, reason: ok ? "" : "writer reported no change" });
       } catch (e) {
         results.push({ label, ok: false, reason: e.message });
@@ -346,7 +346,8 @@
     const { el, type } = field;
     if (type === "richtext") return writeRichText(el, value);
     if (type === "select") return writeSelect(el, value);
-    return writeInput(el, value); // text / textarea / combobox
+    if (type === "combobox") return writeCombobox(el, value);
+    return writeInput(el, value); // text / textarea
   }
 
   /** React-safe input write via the native value setter. */
@@ -368,6 +369,65 @@
     el.value = opt.value;
     el.dispatchEvent(new Event("change", { bubbles: true }));
     return true;
+  }
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  /**
+   * Write into a click-driven combobox (role="combobox" / aria-autocomplete)
+   * — Jumia's category-specific attribute pickers (e.g. Color family) use
+   * this pattern, most likely an Angular Material-style autocomplete whose
+   * option list is a CDK overlay portaled onto <body>, not nested under the
+   * input. Just setting .value like a text input doesn't register a
+   * selection with the framework, so this: types into the input to open/
+   * filter the option list, waits for it to render, then dispatches a real
+   * click on the matching option (framework listens for that, not the
+   * input's value).
+   *
+   * Best-effort — built without a live DOM to test against, so the overlay
+   * selectors below cover the common ARIA/Angular Material patterns. If a
+   * given combobox doesn't match, this reports failure via its `results[]`
+   * entry rather than silently doing nothing, so it's visible in the panel
+   * for the seller to fill by hand.
+   */
+  async function writeCombobox(el, value) {
+    writeInput(el, value); // types the target text to open/filter the list
+    el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
+
+    const target = value.trim().toLowerCase();
+    const OPTION_SEL = [
+      '[role="option"]',
+      '[role="listbox"] li',
+      'mat-option',
+      '.cdk-overlay-container [role="option"]',
+      '.cdk-overlay-container li',
+    ].join(",");
+
+    // Poll briefly — the overlay renders asynchronously after the input event.
+    for (let attempt = 0; attempt < 8; attempt++) {
+      await sleep(120);
+      const candidates = [...document.querySelectorAll(OPTION_SEL)].filter(isVisible);
+      if (!candidates.length) continue;
+
+      let match =
+        candidates.find((o) => (o.innerText || o.textContent || "").trim().toLowerCase() === target) ||
+        candidates.find((o) => {
+          const t = (o.innerText || o.textContent || "").trim().toLowerCase();
+          return t && (t.includes(target) || target.includes(t));
+        });
+
+      if (match) {
+        match.scrollIntoView({ block: "nearest" });
+        match.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        match.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+        match.click();
+        await sleep(80);
+        return true;
+      }
+    }
+
+    el.blur(); // close whatever overlay may still be open
+    return false;
   }
 
   /**
