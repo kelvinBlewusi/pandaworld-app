@@ -43,7 +43,9 @@
 
   async function harvest() {
     const diagnostics = [];
-    const fields = findFields().map((f) => ({
+    const rawFields = findFields();
+    await enrichComboboxOptions(rawFields);
+    const fields = rawFields.map((f) => ({
       label: f.label,
       type: f.type,
       required: f.required,
@@ -164,6 +166,52 @@
     });
 
     return out;
+  }
+
+  // Overlay-portaled option list for a combobox/autocomplete-style dropdown —
+  // covers the common ARIA + Angular Material patterns Jumia's category
+  // attribute pickers (e.g. Color family) are most likely built on. Shared
+  // between harvest-time option scraping and APPLY-time option clicking.
+  const OPTION_SEL = [
+    '[role="option"]',
+    '[role="listbox"] li',
+    'mat-option',
+    '.cdk-overlay-container [role="option"]',
+    '.cdk-overlay-container li',
+  ].join(",");
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  /**
+   * A combobox's option list renders lazily in an overlay only once it's
+   * opened — unlike a native <select>, there's no `.options` to read
+   * up front. Best-effort: open each combobox briefly, scrape whatever
+   * appears, close it again. This lets the AI (and finalizeAiValues' snap-
+   * to-option check) work with Jumia's real choices instead of guessing free
+   * text that then has nothing to click during APPLY.
+   */
+  async function enrichComboboxOptions(fields) {
+    for (const f of fields) {
+      if (f.type !== "combobox") continue;
+      try {
+        f.el.focus();
+        f.el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        f.el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+        f.el.click();
+        await sleep(150);
+        const texts = [...document.querySelectorAll(OPTION_SEL)]
+          .filter(isVisible)
+          .map((o) => (o.innerText || o.textContent || "").trim())
+          .filter(Boolean);
+        if (texts.length) f.options = [...new Set(texts)].slice(0, 60);
+      } catch {
+        /* best effort — leave options undefined, AI falls back to free text */
+      } finally {
+        f.el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
+        f.el.blur();
+        await sleep(50);
+      }
+    }
   }
 
   const CONTROL_SEL = 'input, textarea, select, .ProseMirror';
@@ -371,8 +419,6 @@
     return true;
   }
 
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
   /**
    * Write into a click-driven combobox (role="combobox" / aria-autocomplete)
    * — Jumia's category-specific attribute pickers (e.g. Color family) use
@@ -391,17 +437,18 @@
    * for the seller to fill by hand.
    */
   async function writeCombobox(el, value) {
+    // Some dropdowns only render their option list on click, before typed
+    // filtering does anything — open it the same way enrichComboboxOptions
+    // did at harvest time, then type to filter down to the target.
+    el.focus();
+    el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    el.click();
+    await sleep(120);
     writeInput(el, value); // types the target text to open/filter the list
     el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
 
     const target = value.trim().toLowerCase();
-    const OPTION_SEL = [
-      '[role="option"]',
-      '[role="listbox"] li',
-      'mat-option',
-      '.cdk-overlay-container [role="option"]',
-      '.cdk-overlay-container li',
-    ].join(",");
 
     // Poll briefly — the overlay renders asynchronously after the input event.
     for (let attempt = 0; attempt < 8; attempt++) {
