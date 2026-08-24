@@ -129,6 +129,19 @@ async function refreshView() {
   else hideMainForm();
 }
 
+// ── Field help tooltip — hover/focus show it via CSS; this adds tap-to-toggle
+// (and tap-outside-to-close) for anyone who clicks the icon instead. ────────
+document.querySelectorAll(".helpIcon").forEach((btn) => {
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    btn.classList.toggle("open");
+  });
+});
+document.addEventListener("click", () => {
+  document.querySelectorAll(".helpIcon.open").forEach((b) => b.classList.remove("open"));
+});
+
 // ── Boot ─────────────────────────────────────────────────────────────────────
 async function boot() {
   const { apiKey } = await loadSettings();

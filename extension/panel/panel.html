@@ -52,7 +52,12 @@
     <!-- Main form — shown when connected AND on a Jumia Add-Products tab. -->
     <div id="mainForm" hidden>
       <label class="fld">
-        <span>Product features <em>(optional)</em></span>
+        <span>About this listing <em>(optional)</em>
+          <button type="button" class="helpIcon" id="notesHelp" aria-label="What is this field for?">
+            !
+            <span class="tooltip" role="tooltip">Anything typed here is sent to the AI and takes priority over its own guesses — use it for exact SKU, GTIN/barcode, quantity, sale dates, size/variation, or any other details you want reflected in this listing.</span>
+          </button>
+        </span>
         <textarea id="notes" rows="3" placeholder="e.g. price 250, water resistant, leather strap"></textarea>
       </label>
 

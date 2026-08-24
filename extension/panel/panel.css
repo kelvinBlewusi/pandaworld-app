@@ -96,6 +96,32 @@ select {
 .fld > span { display: block; font-size: 12px; font-weight: 600; margin-bottom: 4px; }
 .fld > span em { color: var(--muted); font-weight: 400; }
 .fld > .hint { display: block; font-size: 11px; font-weight: 400; color: var(--muted); margin-top: 4px; }
+
+/* ── Field help icon + tooltip (hover/focus via CSS, click-toggle via JS) ─── */
+.helpIcon {
+  position: relative;
+  display: inline-flex; align-items: center; justify-content: center;
+  vertical-align: middle; margin-left: 4px;
+  width: 15px; height: 15px; padding: 0;
+  border-radius: 999px; border: none;
+  background: var(--line); color: var(--muted);
+  font-size: 10px; font-weight: 800; line-height: 1;
+  cursor: help;
+}
+.helpIcon:hover, .helpIcon:focus-visible, .helpIcon.open { background: var(--pw-blue); color: #fff; }
+.helpIcon .tooltip {
+  position: absolute; z-index: 5; left: 0; top: 20px; width: 220px;
+  background: var(--fg); color: var(--bg); font-size: 11px; font-weight: 400;
+  line-height: 1.4; padding: 8px 10px; border-radius: 8px;
+  opacity: 0; visibility: hidden; transform: translateY(-4px);
+  transition: opacity .12s ease, transform .12s ease;
+  text-align: left; pointer-events: none;
+}
+.helpIcon:hover .tooltip,
+.helpIcon:focus-visible .tooltip,
+.helpIcon.open .tooltip {
+  opacity: 1; visibility: visible; transform: translateY(0);
+}
 input, textarea {
   width: 100%; padding: 8px 10px; border: 1px solid var(--line);
   border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit;
