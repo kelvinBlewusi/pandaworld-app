@@ -37,7 +37,13 @@ const norm = (s: string) => s.toLowerCase().replace(/\*/g, "").replace(/\s+/g, "
  *  prompt built below. */
 function isNotesOnlyField(label: string): boolean {
   const l = norm(label);
-  return l.includes("quantity") || l.includes("sku") || (l.includes("sale") && (l.includes("start") || l.includes("end")));
+  return (
+    l.includes("quantity") ||
+    l.includes("sku") ||
+    l.includes("gtin") ||
+    l.includes("barcode") ||
+    (l.includes("sale") && (l.includes("start") || l.includes("end")))
+  );
 }
 
 /** Per-field guidance appended to the prompt for common labels. */
@@ -54,6 +60,7 @@ function hintFor(label: string): string {
   if (l.includes("weight")) return " — your best estimate in kg (e.g. 0.2) for a product like this, even if you can't be exact from the photo alone — only omit if the category makes weight meaningless.";
   if (l.includes("quantity")) return " — ONLY if the seller's notes state an exact quantity; otherwise omit (never guess a stock count from the image).";
   if (l.includes("sku")) return " — ONLY if the seller's notes give one; otherwise a short plausible SKU code (uppercase letters + digits, 6–10 chars).";
+  if (l.includes("gtin") || l.includes("barcode")) return " — ONLY if the seller's notes give a real GTIN/barcode; otherwise omit entirely. NEVER invent one — unlike SKU this is a real-world product identifier, and a fabricated one can conflict with Jumia's catalog.";
   if (l.includes("sale") && (l.includes("start") || l.includes("end"))) {
     return " — ONLY if the seller's notes explicitly give this date; otherwise omit entirely.";
   }
