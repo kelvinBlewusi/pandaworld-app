@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { auth } from "@clerk/nextjs/server";
 import { MarketingFooter } from "@/components/marketing/footer";
-import { Wordmark } from "@/components/marketing/wordmark";
+import { ExtensionHeroBackdrop } from "@/components/marketing/extension-hero-backdrop";
 
 // ─── /extension — public page for the Chrome extension flow ──────────────────
 //
@@ -132,42 +132,17 @@ export default async function ExtensionPage() {
 
   return (
     <div className="min-h-screen bg-white text-zinc-900">
-      <MarketingNav />
-
-      {/* Hero */}
-      <section className="border-b border-zinc-100">
-        <div className="mx-auto max-w-6xl px-6 py-20 text-center">
-          <p className="inline-flex items-center gap-2 rounded-full bg-orange-50 px-3 py-1 text-xs font-semibold uppercase tracking-widest text-orange-600">
-            <Chrome className="h-3.5 w-3.5" /> Chrome Extension · Beta
-          </p>
-          <h1 className="mx-auto mt-4 max-w-3xl text-3xl font-bold tracking-tight sm:text-5xl">
-            Fill Jumia listings without leaving Jumia.
-          </h1>
-          <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-zinc-600 sm:text-base">
-            Do your listing on Vendor Center like always. Upload a photo, pick a
-            category, and PandaWorld's AI fills the whole form — SEO-optimised
-            and built to pass QC. You review and submit.
-          </p>
-          <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
-            <Link
-              href={ctaHref}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-orange-500/20 transition-all hover:bg-orange-600"
-            >
-              {ctaLabel}
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-            <a
-              href="#how-it-works"
-              className="inline-flex items-center justify-center gap-2 rounded-lg border border-zinc-200 px-6 py-3 text-sm font-semibold text-zinc-700 transition-colors hover:bg-zinc-50"
-            >
-              See how it works
-            </a>
-          </div>
-          <p className="mt-4 text-xs text-zinc-500">
-            Works alongside your PandaWorld plan — one subscription, two ways to list.
-          </p>
-        </div>
-      </section>
+      {/* Hero — dark, canvas-animated backdrop (components/marketing/extension-hero-backdrop.tsx).
+          Carries its own nav (logo, Pricing, Sign in) since it's visually a
+          different world from the light sections below — no separate
+          MarketingNav on this page. That means Pricing/Sign in aren't
+          persistently reachable while scrolled past the hero; the final CTA
+          section and MarketingFooter below still offer a way through. */}
+      <ExtensionHeroBackdrop
+        signInHref={`/sign-in?redirect_url=${DASHBOARD_REDIRECT}`}
+        ctaHref={ctaHref}
+        ctaLabel={ctaLabel}
+      />
 
       {/* How it works */}
       <section id="how-it-works" className="bg-zinc-50">
@@ -347,46 +322,6 @@ export default async function ExtensionPage() {
 }
 
 // ─── Components ──────────────────────────────────────────────────────────────
-
-// Local to this page (not the shared marketing nav), so its auth links can
-// safely carry redirect_url — see DASHBOARD_REDIRECT above.
-function MarketingNav() {
-  return (
-    <header className="sticky top-0 z-20 border-b border-zinc-100 bg-white/80 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-        <Link href="/" aria-label="pandaworld home">
-          <Wordmark size={28} />
-        </Link>
-        <nav className="flex items-center gap-1 sm:gap-4">
-          <Link
-            href="/extension"
-            className="rounded-md px-3 py-1.5 text-sm font-medium text-orange-600"
-          >
-            Extension
-          </Link>
-          <Link
-            href="/pricing"
-            className="rounded-md px-3 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
-          >
-            Pricing
-          </Link>
-          <Link
-            href={`/sign-in?redirect_url=${DASHBOARD_REDIRECT}`}
-            className="rounded-md px-3 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
-          >
-            Sign in
-          </Link>
-          <Link
-            href={`/sign-up?redirect_url=${DASHBOARD_REDIRECT}`}
-            className="rounded-md bg-orange-500 px-3 py-1.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-orange-600"
-          >
-            Get started
-          </Link>
-        </nav>
-      </div>
-    </header>
-  );
-}
 
 function FAQ({ q, a }: { q: string; a: string }) {
   return (

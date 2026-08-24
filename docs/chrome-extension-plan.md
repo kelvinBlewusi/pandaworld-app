@@ -456,6 +456,19 @@ rendered fields, and writes clean copy into the CKEditor 5 rich-text editors (10
   "← Back to extension dashboard" link) and every CTA relabelled "Get Started" pointing at
   `/dashboard`. One shared component, so editing the marketing copy keeps both landing
   surfaces in sync — the default `/` and `/landing` render is untouched otherwise.
+- 🚧 **`/extension` new hero — in progress.** `/extension` is being rebuilt into its own
+  dedicated landing page (separate from `/`/`/landing`'s `PublicLanding`), starting with the
+  hero. `components/marketing/extension-hero-backdrop.tsx` — a dark, canvas-animated backdrop
+  ported from a Claude Design export (project `18cd00f4-19b6-4d97-99df-f824a1b8281e`, file
+  `Hero Backdrop.dc.html`): a fan of drifting bezier "ribbons" with a travelling specular
+  highlight + film-grain overlay, PandaWorld's real copy in place of the design's placeholder
+  ("datafall"/"Streaming engine v4"), ribbon accent recoloured to brand orange `#f97316`. The
+  rest of the page (how-it-works, features, AI-fills-vs-you-set, FAQ) is unchanged for now —
+  **still to come**: card-based sections built from reference images the founder is sending,
+  which will replace those remaining light sections per the "rebuild `/extension` altogether"
+  direction. The hero currently has no persistent nav below the fold (its own header — logo +
+  Pricing + Sign in — scrolls away with the 100vh section); flagged as an open tradeoff, not
+  a final decision.
 - ✅ **Quota wiring**: `checkQuota`/`incrementUsage` — the SAME per-period listing quota as
   the web app (no separate SKU). Only a real (non-mock) autofill spends a credit.
 - ⬜ **Combobox / click-only dropdown writers** (Color family + step-3 selects) — the one
