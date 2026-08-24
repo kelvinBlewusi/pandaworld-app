@@ -67,14 +67,7 @@ body {
 .linkline:hover { text-decoration: underline; }
 
 /* ── Connect screen ───────────────────────────────────────────────────────── */
-.centerLogo {
-  display: flex; align-items: center; justify-content: center; gap: 8px;
-  margin: 18px 0 10px;
-}
-.centerLogo img { width: 30px; height: 30px; object-fit: contain; }
-.centerLogo span { font-size: 20px; font-weight: 800; color: var(--fg); }
-
-.heroTitle { text-align: center; font-size: 19px; font-weight: 800; margin: 4px 0 6px; }
+.heroTitle { text-align: center; font-size: 19px; font-weight: 800; margin: 20px 0 6px; }
 .heroSub { text-align: center; color: var(--muted); font-size: 12.5px; margin: 0 0 10px; line-height: 1.5; }
 .heroStats {
   display: flex; align-items: center; justify-content: center; gap: 8px;

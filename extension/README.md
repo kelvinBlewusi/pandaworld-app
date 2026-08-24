@@ -49,11 +49,11 @@ back to a deterministic **mock** so the loop never hard-fails. Force mock with
 1. Go to `chrome://extensions`, enable **Developer mode**.
 2. **Load unpacked** → select this `extension/` folder.
 3. Click the extension's toolbar icon → the side panel opens.
-4. `host_permissions` in `manifest.json` is locked to `pandaworldai.site` and
-   `vendorcenter.jumia.com` only. For local dev, add `http://localhost:3002/*`
-   (or your Vercel preview origin) to that list temporarily, reload the
-   extension, then open **Developer settings** at the bottom and set the API
-   base URL there (it defaults to the production site).
+4. The panel always calls the production site (`https://pandaworldai.site`) —
+   there's no in-panel override. For local dev: add `http://localhost:3002/*`
+   (or your Vercel preview origin) to `host_permissions` in `manifest.json`,
+   change the `apiBase` constant near the top of `panel/panel.js` to match,
+   then reload the extension.
 5. Paste an API key from `/extension/dashboard` (sign up if you don't have one)
    and click **Connect**.
 

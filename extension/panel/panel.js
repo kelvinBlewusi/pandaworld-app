@@ -17,16 +17,16 @@
  */
 
 const $ = (id) => document.getElementById(id);
-const DEFAULT_API = "https://pandaworldai.site";
+// Fixed — matches manifest.json's host_permissions, which is locked to just
+// this origin (plus vendorcenter.jumia.com). No user-facing override; a dev
+// pointing at localhost or a preview deployment needs to edit this constant
+// AND add that origin to host_permissions, then reload the extension.
+const apiBase = "https://pandaworldai.site";
 const JUMIA_HOST_RE = /^https:\/\/vendorcenter\.jumia\.com\//;
-
-let apiBase = DEFAULT_API;
 
 // ── Settings persistence ─────────────────────────────────────────────────────
 async function loadSettings() {
-  const { apiBase: savedBase, apiKey } = await chrome.storage.local.get(["apiBase", "apiKey"]);
-  apiBase = savedBase || DEFAULT_API;
-  $("apiBase").value = apiBase;
+  const { apiKey } = await chrome.storage.local.get(["apiKey"]);
   return { apiKey: apiKey || "" };
 }
 
@@ -210,19 +210,6 @@ $("footerHelp").addEventListener("click", (e) => {
 // ── Open Jumia banner button ─────────────────────────────────────────────────
 $("openJumia").addEventListener("click", () => {
   chrome.tabs.create({ url: "https://vendorcenter.jumia.com/" });
-});
-
-// ── Advanced settings (API base URL — dev/testing only) ────────────────────
-$("saveSettings").addEventListener("click", async () => {
-  const newBase = $("apiBase").value.trim() || DEFAULT_API;
-  await chrome.storage.local.set({ apiBase: newBase });
-  apiBase = newBase;
-  $("getKeyLink").href = `${apiBase}/extension/dashboard`;
-  $("privacyLink").href = `${apiBase}/privacy`;
-  $("footerDashboard").dataset.href = `${apiBase}/extension/dashboard`;
-  $("footerHelp").dataset.href = `${apiBase}/extension#how-it-works`;
-  const { apiKey } = await chrome.storage.local.get(["apiKey"]);
-  if (apiKey) await refreshAccount(apiKey);
 });
 
 // ── Main action ──────────────────────────────────────────────────────────────

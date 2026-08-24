@@ -27,11 +27,6 @@
 
     <!-- Connect screen — shown until an API key is saved. -->
     <div id="connectScreen" hidden>
-      <div class="centerLogo">
-        <img src="logo.png" alt="" />
-        <span>PandaWorld</span>
-      </div>
-
       <h1 class="heroTitle">Start for free today</h1>
       <p class="heroSub">5 free AI-powered listing credits,<br />no credit card required.</p>
       <div class="heroStats">
@@ -95,16 +90,6 @@
         <div id="diag"></div>
       </details>
     </div>
-
-    <details class="advanced">
-      <summary>Developer settings</summary>
-      <label class="fld">
-        <span>API base URL</span>
-        <input id="apiBase" type="text" placeholder="https://pandaworldai.site" />
-        <span class="hint">Only pandaworldai.site and vendorcenter.jumia.com are pre-authorized (manifest.json host_permissions). Pointing this at another origin (localhost, a Vercel preview) needs that origin added there temporarily first, or requests will be blocked.</span>
-      </label>
-      <button id="saveSettings" class="secondary">Save</button>
-    </details>
 
     <footer class="linksFooter">
       <a href="#" id="footerDashboard">Dashboard</a>
