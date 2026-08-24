@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "PandaWorld — Jumia Autofill (POC)",
+  "version": "0.0.1",
+  "description": "AI autofill for Jumia Vendor Center product listings. Phase 0 proof-of-concept.",
+  "permissions": ["sidePanel", "storage", "tabs"],
+  "host_permissions": [
+    "https://vendorcenter.jumia.com/*",
+    "http://localhost:3002/*",
+    "https://pandaworldai.site/*",
+    "https://*.vercel.app/*"
+  ],
+  "background": { "service_worker": "background/worker.js" },
+  "action": { "default_title": "PandaWorld Autofill" },
+  "side_panel": { "default_path": "panel/panel.html" },
+  "content_scripts": [
+    {
+      "matches": ["https://vendorcenter.jumia.com/*"],
+      "js": ["content/content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://vendorcenter.jumia.com/*"],
+      "js": ["content/mainworld.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
+    }
+  ]
+}

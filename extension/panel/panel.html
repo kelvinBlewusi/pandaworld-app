@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="panel.css" />
+    <title>PandaWorld Autofill</title>
+  </head>
+  <body>
+    <header>
+      <div class="brand">🐼 PandaWorld <span class="badge">POC</span></div>
+      <div class="sub">Jumia Vendor Center autofill</div>
+    </header>
+
+    <details class="settings" open>
+      <summary>Settings</summary>
+      <label class="fld">
+        <span>API base URL</span>
+        <input id="apiBase" type="text" placeholder="https://your-branch-xxxx.vercel.app" />
+        <span class="hint">Local dev: http://localhost:3002 · Vercel preview: paste the deployment URL (no trailing slash)</span>
+      </label>
+      <label class="fld">
+        <span>API key</span>
+        <input id="apiKey" type="password" placeholder="pw_live_…" />
+        <span class="hint">Generate one on your PandaWorld dashboard → Extension.</span>
+      </label>
+      <button id="saveSettings" class="secondary">Save</button>
+    </details>
+
+    <label class="fld">
+      <span>Optional notes — price, extra features</span>
+      <textarea id="notes" rows="3" placeholder="e.g. price 250, water resistant, leather strap"></textarea>
+    </label>
+
+    <button id="autofill" class="primary">✨ Autofill this listing</button>
+
+    <div id="status" class="status" aria-live="polite"></div>
+    <ul id="results" class="results"></ul>
+    <div id="warnings" class="warnings"></div>
+
+    <details id="diagWrap" class="diag" hidden>
+      <summary>What the extension saw</summary>
+      <div id="diag"></div>
+    </details>
+
+    <footer>
+      <ol>
+        <li>Open <b>vendorcenter.jumia.com → Add Products</b></li>
+        <li>Upload a photo &amp; pick a <b>category</b> (unlocks the form)</li>
+        <li>Click <b>Autofill</b>, then review &amp; submit yourself</li>
+      </ol>
+    </footer>
+
+    <script src="panel.js"></script>
+  </body>
+</html>
