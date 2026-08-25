@@ -144,11 +144,20 @@ async function refreshAccount(apiKey) {
 }
 
 // ── Jumia tab detection ──────────────────────────────────────────────────────
+/**
+ * The Vendor Center tab the seller is actually looking at, or null.
+ *
+ * Deliberately the ACTIVE tab only. This used to fall back to scanning
+ * every tab in the window for any Vendor Center tab, which broke both ways
+ * whenever one was open in the background: the "Open Jumia" banner stayed
+ * hidden on unrelated sites (so the panel looked ready when it wasn't), and
+ * Autofill would happily run — "Reading the form…" and all — against a tab
+ * the seller couldn't even see, writing into a listing they weren't
+ * looking at. Acting on the visible tab is the only safe reading.
+ */
 async function activeJumiaTab() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (tab && JUMIA_HOST_RE.test(tab.url || "")) return tab;
-  const all = await chrome.tabs.query({ currentWindow: true });
-  return all.find((t) => JUMIA_HOST_RE.test(t.url || "")) || null;
+  return tab && JUMIA_HOST_RE.test(tab.url || "") ? tab : null;
 }
 async function refreshView() {
   const tab = await activeJumiaTab();
@@ -201,7 +210,13 @@ boot();
 // stays open — MV3 side panels persist per-window, so this is the only way
 // the view updates without the seller manually reopening the panel.
 chrome.tabs.onActivated.addListener(() => refreshView());
-chrome.tabs.onUpdated.addListener((_id, info) => { if (info.status === "complete") refreshView(); });
+// `info.url` as well as a completed load: Vendor Center is an Angular SPA,
+// and navigating in or out of it can change the URL with no fresh page
+// load, which would otherwise leave the banner showing the previous page's
+// verdict.
+chrome.tabs.onUpdated.addListener((_id, info) => { if (info.status === "complete" || info.url) refreshView(); });
+// Switching browser windows changes which tab is "active" for us too.
+chrome.windows?.onFocusChanged?.addListener(() => refreshView());
 
 // ── Try for Free — sends them to our own sign-up flow in a new tab ─────────
 $("tryFree").addEventListener("click", () => {
@@ -270,6 +285,10 @@ $("autofill").addEventListener("click", async () => {
 
     const tab = await activeJumiaTab();
     if (!tab) {
+      // Say why, rather than silently doing nothing — refreshView() alone
+      // just swaps the banner in, which reads as the button being broken.
+      setStatus("Open a Jumia Vendor Center tab to autofill a listing.", "err");
+      hideProgress();
       await refreshView();
       return;
     }
