@@ -47,7 +47,14 @@
     await enrichComboboxOptions(rawFields);
     await closeAnyLingeringOverlay();
     const fields = rawFields.map((f) => {
-      const field = { label: f.label, type: f.type, required: f.required, options: f.options, multi: f.multi };
+      const field = {
+        label: f.label,
+        type: f.type,
+        required: f.required,
+        options: f.options,
+        multi: f.multi,
+        variantIndex: f.variantIndex,
+      };
       // On an Edit-Product page, Name/Description/Highlights may already
       // carry real seller content — hand it to the AI so it can decide to
       // keep, enhance, or replace it, instead of the extension deciding
@@ -205,10 +212,50 @@
 
   // ── Field discovery ──────────────────────────────────────────────────────
 
-  /** Returns [{ label, type, required, options, el }] for each writable field. */
+  /**
+   * The repeated DOM containers Jumia renders for a multi-variant listing —
+   * one per variant, each holding its own Variation / Seller SKU / GTIN /
+   * Quantity / Price controls.
+   *
+   * Found structurally rather than by class name (which Jumia can rename
+   * freely): take every control labelled exactly "Variation" as an anchor,
+   * then for each, climb to the largest ancestor that still contains only
+   * that one anchor. That ancestor is precisely the variant's own block.
+   * Returns [] for a single-variant listing, which keeps the whole
+   * variant-qualifying path below inert — zero behaviour change there.
+   */
+  function findVariantBlocks(rawFields) {
+    const anchors = rawFields.filter((f) => /^variation$/i.test(f.label));
+    if (anchors.length < 2) return [];
+    return anchors.map((anchor) => {
+      let node = anchor.el;
+      while (node.parentElement) {
+        const parent = node.parentElement;
+        if (anchors.filter((a) => parent.contains(a.el)).length > 1) break;
+        node = parent;
+      }
+      return node;
+    });
+  }
+
+  /**
+   * Returns [{ label, type, required, options, el, variantIndex }] for each
+   * writable field.
+   *
+   * Fields are de-duplicated by label, which is what a multi-variant listing
+   * used to fall over: every variant block repeats the same labels
+   * ("Variation", "Seller SKU", "Quantity", "Price"), so only the FIRST
+   * variant's fields survived and the rest were silently discarded — the AI
+   * never saw them and they were never filled. So when more than one variant
+   * block is present, each variant's fields get their label qualified
+   * ("Variation (Variant 2)"), making them distinct end to end: distinct in
+   * the prompt, in the AI's JSON, and when applyValues maps values back onto
+   * elements. Every label match in this codebase is a substring test, so the
+   * suffix rides along harmlessly through hintFor, isSellerOwned, and the
+   * rest.
+   */
   function findFields() {
-    const out = [];
-    const seen = new Set();
+    const raw = [];
     const nodes = document.querySelectorAll(
       // The last two catch dropdown triggers built as a <div>/<button> rather
       // than an <input> — Jumia's attribute pickers open an overlay from one
@@ -235,8 +282,6 @@
 
       const label = findLabel(el);
       if (!label) return;
-      const key = label.toLowerCase();
-      if (seen.has(key)) return;
 
       let type;
       if (el.classList.contains("ProseMirror") || el.getAttribute("contenteditable") === "true") type = "richtext";
@@ -252,10 +297,23 @@
 
       const options = type === "select" ? [...el.options].map((o) => o.text.trim()).filter(Boolean) : undefined;
 
-      seen.add(key);
-      out.push({ label, type, required, options, el });
+      raw.push({ label, type, required, options, el });
     });
 
+    // Second pass: qualify per-variant labels, then de-duplicate. Ordering
+    // matters — de-duplicating BEFORE qualifying is exactly what dropped
+    // every variant past the first.
+    const blocks = findVariantBlocks(raw);
+    const out = [];
+    const seen = new Set();
+    for (const f of raw) {
+      const vi = blocks.findIndex((b) => b.contains(f.el));
+      const label = vi >= 0 ? `${f.label} (Variant ${vi + 1})` : f.label;
+      const key = label.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ ...f, label, variantIndex: vi >= 0 ? vi + 1 : undefined });
+    }
     return out;
   }
 

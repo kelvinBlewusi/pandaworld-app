@@ -130,6 +130,38 @@ describe("isSellerOwned", () => {
   });
 });
 
+describe("variant-qualified labels (multi-variant listings)", () => {
+  it("still recognises a seller-owned field through the variant suffix", () => {
+    expect(isSellerOwned("Sale Price (Variant 2)")).toBe(true);
+    expect(isSellerOwned("Price (Variant 2)")).toBe(false);
+    expect(isSellerOwned("Seller SKU (Variant 2)")).toBe(false);
+  });
+
+  it("fills every variant's Price from the notes, not just the first", () => {
+    const fields: HarvestedField[] = [
+      { label: "Price (Variant 1)", type: "text", variantIndex: 1 },
+      { label: "Price (Variant 2)", type: "text", variantIndex: 2 },
+    ];
+    const { values } = finalizeAiValues({}, fields, "the price is 250");
+    expect(values["Price (Variant 1)"]).toBe("250");
+    expect(values["Price (Variant 2)"]).toBe("250");
+  });
+
+  it("keeps each variant's own distinct AI values", () => {
+    const fields: HarvestedField[] = [
+      { label: "Variation (Variant 1)", type: "text", variantIndex: 1 },
+      { label: "Variation (Variant 2)", type: "text", variantIndex: 2 },
+    ];
+    const { values } = finalizeAiValues(
+      { "Variation (Variant 1)": "Black", "Variation (Variant 2)": "Brown" },
+      fields,
+      "",
+    );
+    expect(values["Variation (Variant 1)"]).toBe("Black");
+    expect(values["Variation (Variant 2)"]).toBe("Brown");
+  });
+});
+
 describe("isDegenerateName", () => {
   it("flags a bare 'Generic' (any case) and anything under 15 non-space characters", () => {
     expect(isDegenerateName("Generic")).toBe(true);

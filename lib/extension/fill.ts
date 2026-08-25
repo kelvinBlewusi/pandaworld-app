@@ -25,6 +25,12 @@ export interface HarvestedField {
   // i.e. it accepts MORE than one choice (Color family, Material family,
   // Certifications). Detected in content.js's enrichComboboxOptions.
   multi?:    boolean;
+  // 1-based variant number when this field lives inside one of a
+  // multi-variant listing's repeated variant blocks (see findVariantBlocks
+  // in content.js). Undefined on a single-variant listing and on every
+  // shared, product-level field. When set, `label` already carries the
+  // matching " (Variant N)" suffix.
+  variantIndex?: number;
   // Existing on-page content for a narrative field (Name/Description/
   // Highlights — see isNarrativeLabel in content.js) on an Edit-Product
   // page. Only ever set for those fields; other fields keep the plain
