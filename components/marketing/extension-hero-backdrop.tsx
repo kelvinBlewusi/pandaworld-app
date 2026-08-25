@@ -40,7 +40,11 @@ const spaceGrotesk = Space_Grotesk({
 });
 
 const ACCENT = "#f97316"; // Tailwind orange-500 — PandaWorld's brand orange
-const JUMIA_COLOR = "#F55203"; // Jumia's own brand orange — used only on the word "Jumia"/"Vendor Center" so it reads as their brand, not ours
+// Matches extension/panel/panel.css's --accent, which carries the same
+// "Jumia orange" label — this file used to disagree with it (#F55203, a
+// much redder shade). Used only on the word "Jumia"/"Vendor Center" so it
+// reads as their brand, not ours.
+const JUMIA_COLOR = "#f68b1e";
 
 interface ExtensionHeroBackdropProps {
   signInHref: string;
