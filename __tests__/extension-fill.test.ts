@@ -130,6 +130,38 @@ describe("isSellerOwned", () => {
   });
 });
 
+describe("variant-qualified labels (multi-variant listings)", () => {
+  it("still recognises a seller-owned field through the variant suffix", () => {
+    expect(isSellerOwned("Sale Price (Variant 2)")).toBe(true);
+    expect(isSellerOwned("Price (Variant 2)")).toBe(false);
+    expect(isSellerOwned("Seller SKU (Variant 2)")).toBe(false);
+  });
+
+  it("fills every variant's Price from the notes, not just the first", () => {
+    const fields: HarvestedField[] = [
+      { label: "Price (Variant 1)", type: "text", variantIndex: 1 },
+      { label: "Price (Variant 2)", type: "text", variantIndex: 2 },
+    ];
+    const { values } = finalizeAiValues({}, fields, "the price is 250");
+    expect(values["Price (Variant 1)"]).toBe("250");
+    expect(values["Price (Variant 2)"]).toBe("250");
+  });
+
+  it("keeps each variant's own distinct AI values", () => {
+    const fields: HarvestedField[] = [
+      { label: "Variation (Variant 1)", type: "text", variantIndex: 1 },
+      { label: "Variation (Variant 2)", type: "text", variantIndex: 2 },
+    ];
+    const { values } = finalizeAiValues(
+      { "Variation (Variant 1)": "Black", "Variation (Variant 2)": "Brown" },
+      fields,
+      "",
+    );
+    expect(values["Variation (Variant 1)"]).toBe("Black");
+    expect(values["Variation (Variant 2)"]).toBe("Brown");
+  });
+});
+
 describe("isDegenerateName", () => {
   it("flags a bare 'Generic' (any case) and anything under 15 non-space characters", () => {
     expect(isDegenerateName("Generic")).toBe(true);
@@ -215,6 +247,30 @@ describe("finalizeAiValues (real-AI post-processing)", () => {
 
     const real = finalizeAiValues({ Name: "Wholesale Pack of 30 Gold Award Medals with Ribbons" }, fields, "");
     expect(real.values["Name"]).toBe("Wholesale Pack of 30 Gold Award Medals with Ribbons");
+  });
+
+  it("keeps several values for a multi-select field (Color family accepts more than one)", () => {
+    const multiFields: HarvestedField[] = [
+      { label: "Color family", type: "combobox", multi: true, options: ["Black", "Brown", "Blue"] },
+    ];
+    const { values } = finalizeAiValues({ "Color family": "Black, Brown" }, multiFields, "");
+    expect(values["Color family"]).toBe("Black, Brown");
+  });
+
+  it("keeps only the real options from a multi-value answer, and still drops one with no valid part", () => {
+    const multiFields: HarvestedField[] = [
+      { label: "Color family", type: "combobox", multi: true, options: ["Black", "Brown"] },
+    ];
+    expect(finalizeAiValues({ "Color family": "Black, Chartreuse" }, multiFields, "").values["Color family"]).toBe("Black");
+    expect(finalizeAiValues({ "Color family": "Chartreuse, Puce" }, multiFields, "").values["Color family"]).toBeUndefined();
+  });
+
+  it("does not split a comma-containing answer on a single-select field", () => {
+    const singleFields: HarvestedField[] = [
+      { label: "Warranty Address", type: "combobox", options: ["Accra, Ghana", "Lagos"] },
+    ];
+    const { values } = finalizeAiValues({ "Warranty Address": "Accra, Ghana" }, singleFields, "");
+    expect(values["Warranty Address"]).toBe("Accra, Ghana");
   });
 
   it("drops Warranty Duration when Warranty Type is N/A, even if the AI filled a duration in", () => {

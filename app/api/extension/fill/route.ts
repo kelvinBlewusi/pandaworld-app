@@ -163,9 +163,12 @@ function applyWarrantyAddressDefault(values: Record<string, string>, fields: Fil
  * than leaving the field empty for the seller to notice and fix.
  */
 function applyQuantityDefault(values: Record<string, string>, fields: FillRequest["fields"]) {
-  const qty = fields.find((f) => /quantity/i.test(f.label));
-  if (qty && !values[qty.label]) {
-    values[qty.label] = String(1 + Math.floor(Math.random() * 100)); // 1-100
+  // Every Quantity field, not just the first — a multi-variant listing has
+  // one per variant, and each gets its own independent stock count.
+  for (const qty of fields.filter((f) => /quantity/i.test(f.label))) {
+    if (!values[qty.label]) {
+      values[qty.label] = String(1 + Math.floor(Math.random() * 100)); // 1-100
+    }
   }
 }
 

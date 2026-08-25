@@ -109,7 +109,14 @@ function fieldLine(f: HarvestedField): string {
   // Production country's ~195 real countries) from the AI even when
   // content.js had already harvested them all, so it could never pick one
   // outside the first 40.
-  const opts = f.options?.length ? `; choose ONE of: ${f.options.slice(0, 250).join(" | ")}` : "";
+  // A multi-select widget (checkbox rows — Color family, Material family,
+  // Certifications) genuinely accepts several values; saying "choose ONE of"
+  // there is what kept Color family and Material family permanently empty
+  // whenever more than one option applied.
+  const choose = f.multi
+    ? "choose one or MORE of (comma-separate several only when they genuinely all apply)"
+    : "choose ONE of";
+  const opts = f.options?.length ? `; ${choose}: ${f.options.slice(0, 250).join(" | ")}` : "";
   const current = f.currentValue ? `; CURRENT CONTENT: "${f.currentValue.replace(/"/g, "'")}"` : "";
   return `- "${f.label}" [${f.type}${opts}]${current}${hintFor(f)}`;
 }
@@ -178,12 +185,21 @@ export async function aiFillRenderedFields(args: {
     ? `\n\nEXISTING CONTENT: This is an already-published Jumia listing being re-filled, not a blank form — some fields below are marked CURRENT CONTENT with what the seller already has there. For each one: if it's already good (accurate, complete, well-written), return it back unchanged — light polish only. If it's weak, generic, incomplete, or has real facts worth keeping buried in bad writing, rewrite it following CONTENT STYLE below, preserving those genuine facts. If it's placeholder junk or nonsense, treat it as blank and write fresh content. If you omit one of these fields entirely, its current content is left exactly as it is — fine when you're genuinely unsure, but don't omit just to dodge the decision.\n`
     : "";
 
+  // A multi-variant listing repeats the same per-variant fields once per
+  // variant, so content.js suffixes each with " (Variant N)" to keep them
+  // distinct. Without this block the AI sees several near-identical field
+  // names and has no idea they're meant to differ.
+  const variantCount = fields.reduce((max, f) => Math.max(max, f.variantIndex ?? 0), 0);
+  const variantsBlock = variantCount > 1
+    ? `\n\nVARIANTS: This listing has ${variantCount} variants. Fields ending in "(Variant N)" belong to variant N — they are SEPARATE products sharing one listing, so give each its own DISTINCT values, never the same answer repeated. If the seller's notes name the variants (e.g. "two variations black and brown"), assign them in the order given: the first named goes to Variant 1, the second to Variant 2, and so on. Each variant's "Variation" field is its distinguishing attribute (its colour/size/material), and its "Seller SKU" must be unique — derive it from the shared product code plus that variant's own attribute (e.g. "WIG-ST18-BLK" and "WIG-ST18-BRN"). Every field WITHOUT a "(Variant N)" suffix is shared by the whole listing — fill it once, describing the product as a whole rather than any single variant.\n`
+    : "";
+
   const prompt = `You are a product-listing assistant for Jumia (market: ${market}). Look at the product image and fill the EXACT form fields listed below so the listing is accurate, SEO-friendly, and passes Jumia QC.
 
 ${policy}
 
 ${restricted}
-${notesBlock}${notesOnlyBlock}${styleGuideBlock}${existingContentBlock}
+${notesBlock}${notesOnlyBlock}${styleGuideBlock}${existingContentBlock}${variantsBlock}
 FIELDS TO FILL (return a value only for the ones you can confidently fill; omit the rest):
 ${fields.map(fieldLine).join("\n")}
 
