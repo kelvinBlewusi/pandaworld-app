@@ -316,7 +316,7 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
             </h1>
             <p
               className="mt-6 max-w-[520px] text-[17px] font-light leading-relaxed"
-              style={{ color: "rgba(239,236,230,0.62)" }}
+              style={{ color: "rgba(239,236,230,0.88)" }}
             >
               Do your listing on{" "}
               <span style={{ color: JUMIA_COLOR, fontWeight: 500 }}>Vendor Center</span> like

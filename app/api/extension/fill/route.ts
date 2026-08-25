@@ -129,7 +129,32 @@ function applyBrandDefault(
 function applyQuantityDefault(values: Record<string, string>, fields: FillRequest["fields"]) {
   const qty = fields.find((f) => /quantity/i.test(f.label));
   if (qty && !values[qty.label]) {
-    values[qty.label] = String(10 + Math.floor(Math.random() * 41)); // 10-50
+    values[qty.label] = String(1 + Math.floor(Math.random() * 100)); // 1-100
+  }
+}
+
+const stripTags = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+
+/**
+ * Narrative fields (Name/Description/Highlights) can already carry real
+ * seller content on an Edit-Product page — the AI was shown it
+ * (HarvestedField.currentValue) and asked to keep, enhance, or replace it
+ * (see the EXISTING CONTENT block in lib/ai/extension-fill.ts). Flag the
+ * ones it actually changed so the seller knows to double-check them before
+ * submitting, rather than silently rewriting a hand-tuned listing.
+ */
+function noteExistingContentChanges(
+  values: Record<string, string>,
+  fields: FillRequest["fields"],
+  warnings: string[],
+) {
+  const changed = fields.filter(
+    (f) => f.currentValue && values[f.label] !== undefined && stripTags(values[f.label]) !== stripTags(f.currentValue),
+  );
+  if (changed.length) {
+    warnings.push(
+      `Updated existing content in: ${changed.map((f) => f.label).join(", ")} — review before submitting.`,
+    );
   }
 }
 
@@ -218,6 +243,7 @@ export async function POST(req: Request) {
     warnings.push(...finalized.warnings);
     applyBrandDefault(values, body.fields, warnings);
     applyQuantityDefault(values, body.fields);
+    noteExistingContentChanges(values, body.fields, warnings);
   } catch (e) {
     console.error(`[ext/fill] AI call failed for user=${userId}:`, e);
     return NextResponse.json(

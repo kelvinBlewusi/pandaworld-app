@@ -17,6 +17,7 @@ import { callGeminiBackend, isVertexEnabled, type GeminiPart } from "@/lib/ai/ge
 import { pickModelForExtensionFill } from "@/lib/billing/ai-models";
 import { buildContentPolicyInstructions, stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
 import { buildRestrictedWordsInstruction, stripRestrictedWords } from "@/lib/ai/restricted-words";
+import { buildStyleGuideBlock } from "@/lib/ai/content-style-rules";
 import type { HarvestedField } from "@/lib/extension/fill";
 
 export interface AiFillResult {
@@ -52,7 +53,7 @@ function hintFor(f: HarvestedField): string {
   const l = norm(f.label);
   const constrained = Boolean(f.options?.length); // a select/combobox with a fixed choice list
   if (l.includes("name") && !l.includes("brand")) {
-    return " — concise product title (type + key specs). OMIT the brand name; Jumia rejects titles containing the brand.";
+    return " — see CONTENT STYLE below for the exact title format. NEVER a single generic word (e.g. \"Generic\", \"Product\") — that has happened in production and is worse than leaving it blank.";
   }
   if (l.includes("brand")) return " — ONLY if a logo/wordmark is clearly visible; otherwise omit.";
   if (l.includes("description")) return " — see CONTENT STYLE below for the exact structure and tone.";
@@ -94,7 +95,8 @@ function hintFor(f: HarvestedField): string {
 
 function fieldLine(f: HarvestedField): string {
   const opts = f.options?.length ? `; choose ONE of: ${f.options.slice(0, 40).join(" | ")}` : "";
-  return `- "${f.label}" [${f.type}${opts}]${hintFor(f)}`;
+  const current = f.currentValue ? `; CURRENT CONTENT: "${f.currentValue.replace(/"/g, "'")}"` : "";
+  return `- "${f.label}" [${f.type}${opts}]${current}${hintFor(f)}`;
 }
 
 function parseJsonObject(text: string): Record<string, unknown> {
@@ -132,17 +134,17 @@ export async function aiFillRenderedFields(args: {
     ? `\n\nSELLER-CONTROLLED FIELDS — ${notesOnlyFields.map((l) => `"${l}"`).join(", ")}: fill these ONLY if the seller notes above state them explicitly. Never infer or guess these from the photo. No seller notes (or the notes don't mention it) → omit the field.\n`
     : "";
 
-  // Modeled on real high-performing Jumia listings (Kelvin's own examples,
-  // Aug 2026) — only included when the fields that need it are on the page.
-  const hasDescription = fields.some((f) => norm(f.label).includes("description"));
-  const hasHighlights = fields.some((f) => norm(f.label).includes("highlight"));
-  const styleGuideBlock = hasDescription || hasHighlights
-    ? `\n\nCONTENT STYLE:\n${[
-        hasDescription &&
-          `- Description: 2–4 short <p> paragraphs, not one dense block. Open with a one-sentence hook naming the product (you may bold it inline). Weave <strong>key spec/feature phrases</strong> naturally into the sentences as you go — including as a bold micro-heading directly followed by more prose in the same paragraph (e.g. "<strong>Effortless Slicing.</strong> The large, smooth-rolling wheel glides through..."). If the product clearly suits distinct use-cases or buyer types, you may close with a short "Perfect for:" <ul> where each <li> starts with a bold audience/use-case and a colon.`,
-        hasHighlights &&
-          `- Highlights: a <ul><li>, 4–6 items, EVERY item shaped exactly like <li><strong>Short Feature Label</strong>: one clear sentence on the benefit.</li> (label 2–4 words). When the product has clear technical specs (dimensions, ingredients, materials, capacity, servings), lead with a 2-column <table> (<tr><td>Spec</td><td>Value</td></tr> per row) before the bullets.`,
-      ].filter(Boolean).join("\n")}\n- Never end description or highlights with a request for reviews/feedback/ratings — keep the content to the product itself.\n`
+  // See lib/ai/content-style-rules.ts — the file to edit when reviewing
+  // real listings, not here.
+  const styleGuideBlock = buildStyleGuideBlock(fields);
+
+  // Set only for Name/Description/Highlights on an Edit-Product page that
+  // already carry real seller content — see isNarrativeLabel in content.js.
+  // Product photos are never part of this: the extension never harvests or
+  // writes to image fields at all, so they're always left exactly as-is.
+  const hasExistingContent = fields.some((f) => f.currentValue);
+  const existingContentBlock = hasExistingContent
+    ? `\n\nEXISTING CONTENT: This is an already-published Jumia listing being re-filled, not a blank form — some fields below are marked CURRENT CONTENT with what the seller already has there. For each one: if it's already good (accurate, complete, well-written), return it back unchanged — light polish only. If it's weak, generic, incomplete, or has real facts worth keeping buried in bad writing, rewrite it following CONTENT STYLE below, preserving those genuine facts. If it's placeholder junk or nonsense, treat it as blank and write fresh content. If you omit one of these fields entirely, its current content is left exactly as it is — fine when you're genuinely unsure, but don't omit just to dodge the decision.\n`
     : "";
 
   const prompt = `You are a product-listing assistant for Jumia (market: ${market}). Look at the product image and fill the EXACT form fields listed below so the listing is accurate, SEO-friendly, and passes Jumia QC.
@@ -150,7 +152,7 @@ export async function aiFillRenderedFields(args: {
 ${policy}
 
 ${restricted}
-${notesBlock}${notesOnlyBlock}${styleGuideBlock}
+${notesBlock}${notesOnlyBlock}${styleGuideBlock}${existingContentBlock}
 FIELDS TO FILL (return a value only for the ones you can confidently fill; omit the rest):
 ${fields.map(fieldLine).join("\n")}
 
