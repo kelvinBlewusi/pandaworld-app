@@ -46,12 +46,18 @@
     const rawFields = findFields();
     await enrichComboboxOptions(rawFields);
     await closeAnyLingeringOverlay();
-    const fields = rawFields.map((f) => ({
-      label: f.label,
-      type: f.type,
-      required: f.required,
-      options: f.options,
-    }));
+    const fields = rawFields.map((f) => {
+      const field = { label: f.label, type: f.type, required: f.required, options: f.options };
+      // On an Edit-Product page, Name/Description/Highlights may already
+      // carry real seller content — hand it to the AI so it can decide to
+      // keep, enhance, or replace it, instead of the extension deciding
+      // blindly on its own (see isNarrativeLabel above).
+      if (isNarrativeLabel(f.label) && fieldHasValue(f)) {
+        const current = currentTextValue(f);
+        if (current) field.currentValue = current.slice(0, 4000);
+      }
+      return field;
+    });
     diagnostics.push(`Found ${fields.length} fields: ${fields.map((f) => `${f.label}[${f.type}]${f.required ? "*" : ""}`).join(", ") || "none"}`);
 
     // When we recognise few/no fields, dump the raw controls on the page so we
@@ -640,11 +646,43 @@
   }
 
   /**
+   * Free-text/rich-content fields whose fate (keep as-is / enhance / rewrite)
+   * is the AI's call, not a blind client-side skip — see harvest()'s
+   * currentValue capture below and lib/ai/content-style-rules.ts on the
+   * server. Structured attribute fields (Color family, Warranty Type,
+   * Production country, …) are deliberately NOT included here: there's no
+   * "enhance" version of a fixed dropdown pick, so those keep the plain
+   * "already has a value — leave it" gate in applyValues(). Product photos
+   * are never in scope at all — findFields() excludes file/image inputs
+   * entirely, and harvestImage()/applyValues() never write to them, so
+   * images are always left exactly as the seller has them.
+   */
+  function isNarrativeLabel(label) {
+    const l = (label || "").toLowerCase();
+    return (l.includes("name") && !l.includes("brand")) || l.includes("description") || l.includes("highlight");
+  }
+
+  /** Plain-text snapshot of a narrative field's current content, sent to the
+   *  AI so IT decides whether to keep, enhance, or replace it — rather than
+   *  the extension either blindly skipping or blindly overwriting. */
+  function currentTextValue(field) {
+    const { el, type } = field;
+    if (type === "richtext") return (el.innerText || "").trim();
+    return (el.value || "").trim();
+  }
+
+  /**
    * `overwrite` defaults to false: on an already-listed product (Edit page)
    * every field may already hold real, possibly hand-tuned seller content,
    * so the default is "complete what's missing," not "rewrite what's
    * there." On a fresh Add-Products form every field starts empty anyway,
    * so this is a no-op there — nothing to skip.
+   *
+   * Narrative fields (Name/Description/Highlights — see isNarrativeLabel)
+   * are the one exception, always applied regardless of `overwrite`: the AI
+   * was already shown whatever content they held (harvest()'s
+   * currentValue) and asked to keep/enhance/replace it, so its returned
+   * value IS the considered decision, not a blind guess to gate here.
    */
   async function applyValues(values, { overwrite = false } = {}) {
     const fields = findFields();
@@ -657,7 +695,7 @@
         results.push({ label, ok: false, reason: "field not found on page" });
         continue;
       }
-      if (!overwrite && fieldHasValue(f)) {
+      if (!overwrite && !isNarrativeLabel(f.label) && fieldHasValue(f)) {
         results.push({ label, ok: false, skipped: true, reason: "already has a value — left as-is" });
         continue;
       }

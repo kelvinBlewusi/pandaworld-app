@@ -95,7 +95,8 @@ function hintFor(f: HarvestedField): string {
 
 function fieldLine(f: HarvestedField): string {
   const opts = f.options?.length ? `; choose ONE of: ${f.options.slice(0, 40).join(" | ")}` : "";
-  return `- "${f.label}" [${f.type}${opts}]${hintFor(f)}`;
+  const current = f.currentValue ? `; CURRENT CONTENT: "${f.currentValue.replace(/"/g, "'")}"` : "";
+  return `- "${f.label}" [${f.type}${opts}]${current}${hintFor(f)}`;
 }
 
 function parseJsonObject(text: string): Record<string, unknown> {
@@ -137,12 +138,21 @@ export async function aiFillRenderedFields(args: {
   // real listings, not here.
   const styleGuideBlock = buildStyleGuideBlock(fields);
 
+  // Set only for Name/Description/Highlights on an Edit-Product page that
+  // already carry real seller content — see isNarrativeLabel in content.js.
+  // Product photos are never part of this: the extension never harvests or
+  // writes to image fields at all, so they're always left exactly as-is.
+  const hasExistingContent = fields.some((f) => f.currentValue);
+  const existingContentBlock = hasExistingContent
+    ? `\n\nEXISTING CONTENT: This is an already-published Jumia listing being re-filled, not a blank form — some fields below are marked CURRENT CONTENT with what the seller already has there. For each one: if it's already good (accurate, complete, well-written), return it back unchanged — light polish only. If it's weak, generic, incomplete, or has real facts worth keeping buried in bad writing, rewrite it following CONTENT STYLE below, preserving those genuine facts. If it's placeholder junk or nonsense, treat it as blank and write fresh content. If you omit one of these fields entirely, its current content is left exactly as it is — fine when you're genuinely unsure, but don't omit just to dodge the decision.\n`
+    : "";
+
   const prompt = `You are a product-listing assistant for Jumia (market: ${market}). Look at the product image and fill the EXACT form fields listed below so the listing is accurate, SEO-friendly, and passes Jumia QC.
 
 ${policy}
 
 ${restricted}
-${notesBlock}${notesOnlyBlock}${styleGuideBlock}
+${notesBlock}${notesOnlyBlock}${styleGuideBlock}${existingContentBlock}
 FIELDS TO FILL (return a value only for the ones you can confidently fill; omit the rest):
 ${fields.map(fieldLine).join("\n")}
 

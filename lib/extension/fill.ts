@@ -21,6 +21,13 @@ export interface HarvestedField {
   type:      FieldType;
   required?: boolean;
   options?:  string[];        // for select / combobox
+  // Existing on-page content for a narrative field (Name/Description/
+  // Highlights — see isNarrativeLabel in content.js) on an Edit-Product
+  // page. Only ever set for those fields; other fields keep the plain
+  // "already has a value, leave it" client-side gate instead. Sent so the
+  // AI can decide to keep, enhance, or replace it — see buildFieldLine in
+  // lib/ai/extension-fill.ts.
+  currentValue?: string;
 }
 
 export interface FillRequest {
