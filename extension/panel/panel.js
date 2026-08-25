@@ -274,14 +274,18 @@ $("autofill").addEventListener("click", async () => {
     }
     setStatus(`Found ${harvest.fields.length} fields. Asking AI…`);
 
-    // Writing style + refund policy ride along as extra freeform context,
-    // same as the notes box — the AI fill pass already reads notes as
-    // guidance (lib/ai/extension-fill.ts), no separate backend fields needed.
+    // Every Advanced Option rides along as extra freeform context, same as
+    // the notes box — the AI fill pass reads notes as authoritative guidance
+    // (lib/ai/extension-fill.ts) and, for a constrained dropdown like
+    // Warranty Duration, is told to match it against the field's real
+    // harvested options — no separate backend fields needed.
     const extraNotes = [];
     const writingStyle = $("writingStyle").value;
     if (writingStyle && writingStyle !== "SEO Optimized") extraNotes.push(`Writing style: ${writingStyle}`);
     const refundPolicy = $("refundPolicy").value;
     if (refundPolicy) extraNotes.push(`Refund policy: ${refundPolicy}`);
+    const warrantyDuration = $("warrantyDuration").value;
+    if (warrantyDuration) extraNotes.push(`Warranty duration: ${warrantyDuration}`);
     const notes = [$("notes").value.trim(), ...extraNotes].filter(Boolean).join(". ");
 
     const fill = await chrome.runtime.sendMessage({
