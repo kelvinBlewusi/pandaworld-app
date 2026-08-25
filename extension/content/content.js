@@ -337,6 +337,40 @@
     return false;
   }
 
+  /**
+   * The scrollable viewport inside the currently-open overlay, if any — the
+   * smallest visible element whose content overflows it (an ancestor
+   * wrapper can also overflow, so prefer the innermost one). This is
+   * Angular CDK's virtual-scroll viewport when the list is virtualized.
+   */
+  function scrollableOverlayEl() {
+    const candidates = [...document.querySelectorAll('.cdk-overlay-container *, [role="listbox"] *, [role="dialog"] *')]
+      .filter((el) => isVisible(el) && el.scrollHeight > el.clientHeight + 4);
+    candidates.sort((a, b) => a.clientHeight - b.clientHeight);
+    return candidates[0] || null;
+  }
+
+  /**
+   * Nudge a virtualized list's own scroll position down a bit and fire a
+   * scroll event, so the next poll sees a freshly-rendered slice. This is
+   * the fallback for when there's no reachable search box: a CDK virtual-
+   * scroll viewport only renders the currently-visible portion of a long
+   * list into the DOM — an option far down a 200-item list (Production
+   * country) or a long themed list (Color/Material family) literally isn't
+   * there to match against until scrolled into view. The proper fix is
+   * Angular's own scrollToIndex() API, but that's only reachable from
+   * inside the Angular app itself, not from a content script — this is
+   * the standard workaround. Returns false once there's nowhere further to
+   * scroll, so the caller knows to stop trying.
+   */
+  function nudgeScroll(viewport) {
+    if (!viewport) return false;
+    const before = viewport.scrollTop;
+    viewport.scrollTop = Math.min(viewport.scrollTop + 320, viewport.scrollHeight);
+    viewport.dispatchEvent(new Event("scroll", { bubbles: true }));
+    return viewport.scrollTop > before;
+  }
+
   /** Open a dropdown trigger the way a real user click would. */
   function openDropdown(el) {
     el.focus();
@@ -680,14 +714,26 @@
       try { writeInput(el, value); } catch { /* ignore */ }
     }
     let filtered = filterOpenOverlay(value, el);
+    let scrollViewport = null;
+    let canScrollFurther = true;
     el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
 
-    for (let attempt = 0; attempt < 10; attempt++) {
+    // 30 attempts (not 10) — the search-box path usually resolves in the
+    // first few either way, but scroll-and-poll through a long virtualized
+    // list (Production country can run 200+ entries) needs more room.
+    for (let attempt = 0; attempt < 30; attempt++) {
       await sleep(130);
       // A long list's search box can render a beat after the overlay opens
       // — keep trying to find and use it until it's actually filtered.
       if (!filtered) filtered = filterOpenOverlay(value, el);
       const match = matchOption(target);
+      if (!match && !filtered && canScrollFurther) {
+        // No search box found (or none helped) — fall back to nudging a
+        // virtualized list's own scroll position so the next poll sees a
+        // freshly-rendered slice further down.
+        scrollViewport = scrollViewport || scrollableOverlayEl();
+        canScrollFurther = nudgeScroll(scrollViewport);
+      }
       if (match) {
         match.scrollIntoView({ block: "nearest" });
         const box = match.matches('input[type="checkbox"], input[type="radio"]')
