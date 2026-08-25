@@ -60,7 +60,20 @@ export async function getOrCreateCreditBalance(userId: string): Promise<number> 
   return FREE_SIGNUP_CREDITS;
 }
 
-/** Spend credits for one extension autofill. */
+/**
+ * Spend credits for one extension autofill.
+ *
+ * Compare-and-swap, not a plain read-then-write: two concurrent autofills
+ * from the same seller can both call getOrCreateCreditBalance() before
+ * either writes back, both see (say) balance=5, and both would compute and
+ * write the same newBalance=2.5 — one deduction is silently lost and the
+ * seller effectively spent 2.5 credits for two autofills. The extra
+ * `.eq("balance", balance)` makes the UPDATE a no-op unless the row still
+ * holds the exact value we read; Supabase returns the updated row only when
+ * it actually matched, so a lost race is detectable (empty `data`) rather
+ * than silently overwriting a fresher balance, and we retry against the
+ * now-current one instead of racing again blind.
+ */
 export async function deductCredits(
   userId: string,
   amount: number,
@@ -69,27 +82,37 @@ export async function deductCredits(
   if (isAdmin(userId)) return { ok: true, balance: Infinity };
 
   const db = createServerClient();
-  const balance = await getOrCreateCreditBalance(userId);
-  if (balance < amount) {
-    return { ok: false, error: "insufficient_credits", balance };
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const balance = await getOrCreateCreditBalance(userId);
+    if (balance < amount) {
+      return { ok: false, error: "insufficient_credits", balance };
+    }
+    const newBalance = Math.round((balance - amount) * 100) / 100;
+    const { data, error } = await db
+      .from("extension_credits")
+      .update({ balance: newBalance, updated_at: new Date().toISOString() })
+      .eq("user_id", userId)
+      .eq("balance", balance)
+      .select("balance");
+    if (error) {
+      console.error("[extension-credits] deduct failed:", error.message);
+      return { ok: false, error: "db_error", balance };
+    }
+    if (!data || data.length === 0) continue; // lost the race — retry fresh
+
+    await db.from("extension_credit_transactions").insert({
+      user_id: userId,
+      type: "deduction",
+      amount: -amount,
+      balance_after: newBalance,
+      description,
+    });
+    return { ok: true, balance: newBalance };
   }
-  const newBalance = Math.round((balance - amount) * 100) / 100;
-  const { error } = await db
-    .from("extension_credits")
-    .update({ balance: newBalance, updated_at: new Date().toISOString() })
-    .eq("user_id", userId);
-  if (error) {
-    console.error("[extension-credits] deduct failed:", error.message);
-    return { ok: false, error: "db_error", balance };
-  }
-  await db.from("extension_credit_transactions").insert({
-    user_id: userId,
-    type: "deduction",
-    amount: -amount,
-    balance_after: newBalance,
-    description,
-  });
-  return { ok: true, balance: newBalance };
+
+  console.error(`[extension-credits] deduct gave up after 5 CAS retries for user=${userId}`);
+  return { ok: false, error: "concurrent_update", balance: await getOrCreateCreditBalance(userId) };
 }
 
 /**

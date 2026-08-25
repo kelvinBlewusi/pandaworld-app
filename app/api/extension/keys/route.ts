@@ -19,6 +19,7 @@ import {
   getOrCreateExtensionApiKey,
   regenerateExtensionApiKey,
 } from "@/lib/security/extension-keys";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
@@ -36,6 +37,13 @@ export async function GET() {
 export async function POST() {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  // GET is read-mostly (lazily provisions once, guarded by the table's
+  // primary key) so it's left unlimited — this is the one that matters:
+  // regenerating INVALIDATES the previous key, so unbounded POSTs are a
+  // way to lock a seller's own extension out repeatedly, not just churn.
+  const limited = checkRateLimit(`extension-keys:${userId}`, RATE_LIMITS.extensionKeys);
+  if (limited) return limited;
 
   const result = await regenerateExtensionApiKey(userId);
   if ("error" in result) {

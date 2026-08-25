@@ -17,12 +17,18 @@ import { NextResponse } from "next/server";
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { randomBytes } from "node:crypto";
 import { getCreditPack } from "@/lib/billing/credit-packs";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  // Not itself expensive, but an unbounded loop here can spam a seller's
+  // own Paystack account with pending initialized transactions.
+  const limited = checkRateLimit(`extension-checkout:${userId}`, RATE_LIMITS.extensionCheckout);
+  if (limited) return limited;
 
   const user = await currentUser();
   const email = user?.primaryEmailAddress?.emailAddress;

@@ -116,6 +116,21 @@ export const RATE_LIMITS = {
 
   // Writes to Jumia VC. Reputational + duplicate-SKU risk. Tight cap.
   jumiaPush:        { max: 20, windowMs: 60 * 60 * 1000 }, // 20/hour
+
+  // Chrome extension autofill — Gemini vision call, ~$0.02 per call, same
+  // cost profile as autoAnalyze. No limit here before now, on an endpoint
+  // that spends real money per request and is reachable the moment a
+  // seller has an API key.
+  extensionFill:    { max: 30, windowMs: 60 * 60 * 1000 }, // 30/hour
+
+  // Extension API-key issuance. Free to us, but unbounded key creation is
+  // its own abuse surface (credential stuffing, key-sharing checks).
+  extensionKeys:    { max: 10, windowMs: 60 * 60 * 1000 }, // 10/hour
+
+  // Paystack checkout session creation. Not itself expensive, but an
+  // unbounded loop here can spam a seller's Paystack account with pending
+  // transactions.
+  extensionCheckout: { max: 10, windowMs: 60 * 60 * 1000 }, // 10/hour
 } as const;
 
 // ─── Convenience wrapper ─────────────────────────────────────────────────────

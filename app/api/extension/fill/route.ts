@@ -42,6 +42,7 @@ import {
 } from "@/lib/security/extension-keys";
 import { getOrCreateCreditBalance, deductCredits } from "@/lib/billing/extension-credits";
 import { LISTING_CREDIT_COST, serializeCredits } from "@/lib/billing/credit-packs";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -203,6 +204,21 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: authResult.error }, { status: 401, headers: CORS });
   }
   const { userId, keyId } = authResult;
+
+  // This is the one route on the whole extension surface that spends real
+  // money per call (a Gemini vision request, ~$0.02) and had no cap at
+  // all — the credit balance check bounds the damage from any single
+  // account, but not from one account hammering the endpoint within its
+  // balance. checkRateLimit's response has no CORS headers of its own
+  // (it's a generic 429 builder shared by non-extension routes too), and
+  // this endpoint is called cross-origin from the Jumia page, so copy them
+  // on before returning — otherwise the block reads as a CORS failure to
+  // the extension instead of a real 429 it can show the seller.
+  const limited = checkRateLimit(`extension-fill:${userId}`, RATE_LIMITS.extensionFill);
+  if (limited) {
+    for (const [k, v] of Object.entries(CORS)) limited.headers.set(k, v);
+    return limited;
+  }
 
   let body: FillRequest;
   try {
