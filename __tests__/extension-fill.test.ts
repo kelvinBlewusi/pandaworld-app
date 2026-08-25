@@ -137,6 +137,8 @@ describe("finalizeAiValues (real-AI post-processing)", () => {
     { label: "What's in the box", type: "richtext" },
     { label: "Watch Type", type: "select", options: ["Analog", "Digital", "Smart"] },
     { label: "Price", type: "text" },
+    { label: "Warranty Type", type: "select", options: ["Repair by Vendor", "N/A", "None"] },
+    { label: "Warranty Duration", type: "select", options: ["1 Year", "2 Years", "N/A", "None"] },
   ];
 
   it("wraps rich-text as HTML and bulletizes highlights", () => {
@@ -188,5 +190,37 @@ describe("finalizeAiValues (real-AI post-processing)", () => {
     const { values, warnings } = finalizeAiValues({ Price: "GHS 999 — wrong" }, fields, "the price is 250");
     expect(values["Price"]).toBe("250");
     expect(warnings.some((w) => /Filled Price \(250\)/.test(w))).toBe(true);
+  });
+
+  it("rejects a degenerate product name — confirmed happening live (the AI returned the Brand fallback word as the title)", () => {
+    const generic = finalizeAiValues({ Name: "Generic" }, fields, "");
+    expect(generic.values["Name"]).toBeUndefined();
+    expect(generic.warnings.some((w) => /too generic/.test(w))).toBe(true);
+
+    const tooShort = finalizeAiValues({ Name: "Watch" }, fields, "");
+    expect(tooShort.values["Name"]).toBeUndefined();
+
+    const real = finalizeAiValues({ Name: "Wholesale Pack of 30 Gold Award Medals with Ribbons" }, fields, "");
+    expect(real.values["Name"]).toBe("Wholesale Pack of 30 Gold Award Medals with Ribbons");
+  });
+
+  it("drops Warranty Duration when Warranty Type is N/A, even if the AI filled a duration in", () => {
+    const { values } = finalizeAiValues(
+      { "Warranty Type": "N/A", "Warranty Duration": "1 Year" },
+      fields,
+      "",
+    );
+    expect(values["Warranty Type"]).toBe("N/A");
+    expect(values["Warranty Duration"]).toBeUndefined();
+  });
+
+  it("keeps Warranty Duration when Warranty Type is a real warranty", () => {
+    const { values } = finalizeAiValues(
+      { "Warranty Type": "Repair by Vendor", "Warranty Duration": "1 Year" },
+      fields,
+      "",
+    );
+    expect(values["Warranty Type"]).toBe("Repair by Vendor");
+    expect(values["Warranty Duration"]).toBe("1 Year");
   });
 });

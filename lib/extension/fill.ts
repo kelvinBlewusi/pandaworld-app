@@ -358,6 +358,19 @@ export function finalizeAiValues(
     let value = (raw[field.label] ?? "").trim();
     if (!value) continue;
 
+    // Guard against a degenerate product title — confirmed happening live:
+    // the AI once returned literally "Generic" (the Brand field's own
+    // fallback word, applied entirely separately by applyBrandDefault) as
+    // the product NAME. A real SEO title is always much longer than this;
+    // better to leave it for the seller to write than push something this
+    // bad into an actual listing.
+    if (fieldLabel.includes("name") && !fieldLabel.includes("brand") && !fieldLabel.includes("store")) {
+      if (value.toLowerCase() === "generic" || value.replace(/\s+/g, "").length < 15) {
+        warnings.push(`AI's product name looked too generic ("${value}") — left blank, please write one.`);
+        continue;
+      }
+    }
+
     if (field.type === "richtext") {
       const l = norm(field.label);
       value = l.includes("highlight") ? bulletsToHtml(value)
@@ -375,6 +388,18 @@ export function finalizeAiValues(
     }
 
     values[field.label] = value;
+  }
+
+  // If Warranty Type came out N/A (or wasn't filled at all), a duration
+  // doesn't mean anything — drop it even if the AI filled one in, rather
+  // than leaving a duration on a listing that says it has no warranty.
+  const warrantyTypeField = fields.find((f) => { const l = norm(f.label); return l.includes("warranty") && l.includes("type"); });
+  const warrantyDurationField = fields.find((f) => { const l = norm(f.label); return l.includes("warranty") && l.includes("duration"); });
+  if (warrantyDurationField && values[warrantyDurationField.label]) {
+    const typeVal = warrantyTypeField ? (values[warrantyTypeField.label] ?? "").trim().toLowerCase() : "";
+    if (!warrantyTypeField || !typeVal || typeVal === "n/a" || typeVal === "none") {
+      delete values[warrantyDurationField.label];
+    }
   }
 
   if (price != null) {

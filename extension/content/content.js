@@ -461,9 +461,19 @@
     }
   }
 
-  const CONTROL_SEL = 'input, textarea, select, .ProseMirror';
+  // Must match findFields()'s own node query (which also picks up <div>/
+  // <button> role="combobox"/"listbox" triggers, not just <input>) — these
+  // two selectors decide where a label-boundary walk stops so a field never
+  // steals its neighbour's label. When findFields() started discovering
+  // div-based triggers but this list wasn't updated to match, the walk
+  // could sail straight past a "Color family"/"Material family" trigger
+  // (built as a div, not an input) as if it weren't a control at all,
+  // grabbing "Color"/"Main material"'s label instead — the exact "Color vs
+  // Color family" collision this code was already patched for once, now
+  // regressed for any trigger that isn't a plain <input>.
+  const CONTROL_SEL = 'input, textarea, select, .ProseMirror, [role="combobox"], [role="listbox"]';
   // Neighbours whose presence, when visible, ends the backward label walk.
-  const STOP_SEL = 'input, textarea, select, .ProseMirror, [contenteditable="true"]';
+  const STOP_SEL = 'input, textarea, select, .ProseMirror, [contenteditable="true"], [role="combobox"], [role="listbox"]';
   // A rich-text editor's own aria-label ("Editor editing area: main") is NOT
   // the field label — ignore these so we find the real one above it.
   const BAD_ARIA = /editor editing area|rich.?text|prosemirror/i;

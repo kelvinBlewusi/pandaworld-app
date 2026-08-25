@@ -129,7 +129,7 @@ function applyBrandDefault(
 function applyQuantityDefault(values: Record<string, string>, fields: FillRequest["fields"]) {
   const qty = fields.find((f) => /quantity/i.test(f.label));
   if (qty && !values[qty.label]) {
-    values[qty.label] = String(10 + Math.floor(Math.random() * 41)); // 10-50
+    values[qty.label] = String(1 + Math.floor(Math.random() * 100)); // 1-100
   }
 }
 

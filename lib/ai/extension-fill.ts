@@ -52,7 +52,7 @@ function hintFor(f: HarvestedField): string {
   const l = norm(f.label);
   const constrained = Boolean(f.options?.length); // a select/combobox with a fixed choice list
   if (l.includes("name") && !l.includes("brand")) {
-    return " — concise product title (type + key specs). OMIT the brand name; Jumia rejects titles containing the brand.";
+    return " — see CONTENT STYLE below for the exact title format. NEVER a single generic word (e.g. \"Generic\", \"Product\") — that has happened in production and is worse than leaving it blank.";
   }
   if (l.includes("brand")) return " — ONLY if a logo/wordmark is clearly visible; otherwise omit.";
   if (l.includes("description")) return " — see CONTENT STYLE below for the exact structure and tone.";
@@ -134,10 +134,13 @@ export async function aiFillRenderedFields(args: {
 
   // Modeled on real high-performing Jumia listings (Kelvin's own examples,
   // Aug 2026) — only included when the fields that need it are on the page.
+  const hasName = fields.some((f) => { const l = norm(f.label); return l.includes("name") && !l.includes("brand"); });
   const hasDescription = fields.some((f) => norm(f.label).includes("description"));
   const hasHighlights = fields.some((f) => norm(f.label).includes("highlight"));
-  const styleGuideBlock = hasDescription || hasHighlights
+  const styleGuideBlock = hasName || hasDescription || hasHighlights
     ? `\n\nCONTENT STYLE:\n${[
+        hasName &&
+          `- Name/title: genuinely descriptive and SEO-rich — TYPE + the specific, real details a buyer would search for (material, colour, size, pack count/quantity, capacity, a key feature), roughly 6–12 words long (e.g. "Wholesale Pack of 30 Gold Award Medals with Ribbons", not "Medals"). NEVER a single generic word or phrase ("Generic", "Product", "Item") — if the image genuinely doesn't give you enough to write a real title, omit the field entirely rather than writing something vague; a blank field the seller fills in is far better than a title that says nothing. No ALL CAPS, no keyword repetition/stuffing, no brand name (Jumia rejects titles containing the brand).`,
         hasDescription &&
           `- Description: 2–4 short <p> paragraphs, not one dense block. Open with a one-sentence hook naming the product (you may bold it inline). Weave <strong>key spec/feature phrases</strong> naturally into the sentences as you go — including as a bold micro-heading directly followed by more prose in the same paragraph (e.g. "<strong>Effortless Slicing.</strong> The large, smooth-rolling wheel glides through..."). If the product clearly suits distinct use-cases or buyer types, you may close with a short "Perfect for:" <ul> where each <li> starts with a bold audience/use-case and a colon.`,
         hasHighlights &&
