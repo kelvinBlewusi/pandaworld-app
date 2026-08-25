@@ -47,6 +47,19 @@ export interface FillResponse {
 }
 
 /**
+ * True for a product Name/title that's too degenerate to ever write into a
+ * real listing — a bare "Generic" (the Brand field's own fallback word) or
+ * anything under 15 non-space characters. Shared so lib/ai/extension-fill.ts
+ * can also filter this OUT of what gets shown to the AI as "current
+ * content" on an Edit page — confirmed live: showing the AI its own past
+ * "Generic" back as existing content to weigh made it echo the same value
+ * again instead of writing something real, defeating the guard below.
+ */
+export function isDegenerateName(value: string): boolean {
+  return value.trim().toLowerCase() === "generic" || value.replace(/\s+/g, "").length < 15;
+}
+
+/**
  * The subset of the real `ProductDescription` (lib/actions/ai.ts) that the
  * mapper consumes. Keeping it structural means the Phase-1 swap to the real
  * type is a drop-in.
@@ -370,9 +383,11 @@ export function finalizeAiValues(
     // fallback word, applied entirely separately by applyBrandDefault) as
     // the product NAME. A real SEO title is always much longer than this;
     // better to leave it for the seller to write than push something this
-    // bad into an actual listing.
+    // bad into an actual listing. Also see isDegenerateName below, applied
+    // BEFORE the AI ever sees existing content, to stop this same value
+    // being shown back to it as "current content" worth keeping.
     if (fieldLabel.includes("name") && !fieldLabel.includes("brand") && !fieldLabel.includes("store")) {
-      if (value.toLowerCase() === "generic" || value.replace(/\s+/g, "").length < 15) {
+      if (isDegenerateName(value)) {
         warnings.push(`AI's product name looked too generic ("${value}") — left blank, please write one.`);
         continue;
       }

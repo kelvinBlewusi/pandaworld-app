@@ -462,7 +462,11 @@
         const texts = collectOptionEls()
           .map((o) => (o.innerText || o.textContent || "").trim())
           .filter(Boolean);
-        if (texts.length) f.options = [...new Set(texts)].slice(0, 80);
+        // Capped well above any real Jumia attribute list (the largest is
+        // a ~195-country picker) — confirmed live: the previous 80-item cap
+        // silently cut off Production country well before it got there, so
+        // the AI could never even see, let alone pick, most real countries.
+        if (texts.length) f.options = [...new Set(texts)].slice(0, 250);
       } catch {
         /* best effort — leave options undefined, AI falls back to free text */
       } finally {

@@ -18,7 +18,7 @@ import { pickModelForExtensionFill } from "@/lib/billing/ai-models";
 import { buildContentPolicyInstructions, stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
 import { buildRestrictedWordsInstruction, stripRestrictedWords } from "@/lib/ai/restricted-words";
 import { buildStyleGuideBlock } from "@/lib/ai/content-style-rules";
-import type { HarvestedField } from "@/lib/extension/fill";
+import { isDegenerateName, type HarvestedField } from "@/lib/extension/fill";
 
 export interface AiFillResult {
   raw:      Record<string, string>; // value per field label, policy-cleaned
@@ -104,7 +104,12 @@ function hintFor(f: HarvestedField): string {
 }
 
 function fieldLine(f: HarvestedField): string {
-  const opts = f.options?.length ? `; choose ONE of: ${f.options.slice(0, 40).join(" | ")}` : "";
+  // Matches content.js's harvest-side cap (250) — confirmed live: a lower
+  // cap here (previously 40) silently hid most of a long option list (e.g.
+  // Production country's ~195 real countries) from the AI even when
+  // content.js had already harvested them all, so it could never pick one
+  // outside the first 40.
+  const opts = f.options?.length ? `; choose ONE of: ${f.options.slice(0, 250).join(" | ")}` : "";
   const current = f.currentValue ? `; CURRENT CONTENT: "${f.currentValue.replace(/"/g, "'")}"` : "";
   return `- "${f.label}" [${f.type}${opts}]${current}${hintFor(f)}`;
 }
@@ -130,8 +135,24 @@ export async function aiFillRenderedFields(args: {
   notes?:      string;
   market?:     string;
 }): Promise<AiFillResult> {
-  const { imageBase64, mimeType, fields, notes, market = "GH" } = args;
+  const { imageBase64, mimeType, notes, market = "GH" } = args;
   const warnings: string[] = [];
+
+  // A field's currentValue that's already degenerate (a stale "Generic"
+  // name, most likely written by an earlier bug or an earlier AI slip)
+  // must never be shown to the AI as "current content" to weigh keeping —
+  // confirmed live: doing so made the AI echo the same "Generic" straight
+  // back instead of writing a real title, because the EXISTING CONTENT
+  // instruction to "keep it if it's already good" won out over the
+  // CONTENT STYLE rule banning that exact word. Strip it so the field
+  // reads as blank instead, with nothing for the AI to anchor on.
+  const fields = args.fields.map((f) => {
+    const l = norm(f.label);
+    if (f.currentValue && l.includes("name") && !l.includes("brand") && isDegenerateName(f.currentValue)) {
+      return { ...f, currentValue: undefined };
+    }
+    return f;
+  });
 
   const policy = buildContentPolicyInstructions({ categoryPath: null, includeImageRules: false });
   const restricted = buildRestrictedWordsInstruction();
