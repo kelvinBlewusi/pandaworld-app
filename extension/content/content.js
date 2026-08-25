@@ -51,8 +51,11 @@
       // On an Edit-Product page, Name/Description/Highlights may already
       // carry real seller content — hand it to the AI so it can decide to
       // keep, enhance, or replace it, instead of the extension deciding
-      // blindly on its own (see isNarrativeLabel above).
-      if (isNarrativeLabel(f.label) && fieldHasValue(f)) {
+      // blindly on its own (see isNarrativeLabel above). Skip this for a
+      // field with an embedded image (hasEmbeddedImage below) — it's never
+      // going to be written to regardless of what the AI says, so there's
+      // no point spending prompt space asking it to reconsider the text.
+      if (isNarrativeLabel(f.label) && fieldHasValue(f) && !hasEmbeddedImage(f)) {
         const current = currentTextValue(f);
         if (current) field.currentValue = current.slice(0, 4000);
       }
@@ -672,6 +675,24 @@
   }
 
   /**
+   * True when a rich-text field currently has an image embedded IN it —
+   * Jumia's Highlights/Description editors allow inserting a photo inline,
+   * separate from the one top-level product-photo upload (which findFields()
+   * excludes entirely and is never at risk). writeRichText() below always
+   * replaces a rich-text field's content wholesale (CKEditor bridge,
+   * execCommand after select-all, or a raw innerHTML set) — there is no
+   * "keep the image, just change the text" write path. So a field with an
+   * embedded image is never handed to the AI's keep/enhance/replace
+   * decision at all: applyValues() refuses to write to it, full stop,
+   * regardless of what the AI returned or whether "Overwrite existing
+   * content" is checked — that's the only way to guarantee the image can
+   * never be silently wiped by a text rewrite.
+   */
+  function hasEmbeddedImage(field) {
+    return field.type === "richtext" && !!field.el.querySelector("img");
+  }
+
+  /**
    * `overwrite` defaults to false: on an already-listed product (Edit page)
    * every field may already hold real, possibly hand-tuned seller content,
    * so the default is "complete what's missing," not "rewrite what's
@@ -683,6 +704,12 @@
    * was already shown whatever content they held (harvest()'s
    * currentValue) and asked to keep/enhance/replace it, so its returned
    * value IS the considered decision, not a blind guess to gate here.
+   *
+   * A field with an embedded image (hasEmbeddedImage) overrides ALL of the
+   * above, unconditionally: never written to, ever, even with "Overwrite
+   * existing content" checked. Rich-text writes replace a field's whole
+   * content, so this is the only way to guarantee an inline image is never
+   * silently wiped by a text rewrite.
    */
   async function applyValues(values, { overwrite = false } = {}) {
     const fields = findFields();
@@ -693,6 +720,10 @@
       const f = byLabel.get(label.toLowerCase());
       if (!f) {
         results.push({ label, ok: false, reason: "field not found on page" });
+        continue;
+      }
+      if (hasEmbeddedImage(f)) {
+        results.push({ label, ok: false, skipped: true, reason: "contains an embedded image — left as-is to avoid removing it" });
         continue;
       }
       if (!overwrite && !isNarrativeLabel(f.label) && fieldHasValue(f)) {
