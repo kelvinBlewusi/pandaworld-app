@@ -55,7 +55,12 @@ body {
   border: 1px solid var(--line); background: var(--card);
   border-radius: 12px; padding: 16px; margin: 10px 0 16px; text-align: center;
 }
-.banner.warn { background: var(--warn-bg); border-color: var(--warn-line); }
+/* Deliberately NOT --warn-bg here — that amber tint plus the orange
+   "Open Jumia Vendor Center" button below it read as one undifferentiated
+   orange block (confirmed live: the CTA button disappeared into its own
+   card). A neutral card lets the orange button stay the one accent color
+   that actually draws the eye. */
+.banner.warn { background: var(--card); border-color: var(--line); }
 .bannerIcon { font-size: 26px; line-height: 1; margin-bottom: 6px; }
 .bannerTitle { font-weight: 700; font-size: 14px; margin-bottom: 4px; }
 .bannerBody { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
