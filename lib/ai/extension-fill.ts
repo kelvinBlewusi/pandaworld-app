@@ -14,7 +14,7 @@
  */
 
 import { callGeminiBackend, isVertexEnabled, type GeminiPart } from "@/lib/ai/gemini-client";
-import { pickModelForOwnImagesFlow } from "@/lib/billing/ai-models";
+import { pickModelForExtensionFill } from "@/lib/billing/ai-models";
 import { buildContentPolicyInstructions, stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
 import { buildRestrictedWordsInstruction, stripRestrictedWords } from "@/lib/ai/restricted-words";
 import type { HarvestedField } from "@/lib/extension/fill";
@@ -42,6 +42,7 @@ function isNotesOnlyField(label: string): boolean {
     l.includes("sku") ||
     l.includes("gtin") ||
     l.includes("barcode") ||
+    (l.includes("price") && !l.includes("sale")) ||
     (l.includes("sale") && (l.includes("start") || l.includes("end")))
   );
 }
@@ -62,6 +63,7 @@ function hintFor(f: HarvestedField): string {
   if (l.includes("quantity")) return " — ONLY if the seller's notes state an exact quantity; otherwise omit (never guess a stock count from the image).";
   if (l.includes("sku")) return " — ONLY if the seller's notes give one; otherwise a short plausible SKU code (uppercase letters + digits, 6–10 chars).";
   if (l.includes("gtin") || l.includes("barcode")) return " — ONLY if the seller's notes give a real GTIN/barcode; otherwise omit entirely. NEVER invent one — unlike SKU this is a real-world product identifier, and a fabricated one can conflict with Jumia's catalog.";
+  if (l.includes("price") && !l.includes("sale")) return " — ONLY if the seller's notes state an exact price figure; otherwise omit (never guess a price from the image). Digits only — no currency symbol, commas, or words (e.g. \"210\", not \"GHS 210\").";
   if (l.includes("sale") && (l.includes("start") || l.includes("end"))) {
     return " — ONLY if the seller's notes explicitly give this date; otherwise omit entirely.";
   }
@@ -168,7 +170,7 @@ Return ONLY the JSON object, no markdown, no commentary.`;
     { inlineData: { data: imageBase64, mimeType } },
   ];
 
-  const model = pickModelForOwnImagesFlow("vision");
+  const model = pickModelForExtensionFill();
   const t0 = Date.now();
   const { text, backend } = await callGeminiBackend(model, parts);
   console.info(`[ext/ai-fill] model=${model} backend=${backend} ms=${Date.now() - t0} fields=${fields.length}`);

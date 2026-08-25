@@ -66,11 +66,19 @@ describe("mapProductToFields — Watches POC", () => {
     expect(values["Color family"]).toBe("Black"); // exact-cased option
   });
 
-  it("does not write price into any field, but warns to set it on Variants", () => {
+  it("warns (with no Price field on the page) when a price is detected in notes but has nowhere to go", () => {
     const product = buildMockProduct("price 250", "Watches");
     const { values, warnings } = mapProductToFields(product, fields, "price 250");
     expect(Object.values(values).some((v) => v.includes("250"))).toBe(false);
-    expect(warnings.some((w) => /Variants/.test(w))).toBe(true);
+    expect(warnings.some((w) => /no Price field was found/.test(w))).toBe(true);
+  });
+
+  it("fills a real Price field from notes as digits only, and warns to double-check it", () => {
+    const withPrice: HarvestedField[] = [...fields, { label: "Price", type: "text", required: true }];
+    const product = buildMockProduct("price 250", "Watches");
+    const { values, warnings } = mapProductToFields(product, withPrice, "price 250");
+    expect(values["Price"]).toBe("250");
+    expect(warnings.some((w) => /Filled Price \(250\)/.test(w))).toBe(true);
   });
 
   it("highlights render as a real bulleted list", () => {
@@ -107,12 +115,12 @@ describe("mapProductToFields — Watches POC", () => {
 
 describe("isSellerOwned", () => {
   it("flags seller-owned fields", () => {
-    ["Price", "Sale Price", "Stock", "Category", "Country", "Currency"].forEach((l) =>
+    ["Sale Price", "Stock", "Category", "Country", "Currency"].forEach((l) =>
       expect(isSellerOwned(l)).toBe(true),
     );
   });
-  it("does not flag AI fields — Quantity and SKU are now AI-fillable", () => {
-    ["Name", "Brand", "Product description", "Weight (kg)", "Quantity", "Seller SKU"].forEach((l) =>
+  it("does not flag AI/notes fields — Quantity, SKU, and base Price are all notes-fillable now", () => {
+    ["Name", "Brand", "Product description", "Weight (kg)", "Quantity", "Seller SKU", "Price"].forEach((l) =>
       expect(isSellerOwned(l)).toBe(false),
     );
   });
@@ -171,8 +179,14 @@ describe("finalizeAiValues (real-AI post-processing)", () => {
     expect(bad.warnings.some((w) => /Watch Type/.test(w))).toBe(true);
   });
 
-  it("never fills seller-owned fields even if the AI returned them", () => {
+  it("leaves Price blank when notes give no price, even if the AI guessed one", () => {
     const { values } = finalizeAiValues({ Price: "250" }, fields, "");
     expect(values["Price"]).toBeUndefined();
+  });
+
+  it("fills Price deterministically from notes as digits only, ignoring whatever the AI itself returned", () => {
+    const { values, warnings } = finalizeAiValues({ Price: "GHS 999 — wrong" }, fields, "the price is 250");
+    expect(values["Price"]).toBe("250");
+    expect(warnings.some((w) => /Filled Price \(250\)/.test(w))).toBe(true);
   });
 });
