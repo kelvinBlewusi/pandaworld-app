@@ -17,6 +17,7 @@ import { callGeminiBackend, isVertexEnabled, type GeminiPart } from "@/lib/ai/ge
 import { pickModelForExtensionFill } from "@/lib/billing/ai-models";
 import { buildContentPolicyInstructions, stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
 import { buildRestrictedWordsInstruction, stripRestrictedWords } from "@/lib/ai/restricted-words";
+import { buildStyleGuideBlock } from "@/lib/ai/content-style-rules";
 import type { HarvestedField } from "@/lib/extension/fill";
 
 export interface AiFillResult {
@@ -132,21 +133,9 @@ export async function aiFillRenderedFields(args: {
     ? `\n\nSELLER-CONTROLLED FIELDS — ${notesOnlyFields.map((l) => `"${l}"`).join(", ")}: fill these ONLY if the seller notes above state them explicitly. Never infer or guess these from the photo. No seller notes (or the notes don't mention it) → omit the field.\n`
     : "";
 
-  // Modeled on real high-performing Jumia listings (Kelvin's own examples,
-  // Aug 2026) — only included when the fields that need it are on the page.
-  const hasName = fields.some((f) => { const l = norm(f.label); return l.includes("name") && !l.includes("brand"); });
-  const hasDescription = fields.some((f) => norm(f.label).includes("description"));
-  const hasHighlights = fields.some((f) => norm(f.label).includes("highlight"));
-  const styleGuideBlock = hasName || hasDescription || hasHighlights
-    ? `\n\nCONTENT STYLE:\n${[
-        hasName &&
-          `- Name/title: genuinely descriptive and SEO-rich — TYPE + the specific, real details a buyer would search for (material, colour, size, pack count/quantity, capacity, a key feature), roughly 6–12 words long (e.g. "Wholesale Pack of 30 Gold Award Medals with Ribbons", not "Medals"). NEVER a single generic word or phrase ("Generic", "Product", "Item") — if the image genuinely doesn't give you enough to write a real title, omit the field entirely rather than writing something vague; a blank field the seller fills in is far better than a title that says nothing. No ALL CAPS, no keyword repetition/stuffing, no brand name (Jumia rejects titles containing the brand).`,
-        hasDescription &&
-          `- Description: 2–4 short <p> paragraphs, not one dense block. Open with a one-sentence hook naming the product (you may bold it inline). Weave <strong>key spec/feature phrases</strong> naturally into the sentences as you go — including as a bold micro-heading directly followed by more prose in the same paragraph (e.g. "<strong>Effortless Slicing.</strong> The large, smooth-rolling wheel glides through..."). If the product clearly suits distinct use-cases or buyer types, you may close with a short "Perfect for:" <ul> where each <li> starts with a bold audience/use-case and a colon.`,
-        hasHighlights &&
-          `- Highlights: a <ul><li>, 4–6 items, EVERY item shaped exactly like <li><strong>Short Feature Label</strong>: one clear sentence on the benefit.</li> (label 2–4 words). When the product has clear technical specs (dimensions, ingredients, materials, capacity, servings), lead with a 2-column <table> (<tr><td>Spec</td><td>Value</td></tr> per row) before the bullets.`,
-      ].filter(Boolean).join("\n")}\n- Never end description or highlights with a request for reviews/feedback/ratings — keep the content to the product itself.\n`
-    : "";
+  // See lib/ai/content-style-rules.ts — the file to edit when reviewing
+  // real listings, not here.
+  const styleGuideBlock = buildStyleGuideBlock(fields);
 
   const prompt = `You are a product-listing assistant for Jumia (market: ${market}). Look at the product image and fill the EXACT form fields listed below so the listing is accurate, SEO-friendly, and passes Jumia QC.
 
