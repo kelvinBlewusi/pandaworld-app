@@ -27,7 +27,22 @@ const TIERS: Tier[] = CREDIT_PACKS.map((p) => ({
   popular: p.id === POPULAR_PACK_ID,
 }));
 
-export function BuyCreditsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function BuyCreditsModal({
+  open,
+  onClose,
+  signedIn = true,
+  signInHref,
+}: {
+  open: boolean;
+  onClose: () => void;
+  // False when shown to a logged-out visitor (the /extension marketing
+  // page's "Pricing" popup) — the dashboard's own usage is always signed
+  // in, so this defaults to true and that caller needs no changes.
+  signedIn?: boolean;
+  // Where "Buy" sends a logged-out visitor instead of calling checkout —
+  // required whenever signedIn is false.
+  signInHref?: string;
+}) {
   const [selected, setSelected] = useState(POPULAR_PACK_ID);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,6 +52,13 @@ export function BuyCreditsModal({ open, onClose }: { open: boolean; onClose: () 
   const tier = TIERS.find((t) => t.id === selected)!;
 
   async function buy() {
+    // Logged-out visitor: /api/extension/credits/checkout requires a Clerk
+    // session and would just 401. Send them to sign in instead of showing
+    // an error for something that isn't actually broken.
+    if (!signedIn) {
+      if (signInHref) window.location.href = signInHref;
+      return;
+    }
     setError(null);
     setPending(true);
     try {
@@ -115,7 +137,7 @@ export function BuyCreditsModal({ open, onClose }: { open: boolean; onClose: () 
           className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-zinc-900 px-4 py-3 text-sm font-semibold text-white hover:bg-zinc-800 disabled:opacity-60"
         >
           {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-          Buy {tier.credits} credits · {tier.price}
+          {signedIn ? `Buy ${tier.credits} credits · ${tier.price}` : "Sign in to buy"}
         </button>
         <p className="mt-2.5 flex items-center justify-center gap-1 text-[11px] text-zinc-400">
           <Lock className="h-3 w-3" /> Secure checkout by Paystack
