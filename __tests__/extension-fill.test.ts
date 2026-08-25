@@ -217,6 +217,30 @@ describe("finalizeAiValues (real-AI post-processing)", () => {
     expect(real.values["Name"]).toBe("Wholesale Pack of 30 Gold Award Medals with Ribbons");
   });
 
+  it("keeps several values for a multi-select field (Color family accepts more than one)", () => {
+    const multiFields: HarvestedField[] = [
+      { label: "Color family", type: "combobox", multi: true, options: ["Black", "Brown", "Blue"] },
+    ];
+    const { values } = finalizeAiValues({ "Color family": "Black, Brown" }, multiFields, "");
+    expect(values["Color family"]).toBe("Black, Brown");
+  });
+
+  it("keeps only the real options from a multi-value answer, and still drops one with no valid part", () => {
+    const multiFields: HarvestedField[] = [
+      { label: "Color family", type: "combobox", multi: true, options: ["Black", "Brown"] },
+    ];
+    expect(finalizeAiValues({ "Color family": "Black, Chartreuse" }, multiFields, "").values["Color family"]).toBe("Black");
+    expect(finalizeAiValues({ "Color family": "Chartreuse, Puce" }, multiFields, "").values["Color family"]).toBeUndefined();
+  });
+
+  it("does not split a comma-containing answer on a single-select field", () => {
+    const singleFields: HarvestedField[] = [
+      { label: "Warranty Address", type: "combobox", options: ["Accra, Ghana", "Lagos"] },
+    ];
+    const { values } = finalizeAiValues({ "Warranty Address": "Accra, Ghana" }, singleFields, "");
+    expect(values["Warranty Address"]).toBe("Accra, Ghana");
+  });
+
   it("drops Warranty Duration when Warranty Type is N/A, even if the AI filled a duration in", () => {
     const { values } = finalizeAiValues(
       { "Warranty Type": "N/A", "Warranty Duration": "1 Year" },

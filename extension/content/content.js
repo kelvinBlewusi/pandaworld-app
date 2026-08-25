@@ -47,7 +47,7 @@
     await enrichComboboxOptions(rawFields);
     await closeAnyLingeringOverlay();
     const fields = rawFields.map((f) => {
-      const field = { label: f.label, type: f.type, required: f.required, options: f.options };
+      const field = { label: f.label, type: f.type, required: f.required, options: f.options, multi: f.multi };
       // On an Edit-Product page, Name/Description/Highlights may already
       // carry real seller content — hand it to the AI so it can decide to
       // keep, enhance, or replace it, instead of the extension deciding
@@ -486,7 +486,8 @@
       try {
         openDropdown(f.el);
         await sleep(180);
-        const texts = collectOptionEls()
+        const optionEls = collectOptionEls();
+        const texts = optionEls
           .map((o) => (o.innerText || o.textContent || "").trim())
           .filter(Boolean);
         // Capped well above any real Jumia attribute list (the largest is
@@ -494,6 +495,15 @@
         // silently cut off Production country well before it got there, so
         // the AI could never even see, let alone pick, most real countries.
         if (texts.length) f.options = [...new Set(texts)].slice(0, 250);
+        // Checkbox rows mean the widget accepts MORE than one choice
+        // (Color family, Material family, Certifications); radio rows mean
+        // exactly one. Recorded so the prompt can invite several values for
+        // the former and insist on a single one for the latter — Color
+        // family and Material family had never once been filled, partly
+        // because the prompt only ever said "choose ONE of".
+        f.multi = optionEls.some(
+          (o) => o.matches?.('input[type="checkbox"]') || o.querySelector?.('input[type="checkbox"]'),
+        );
       } catch {
         /* best effort — leave options undefined, AI falls back to free text */
       } finally {
@@ -519,12 +529,47 @@
   // the field label — ignore these so we find the real one above it.
   const BAD_ARIA = /editor editing area|rich.?text|prosemirror/i;
 
+  /**
+   * A <label>'s OWN text, with every control's rendered content stripped out
+   * first. Reading a wrapping <label>'s innerText directly is wrong whenever
+   * the label has no separate heading element inside it: the label then
+   * renders as whatever the control is currently displaying — confirmed live
+   * across a whole listing, where Production country, Gender, Season, Hair
+   * Type and Skin Type all reported their own SELECTED VALUE ("China",
+   * "Female", "All Seasons", "All Hair Types", "All skin types") as their
+   * label in the extension's results panel, and an EMPTY dropdown reported
+   * its "Ex: …" placeholder instead. Both break the same way: the AI is
+   * handed a field whose name is really a value, so it can't fill the real
+   * attribute, and the seller sees nonsense field names in the panel.
+   *
+   * Cloning and removing the controls leaves only the text the label itself
+   * contributes, which is the actual field name (or nothing, in which case
+   * the caller falls through to the positional strategies below).
+   */
+  const LABEL_STRIP_SEL =
+    'input, textarea, select, option, button, svg, .ProseMirror, [contenteditable="true"], ' +
+    '[role="combobox"], [role="listbox"], [role="option"], [role="button"], [role="toolbar"]';
+
+  function labelOwnText(labelEl) {
+    if (!labelEl) return null;
+    const clone = labelEl.cloneNode(true);
+    clone.querySelectorAll(LABEL_STRIP_SEL).forEach((n) => n.remove());
+    const raw = (clone.textContent || "").replace(/\s+/g, " ").trim();
+    if (!raw) return null;
+    const first = raw.split("\n")[0].trim();
+    if (first.length < 1 || first.length > 40) return null;
+    if (looksLikePlaceholderJunk(first)) return null;
+    return clean(first);
+  }
+
   /** Best-effort label resolution for a control. */
   function findLabel(el) {
     const isRich = el.classList.contains("ProseMirror") || el.getAttribute("contenteditable") === "true";
 
-    // 1. <label for> association
-    if (el.labels && el.labels[0] && el.labels[0].innerText.trim()) return clean(el.labels[0].innerText);
+    // 1. <label for> association — via labelOwnText, since a <label for> can
+    // just as easily wrap the control it names (see labelOwnText above).
+    const forLabel = el.labels && el.labels[0] ? labelOwnText(el.labels[0]) : null;
+    if (forLabel) return forLabel;
     // 2. aria-label / aria-labelledby — but never a rich-text editor's own aria.
     const aria = el.getAttribute("aria-label");
     if (aria && !(isRich && BAD_ARIA.test(aria))) return clean(aria);
@@ -533,15 +578,10 @@
       const ref = document.getElementById(labelledby);
       if (ref && ref.innerText.trim() && !BAD_ARIA.test(ref.innerText)) return clean(ref.innerText);
     }
-    // 3. Wrapping <label>. Guarded the same way as labelTextOf below — a
-    // <label> that wraps a <select> with no separate heading inside it
-    // renders as just the currently-displayed option, which for an
-    // untouched field is Jumia's own "Ex: 2 years [...]" placeholder
-    // option — confirmed live (Warranty Duration's placeholder option text
-    // was showing up as its "label" in the extension's own results panel).
-    // Reject that and fall through to the more careful strategies below.
-    const wrap = el.closest("label");
-    if (wrap && wrap.innerText.trim() && !looksLikePlaceholderJunk(wrap.innerText)) return clean(wrap.innerText);
+    // 3. Wrapping <label> — again via labelOwnText, so we get the label's own
+    // text rather than whatever the control it wraps happens to be showing.
+    const wrap = labelOwnText(el.closest("label"));
+    if (wrap) return wrap;
 
     // 4. Walk backwards in document (reading) order until we hit a label-like
     // snippet. Most structure-agnostic match; stops if it reaches another form
@@ -817,7 +857,7 @@
       return writeRichText(el, merged);
     }
     if (type === "select") return writeSelect(el, value);
-    if (type === "combobox") return writeCombobox(el, value);
+    if (type === "combobox") return writeCombobox(el, value, field);
     return writeInput(el, value); // text / textarea
   }
 
@@ -853,8 +893,38 @@
    * search box to narrow a long list, find the row whose text matches, and
    * click it (plus its checkbox as a fallback).
    */
-  async function writeCombobox(el, value) {
+  /**
+   * Split a combobox value into the individual choices to select. Jumia's
+   * "family" pickers (Color family, Material family, Certifications) accept
+   * MORE than one choice — they're checkbox lists, not radio lists — so the
+   * AI can legitimately answer "Black, Brown". Only split when every part
+   * matches a real option, so a single option that itself contains a comma
+   * (e.g. "Ships from Accra, Ghana") is never shredded into nonsense.
+   */
+  function splitComboValues(value, field) {
+    const whole = value.trim();
+    if (!whole) return [];
+    const opts = field?.options;
+    const matchesOption = (v) => opts.some((o) => o.trim().toLowerCase() === v.trim().toLowerCase());
+    // With a known option list, prefer an exact whole-string match.
+    if (opts?.length && matchesOption(whole)) return [whole];
+    const parts = whole.split(/\s*[,|]\s*/).map((p) => p.trim()).filter(Boolean);
+    if (parts.length < 2) return [whole];
+    if (opts?.length && !parts.every(matchesOption)) return [whole];
+    return parts;
+  }
+
+  /**
+   * Select one value in a combobox: open it, narrow it (search box, else
+   * scroll-and-poll a virtualized list), click the matching row. Leaves the
+   * overlay CLOSED on the way out so the next value starts from a clean
+   * state — reopening per value is a little slower than keeping the overlay
+   * up, but it's the only way that's safe for both single-select widgets
+   * (which close themselves on pick) and multi-select ones (which don't).
+   */
+  async function writeComboboxOne(el, value) {
     const target = value.trim().toLowerCase();
+    await closeDropdown(el);
     openDropdown(el);
     await sleep(160);
 
@@ -905,6 +975,22 @@
 
     await closeDropdown(el);
     return false;
+  }
+
+  /**
+   * Write into a custom dropdown, selecting every value the AI returned —
+   * one for an ordinary picker, several for a multi-select one like Color
+   * family or Material family (see splitComboValues). Reports success if at
+   * least one choice landed, so a partly-matched multi-select still counts
+   * as filled rather than silently reading as a total failure.
+   */
+  async function writeCombobox(el, value, field) {
+    const values = splitComboValues(value, field);
+    let selected = 0;
+    for (const v of values) {
+      if (await writeComboboxOne(el, v)) selected++;
+    }
+    return selected > 0;
   }
 
   /**

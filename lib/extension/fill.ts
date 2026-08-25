@@ -21,6 +21,10 @@ export interface HarvestedField {
   type:      FieldType;
   required?: boolean;
   options?:  string[];        // for select / combobox
+  // True when the widget's option rows are checkboxes rather than radios —
+  // i.e. it accepts MORE than one choice (Color family, Material family,
+  // Certifications). Detected in content.js's enrichComboboxOptions.
+  multi?:    boolean;
   // Existing on-page content for a narrative field (Name/Description/
   // Highlights — see isNarrativeLabel in content.js) on an Edit-Product
   // page. Only ever set for those fields; other fields keep the plain
@@ -401,7 +405,26 @@ export function finalizeAiValues(
     }
 
     if ((field.type === "select" || field.type === "combobox") && field.options?.length) {
-      const snapped = snapToOption(value, field.options);
+      // A multi-select field (checkbox rows) may legitimately come back as
+      // "Black, Brown". Order matters: snapToOption falls back to a SUBSTRING
+      // match, so snapping the whole string first would quietly resolve
+      // "Black, Brown" to just "Black" and throw the rest away. So for a
+      // multi field carrying a separator: try an EXACT whole-string match
+      // first (an option can itself contain a comma, e.g. "Accra, Ghana"),
+      // then per-part, and only then the fuzzy whole-string fallback.
+      // content.js's splitComboValues mirrors this when clicking the rows.
+      let snapped: string | null = null;
+      if (field.multi && /[,|]/.test(value)) {
+        const exact = field.options.find((o) => o.toLowerCase() === value.trim().toLowerCase());
+        if (exact) {
+          snapped = exact;
+        } else {
+          const parts = value.split(/\s*[,|]\s*/).map((p) => p.trim()).filter(Boolean);
+          const hits = parts.map((p) => snapToOption(p, field.options!)).filter(Boolean) as string[];
+          if (hits.length) snapped = hits.filter((h, i) => hits.indexOf(h) === i).join(", ");
+        }
+      }
+      if (!snapped) snapped = snapToOption(value, field.options);
       if (!snapped) {
         warnings.push(`"${value}" isn't an option for "${field.label}" — left blank, please pick one.`);
         continue;

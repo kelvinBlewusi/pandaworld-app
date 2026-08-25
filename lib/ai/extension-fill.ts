@@ -109,7 +109,14 @@ function fieldLine(f: HarvestedField): string {
   // Production country's ~195 real countries) from the AI even when
   // content.js had already harvested them all, so it could never pick one
   // outside the first 40.
-  const opts = f.options?.length ? `; choose ONE of: ${f.options.slice(0, 250).join(" | ")}` : "";
+  // A multi-select widget (checkbox rows — Color family, Material family,
+  // Certifications) genuinely accepts several values; saying "choose ONE of"
+  // there is what kept Color family and Material family permanently empty
+  // whenever more than one option applied.
+  const choose = f.multi
+    ? "choose one or MORE of (comma-separate several only when they genuinely all apply)"
+    : "choose ONE of";
+  const opts = f.options?.length ? `; ${choose}: ${f.options.slice(0, 250).join(" | ")}` : "";
   const current = f.currentValue ? `; CURRENT CONTENT: "${f.currentValue.replace(/"/g, "'")}"` : "";
   return `- "${f.label}" [${f.type}${opts}]${current}${hintFor(f)}`;
 }
