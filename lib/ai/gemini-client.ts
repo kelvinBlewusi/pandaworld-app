@@ -20,6 +20,16 @@
  *
  * Roll-back path: unset the two Vertex env vars in Vercel, redeploy. We're
  * instantly back on AI Studio with no code change required.
+ *
+ * TODO(margin optimization, not a bug — do when there's time, not urgent):
+ * The extension's fill prompt (lib/ai/extension-fill.ts) sends ~18,000
+ * characters of identical boilerplate (Jumia content policy, restricted
+ * words, style guide, output rules) on every single call — only the
+ * per-listing FIELDS/image actually varies. Vertex AI supports context
+ * caching for a repeated prompt prefix, which would let that fixed chunk
+ * be billed once instead of on every autofill. Worth implementing once
+ * there's real call volume to justify it — see the margin math worked
+ * out for the "check the thin margins" request, Aug 2026.
  */
 
 import {
