@@ -36,6 +36,22 @@ function setStatus(text, kind = "") {
   s.textContent = text;
   s.className = `status ${kind}`;
 }
+
+// Determinate steps for the parts we know finish fast (harvest, apply);
+// the AI call is the one open-ended wait, so it holds its width and pulses
+// instead of pretending to know how close it is to done.
+function setProgress(pct, { pulsing = false } = {}) {
+  const track = $("progressTrack");
+  const bar = $("progressBar");
+  track.hidden = false;
+  bar.style.width = `${pct}%`;
+  bar.classList.toggle("pulse", pulsing);
+}
+function hideProgress() {
+  $("progressTrack").hidden = true;
+  $("progressBar").classList.remove("pulse");
+  $("progressBar").style.width = "0%";
+}
 function renderResults(results) {
   const ul = $("results");
   ul.innerHTML = "";
@@ -259,20 +275,28 @@ $("autofill").addEventListener("click", async () => {
     }
 
     setStatus("Reading the form…");
+    setProgress(15);
     const harvest = await sendToTab(tab.id, { type: "HARVEST" });
     if (!harvest?.ok) {
       setStatus("Could not read the page. Reload the Jumia tab and try again.", "err");
+      hideProgress();
       return;
     }
     if (!harvest.fields.length) {
       setStatus("No fields found — did you pick a category to open the form?", "err");
+      hideProgress();
       return;
     }
     if (!harvest.image && !harvest.imageUrl) {
       setStatus("No product photo detected — upload one on Jumia, then try again.", "err");
+      hideProgress();
       return;
     }
     setStatus(`Found ${harvest.fields.length} fields. Asking AI…`);
+    // The AI call is the one genuinely unpredictable wait (a single vision
+    // request, no sub-steps to report) — hold the bar here and pulse it
+    // rather than guessing at a percentage that would just be wrong.
+    setProgress(35, { pulsing: true });
 
     // Every Advanced Option rides along as extra freeform context, same as
     // the notes box — the AI fill pass reads notes as authoritative guidance
@@ -304,10 +328,12 @@ $("autofill").addEventListener("click", async () => {
     });
     if (!fill?.ok) {
       setStatus(fill?.error || "Something went wrong — please try again.", "err");
+      hideProgress();
       return;
     }
 
     setStatus("Filling the form…");
+    setProgress(85);
     const apply = await sendToTab(tab.id, {
       type: "APPLY",
       values: fill.data.values,
@@ -315,6 +341,8 @@ $("autofill").addEventListener("click", async () => {
     });
     renderResults(apply?.results);
     renderWarnings(fill.data.warnings || []);
+    setProgress(100);
+    setTimeout(hideProgress, 700);
 
     const results = apply?.results || [];
     const okCount = results.filter((r) => r.ok).length;
@@ -327,6 +355,7 @@ $("autofill").addEventListener("click", async () => {
   } catch (e) {
     console.error("[PandaWorld] autofill failed:", e);
     setStatus("Something went wrong — please try again.", "err");
+    hideProgress();
   } finally {
     btn.disabled = false;
   }
