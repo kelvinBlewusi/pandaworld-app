@@ -19,6 +19,10 @@ describe("parseNotes", () => {
     expect(parseNotes("sells for 80 cedis").price).toBe(80);
   });
 
+  it("extracts a price written as natural language ('price is 210')", () => {
+    expect(parseNotes("the price is 210 and the quantity is 20").price).toBe(210);
+  });
+
   it("splits features and drops the price fragment", () => {
     const p = parseNotes("price 250, water resistant, leather strap");
     expect(p.extraFeatures).toEqual(["water resistant", "leather strap"]);

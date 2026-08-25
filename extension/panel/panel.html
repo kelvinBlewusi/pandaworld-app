@@ -90,7 +90,7 @@
         <label class="fld">
           <span>Warranty duration</span>
           <select id="warrantyDuration">
-            <option value="">Not set — AI decides or leaves it blank</option>
+            <option value="">Not set — AI defaults to N/A</option>
             <option value="10 Years">10 Years</option>
             <option value="1 Month">1 Month</option>
             <option value="1 Year">1 Year</option>
@@ -106,6 +106,10 @@
             <option value="N/A">N/A</option>
             <option value="None">None</option>
           </select>
+        </label>
+        <label class="fld">
+          <span>Warranty address <em>(optional)</em></span>
+          <input id="warrantyAddress" type="text" placeholder="e.g. 123 Repair Street, Accra" />
         </label>
       </details>
 

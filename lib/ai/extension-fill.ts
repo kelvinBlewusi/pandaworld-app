@@ -65,17 +65,25 @@ function hintFor(f: HarvestedField): string {
   if (l.includes("sale") && (l.includes("start") || l.includes("end"))) {
     return " — ONLY if the seller's notes explicitly give this date; otherwise omit entirely.";
   }
-  // "N/A" is a fine free-text answer but isn't a real choice in a constrained
-  // dropdown (e.g. Warranty Duration's own options are things like "1 Year",
-  // "2 Years" — never "N/A") — forcing it there just produces a value that
-  // gets rejected as invalid and left blank with a confusing warning.
+  // Default every warranty-related field to N/A — only depart from that when
+  // the seller's notes actually say something about warranty (including a
+  // "Warranty duration"/"Warranty address" note from the extension's
+  // Advanced Options, which rides along in these same notes). When they do,
+  // keep the Warranty Duration dropdown, the free-text Product warranty
+  // terms, and the Warranty Address all consistent with that SAME
+  // information, not independently guessed. "N/A" isn't automatically a
+  // real choice in a constrained dropdown — only pick it (or "None") if the
+  // options listed above actually offer one; some sellers' catalogs do,
+  // some don't.
   if (l.includes("warranty") && l.includes("address")) {
-    return constrained ? " — pick the option matching the seller's notes, or omit if none fit." : " — a warranty address, or \"N/A\".";
+    return constrained
+      ? " — pick the option matching the seller's notes (including any \"Warranty address\" note), or omit if none fit."
+      : " — the seller's warranty address if their notes give one (including any \"Warranty address\" note); otherwise \"N/A\".";
   }
   if (l.includes("warranty")) {
     return constrained
-      ? " — pick the option matching the seller's notes, or omit entirely if warranty info isn't given (do NOT force a value)."
-      : " — warranty terms, or \"N/A\".";
+      ? " — default to \"N/A\"/\"None\" if the options above offer one, UNLESS the seller's notes state a warranty period (including any \"Warranty duration\" note) matching one of the OTHER options above — then pick that instead. If neither fits, omit."
+      : " — default to \"N/A\", UNLESS the seller's notes state a warranty period or terms (including any \"Warranty duration\" note) — then describe that SAME period here, consistent with whatever you picked for a Warranty Duration field if the page has one.";
   }
   if (l.includes("color") || l.includes("colour")) return " — the product's visible colour.";
   if (l.includes("variation")) return " — the specific variant identifier for this listing (e.g. colour + material/size, like \"Brown Leather\" or \"Red - Large\"), your best read from the image. If the seller's notes explicitly state the variation, use that instead — it always overrides your own guess.";

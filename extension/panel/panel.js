@@ -286,6 +286,8 @@ $("autofill").addEventListener("click", async () => {
     if (refundPolicy) extraNotes.push(`Refund policy: ${refundPolicy}`);
     const warrantyDuration = $("warrantyDuration").value;
     if (warrantyDuration) extraNotes.push(`Warranty duration: ${warrantyDuration}`);
+    const warrantyAddress = $("warrantyAddress").value.trim();
+    if (warrantyAddress) extraNotes.push(`Warranty address: ${warrantyAddress}`);
     const notes = [$("notes").value.trim(), ...extraNotes].filter(Boolean).join(". ");
 
     const fill = await chrome.runtime.sendMessage({

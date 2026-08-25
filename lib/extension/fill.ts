@@ -76,10 +76,13 @@ export function parseNotes(notes: string | undefined | null): ParsedNotes {
   const raw = (notes ?? "").trim();
   if (!raw) return { price: null, extraFeatures: [], raw: "" };
 
-  // Price: "price 250", "GHS 250", "250 cedis", or a bare number token.
+  // Price: "price 250", "price is 250", "GHS 250", "250 cedis", or a bare
+  // number token. Price is never written into any field — it lives on
+  // Jumia's Variants step — this is only so the "set it on Variants" warning
+  // below reliably fires instead of silently saying nothing.
   let price: number | null = null;
   const priceMatch =
-    raw.match(/(?:price|ghs|gh₵|₵|cedis?)\s*[:=]?\s*(\d[\d,]*(?:\.\d+)?)/i) ||
+    raw.match(/(?:price|ghs|gh₵|₵|cedis?)\s*(?:is\s+)?[:=]?\s*(\d[\d,]*(?:\.\d+)?)/i) ||
     raw.match(/(\d[\d,]*(?:\.\d+)?)\s*(?:ghs|cedis?|₵)/i);
   if (priceMatch) {
     const n = parseFloat(priceMatch[1].replace(/,/g, ""));
