@@ -4,6 +4,7 @@ import {
   mapProductToFields,
   finalizeAiValues,
   isSellerOwned,
+  isDegenerateName,
   type HarvestedField,
 } from "@/lib/extension/fill";
 
@@ -126,6 +127,18 @@ describe("isSellerOwned", () => {
   });
   it("does not flag 'Country of origin' — exact 'Country' match only, so this legitimate product attribute stays AI-fillable", () => {
     expect(isSellerOwned("Country of origin")).toBe(false);
+  });
+});
+
+describe("isDegenerateName", () => {
+  it("flags a bare 'Generic' (any case) and anything under 15 non-space characters", () => {
+    expect(isDegenerateName("Generic")).toBe(true);
+    expect(isDegenerateName("generic")).toBe(true);
+    expect(isDegenerateName("Watch")).toBe(true);
+    expect(isDegenerateName("")).toBe(true);
+  });
+  it("does not flag a real, specific title", () => {
+    expect(isDegenerateName("Wholesale Pack of 30 Gold Award Medals with Ribbons")).toBe(false);
   });
 });
 

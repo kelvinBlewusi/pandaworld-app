@@ -107,16 +107,52 @@ async function resolveImage(body: FillRequest): Promise<{ base64: string; mimeTy
   return null;
 }
 
-/** Ensure a Brand field is filled — default to "Generic" like the API push does. */
+/**
+ * Ensure a Brand field is filled — default to "Generic" like the API push
+ * does. Confirmed live: on a Brand field constrained to a fixed option list
+ * (a combobox), blindly writing "Generic" when it isn't actually one of
+ * those options makes the client's write silently fail (no matching row to
+ * click) — the panel still claimed "filled Generic" while the field stayed
+ * empty. Check the option list first; when "Generic" isn't on it, leave the
+ * field for the seller instead of writing a value that can't apply.
+ */
 function applyBrandDefault(
   values: Record<string, string>,
   fields: FillRequest["fields"],
   warnings: string[],
 ) {
   const brand = fields.find((f) => /brand/i.test(f.label) && !/store/i.test(f.label));
-  if (brand && !values[brand.label]) {
+  if (!brand || values[brand.label]) return;
+  if (brand.options?.length) {
+    const generic = brand.options.find((o) => o.trim().toLowerCase() === "generic");
+    if (!generic) {
+      warnings.push(`Brand not detected, and "Generic" isn't an option for this category — please pick one.`);
+      return;
+    }
+    values[brand.label] = generic;
+  } else {
     values[brand.label] = "Generic";
-    warnings.push(`Brand not detected — filled "Generic". Change it if you know the brand.`);
+  }
+  warnings.push(`Brand not detected — filled "Generic". Change it if you know the brand.`);
+}
+
+/**
+ * Warranty Address: the prompt already tells the AI to default to "N/A"
+ * when the seller gives no address (in notes or the extension's Advanced
+ * Options), but that's a soft instruction the AI doesn't reliably follow —
+ * same class of problem Price and the Name guard needed a hard default
+ * for, not just a prompt line. Enforce it here instead: N/A on a free-text
+ * field, or whichever option actually reads "N/A"/"None" on a constrained
+ * one (never force an option that doesn't exist).
+ */
+function applyWarrantyAddressDefault(values: Record<string, string>, fields: FillRequest["fields"]) {
+  const addr = fields.find((f) => /warranty/i.test(f.label) && /address/i.test(f.label));
+  if (!addr || values[addr.label]) return;
+  if (addr.options?.length) {
+    const na = addr.options.find((o) => /^(n\/a|none)$/i.test(o.trim()));
+    if (na) values[addr.label] = na;
+  } else {
+    values[addr.label] = "N/A";
   }
 }
 
@@ -243,6 +279,7 @@ export async function POST(req: Request) {
     warnings.push(...finalized.warnings);
     applyBrandDefault(values, body.fields, warnings);
     applyQuantityDefault(values, body.fields);
+    applyWarrantyAddressDefault(values, body.fields);
     noteExistingContentChanges(values, body.fields, warnings);
   } catch (e) {
     console.error(`[ext/fill] AI call failed for user=${userId}:`, e);

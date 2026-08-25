@@ -18,7 +18,7 @@ import { pickModelForExtensionFill } from "@/lib/billing/ai-models";
 import { buildContentPolicyInstructions, stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
 import { buildRestrictedWordsInstruction, stripRestrictedWords } from "@/lib/ai/restricted-words";
 import { buildStyleGuideBlock } from "@/lib/ai/content-style-rules";
-import type { HarvestedField } from "@/lib/extension/fill";
+import { isDegenerateName, type HarvestedField } from "@/lib/extension/fill";
 
 export interface AiFillResult {
   raw:      Record<string, string>; // value per field label, policy-cleaned
@@ -88,13 +88,28 @@ function hintFor(f: HarvestedField): string {
       ? " — default to \"N/A\"/\"None\" if the options above offer one, UNLESS the seller's notes state a warranty period (including any \"Warranty duration\" note) matching one of the OTHER options above — then pick that instead. If neither fits, omit."
       : " — default to \"N/A\", UNLESS the seller's notes state a warranty period or terms (including any \"Warranty duration\" note) — then describe that SAME period here, consistent with whatever you picked for a Warranty Duration field if the page has one.";
   }
+  // "Color family"/"Material family" are their own fields, distinct from
+  // "Color"/"Main material" — confirmed live: giving them the same generic
+  // hint as the base attribute made the AI fill the base field from an
+  // explicit seller note (e.g. "color family is black") and then treat the
+  // "family" field as a separate, less-certain attribute it left blank,
+  // even though here it's the same value. Point it at both the base
+  // attribute and the notes explicitly.
+  if (l.includes("family")) {
+    return " — the broader category for the more specific attribute elsewhere on this page (e.g. if Color is \"Navy Blue\", Color family is \"Blue\"; if Main material is \"Stainless Steel\", Material family is \"Metal\"). Often the same value as that attribute for a simple case (e.g. Color \"Black\" → Color family \"Black\"). Check the seller's notes for an explicit mention of this exact field first (e.g. \"color family is black\") and use that if given, even if it just repeats the base attribute.";
+  }
   if (l.includes("color") || l.includes("colour")) return " — the product's visible colour.";
   if (l.includes("variation")) return " — the specific variant identifier for this listing (e.g. colour + material/size, like \"Brown Leather\" or \"Red - Large\"), your best read from the image. If the seller's notes explicitly state the variation, use that instead — it always overrides your own guess.";
   return " — infer from the image; keep it short and accurate, or omit if unknown.";
 }
 
 function fieldLine(f: HarvestedField): string {
-  const opts = f.options?.length ? `; choose ONE of: ${f.options.slice(0, 40).join(" | ")}` : "";
+  // Matches content.js's harvest-side cap (250) — confirmed live: a lower
+  // cap here (previously 40) silently hid most of a long option list (e.g.
+  // Production country's ~195 real countries) from the AI even when
+  // content.js had already harvested them all, so it could never pick one
+  // outside the first 40.
+  const opts = f.options?.length ? `; choose ONE of: ${f.options.slice(0, 250).join(" | ")}` : "";
   const current = f.currentValue ? `; CURRENT CONTENT: "${f.currentValue.replace(/"/g, "'")}"` : "";
   return `- "${f.label}" [${f.type}${opts}]${current}${hintFor(f)}`;
 }
@@ -120,8 +135,24 @@ export async function aiFillRenderedFields(args: {
   notes?:      string;
   market?:     string;
 }): Promise<AiFillResult> {
-  const { imageBase64, mimeType, fields, notes, market = "GH" } = args;
+  const { imageBase64, mimeType, notes, market = "GH" } = args;
   const warnings: string[] = [];
+
+  // A field's currentValue that's already degenerate (a stale "Generic"
+  // name, most likely written by an earlier bug or an earlier AI slip)
+  // must never be shown to the AI as "current content" to weigh keeping —
+  // confirmed live: doing so made the AI echo the same "Generic" straight
+  // back instead of writing a real title, because the EXISTING CONTENT
+  // instruction to "keep it if it's already good" won out over the
+  // CONTENT STYLE rule banning that exact word. Strip it so the field
+  // reads as blank instead, with nothing for the AI to anchor on.
+  const fields = args.fields.map((f) => {
+    const l = norm(f.label);
+    if (f.currentValue && l.includes("name") && !l.includes("brand") && isDegenerateName(f.currentValue)) {
+      return { ...f, currentValue: undefined };
+    }
+    return f;
+  });
 
   const policy = buildContentPolicyInstructions({ categoryPath: null, includeImageRules: false });
   const restricted = buildRestrictedWordsInstruction();
