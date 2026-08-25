@@ -22,6 +22,9 @@ const $ = (id) => document.getElementById(id);
 // pointing at localhost or a preview deployment needs to edit this constant
 // AND add that origin to host_permissions, then reload the extension.
 const apiBase = "https://pandaworldai.site";
+// Matches lib/constants/support.ts SUPPORT_EMAIL — the extension bundle has
+// no build step to import that file, so it's duplicated here.
+const SUPPORT_EMAIL = "help.pandaworldai@gmail.com";
 // Matches manifest.json's content_scripts/host_permissions exactly: only
 // the two pages that actually render a product form. Vendor Center has
 // plenty of other pages (Orders, Manage Products, Promotions, …) where
@@ -278,6 +281,13 @@ $("footerDashboard").addEventListener("click", (e) => {
 $("footerHelp").addEventListener("click", (e) => {
   e.preventDefault();
   chrome.tabs.create({ url: e.currentTarget.dataset.href });
+});
+$("footerReport").addEventListener("click", (e) => {
+  e.preventDefault();
+  const version = chrome.runtime.getManifest().version;
+  const subject = encodeURIComponent("PandaWorldAI extension — problem report");
+  const body = encodeURIComponent(`Describe what happened:\n\n\n— extension v${version}`);
+  chrome.tabs.create({ url: `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}` });
 });
 
 // ── Open Jumia banner button ─────────────────────────────────────────────────

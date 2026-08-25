@@ -16,7 +16,7 @@
 import { callGeminiBackend, isVertexEnabled, type GeminiPart } from "@/lib/ai/gemini-client";
 import { pickModelForExtensionFill } from "@/lib/billing/ai-models";
 import { buildContentPolicyInstructions, stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
-import { buildRestrictedWordsInstruction, stripRestrictedWords } from "@/lib/ai/restricted-words";
+import { stripRestrictedWords } from "@/lib/ai/restricted-words";
 import { buildStyleGuideBlock } from "@/lib/ai/content-style-rules";
 import { isDegenerateName, type HarvestedField } from "@/lib/extension/fill";
 
@@ -163,8 +163,11 @@ export async function aiFillRenderedFields(args: {
     return f;
   });
 
+  // buildContentPolicyInstructions() already embeds the restricted-words
+  // block internally (it calls buildRestrictedWordsInstruction() itself) —
+  // don't add a second copy here, that was ~1,000 wasted characters on
+  // every single call for zero extra instruction value.
   const policy = buildContentPolicyInstructions({ categoryPath: null, includeImageRules: false });
-  const restricted = buildRestrictedWordsInstruction();
   const notesBlock = notes && notes.trim()
     ? `\n\nSELLER NOTES (authoritative for anything the image doesn't show):\n"${notes.trim()}"\n`
     : "";
@@ -200,7 +203,6 @@ export async function aiFillRenderedFields(args: {
 
 ${policy}
 
-${restricted}
 ${notesBlock}${notesOnlyBlock}${styleGuideBlock}${existingContentBlock}${variantsBlock}
 FIELDS TO FILL (return a value only for the ones you can confidently fill; omit the rest):
 ${fields.map(fieldLine).join("\n")}
