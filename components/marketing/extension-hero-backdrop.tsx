@@ -242,8 +242,12 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
         }}
       />
 
-      <div className="relative z-10 box-border grid min-h-screen grid-rows-[auto_1fr] px-7 pb-16 pt-10 sm:px-12 lg:px-24">
-        <header className="flex items-center justify-between gap-8">
+      {/* px-5 on phones (was px-7): with the nav's own width, 28px gutters
+          left the header wider than a 375px viewport, and the resulting
+          horizontal overflow is what made the centred hero text below read
+          as pushed off to one side. */}
+      <div className="relative z-10 box-border grid min-h-screen grid-rows-[auto_1fr] px-5 pb-16 pt-10 sm:px-12 lg:px-24">
+        <header className="flex flex-wrap items-center justify-between gap-4 sm:gap-8">
           <Link href="/extension" aria-label="pandaworld home">
             {/* iconColor dark — the icon's head is a hardcoded white fill, so
                 the ears/eyes/nose need a DARK colour to read against it. The
@@ -251,11 +255,11 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
                 page's near-black background. */}
             <Wordmark size={26} color="#f4f1ea" iconColor="#161616" />
           </Link>
-          <nav className="flex items-center gap-3 text-[13px] uppercase tracking-[0.08em]">
+          <nav className="flex items-center gap-2 text-[12px] uppercase tracking-[0.08em] sm:gap-3 sm:text-[13px]">
             <Link
               href="/pricing"
-              className="px-2 transition-colors hover:!text-white"
-              style={{ color: "rgba(239,236,230,0.6)" }}
+              className="px-1.5 transition-colors hover:!text-white sm:px-2"
+              style={{ color: "rgba(239,236,230,0.78)" }}
             >
               Pricing
             </Link>
@@ -263,7 +267,7 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
                 as a button rather than a plain nav link. */}
             <Link
               href={signInHref}
-              className="rounded-full px-4 py-2 transition-colors hover:!bg-white/[0.1]"
+              className="whitespace-nowrap rounded-full px-3 py-2 transition-colors hover:!bg-white/[0.1] sm:px-4"
               style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(239,236,230,0.85)" }}
             >
               Sign in
@@ -273,7 +277,7 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
                 material rather than a flat fill. */}
             <Link
               href={signUpHref}
-              className="rounded-full px-4 py-2 font-medium normal-case tracking-normal text-white backdrop-blur-xl transition-transform hover:scale-[1.03]"
+              className="whitespace-nowrap rounded-full px-3 py-2 font-medium normal-case tracking-normal text-white backdrop-blur-xl transition-transform hover:scale-[1.03] sm:px-4"
               style={{
                 background: "linear-gradient(135deg, rgba(255,255,255,0.28), rgba(255,255,255,0.08))",
                 border: "1px solid rgba(255,255,255,0.35)",
@@ -290,7 +294,7 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
           <div className="flex max-w-[760px] flex-col items-center">
             <div
               className="inline-flex items-center gap-2.5 rounded-full border px-3.5 py-[7px] text-[12px] uppercase tracking-[0.1em] backdrop-blur-[6px]"
-              style={{ borderColor: "rgba(255,255,255,0.14)", color: "rgba(239,236,230,0.72)" }}
+              style={{ borderColor: "rgba(255,255,255,0.2)", color: "rgba(239,236,230,0.85)" }}
             >
               <span
                 className="h-[5px] w-[5px] rounded-full"
@@ -306,7 +310,10 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
               className="mt-6 font-bold"
               style={{
                 fontFamily: "var(--font-space-grotesk), system-ui, sans-serif",
-                fontSize: "clamp(38px, 6vw, 72px)",
+                // 32px floor (was 38px): at 38px the headline wrapped to four
+                // cramped lines inside a phone's content width. Desktop is
+                // unchanged — 6vw still caps at 72px well before then.
+                fontSize: "clamp(32px, 6vw, 72px)",
                 lineHeight: 1.08,
                 letterSpacing: "-0.02em",
                 color: "#f7f4ee",
@@ -324,10 +331,13 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
               PandaWorld&apos;s AI fills the whole form for you. SEO-optimised. You review
               and submit.
             </p>
-            <div className="mt-9 flex flex-wrap items-center justify-center gap-3.5">
+            {/* Stacked full-width on phones, inline row from sm up: three
+                pills wrapping at phone width left a ragged 2-then-1 layout
+                with the odd one out floating centred under the pair. */}
+            <div className="mt-9 flex w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:justify-center sm:gap-3.5">
               <Link
                 href={ctaHref}
-                className="inline-flex items-center gap-2 rounded-full px-6 py-3.5 text-sm font-medium text-white backdrop-blur-xl transition-transform hover:scale-[1.02]"
+                className="inline-flex items-center justify-center gap-2 rounded-full px-6 py-3.5 text-sm font-medium text-white backdrop-blur-xl transition-transform hover:scale-[1.02]"
                 style={{
                   background: "linear-gradient(135deg, rgba(255,255,255,0.28), rgba(255,255,255,0.08))",
                   border: "1px solid rgba(255,255,255,0.35)",
@@ -340,14 +350,14 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
               </Link>
               <a
                 href="#how-it-works"
-                className="inline-flex items-center gap-2 rounded-full border px-6 py-3.5 text-sm transition-colors hover:!border-white/45 hover:!text-white"
+                className="inline-flex items-center justify-center gap-2 rounded-full border px-6 py-3.5 text-sm transition-colors hover:!border-white/45 hover:!text-white"
                 style={{ borderColor: "rgba(255,255,255,0.18)", color: "rgba(239,236,230,0.85)" }}
               >
                 See how it works
               </a>
               <Link
                 href={ctaHref}
-                className="inline-flex items-center gap-2 rounded-full border px-6 py-3.5 text-sm transition-colors hover:!border-white/45 hover:!text-white"
+                className="inline-flex items-center justify-center gap-2 rounded-full border px-6 py-3.5 text-sm transition-colors hover:!border-white/45 hover:!text-white"
                 style={{ borderColor: "rgba(255,255,255,0.18)", color: "rgba(239,236,230,0.85)" }}
               >
                 Try for free

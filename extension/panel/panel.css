@@ -181,6 +181,14 @@ button { cursor: pointer; border: none; border-radius: 8px; font: inherit; font-
 footer.linksFooter {
   margin-top: 18px; border-top: 1px solid var(--line); padding-top: 12px;
   display: flex; align-items: center; justify-content: center; gap: 8px;
+  flex-wrap: wrap; /* lets the AI disclaimer sit on its own row below the links */
+}
+/* Quiet standing reminder that every filled field is a suggestion to review,
+   not a finished listing — the panel's own warnings are per-run, so nothing
+   made this point when a fill came back clean. */
+footer.linksFooter .aiDisclaimer {
+  flex-basis: 100%; margin: 8px 0 0; text-align: center;
+  color: var(--muted); font-size: 11px; line-height: 1.45;
 }
 footer.linksFooter a {
   color: var(--muted); font-size: 12px; text-decoration: none;

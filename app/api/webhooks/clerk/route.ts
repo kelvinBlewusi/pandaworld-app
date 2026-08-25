@@ -76,7 +76,8 @@ export async function POST(req: NextRequest) {
 // ─── user.created handler ────────────────────────────────────────────────────
 
 async function handleUserCreated(user: ClerkUserData): Promise<void> {
-  // Pre-warm the extension credit ledger with the 5 free sign-up credits.
+  // Pre-warm the extension credit ledger with the free sign-up credits
+  // (FREE_SIGNUP_CREDITS in lib/billing/credit-packs.ts).
   // Not strictly required here — getOrCreateCreditBalance() also grants
   // them lazily the first time the dashboard or a fill request touches a
   // new user — but doing it on signup means the balance is already there

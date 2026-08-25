@@ -59,7 +59,9 @@ function hintFor(f: HarvestedField): string {
   if (l.includes("description")) return " — see CONTENT STYLE below for the exact structure and tone.";
   if (l.includes("highlight")) return " — see CONTENT STYLE below for the exact bullet format.";
   if (l.includes("box")) return " — one item per line as <p>1x Item<br>1x Item</p> — a real line break between each item, never all on one line (Jumia's format).";
-  if (l.includes("manufacturer")) return " — a short manufacturer blurb about the product.";
+  if (l.includes("manufacturer")) {
+    return " — DO fill this: 1–2 short sentences in the manufacturer's own voice about how the product is made and what it's made of (materials, construction, quality standards). It is NOT a duplicate of the product description, so don't skip it as redundant — write it from the same facts with a maker's focus.";
+  }
   if (l.includes("weight")) return " — your best estimate in kg (e.g. 0.2) for a product like this, even if you can't be exact from the photo alone — only omit if the category makes weight meaningless.";
   if (l.includes("quantity")) return " — ONLY if the seller's notes state an exact quantity; otherwise omit (never guess a stock count from the image).";
   if (l.includes("sku")) return " — ONLY if the seller's notes give one; otherwise a short plausible SKU code (uppercase letters + digits, 6–10 chars).";
@@ -211,6 +213,7 @@ RULES:
 - NEVER invent price or stock.
 - For the seller-controlled fields listed above (if any): only from the seller's notes, never from the photo.
 - Omit any other field you cannot fill confidently — do not guess.
+- Jumia shows every attribute its category template defines, and some simply do not apply to this product. If an attribute is meaningless for what's in the photo (e.g. "Skin Type" or "Volume" on a wig, "Hair Type" on a saucepan), OMIT it — leave it for the seller. Never reach for a catch-all like "All", "Other", "Not Applicable" or "N/A" just to put something in the box; a blank irrelevant field is better than a filled meaningless one. This does NOT apply to the warranty fields, whose N/A default is deliberate and described above.
 
 Return ONLY the JSON object, no markdown, no commentary.`;
 
