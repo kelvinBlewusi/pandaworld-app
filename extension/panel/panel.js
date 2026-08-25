@@ -361,14 +361,45 @@ $("autofill").addEventListener("click", async () => {
   }
 });
 
-function sendToTab(tabId, msg) {
+function sendMessageOnce(tabId, msg) {
   return new Promise((resolve) => {
     chrome.tabs.sendMessage(tabId, msg, (resp) => {
       if (chrome.runtime.lastError) {
-        resolve(null); // content script not present (page needs reload)
+        resolve(null); // content script not present
       } else {
         resolve(resp);
       }
     });
   });
+}
+
+/** Re-injects both content scripts (isolated + MAIN world, matching
+ *  manifest.json's content_scripts entries) into an already-open tab.
+ *  Fails harmlessly (returns false) on a page Chrome won't allow scripting
+ *  into (e.g. not actually a Jumia Vendor Center page). */
+async function injectContentScripts(tabId) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["content/content.js"] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["content/mainworld.js"], world: "MAIN" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Send a message to the Jumia tab's content script, auto-recovering when
+ * it isn't there to receive it. Every extension update severs the
+ * connection for any Jumia tab that was already open when the update
+ * happened — normally the seller has to manually reload that tab before
+ * Autofill works again. Instead: on a failed send, inject the content
+ * scripts fresh into the tab and retry once, so an update never blocks a
+ * seller who hasn't reloaded yet.
+ */
+async function sendToTab(tabId, msg) {
+  const first = await sendMessageOnce(tabId, msg);
+  if (first !== null) return first;
+  const injected = await injectContentScripts(tabId);
+  if (!injected) return null;
+  return sendMessageOnce(tabId, msg);
 }

@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "PandaWorldAI - AI Jumia Listing Assistant",
-  "version": "0.2.21",
+  "version": "0.2.22",
   "description": "AI autofill for Jumia Vendor Center product listings — upload a photo, pick a category, and PandaWorld fills the form for you.",
-  "permissions": ["sidePanel", "storage", "tabs"],
+  "permissions": ["sidePanel", "storage", "tabs", "scripting"],
   "host_permissions": [
     "https://vendorcenter.jumia.com/*",
     "https://pandaworldai.site/*"
