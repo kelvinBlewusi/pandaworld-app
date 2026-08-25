@@ -135,19 +135,30 @@
     // so fetching it from here would hit that origin's CORS policy. We don't
     // need to: the fill route already knows how to fetch a plain imageUrl
     // server-side (no browser CORS involved there), so just hand back the
-    // URL and skip the local fetch entirely. Scoped to naturalWidth > 120 and
-    // outside nav/header/footer/aside so we don't pick up Jumia's own logo.
+    // URL and skip the local fetch entirely.
+    //
+    // Production evidence (Vercel logs): naturalWidth > 120 alone wasn't
+    // enough — it was consistently picking up a 559-byte resource (an icon
+    // or logo, not a photo; a real product photo is many KB). Excludes SVGs
+    // (never a real product photo on a catalog like this) and obvious
+    // icon/logo/placeholder filename patterns, and — since several images on
+    // the page can still pass those filters — picks the one with the
+    // LARGEST rendered area rather than just the first match, on the theory
+    // that a real product photo is the most prominent image on the page.
     if (EDIT_PAGE_RE.test(location.pathname)) {
-      const existing = [...document.querySelectorAll("img")].find((img) => {
+      const BAD_SRC_RE = /\.svg(\?|$)|logo|icon(?!ography)|placeholder|avatar|sprite|badge/i;
+      const candidates = [...document.querySelectorAll("img")].filter((img) => {
         const src = img.currentSrc || img.src || "";
         return (
           /^https?:/i.test(src) &&
-          (img.naturalWidth || 0) > 120 &&
+          (img.naturalWidth || 0) > 200 &&
+          !BAD_SRC_RE.test(src) &&
           !img.closest("nav, header, footer, aside")
         );
       });
-      if (existing) {
-        const src = existing.currentSrc || existing.src;
+      const best = candidates.sort((a, b) => b.naturalWidth * b.naturalHeight - a.naturalWidth * a.naturalHeight)[0];
+      if (best) {
+        const src = best.currentSrc || best.src;
         return { dataUrl: null, httpUrl: src, source: "existing product photo" };
       }
     }
@@ -265,6 +276,21 @@
     // Checkbox/radio-row pattern: the row (label/li/div) that wraps the input.
     document.querySelectorAll('label, li, [role="menuitemcheckbox"]').forEach((row) => {
       if (row.querySelector('input[type="checkbox"], input[type="radio"]')) set.add(row);
+    });
+    // Plain single-select list pattern — e.g. Warranty Duration's rows are
+    // just text, no ARIA role and no checkbox, so neither branch above ever
+    // matched them (confirmed: screenshots of that dropdown show no ☐ at
+    // all, unlike Color/Material family). Trust the CONTAINER instead of the
+    // row: any short-text LEAF element inside the CDK overlay portal is
+    // almost certainly one of the currently-open dropdown's choices — safe
+    // to assume there's only the one open overlay there now that
+    // closeDropdown()/closeAnyLingeringOverlay() actually close the previous
+    // one via its real backdrop before the next opens.
+    document.querySelectorAll(".cdk-overlay-container *").forEach((row) => {
+      if (row.children.length > 0) return; // leaf rows only, not wrappers
+      if (row.matches("input, textarea, button, svg, path")) return;
+      const t = (row.innerText || row.textContent || "").trim();
+      if (t && t.length <= 40) set.add(row);
     });
     return [...set].filter(isVisible);
   }
@@ -541,11 +567,18 @@
 
   // ── Apply values ─────────────────────────────────────────────────────────
 
-  /** True if the field already carries a value on the page. */
+  // Jumia's own placeholder-ish default values — not real seller content,
+  // so fill-empty-only shouldn't treat them as "already filled". Confirmed:
+  // the Variation field defaults to a literal "..." until the seller sets a
+  // real variant name.
+  const PLACEHOLDER_VALUES = new Set(["...", "…"]);
+
+  /** True if the field already carries a real (non-placeholder) value. */
   function fieldHasValue(field) {
     const { el, type } = field;
     if (type === "richtext") return !isEditorEmpty(el);
-    return !!(el.value && el.value.trim());
+    const v = (el.value || "").trim();
+    return !!v && !PLACEHOLDER_VALUES.has(v);
   }
 
   /**

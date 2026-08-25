@@ -14,7 +14,7 @@
  */
 
 import { callGeminiBackend, isVertexEnabled, type GeminiPart } from "@/lib/ai/gemini-client";
-import { pickModelForOwnImagesFlow } from "@/lib/billing/ai-models";
+import { pickModelForExtensionFill } from "@/lib/billing/ai-models";
 import { buildContentPolicyInstructions, stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
 import { buildRestrictedWordsInstruction, stripRestrictedWords } from "@/lib/ai/restricted-words";
 import type { HarvestedField } from "@/lib/extension/fill";
@@ -42,6 +42,7 @@ function isNotesOnlyField(label: string): boolean {
     l.includes("sku") ||
     l.includes("gtin") ||
     l.includes("barcode") ||
+    (l.includes("price") && !l.includes("sale")) ||
     (l.includes("sale") && (l.includes("start") || l.includes("end")))
   );
 }
@@ -62,20 +63,29 @@ function hintFor(f: HarvestedField): string {
   if (l.includes("quantity")) return " — ONLY if the seller's notes state an exact quantity; otherwise omit (never guess a stock count from the image).";
   if (l.includes("sku")) return " — ONLY if the seller's notes give one; otherwise a short plausible SKU code (uppercase letters + digits, 6–10 chars).";
   if (l.includes("gtin") || l.includes("barcode")) return " — ONLY if the seller's notes give a real GTIN/barcode; otherwise omit entirely. NEVER invent one — unlike SKU this is a real-world product identifier, and a fabricated one can conflict with Jumia's catalog.";
+  if (l.includes("price") && !l.includes("sale")) return " — ONLY if the seller's notes state an exact price figure; otherwise omit (never guess a price from the image). Digits only — no currency symbol, commas, or words (e.g. \"210\", not \"GHS 210\").";
   if (l.includes("sale") && (l.includes("start") || l.includes("end"))) {
     return " — ONLY if the seller's notes explicitly give this date; otherwise omit entirely.";
   }
-  // "N/A" is a fine free-text answer but isn't a real choice in a constrained
-  // dropdown (e.g. Warranty Duration's own options are things like "1 Year",
-  // "2 Years" — never "N/A") — forcing it there just produces a value that
-  // gets rejected as invalid and left blank with a confusing warning.
+  // Default every warranty-related field to N/A — only depart from that when
+  // the seller's notes actually say something about warranty (including a
+  // "Warranty duration"/"Warranty address" note from the extension's
+  // Advanced Options, which rides along in these same notes). When they do,
+  // keep the Warranty Duration dropdown, the free-text Product warranty
+  // terms, and the Warranty Address all consistent with that SAME
+  // information, not independently guessed. "N/A" isn't automatically a
+  // real choice in a constrained dropdown — only pick it (or "None") if the
+  // options listed above actually offer one; some sellers' catalogs do,
+  // some don't.
   if (l.includes("warranty") && l.includes("address")) {
-    return constrained ? " — pick the option matching the seller's notes, or omit if none fit." : " — a warranty address, or \"N/A\".";
+    return constrained
+      ? " — pick the option matching the seller's notes (including any \"Warranty address\" note), or omit if none fit."
+      : " — the seller's warranty address if their notes give one (including any \"Warranty address\" note); otherwise \"N/A\".";
   }
   if (l.includes("warranty")) {
     return constrained
-      ? " — pick the option matching the seller's notes, or omit entirely if warranty info isn't given (do NOT force a value)."
-      : " — warranty terms, or \"N/A\".";
+      ? " — default to \"N/A\"/\"None\" if the options above offer one, UNLESS the seller's notes state a warranty period (including any \"Warranty duration\" note) matching one of the OTHER options above — then pick that instead. If neither fits, omit."
+      : " — default to \"N/A\", UNLESS the seller's notes state a warranty period or terms (including any \"Warranty duration\" note) — then describe that SAME period here, consistent with whatever you picked for a Warranty Duration field if the page has one.";
   }
   if (l.includes("color") || l.includes("colour")) return " — the product's visible colour.";
   if (l.includes("variation")) return " — the specific variant identifier for this listing (e.g. colour + material/size, like \"Brown Leather\" or \"Red - Large\"), your best read from the image. If the seller's notes explicitly state the variation, use that instead — it always overrides your own guess.";
@@ -160,7 +170,7 @@ Return ONLY the JSON object, no markdown, no commentary.`;
     { inlineData: { data: imageBase64, mimeType } },
   ];
 
-  const model = pickModelForOwnImagesFlow("vision");
+  const model = pickModelForExtensionFill();
   const t0 = Date.now();
   const { text, backend } = await callGeminiBackend(model, parts);
   console.info(`[ext/ai-fill] model=${model} backend=${backend} ms=${Date.now() - t0} fields=${fields.length}`);

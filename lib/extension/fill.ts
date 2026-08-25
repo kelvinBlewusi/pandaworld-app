@@ -76,10 +76,13 @@ export function parseNotes(notes: string | undefined | null): ParsedNotes {
   const raw = (notes ?? "").trim();
   if (!raw) return { price: null, extraFeatures: [], raw: "" };
 
-  // Price: "price 250", "GHS 250", "250 cedis", or a bare number token.
+  // Price: "price 250", "price is 250", "GHS 250", "250 cedis", or a bare
+  // number token. Price is never written into any field — it lives on
+  // Jumia's Variants step — this is only so the "set it on Variants" warning
+  // below reliably fires instead of silently saying nothing.
   let price: number | null = null;
   const priceMatch =
-    raw.match(/(?:price|ghs|gh₵|₵|cedis?)\s*[:=]?\s*(\d[\d,]*(?:\.\d+)?)/i) ||
+    raw.match(/(?:price|ghs|gh₵|₵|cedis?)\s*(?:is\s+)?[:=]?\s*(\d[\d,]*(?:\.\d+)?)/i) ||
     raw.match(/(\d[\d,]*(?:\.\d+)?)\s*(?:ghs|cedis?|₵)/i);
   if (priceMatch) {
     const n = parseFloat(priceMatch[1].replace(/,/g, ""));
@@ -159,8 +162,16 @@ const norm = (s: string) => s.toLowerCase().replace(/\*/g, "").replace(/\s+/g, "
  * AI guess into them threw a real DOMException in production
  * ("The specified value 'Ghana' cannot be parsed, or is out of range."),
  * since they're constrained native inputs, not free text.
+ *
+ * Base "Price" is NOT in this list any more — it's now notes-only
+ * AI-fillable (see isNotesOnlyField in lib/ai/extension-fill.ts): written as
+ * digits only when the seller's notes state one explicitly, left blank
+ * otherwise, never guessed from the photo. "Sale Price" stays fully
+ * seller-owned (a promotional discount the seller sets deliberately) — see
+ * isSellerOwned() below, which excludes it by name rather than by the bare
+ * "price" substring.
  */
-const SELLER_OWNED = ["category", "price", "stock", "currency"];
+const SELLER_OWNED = ["category", "stock", "currency"];
 
 /** Wrap plain text as a <p> if it carries no HTML tags. */
 function asHtml(text: string): string {
@@ -253,10 +264,17 @@ export function mapProductToFields(
       value = product.warranty_address ?? "N/A";
     } else if (label.includes("warranty")) {
       value = product.warranty_text ?? "N/A";
+    } else if (label.includes("price") && !label.includes("sale")) {
+      // Set deterministically from the seller's notes (parsed above) —
+      // never guessed, and guaranteed figures-only since it's just the
+      // parsed number restringified. Blank/untouched when no price was
+      // stated in notes.
+      if (price == null) continue;
+      value = String(price);
     } else if (isSellerOwned(field.label)) {
-      // Category, price, stock, currency, country — fixed by the seller's
-      // account/market, never AI-filled. Skip silently; don't nag even
-      // though some are required.
+      // Sale price, category, stock, currency, country — fixed by the
+      // seller's account/market, never AI-filled. Skip silently; don't nag
+      // even though some are required.
       continue;
     } else {
       // Unknown field — leave for the seller. Only nag if it's required.
@@ -283,19 +301,29 @@ export function mapProductToFields(
   }
 
   if (price != null) {
-    warnings.push(`Detected price ${price} in your notes — set it on the Variants step (price lives there, not here).`);
+    const priceField = fields.find((f) => { const l = norm(f.label); return l.includes("price") && !l.includes("sale"); });
+    warnings.push(
+      priceField && values[priceField.label]
+        ? `Filled Price (${price}) from your notes — double-check it's correct before submitting.`
+        : `Detected price ${price} in your notes — no Price field was found on this page to fill it automatically.`,
+    );
   }
 
   return { values, warnings };
 }
 
-/** True for fields the seller owns — never AI-filled (price, stock, category, currency, country). */
+/** True for fields the seller owns — never AI-filled (sale price, stock, category, currency, country). */
 export function isSellerOwned(label: string): boolean {
   const l = norm(label);
   // Exact match only — a substring match on "country" would also catch a
   // legitimate "Country of origin" product attribute some categories ask
   // for, which SHOULD stay AI/notes-fillable like Brand.
   if (l === "country") return true;
+  // Sale Price is a promotional discount the seller sets deliberately —
+  // always seller-owned. Checked here (not via the bare "price" substring in
+  // SELLER_OWNED) so the base "Price" field is free to be notes-only
+  // AI-fillable instead.
+  if (l.includes("sale") && l.includes("price")) return true;
   return SELLER_OWNED.some((k) => l.includes(k));
 }
 
@@ -316,6 +344,17 @@ export function finalizeAiValues(
 
   for (const field of fields) {
     if (isSellerOwned(field.label)) continue;
+
+    const fieldLabel = norm(field.label);
+    // Price is set deterministically from the seller's notes (parsed
+    // above), not from the AI's own JSON transcription — guarantees a
+    // clean figures-only value with no risk of the AI adding a currency
+    // symbol or reformatting it. Blank/untouched when no price was stated.
+    if (fieldLabel.includes("price") && !fieldLabel.includes("sale")) {
+      if (price != null) values[field.label] = String(price);
+      continue;
+    }
+
     let value = (raw[field.label] ?? "").trim();
     if (!value) continue;
 
@@ -339,7 +378,12 @@ export function finalizeAiValues(
   }
 
   if (price != null) {
-    warnings.push(`Detected price ${price} in your notes — set it on the Variants step (price lives there, not here).`);
+    const priceField = fields.find((f) => { const l = norm(f.label); return l.includes("price") && !l.includes("sale"); });
+    warnings.push(
+      priceField && values[priceField.label]
+        ? `Filled Price (${price}) from your notes — double-check it's correct before submitting.`
+        : `Detected price ${price} in your notes — no Price field was found on this page to fill it automatically.`,
+    );
   }
 
   return { values, warnings };
