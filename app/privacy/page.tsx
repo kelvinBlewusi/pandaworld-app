@@ -95,6 +95,19 @@ export default function PrivacyPage() {
               error traces, performance metrics) collected by Vercel
               for service operation and abuse prevention.
             </li>
+            <li>
+              <strong>Chrome extension data</strong>: when you click
+              Autofill in the PandaWorldAI browser extension, it reads
+              the product form on the Jumia Vendor Center page you are
+              viewing and sends us the product photo on that page, the
+              names of the form fields shown, any text those fields
+              already contain, and the notes you type into the
+              extension panel. This is used only to generate the
+              listing content for that one request. The extension runs
+              only on <code>vendorcenter.jumia.com</code>, never reads
+              any other website, and stores nothing on your device
+              except your PandaWorld API key.
+            </li>
           </ul>
 
           <h2>2. Why we collect it (legal basis)</h2>
@@ -144,7 +157,9 @@ export default function PrivacyPage() {
               <strong>Google (Gemini API)</strong> — AI provider for
               text generation, image analysis, and image generation.
               Product images and prompts you submit are sent to
-              Google for processing. Per Google&apos;s API terms,
+              Google for processing — including the product photo,
+              form-field names and notes the browser extension sends
+              when you click Autofill. Per Google&apos;s API terms,
               your data is NOT used to train Google&apos;s models.
             </li>
             <li>
