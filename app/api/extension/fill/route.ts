@@ -11,7 +11,7 @@
  *
  * Credits: the extension runs on its own credit ledger (lib/billing/
  * extension-credits.ts), separate from the web app's plan-based monthly
- * quota (lib/billing/quota.ts) — new sign-ups get 5 free credits, one real
+ * quota (lib/billing/quota.ts) — new sign-ups get 10 free credits, one real
  * autofill costs 2.5, purchased credits never expire. Balance checked
  * BEFORE the AI call, deducted AFTER success, same before/after shape as
  * the quota check it replaced.

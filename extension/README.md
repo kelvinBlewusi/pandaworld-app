@@ -15,7 +15,7 @@ No build step — it's plain JS/HTML/CSS and loads unpacked as-is.
 - Content script that harvests the rendered fields + the uploaded image.
 - DOM writers: React-safe inputs, native `<select>`, and CKEditor 5 rich-text.
 - Real auth (`pw_live_...` API keys, see `lib/security/extension-keys.ts`) and
-  a credit ledger (`lib/billing/extension-credits.ts`) — 5 free credits on
+  a credit ledger (`lib/billing/extension-credits.ts`) — 10 free credits on
   sign-up, 2.5 spent per real autofill, top-ups via Paystack on the dashboard.
 - Backend endpoints: `POST /api/extension/fill` (autofill),
   `GET /api/extension/account` (plan + credit balance for the panel's status

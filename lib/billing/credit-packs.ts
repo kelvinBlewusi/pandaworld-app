@@ -24,7 +24,7 @@ export function getCreditPack(id: string): CreditPack | undefined {
 }
 
 /** Every sign-up starts with this many free credits (lib/billing/extension-credits.ts). */
-export const FREE_SIGNUP_CREDITS = 5;
+export const FREE_SIGNUP_CREDITS = 10;
 
 /** One extension autofill costs this many credits. */
 export const LISTING_CREDIT_COST = 2.5;

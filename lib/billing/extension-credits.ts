@@ -54,7 +54,7 @@ export async function getOrCreateCreditBalance(userId: string): Promise<number> 
     type: "grant",
     amount: FREE_SIGNUP_CREDITS,
     balance_after: FREE_SIGNUP_CREDITS,
-    description: "Welcome bonus — 5 free credits",
+    description: `Welcome bonus — ${FREE_SIGNUP_CREDITS} free credits`,
   });
 
   return FREE_SIGNUP_CREDITS;
