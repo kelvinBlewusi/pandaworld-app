@@ -134,6 +134,24 @@ button { cursor: pointer; border: none; border-radius: 8px; font: inherit; font-
 }
 .secondary { padding: 6px 12px; background: var(--card); color: var(--fg); border: 1px solid var(--line); }
 
+/* ── Progress bar (Reading → Asking AI → Filling → Done) ─────────────────── */
+.progressTrack {
+  margin: 12px 0 2px; height: 6px; border-radius: 999px;
+  background: var(--card); border: 1px solid var(--line); overflow: hidden;
+}
+.progressBar {
+  height: 100%; width: 0%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--pw-blue), var(--pw-blue-2));
+  transition: width .4s ease;
+}
+/* The AI call has no real sub-progress to report, so the bar holds its
+   position and pulses instead — communicates "still working", not stuck. */
+.progressBar.pulse { animation: progressPulse 1.3s ease-in-out infinite; }
+@keyframes progressPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .5; }
+}
+
 .status { margin: 12px 0 4px; font-size: 13px; min-height: 18px; }
 .status.err { color: var(--err); }
 .status.ok { color: var(--ok); }
