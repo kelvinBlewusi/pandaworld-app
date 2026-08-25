@@ -14,7 +14,18 @@
  * right place even when they open the email on a different device.
  */
 
+import { PLANS } from "@/lib/billing/plans";
+
 const BRAND = "PandaWorld";
+
+/**
+ * The free plan's monthly listing allowance, read from the plan config
+ * rather than written out — the welcome email used to claim "2 free
+ * listings", which matched neither the plan (5/month) nor anything else
+ * the site says. Deriving it means the email can't drift again when the
+ * allowance changes.
+ */
+const FREE_MONTHLY_LISTINGS = PLANS.free.monthly_listings;
 
 interface RenderResult {
   subject: string;
@@ -45,8 +56,8 @@ export function welcomeEmail(opts: {
           Vendor Center.
         </p>
         <p style="margin:0 0 24px;">
-          You&rsquo;ve got <strong>2 free listings</strong> to try things out
-          — no card needed.
+          You&rsquo;ve got <strong>${FREE_MONTHLY_LISTINGS} free listings every
+          month</strong> to try things out — no card needed.
         </p>
         ${ctaButton("Create your first listing", dashboardUrl)}
         <p style="margin:24px 0 8px; font-size:13px; color:#52525b;">
@@ -69,7 +80,7 @@ export function welcomeEmail(opts: {
       "",
       "You can now upload a phone photo of a product and our AI will pick the right Jumia category, fill the required attributes, polish the image, and push the listing to Vendor Center.",
       "",
-      "You've got 2 free listings to try — no card needed.",
+      `You've got ${FREE_MONTHLY_LISTINGS} free listings every month to try — no card needed.`,
       "",
       `Get started: ${dashboardUrl}`,
       "",
