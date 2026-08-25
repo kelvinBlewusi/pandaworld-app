@@ -310,13 +310,27 @@
     );
   }
 
-  /** Type into a search box inside the open overlay, if one exists (long lists). */
-  function filterOpenOverlay(value) {
-    const box = document.querySelector(
-      '.cdk-overlay-container input:not([type="checkbox"]):not([type="radio"]), ' +
-        '[role="listbox"] input, [role="dialog"] input, [role="menu"] input',
-    );
-    if (box && isVisible(box)) {
+  /**
+   * Type into a search/filter box inside the open overlay, if one exists —
+   * needed for long lists (Production country, Color family, Material
+   * family: dozens to 200+ entries) which are very likely VIRTUALIZED —
+   * only the currently-visible slice exists in the DOM at all, so a target
+   * far down the list is literally not there to match against until
+   * something filters the list down. Scrolling wouldn't help without
+   * knowing exactly how far to go; filtering does. Broadened beyond a
+   * specific container class selector, which was probably too narrow to
+   * find Jumia's real search box: any visible, non-checkbox/radio text
+   * input that isn't the trigger itself is a candidate, preferring one
+   * that's actually inside an overlay-ish container over a stray match
+   * elsewhere on the page.
+   */
+  function filterOpenOverlay(value, triggerEl) {
+    const candidates = [...document.querySelectorAll('input[type="text"], input[type="search"], input:not([type])')]
+      .filter((el) => el !== triggerEl && isVisible(el) && !el.readOnly);
+    const box =
+      candidates.find((el) => el.closest('.cdk-overlay-container, [role="dialog"], [role="listbox"], [role="menu"]')) ||
+      candidates[0];
+    if (box) {
       try { writeInput(box, value); } catch { /* ignore */ }
       return true;
     }
@@ -665,11 +679,14 @@
     if (el.tagName === "INPUT" && !el.readOnly) {
       try { writeInput(el, value); } catch { /* ignore */ }
     }
-    filterOpenOverlay(value);
+    let filtered = filterOpenOverlay(value, el);
     el.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
 
     for (let attempt = 0; attempt < 10; attempt++) {
       await sleep(130);
+      // A long list's search box can render a beat after the overlay opens
+      // — keep trying to find and use it until it's actually filtered.
+      if (!filtered) filtered = filterOpenOverlay(value, el);
       const match = matchOption(target);
       if (match) {
         match.scrollIntoView({ block: "nearest" });
