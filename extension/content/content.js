@@ -51,11 +51,12 @@
       // On an Edit-Product page, Name/Description/Highlights may already
       // carry real seller content — hand it to the AI so it can decide to
       // keep, enhance, or replace it, instead of the extension deciding
-      // blindly on its own (see isNarrativeLabel above). Skip this for a
-      // field with an embedded image (hasEmbeddedImage below) — it's never
-      // going to be written to regardless of what the AI says, so there's
-      // no point spending prompt space asking it to reconsider the text.
-      if (isNarrativeLabel(f.label) && fieldHasValue(f) && !hasEmbeddedImage(f)) {
+      // blindly on its own (see isNarrativeLabel above). Included even when
+      // the field has an embedded image — the AI never sees or touches the
+      // image itself (currentTextValue is plain text only), and
+      // mergePreservedImages splices it back into whatever text comes back
+      // at write time, so reviewing the text is still safe.
+      if (isNarrativeLabel(f.label) && fieldHasValue(f)) {
         const current = currentTextValue(f);
         if (current) field.currentValue = current.slice(0, 4000);
       }
@@ -667,29 +668,54 @@
 
   /** Plain-text snapshot of a narrative field's current content, sent to the
    *  AI so IT decides whether to keep, enhance, or replace it — rather than
-   *  the extension either blindly skipping or blindly overwriting. */
+   *  the extension either blindly skipping or blindly overwriting. Strips
+   *  zero-width characters (CKEditor leaves word-joiners — U+2060 — behind
+   *  as a paste artifact around inline widgets, confirmed to persist across
+   *  a save) so they don't get read back as real content or throw off the
+   *  server's kept-vs-changed comparison. */
   function currentTextValue(field) {
     const { el, type } = field;
-    if (type === "richtext") return (el.innerText || "").trim();
-    return (el.value || "").trim();
+    const raw = type === "richtext" ? el.innerText || "" : el.value || "";
+    return raw.replace(/[\u2060\u200b\ufeff]/g, "").trim();
   }
 
   /**
    * True when a rich-text field currently has an image embedded IN it —
    * Jumia's Highlights/Description editors allow inserting a photo inline,
    * separate from the one top-level product-photo upload (which findFields()
-   * excludes entirely and is never at risk). writeRichText() below always
-   * replaces a rich-text field's content wholesale (CKEditor bridge,
-   * execCommand after select-all, or a raw innerHTML set) — there is no
-   * "keep the image, just change the text" write path. So a field with an
-   * embedded image is never handed to the AI's keep/enhance/replace
-   * decision at all: applyValues() refuses to write to it, full stop,
-   * regardless of what the AI returned or whether "Overwrite existing
-   * content" is checked — that's the only way to guarantee the image can
-   * never be silently wiped by a text rewrite.
+   * excludes entirely and is never at risk). Confirmed via a live save+
+   * reload test: the <img src> is a permanent Vendor Center CDN URL (not
+   * blob:/data:), unchanged by save, so it's safe to capture now and splice
+   * back in later — see mergePreservedImages below, which writeValue()
+   * always runs before writing a richtext field with one of these, so the
+   * image can never be silently wiped by a text rewrite.
    */
   function hasEmbeddedImage(field) {
     return field.type === "richtext" && !!field.el.querySelector("img");
+  }
+
+  /**
+   * Splices this field's currently-embedded <img> tag(s) into freshly
+   * generated HTML before it's written. Extracts just the bare `src` (no
+   * CKEditor view-layer wrapper span, no width/class/alt) — the same shape
+   * CKEditor's own getData() returns and setData() expects; it rebuilds its
+   * own widget chrome around a plain <img> on the way back in. Placed as
+   * the first child of the corresponding new <li>/<p>, in the image's
+   * original order — matching where CKEditor put it (ahead of the text, in
+   * the first bullet) — with any extra images beyond the number of new
+   * items landing in the last one. Falls back to prepending at the very
+   * front when the new HTML has no <li>/<p> structure to anchor to.
+   */
+  function mergePreservedImages(html, field) {
+    const imgs = [...field.el.querySelectorAll("img")];
+    if (!imgs.length) return html;
+    const imgTags = imgs.map((img) => `<img src="${img.getAttribute("src")}">`);
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = html;
+    const slots = [...wrapper.querySelectorAll("li, p")];
+    if (!slots.length) return imgTags.join("") + wrapper.innerHTML;
+    imgTags.forEach((tag, i) => slots[Math.min(i, slots.length - 1)].insertAdjacentHTML("afterbegin", tag));
+    return wrapper.innerHTML;
   }
 
   /**
@@ -705,11 +731,11 @@
    * currentValue) and asked to keep/enhance/replace it, so its returned
    * value IS the considered decision, not a blind guess to gate here.
    *
-   * A field with an embedded image (hasEmbeddedImage) overrides ALL of the
-   * above, unconditionally: never written to, ever, even with "Overwrite
-   * existing content" checked. Rich-text writes replace a field's whole
-   * content, so this is the only way to guarantee an inline image is never
-   * silently wiped by a text rewrite.
+   * A field with an embedded image (hasEmbeddedImage) is handled specially
+   * regardless of the above: writeValue() below always runs
+   * mergePreservedImages() first, so the image rides along into whatever
+   * gets written rather than being wiped by the rich-text field's
+   * wholesale-replace write — see hasEmbeddedImage's doc comment.
    */
   async function applyValues(values, { overwrite = false } = {}) {
     const fields = findFields();
@@ -720,10 +746,6 @@
       const f = byLabel.get(label.toLowerCase());
       if (!f) {
         results.push({ label, ok: false, reason: "field not found on page" });
-        continue;
-      }
-      if (hasEmbeddedImage(f)) {
-        results.push({ label, ok: false, skipped: true, reason: "contains an embedded image — left as-is to avoid removing it" });
         continue;
       }
       if (!overwrite && !isNarrativeLabel(f.label) && fieldHasValue(f)) {
@@ -744,7 +766,10 @@
 
   function writeValue(field, value) {
     const { el, type } = field;
-    if (type === "richtext") return writeRichText(el, value);
+    if (type === "richtext") {
+      const merged = hasEmbeddedImage(field) ? mergePreservedImages(value, field) : value;
+      return writeRichText(el, merged);
+    }
     if (type === "select") return writeSelect(el, value);
     if (type === "combobox") return writeCombobox(el, value);
     return writeInput(el, value); // text / textarea
