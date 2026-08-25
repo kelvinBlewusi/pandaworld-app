@@ -23,11 +23,12 @@
  * generic peach (#ffb27a).
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Space_Grotesk } from "next/font/google";
 import { ArrowRight } from "lucide-react";
 import { Wordmark } from "@/components/marketing/wordmark";
+import { BuyCreditsModal } from "@/components/extension/buy-credits-modal";
 
 // Bold sans headline (700) unifies the type system with the nav/body, which
 // are already Space Grotesk — no separate serif face needed.
@@ -46,10 +47,18 @@ interface ExtensionHeroBackdropProps {
   signUpHref: string;
   ctaHref: string;
   ctaLabel: string;
+  // Whether the visitor already has a session — decides what the Pricing
+  // popup's Buy button does (checkout vs. redirect to sign in).
+  signedIn: boolean;
 }
 
-export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabel }: ExtensionHeroBackdropProps) {
+export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabel, signedIn }: ExtensionHeroBackdropProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // "Pricing" here opens the extension's own credit-pack pricing (the same
+  // popup the dashboard uses) rather than navigating to /pricing, which is
+  // the classic web app's monthly-plan pricing — a completely different
+  // product from this visitor's point of view.
+  const [pricingOpen, setPricingOpen] = useState(false);
 
   useEffect(() => {
     const cvs = canvasRef.current;
@@ -228,6 +237,7 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
   }, []);
 
   return (
+    <>
     <section
       className={`${spaceGrotesk.variable} relative min-h-screen w-full overflow-hidden bg-[#050505]`}
       style={{ fontFamily: "var(--font-space-grotesk), system-ui, sans-serif", color: "#efece6" }}
@@ -256,13 +266,14 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
             <Wordmark size={26} color="#f4f1ea" iconColor="#161616" />
           </Link>
           <nav className="flex items-center gap-2 text-[12px] uppercase tracking-[0.08em] sm:gap-3 sm:text-[13px]">
-            <Link
-              href="/pricing"
+            <button
+              type="button"
+              onClick={() => setPricingOpen(true)}
               className="px-1.5 transition-colors hover:!text-white sm:px-2"
               style={{ color: "rgba(239,236,230,0.78)" }}
             >
               Pricing
-            </Link>
+            </button>
             {/* "Card" treatment — shaded pill background, distinguishing it
                 as a button rather than a plain nav link. */}
             <Link
@@ -367,5 +378,12 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
         </div>
       </div>
     </section>
+    <BuyCreditsModal
+      open={pricingOpen}
+      onClose={() => setPricingOpen(false)}
+      signedIn={signedIn}
+      signInHref={signInHref}
+    />
+    </>
   );
 }

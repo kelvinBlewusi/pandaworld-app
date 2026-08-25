@@ -100,6 +100,7 @@ export async function ExtensionPage() {
         signUpHref={`/sign-up?redirect_url=${DASHBOARD_REDIRECT}`}
         ctaHref={ctaHref}
         ctaLabel={ctaLabel}
+        signedIn={Boolean(userId)}
       />
 
       {/* How it works */}

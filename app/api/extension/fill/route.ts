@@ -110,12 +110,25 @@ async function resolveImage(body: FillRequest): Promise<{ base64: string; mimeTy
 
 /**
  * Ensure a Brand field is filled — default to "Generic" like the API push
- * does. Confirmed live: on a Brand field constrained to a fixed option list
- * (a combobox), blindly writing "Generic" when it isn't actually one of
- * those options makes the client's write silently fail (no matching row to
- * click) — the panel still claimed "filled Generic" while the field stayed
- * empty. Check the option list first; when "Generic" isn't on it, leave the
- * field for the seller instead of writing a value that can't apply.
+ * does.
+ *
+ * Previously gated this on `brand.options` actually listing "Generic"
+ * first, to avoid writing a value the combobox can't select. That backfired
+ * live: the harvested option snapshot (content.js's enrichComboboxOptions,
+ * taken once during harvest) can miss a real option that IS selectable at
+ * apply time — confirmed by re-testing a category where "Generic" was
+ * genuinely there but got refused anyway, because content.js's scrape of
+ * that specific dropdown hadn't captured it. That snapshot was never meant
+ * to be authoritative for "does this option exist" — it's a hint for the
+ * PROMPT. The real answer lives in the live DOM at apply time, which is
+ * exactly what content.js's writeCombobox already searches/scrolls through
+ * when it tries to select "Generic" — so it's the one true arbiter here,
+ * via the per-field ok/fail the panel's results list already shows.
+ *
+ * So: always attempt "Generic" here, and phrase the warning honestly as a
+ * prediction rather than a claimed outcome — neither "filled" nor "isn't an
+ * option" is something this function actually knows at the time it runs,
+ * since the write itself hasn't happened yet.
  */
 function applyBrandDefault(
   values: Record<string, string>,
@@ -124,17 +137,10 @@ function applyBrandDefault(
 ) {
   const brand = fields.find((f) => /brand/i.test(f.label) && !/store/i.test(f.label));
   if (!brand || values[brand.label]) return;
-  if (brand.options?.length) {
-    const generic = brand.options.find((o) => o.trim().toLowerCase() === "generic");
-    if (!generic) {
-      warnings.push(`Brand not detected, and "Generic" isn't an option for this category — please pick one.`);
-      return;
-    }
-    values[brand.label] = generic;
-  } else {
-    values[brand.label] = "Generic";
-  }
-  warnings.push(`Brand not detected — filled "Generic". Change it if you know the brand.`);
+  values[brand.label] = "Generic";
+  warnings.push(
+    `Brand not detected — trying "Generic". Check the results list below: if it didn't take, pick the real brand yourself.`,
+  );
 }
 
 /**

@@ -401,6 +401,25 @@ export function finalizeAiValues(
         warnings.push(`AI's product name looked too generic ("${value}") — left blank, please write one.`);
         continue;
       }
+      // Confirmed happening live on a fresh listing (no existing-content
+      // path involved at all): Name came back "Repair by Vendor" — a real,
+      // specific-looking string, but it's actually one of Warranty Type's
+      // own dropdown options, not a title. isDegenerateName can't catch
+      // this (16 real characters, not "Generic"). Whatever the exact cause
+      // — the AI shuffling its own JSON keys, or a value landing under the
+      // wrong label — the symptom is the same either way: Name exactly
+      // matches another field's valid option, which no real SEO title
+      // would. Reject it rather than write a wrong-but-plausible-looking
+      // title into the listing.
+      const stolenFrom = fields.find(
+        (f) => f !== field && f.options?.some((o) => o.trim().toLowerCase() === value.toLowerCase()),
+      );
+      if (stolenFrom) {
+        warnings.push(
+          `AI's product name ("${value}") looks like it was meant for "${stolenFrom.label}" instead — left blank, please write one.`,
+        );
+        continue;
+      }
     }
 
     if (field.type === "richtext") {

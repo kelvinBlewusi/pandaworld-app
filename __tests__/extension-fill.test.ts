@@ -249,6 +249,35 @@ describe("finalizeAiValues (real-AI post-processing)", () => {
     expect(real.values["Name"]).toBe("Wholesale Pack of 30 Gold Award Medals with Ribbons");
   });
 
+  it("rejects a Name that's actually another field's dropdown option — confirmed happening live on a fresh listing (Name came back \"Repair by Vendor\", a Warranty Type option)", () => {
+    // A long-enough option that isDegenerateName's length check alone
+    // would NOT catch, so this actually exercises the new cross-field
+    // guard rather than the pre-existing "too short" one — "Repair by
+    // Vendor" itself happens to be 14 non-space characters, just under
+    // that guard's own threshold, which is why the live bug needed this
+    // second check at all.
+    const withWarranty: HarvestedField[] = [
+      ...fields,
+      { label: "Warranty Type", type: "select", options: ["Service Center - Greater Accra", "N/A", "None"] },
+    ];
+    const { values, warnings } = finalizeAiValues(
+      { Name: "Service Center - Greater Accra" },
+      withWarranty,
+      "",
+    );
+    expect(values["Name"]).toBeUndefined();
+    expect(warnings.some((w) => /meant for "Warranty Type"/.test(w))).toBe(true);
+
+    // A real title merely SHARING a word with some option is fine — only an
+    // exact whole-string match is rejected.
+    const ok = finalizeAiValues(
+      { Name: "Vendor-Grade Stainless Steel Repair Kit, 40-Piece" },
+      withWarranty,
+      "",
+    );
+    expect(ok.values["Name"]).toBe("Vendor-Grade Stainless Steel Repair Kit, 40-Piece");
+  });
+
   it("keeps several values for a multi-select field (Color family accepts more than one)", () => {
     const multiFields: HarvestedField[] = [
       { label: "Color family", type: "combobox", multi: true, options: ["Black", "Brown", "Blue"] },
