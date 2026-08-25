@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 import { ExtensionPage } from "@/app/extension/page";
@@ -32,6 +33,34 @@ import { ExtensionPage } from "@/app/extension/page";
 // Kept as a Server Component so the auth check + redirect run on the
 // edge and visitors hit the landing with no client-side JS until they
 // interact.
+//
+// Metadata: without its own export here, this route fell back to the root
+// layout's generic default title/description — which no longer matches what
+// a visitor actually sees (the Chrome extension pitch, not a generic "AI
+// listing assistant" pitch). Mirrors app/extension/page.tsx's copy since
+// the two render byte-identical content; canonical is root itself (the
+// primary, most-shared URL) — app/extension/page.tsx's own canonical points
+// HERE instead of self-referencing, so Google consolidates ranking signal
+// on this one URL instead of splitting it across both.
+export const metadata: Metadata = {
+  title: "Chrome Extension — Autofill Jumia Listings",
+  description:
+    "The PandaWorld Chrome extension fills the Jumia Vendor Center product form for you. Upload a photo, pick a category, and AI writes the title, description, highlights, and attributes — SEO-optimised and QC-compliant. You review and submit. Works on any category.",
+  keywords: [
+    "Jumia autofill",
+    "Jumia Vendor Center extension",
+    "Jumia listing chrome extension",
+    "AI product listing Jumia",
+    "Jumia seller tool Ghana",
+  ],
+  openGraph: {
+    title: "PandaWorld Chrome Extension for Jumia Vendor Center",
+    description:
+      "Autofill the Jumia listing form from a product photo — SEO-optimised, QC-compliant. You review and submit.",
+    type: "website",
+  },
+  alternates: { canonical: "/" },
+};
 
 export default async function Home() {
   const { userId } = await auth();

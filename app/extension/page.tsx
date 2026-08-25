@@ -36,7 +36,12 @@ export const metadata: import("next").Metadata = {
       "Autofill the Jumia listing form from a product photo — SEO-optimised, QC-compliant. You review and submit.",
     type: "website",
   },
-  alternates: { canonical: "/extension" },
+  // Points at root, not "/extension" itself — app/page.tsx renders this exact
+  // same component for logged-out visitors, so both URLs serve byte-identical
+  // content. Without this, each page self-declared as its own canonical,
+  // which splits ranking signal across two URLs for Google instead of
+  // consolidating it on the one people actually share (the root domain).
+  alternates: { canonical: "/" },
 };
 
 const STEPS = [
