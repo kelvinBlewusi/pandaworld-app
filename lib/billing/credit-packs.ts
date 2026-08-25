@@ -12,8 +12,8 @@ export interface CreditPack {
 
 export const CREDIT_PACKS: CreditPack[] = [
   { id: "starter", credits: 100, amountGhs: 20 },
-  { id: "small",   credits: 210, amountGhs: 50 },
-  { id: "medium",  credits: 400, amountGhs: 100 },
+  { id: "small",   credits: 280, amountGhs: 50 },
+  { id: "medium",  credits: 600, amountGhs: 100 },
 ];
 
 /** Pack id shown with the "Popular" badge in the Buy Credits modal. */
