@@ -139,10 +139,34 @@
       }
     }
 
-    // Fallback 2: an Edit-Product page's already-uploaded photo. There's no
-    // blob:/data: preview here — it's already hosted on Jumia's own image
-    // CDN as a normal https:// <img src>, on a different origin than ours,
-    // so fetching it from here would hit that origin's CORS policy. We don't
+    // Fallback 2: an already-uploaded photo hosted on Jumia's own dedicated
+    // product-image CDN path — confirmed live: uploaded photos land at
+    // https://vendorcenter.jumia.com/product-set-images/YYYY/MM/DD/... .
+    // That's an unambiguous, POSITIVE signal (nothing else on the page is
+    // ever served from that path), so unlike the broader fallback below,
+    // it's safe to run on ANY page, not just an Edit-Product one. That
+    // matters because Jumia swaps a freshly-uploaded photo's <img src> from
+    // a blob: preview to this permanent CDN URL fairly quickly — even
+    // mid-session on the Add-Products flow, well before the seller clicks
+    // Autofill — and fallback 1 above only ever matches a blob:/data: src,
+    // so once that swap happens the photo goes invisible to it. Picks the
+    // largest by rendered area if more than one candidate matches.
+    const cdnCandidates = [...document.querySelectorAll("img")].filter((img) => {
+      const src = img.currentSrc || img.src || "";
+      return /product-set-images/i.test(src);
+    });
+    const bestCdn = cdnCandidates.sort((a, b) => b.naturalWidth * b.naturalHeight - a.naturalWidth * a.naturalHeight)[0];
+    if (bestCdn) {
+      const src = bestCdn.currentSrc || bestCdn.src;
+      return { dataUrl: null, httpUrl: src, source: "product-set-images CDN photo" };
+    }
+
+    // Fallback 3: Edit-Product-only, broader heuristic — kept as a last
+    // resort in case Jumia's CDN path ever differs from fallback 2's
+    // expectation (e.g. a different market/category). There's no blob:/
+    // data: preview here — it's already hosted on Jumia's own image CDN as
+    // a normal https:// <img src>, on a different origin than ours, so
+    // fetching it from here would hit that origin's CORS policy. We don't
     // need to: the fill route already knows how to fetch a plain imageUrl
     // server-side (no browser CORS involved there), so just hand back the
     // URL and skip the local fetch entirely.
@@ -155,6 +179,9 @@
     // the page can still pass those filters — picks the one with the
     // LARGEST rendered area rather than just the first match, on the theory
     // that a real product photo is the most prominent image on the page.
+    // Restricted to Edit pages only (unlike fallback 2 above): without a
+    // real photo present yet, this broader https://-image heuristic risks
+    // grabbing Jumia's own logo/chrome on a still-blank Add-Products form.
     if (EDIT_PAGE_RE.test(location.pathname)) {
       const BAD_SRC_RE = /\.svg(\?|$)|logo|icon(?!ography)|placeholder|avatar|sprite|badge/i;
       const candidates = [...document.querySelectorAll("img")].filter((img) => {
