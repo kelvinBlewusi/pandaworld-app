@@ -22,7 +22,13 @@ const $ = (id) => document.getElementById(id);
 // pointing at localhost or a preview deployment needs to edit this constant
 // AND add that origin to host_permissions, then reload the extension.
 const apiBase = "https://pandaworldai.site";
-const JUMIA_HOST_RE = /^https:\/\/vendorcenter\.jumia\.com\//;
+// Matches manifest.json's content_scripts/host_permissions exactly: only
+// the two pages that actually render a product form. Vendor Center has
+// plenty of other pages (Orders, Manage Products, Promotions, …) where
+// there's no form to read and no content script even gets injected —
+// this must agree with the manifest or the panel would claim "ready" on a
+// page it can't actually act on.
+const JUMIA_HOST_RE = /^https:\/\/vendorcenter\.jumia\.com\/products\/(add\/new|edit\/)/;
 
 // ── Settings persistence ─────────────────────────────────────────────────────
 async function loadSettings() {
@@ -70,7 +76,16 @@ function renderWarnings(warnings) {
   for (const w of warnings || []) {
     const d = document.createElement("div");
     d.className = "w";
-    d.textContent = `⚠️ ${w}`;
+    const text = document.createElement("span");
+    text.className = "wText";
+    text.textContent = `⚠️ ${w}`;
+    const close = document.createElement("button");
+    close.className = "wClose";
+    close.type = "button";
+    close.setAttribute("aria-label", "Dismiss");
+    close.textContent = "×";
+    close.addEventListener("click", () => d.remove());
+    d.append(text, close);
     box.appendChild(d);
   }
 }

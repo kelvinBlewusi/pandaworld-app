@@ -172,7 +172,15 @@ button { cursor: pointer; border: none; border-radius: 8px; font: inherit; font-
 .warnings .w {
   background: var(--warn-bg); border: 1px solid var(--warn-line);
   border-radius: 8px; padding: 8px 10px; font-size: 12px; margin-bottom: 6px;
+  display: flex; align-items: flex-start; gap: 8px;
 }
+.warnings .w .wText { flex: 1; }
+.warnings .w .wClose {
+  flex: none; border: none; background: none; cursor: pointer;
+  font-size: 15px; line-height: 1; color: var(--muted); padding: 0 2px;
+  margin-top: -1px;
+}
+.warnings .w .wClose:hover { color: var(--fg); }
 
 
 .advanced { margin: 14px 0; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
