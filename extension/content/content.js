@@ -620,6 +620,49 @@
     return clean(first);
   }
 
+  /**
+   * What the control is currently DISPLAYING — its selected option, typed
+   * value, or (for a div-based dropdown trigger) its rendered text. Used
+   * only by acceptLabel's value-echo guard below.
+   */
+  function controlOwnValue(el) {
+    const tag = el.tagName.toLowerCase();
+    if (tag === "select") return (el.options?.[el.selectedIndex]?.text || "").trim();
+    if (tag === "input" || tag === "textarea") return (el.value || "").trim();
+    return (el.innerText || el.textContent || "").trim();
+  }
+
+  /**
+   * The single gate every label candidate passes through, whichever strategy
+   * produced it. Two rules earn their place from live evidence:
+   *
+   *  - Length + placeholder-junk, previously enforced everywhere EXCEPT the
+   *    aria-label branch. That gap let a 70-character placeholder ("Ex:
+   *    Sevice center - Lagos [Type of warranty offered, …]") through as
+   *    Warranty Type's "label" — no other strategy could have produced it,
+   *    since they all cap at 40 characters.
+   *  - The value-echo guard: a candidate identical to what the control is
+   *    currently showing is a value, not a name. Production country,
+   *    Warranty Duration, Gender, Hair Type, Season and Skin Type all
+   *    reported their own selected value ("China", "N/A", "Female", "All
+   *    Hair Types", "All Seasons", "All skin types") as their label, so the
+   *    AI never saw the real attribute names — which is also why Color
+   *    family and Material family were never filled: their labels came
+   *    through as Jumia's "Ex: …" placeholder rather than their real names.
+   */
+  function acceptLabel(raw, el) {
+    const text = (raw || "").replace(/\s+/g, " ").trim();
+    if (!text) return null;
+    const first = text.split("\n")[0].trim();
+    if (first.length < 1 || first.length > 40) return null;
+    if (looksLikePlaceholderJunk(first)) return null;
+    const cleaned = clean(first);
+    if (!cleaned) return null;
+    const own = clean(controlOwnValue(el));
+    if (own && own.toLowerCase() === cleaned.toLowerCase()) return null;
+    return cleaned;
+  }
+
   /** Best-effort label resolution for a control. */
   function findLabel(el) {
     const isRich = el.classList.contains("ProseMirror") || el.getAttribute("contenteditable") === "true";
@@ -627,26 +670,38 @@
     // 1. <label for> association — via labelOwnText, since a <label for> can
     // just as easily wrap the control it names (see labelOwnText above).
     const forLabel = el.labels && el.labels[0] ? labelOwnText(el.labels[0]) : null;
-    if (forLabel) return forLabel;
+    if (forLabel) return acceptLabel(forLabel, el);
     // 2. aria-label / aria-labelledby — but never a rich-text editor's own aria.
     const aria = el.getAttribute("aria-label");
-    if (aria && !(isRich && BAD_ARIA.test(aria))) return clean(aria);
+    if (aria && !(isRich && BAD_ARIA.test(aria))) {
+      const ok = acceptLabel(aria, el);
+      if (ok) return ok;
+    }
     const labelledby = el.getAttribute("aria-labelledby");
     if (labelledby) {
       const ref = document.getElementById(labelledby);
-      if (ref && ref.innerText.trim() && !BAD_ARIA.test(ref.innerText)) return clean(ref.innerText);
+      if (ref && ref.innerText.trim() && !BAD_ARIA.test(ref.innerText)) {
+        const ok = acceptLabel(ref.innerText, el);
+        if (ok) return ok;
+      }
     }
     // 3. Wrapping <label> — again via labelOwnText, so we get the label's own
     // text rather than whatever the control it wraps happens to be showing.
     const wrap = labelOwnText(el.closest("label"));
-    if (wrap) return wrap;
+    if (wrap) {
+      const ok = acceptLabel(wrap, el);
+      if (ok) return ok;
+    }
 
     // 4. Walk backwards in document (reading) order until we hit a label-like
     // snippet. Most structure-agnostic match; stops if it reaches another form
     // control, so it never steals the previous field's label. This is what
     // reliably finds "Product description" above a ProseMirror toolbar.
     const docOrder = previousLabelInDocOrder(el);
-    if (docOrder) return docOrder;
+    if (docOrder) {
+      const ok = acceptLabel(docOrder, el);
+      if (ok) return ok;
+    }
 
     // 5. Find the field's "cell" — climb while the parent still holds just this
     // one control — then take the closest label-like text before the control.
@@ -657,13 +712,16 @@
       cell = cell.parentElement;
     }
     const inside = closestLabelBefore(cell, el);
-    if (inside) return inside;
+    if (inside) {
+      const ok = acceptLabel(inside, el);
+      if (ok) return ok;
+    }
 
     // 6. Nearest preceding sibling of the cell.
     let sib = cell.previousElementSibling;
     for (let hop = 0; sib && hop < 4; hop++) {
-      const txt = labelTextOf(sib);
-      if (txt) return txt;
+      const ok = acceptLabel(labelTextOf(sib), el);
+      if (ok) return ok;
       sib = sib.previousElementSibling;
     }
     return null;
@@ -1013,7 +1071,19 @@
         canScrollFurther = nudgeScroll(scrollViewport);
       }
       if (match) {
-        match.scrollIntoView({ block: "nearest" });
+        // `block: "nearest"` still scrolls the PAGE when the option's own
+        // overlay isn't the nearest scrollable ancestor, which is what
+        // walks the form upward a step each time a multi-select option is
+        // ticked. Scroll the overlay's own viewport directly instead, and
+        // leave the page where the seller left it.
+        const viewport = scrollViewport || scrollableOverlayEl();
+        if (viewport && viewport.contains(match)) {
+          const vRect = viewport.getBoundingClientRect();
+          const mRect = match.getBoundingClientRect();
+          if (mRect.top < vRect.top || mRect.bottom > vRect.bottom) {
+            viewport.scrollTop += mRect.top - vRect.top;
+          }
+        }
         const box = match.matches('input[type="checkbox"], input[type="radio"]')
           ? match
           : match.querySelector('input[type="checkbox"], input[type="radio"]');
