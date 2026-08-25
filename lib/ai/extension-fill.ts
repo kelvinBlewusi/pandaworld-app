@@ -88,6 +88,16 @@ function hintFor(f: HarvestedField): string {
       ? " — default to \"N/A\"/\"None\" if the options above offer one, UNLESS the seller's notes state a warranty period (including any \"Warranty duration\" note) matching one of the OTHER options above — then pick that instead. If neither fits, omit."
       : " — default to \"N/A\", UNLESS the seller's notes state a warranty period or terms (including any \"Warranty duration\" note) — then describe that SAME period here, consistent with whatever you picked for a Warranty Duration field if the page has one.";
   }
+  // "Color family"/"Material family" are their own fields, distinct from
+  // "Color"/"Main material" — confirmed live: giving them the same generic
+  // hint as the base attribute made the AI fill the base field from an
+  // explicit seller note (e.g. "color family is black") and then treat the
+  // "family" field as a separate, less-certain attribute it left blank,
+  // even though here it's the same value. Point it at both the base
+  // attribute and the notes explicitly.
+  if (l.includes("family")) {
+    return " — the broader category for the more specific attribute elsewhere on this page (e.g. if Color is \"Navy Blue\", Color family is \"Blue\"; if Main material is \"Stainless Steel\", Material family is \"Metal\"). Often the same value as that attribute for a simple case (e.g. Color \"Black\" → Color family \"Black\"). Check the seller's notes for an explicit mention of this exact field first (e.g. \"color family is black\") and use that if given, even if it just repeats the base attribute.";
+  }
   if (l.includes("color") || l.includes("colour")) return " — the product's visible colour.";
   if (l.includes("variation")) return " — the specific variant identifier for this listing (e.g. colour + material/size, like \"Brown Leather\" or \"Red - Large\"), your best read from the image. If the seller's notes explicitly state the variation, use that instead — it always overrides your own guess.";
   return " — infer from the image; keep it short and accurate, or omit if unknown.";

@@ -502,9 +502,15 @@
       const ref = document.getElementById(labelledby);
       if (ref && ref.innerText.trim() && !BAD_ARIA.test(ref.innerText)) return clean(ref.innerText);
     }
-    // 3. Wrapping <label>
+    // 3. Wrapping <label>. Guarded the same way as labelTextOf below — a
+    // <label> that wraps a <select> with no separate heading inside it
+    // renders as just the currently-displayed option, which for an
+    // untouched field is Jumia's own "Ex: 2 years [...]" placeholder
+    // option — confirmed live (Warranty Duration's placeholder option text
+    // was showing up as its "label" in the extension's own results panel).
+    // Reject that and fall through to the more careful strategies below.
     const wrap = el.closest("label");
-    if (wrap && wrap.innerText.trim()) return clean(wrap.innerText);
+    if (wrap && wrap.innerText.trim() && !looksLikePlaceholderJunk(wrap.innerText)) return clean(wrap.innerText);
 
     // 4. Walk backwards in document (reading) order until we hit a label-like
     // snippet. Most structure-agnostic match; stops if it reaches another form
@@ -605,6 +611,15 @@
     return elm.getClientRects().length > 0;
   }
 
+  /** True when text looks like Jumia's own helper/placeholder copy ("Ex: …",
+   *  "Required to increase listing quality", size hints) rather than a real
+   *  field label — checked against just the first line, same as
+   *  labelTextOf below. */
+  function looksLikePlaceholderJunk(text) {
+    const first = (text || "").trim().split("\n")[0].trim();
+    return /^(ex:|e\.g\.)|required to increase|recommended|maximum|pixels|watermark/i.test(first);
+  }
+
   function labelTextOf(elm) {
     if (!elm || !elm.querySelector) return null;
     if (elm.matches('input, textarea, select, [contenteditable="true"]')) return null;
@@ -617,7 +632,7 @@
     if (!raw) return null;
     const first = raw.split("\n")[0].trim();
     if (first.length < 1 || first.length > 40) return null;
-    if (/^(ex:|e\.g\.)|required to increase|recommended|maximum|pixels|watermark/i.test(first)) return null;
+    if (looksLikePlaceholderJunk(first)) return null;
     // Reject the editor's own generic captions so we keep climbing to the real
     // field label (e.g. "Product description") sitting above the toolbar.
     if (/^(rich ?text editor|editor|paragraph|normal text|heading \d)$/i.test(first)) return null;
