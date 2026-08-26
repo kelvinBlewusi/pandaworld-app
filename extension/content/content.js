@@ -939,15 +939,63 @@
    * gets written rather than being wiped by the rich-text field's
    * wholesale-replace write — see hasEmbeddedImage's doc comment.
    */
+  /**
+   * Does this element look like the product-NAME input judged by its OWN
+   * stable Angular attribute, independent of whatever findLabel() decided?
+   *
+   * Needed because the two can disagree: confirmed live (Vercel logs, Aug 26
+   * 2026) the server returned a real title — "Pack Of 30 Award Medals - Gold
+   * Colour, With Neck Ribbons" — on the very run whose Name field ended up
+   * reading "Generic". So the bad value was never the AI's; some OTHER
+   * label's value ("Generic" only ever comes from the server's Brand
+   * default) was routed into the product-name input by a label mismatch.
+   */
+  function elIsProductNameInput(el) {
+    const fc = (el.getAttribute?.("formcontrolname") || "").toLowerCase();
+    return fc === "name" || fc === "productname" || fc === "product_name";
+  }
+
+  const labelIsProductName = (label) => {
+    const l = (label || "").toLowerCase();
+    return l.includes("name") && !l.includes("brand") && !l.includes("store");
+  };
+
   async function applyValues(values, { overwrite = false } = {}) {
     const fields = findFields();
     const byLabel = new Map(fields.map((f) => [f.label.toLowerCase(), f]));
     const results = [];
 
+    // Temporary diagnostic for the "Name shows Generic" investigation — the
+    // server-side half is already proven clean, so what's needed next is the
+    // label→element mapping this side actually built.
+    console.info(
+      LOG,
+      "label → element map:",
+      fields.map((f) => ({
+        label: f.label,
+        type: f.type,
+        formcontrolname: f.el.getAttribute?.("formcontrolname") || null,
+        id: f.el.id || null,
+      })),
+    );
+
     for (const [label, value] of Object.entries(values)) {
       const f = byLabel.get(label.toLowerCase());
       if (!f) {
         results.push({ label, ok: false, reason: "field not found on page" });
+        continue;
+      }
+      // Mis-route guard (see elIsProductNameInput above): the target IS the
+      // product-name input, but we got here under some other field's label —
+      // so this value belongs somewhere else and would clobber a title the
+      // server already vetted. Refuse rather than write it.
+      if (elIsProductNameInput(f.el) && !labelIsProductName(f.label)) {
+        console.warn(LOG, `refused: label "${f.label}" resolved to the product-name input`);
+        results.push({
+          label,
+          ok: false,
+          reason: `would have overwritten the product name — left as-is`,
+        });
         continue;
       }
       if (!overwrite && !isNarrativeLabel(f.label) && fieldHasValue(f)) {
