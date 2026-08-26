@@ -415,12 +415,26 @@ export function finalizeAiValues(
       // this (16 real characters, not "Generic"). Whatever the exact cause
       // — the AI shuffling its own JSON keys, or a value landing under the
       // wrong label — the symptom is the same either way: Name exactly
-      // matches another field's valid option, which no real SEO title
-      // would. Reject it rather than write a wrong-but-plausible-looking
-      // title into the listing.
-      const stolenFrom = fields.find(
-        (f) => f !== field && f.options?.some((o) => o.trim().toLowerCase() === value.toLowerCase()),
-      );
+      // matches another field's value, which no real SEO title would.
+      // Reject it rather than write a wrong-but-plausible-looking title
+      // into the listing.
+      //
+      // Checks two sources deliberately, not just one: a constrained
+      // field's OPTION LIST (the original "Repair by Vendor" case — Name
+      // stolen from a dropdown, whether or not the AI actually picked that
+      // option for its real field) AND every other field's actual RAW
+      // value (catches theft from a free-text field like Highlights,
+      // Description, or Warranty Address, which has no option list to
+      // check against at all). Both are checked so this doesn't need a new
+      // one-off fix the next time the stolen value happens to come from a
+      // different kind of field — this is the general form of that bug,
+      // not one more specific banned string.
+      const stolenFrom = fields.find((f) => {
+        if (f === field) return false;
+        if (f.options?.some((o) => o.trim().toLowerCase() === value.toLowerCase())) return true;
+        const otherValue = (raw[f.label] ?? "").trim();
+        return otherValue.length > 0 && otherValue.toLowerCase() === value.toLowerCase();
+      });
       if (stolenFrom) {
         warnings.push(
           `AI's product name ("${value}") looks like it was meant for "${stolenFrom.label}" instead — left blank, please write one.`,

@@ -282,6 +282,30 @@ describe("finalizeAiValues (real-AI post-processing)", () => {
     expect(ok.values["Name"]).toBe("Vendor-Grade Stainless Steel Repair Kit, 40-Piece");
   });
 
+  it("rejects a Name stolen from a FREE-TEXT field's own value, not just a dropdown's option list", () => {
+    // Warranty Address has no `options` at all — the original guard only
+    // checked f.options, so a value shuffled in from a free-text field like
+    // this would have sailed straight through. The AI returning the exact
+    // same string for two different field keys is the tell, whatever kind
+    // of field the value actually belonged to.
+    const withAddress: HarvestedField[] = [
+      ...fields,
+      { label: "Warranty Address", type: "text" },
+    ];
+    const { values, warnings } = finalizeAiValues(
+      {
+        Name: "123 Repair Street, Accra, Greater Accra Region",
+        "Warranty Address": "123 Repair Street, Accra, Greater Accra Region",
+      },
+      withAddress,
+      "",
+    );
+    expect(values["Name"]).toBeUndefined();
+    expect(warnings.some((w) => /meant for "Warranty Address"/.test(w))).toBe(true);
+    // The Warranty Address field itself is untouched by this guard.
+    expect(values["Warranty Address"]).toBe("123 Repair Street, Accra, Greater Accra Region");
+  });
+
   it("keeps several values for a multi-select field (Color family accepts more than one)", () => {
     const multiFields: HarvestedField[] = [
       { label: "Color family", type: "combobox", multi: true, options: ["Black", "Brown", "Blue"] },
