@@ -404,6 +404,14 @@ export function finalizeAiValues(
     // BEFORE the AI ever sees existing content, to stop this same value
     // being shown back to it as "current content" worth keeping.
     if (fieldLabel.includes("name") && !fieldLabel.includes("brand") && !fieldLabel.includes("store")) {
+      // TEMPORARY diagnostic (remove once the "Name still comes back
+      // Generic" report is confirmed fixed or root-caused) — reported live
+      // with a screenshot showing Name = "Generic" despite this exact guard
+      // existing and being deployed at request time. Static review of every
+      // function that touches `values` found no path that should let a bare
+      // "Generic" through, so the next step is observing the ACTUAL raw
+      // value Gemini returned for this field rather than guessing further.
+      console.info(`[ext/fill] Name field "${field.label}" raw AI value: ${JSON.stringify(value)}`);
       if (isDegenerateName(value)) {
         warnings.push(`AI's product name looked too generic ("${value}") — left blank, please write one.`);
         continue;

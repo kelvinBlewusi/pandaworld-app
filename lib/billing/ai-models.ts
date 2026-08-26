@@ -64,21 +64,24 @@ const MODEL_PREMIUM    = "gemini-2.5-pro";                 // Business / Admin
 // we wanted in the first place.
 const MODEL_OWN_IMAGES_FLOW = "gemini-2.5-flash-lite";
 
-// The Chrome extension's autofill. Was gemini-2.5-pro (Aug 2026) for
-// better category-attribute accuracy and fewer hallucinated values, then
-// briefly tried both gemini-3.5-flash-lite and gemini-3.1-flash-lite for
-// a quality bump at the flash-lite speed/cost tier — BOTH confirmed LIVE
-// (Vercel logs, Aug 26 2026) to 404 on this project's Vertex Publisher
-// Model catalogue in us-central1: "Publisher model
-// ...gen-lang-client-0721987658/locations/us-central1... not found".
-// Settled back on gemini-2.5-flash-lite: the 3.x generation genuinely
-// isn't in this project/region's Vertex catalogue yet, regardless of
-// what AI Studio's own model listing shows (same gap this codebase hit
-// with 3.1 once before, May 2026 — see MODEL_OWN_IMAGES_FLOW above).
-// Don't re-try a 3.x primary here without first confirming — via a live
-// call, not a marketing page — that Vertex's catalogue for THIS project
-// actually serves it.
-const MODEL_EXTENSION_FILL = MODEL_LITE;
+// The Chrome extension's autofill. History: gemini-2.5-pro (Aug 2026) for
+// better category-attribute accuracy, then gemini-2.5-flash-lite for speed,
+// then briefly tried both gemini-3.5-flash-lite and gemini-3.1-flash-lite
+// for a quality bump at the flash-lite tier — BOTH confirmed LIVE (Vercel
+// logs, Aug 26 2026) to 404 on this project's Vertex Publisher Model
+// catalogue in us-central1: "Publisher model
+// ...gen-lang-client-0721987658/locations/us-central1... not found". Don't
+// re-try a 3.x primary here without first confirming — via a live call,
+// not a marketing page — that Vertex's catalogue for THIS project actually
+// serves it (same gap this codebase hit with 3.1 once before, May 2026 —
+// see MODEL_OWN_IMAGES_FLOW above).
+//
+// Back on gemini-2.5-pro (Aug 26 2026) to isolate a live "Name" bug report
+// (Name came back a bare "Generic" despite the isDegenerateName guard) —
+// comparing Pro's output against flash-lite's to see whether this is a
+// weaker-model quality issue or a guard bug. Revert to MODEL_LITE once
+// that's confirmed one way or the other; Pro is ~5-10x the per-call cost.
+const MODEL_EXTENSION_FILL = MODEL_PREMIUM;
 
 // Image editing — currently only one viable Gemini model. Used by
 // the "Polish" and "Rebuild as studio shot" buttons (which take an
