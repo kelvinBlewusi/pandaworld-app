@@ -67,19 +67,24 @@ const MODEL_OWN_IMAGES_FLOW = "gemini-2.5-flash-lite";
 // The Chrome extension's autofill. Was gemini-2.5-pro (Aug 2026) for
 // better category-attribute accuracy and fewer hallucinated values, then
 // briefly gemini-2.5-flash-lite (same request, prioritizing speed), then
-// bumped to gemini-3.5-flash-lite — Google positions the 3.x flash-lite
-// line as matching or beating 2.5 Flash's quality at flash-lite speed/cost,
-// which is a better trade than plain 2.5-flash-lite gave up.
+// gemini-3.5-flash-lite — confirmed LIVE (Vercel logs, Aug 26 2026) to
+// 404 on this project's Vertex catalogue in us-central1: "Publisher model
+// ...gen-lang-client-0721987658/locations/us-central1... not found".
+// Dropped a generation to gemini-3.1-flash-lite on that evidence — same
+// family of risk (this exact codebase already 404'd on 3.1 once before,
+// May 2026, back when Vertex only exposed the 2.5 generation at all) but
+// 3.1 has had 3 more months to roll out than 3.5 did, so worth one more
+// live try. If Vercel logs show this ALSO falling back to
+// MODEL_EXTENSION_FILL_FALLBACK, Vertex's Publisher Model catalogue for
+// this project/region genuinely hasn't caught up to the 3.x generation
+// yet regardless of what AI Studio's own model listing shows — stop
+// trying 3.x primaries here until that changes.
 //
-// Real risk carried over from MODEL_OWN_IMAGES_FLOW's own history just
-// above: this exact codebase 404'd on "gemini-3.1-flash-lite" in May 2026
-// because Vertex's catalogue only exposed the 2.5 generation at the time.
-// Google's rebrand to "Gemini Enterprise Agent Platform" plus 3.5's July
-// 2026 GA make that stale, but it's unverified on THIS project/region —
-// see aiFillRenderedFields()'s try/fallback in lib/ai/extension-fill.ts,
-// which catches exactly this and drops to MODEL_EXTENSION_FILL_FALLBACK
-// rather than failing (and charging nobody) an autofill outright.
-const MODEL_EXTENSION_FILL = "gemini-3.5-flash-lite";
+// aiFillRenderedFields()'s try/fallback in lib/ai/extension-fill.ts
+// catches a 404 on whichever model this constant names and drops to
+// MODEL_EXTENSION_FILL_FALLBACK rather than failing (and charging nobody)
+// an autofill outright.
+const MODEL_EXTENSION_FILL = "gemini-3.1-flash-lite";
 export const MODEL_EXTENSION_FILL_FALLBACK = MODEL_LITE; // gemini-2.5-flash-lite — proven working
 
 // Image editing — currently only one viable Gemini model. Used by
