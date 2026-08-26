@@ -210,6 +210,19 @@ describe("finalizeAiValues (real-AI post-processing)", () => {
     );
   });
 
+  it("does not split a multi-digit count mid-number — confirmed live as '3' / '0x Gold Award Medals'", () => {
+    const raw = { "What's in the box": "30x Gold Award Medals with Ribbons" };
+    const { values } = finalizeAiValues(raw, fields, "");
+    expect(values["What's in the box"]).not.toContain(">3<br>");
+    expect(values["What's in the box"]).toContain("30x Gold Award Medals with Ribbons");
+  });
+
+  it("still splits a real multi-item list whose counts are multi-digit", () => {
+    const raw = { "What's in the box": "30x Medals 12x Ribbons 1x Storage Box" };
+    const { values } = finalizeAiValues(raw, fields, "");
+    expect(values["What's in the box"]).toBe("<p>30x Medals<br>12x Ribbons<br>1x Storage Box</p>");
+  });
+
   it("keeps a newline-separated box list as-is (just wraps it)", () => {
     const raw = { "What's in the box": "1x Watch\n1x Manual" };
     const { values } = finalizeAiValues(raw, fields, "");

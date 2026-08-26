@@ -230,9 +230,17 @@ Return ONLY the JSON object, no markdown, no commentary.`;
   // model on failure isn't a thing this needs right now; retrying the SAME
   // model (what a fallback would degenerate into today) only doubles
   // latency on a genuine transient error for no benefit.
+  // Routed through AI Studio rather than Vertex: Vertex's publisher catalogue
+  // for this project doesn't carry the newer Gemini generations (both
+  // gemini-3.5-flash-lite and gemini-3.1-flash-lite 404'd live), while AI
+  // Studio's does — so this is the backend to be on when the model pinned in
+  // lib/billing/ai-models.ts is anything past the 2.5 line. Degrades to
+  // Vertex automatically when GOOGLE_API_KEY isn't set (see callGeminiBackend).
   const model = pickModelForExtensionFill();
   const t0 = Date.now();
-  const { text, backend } = await callGeminiBackend(model, parts);
+  const { text, backend } = await callGeminiBackend(model, parts, {
+    preferBackend: "ai-studio",
+  });
   console.info(`[ext/ai-fill] model=${model} backend=${backend} ms=${Date.now() - t0} fields=${fields.length}`);
 
   let parsed: Record<string, unknown>;

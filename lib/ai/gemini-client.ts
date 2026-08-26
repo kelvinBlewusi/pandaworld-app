@@ -151,8 +151,23 @@ function getAIStudioClient(): GoogleGenerativeAI {
 export async function callGeminiBackend(
   modelName: string,
   parts: GeminiPart[],
+  opts: { preferBackend?: "vertex" | "ai-studio" } = {},
 ): Promise<GeminiCallResult> {
-  if (isVertexEnabled()) {
+  // Per-call backend preference. Vertex and AI Studio expose DIFFERENT model
+  // catalogues despite sharing model names and pricing: confirmed live (Aug
+  // 26 2026) that gemini-3.5-flash-lite and gemini-3.1-flash-lite both 404 on
+  // this project's Vertex publisher catalogue in us-central1, while AI
+  // Studio's own listing carries them. So a caller that wants a newer model
+  // than Vertex serves can ask for AI Studio explicitly.
+  //
+  // Falls back to the default resolution when AI Studio isn't configured
+  // (no GOOGLE_API_KEY) — a preference, never a hard requirement, so setting
+  // it can't take the whole route down. Omitting opts keeps the historical
+  // behaviour byte-for-byte: Vertex when configured, AI Studio otherwise.
+  const preferAiStudio =
+    opts.preferBackend === "ai-studio" && Boolean(process.env.GOOGLE_API_KEY);
+
+  if (!preferAiStudio && isVertexEnabled()) {
     const vertex = getVertexClient();
     const model: VertexModel = vertex.getGenerativeModel({ model: modelName });
     const result = await model.generateContent({

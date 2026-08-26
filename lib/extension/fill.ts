@@ -240,7 +240,12 @@ function boxItemsToHtml(text: string): string {
   if (/<br\s*\/?>/i.test(text) || /<ul[\s>]/i.test(text) || /<li[\s>]/i.test(text)) return text;
   let items = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
   if (items.length <= 1) {
-    items = text.split(/(?=\d+\s*x\s+)/i).map((s) => s.trim()).filter(Boolean);
+    // (?<!\d) is load-bearing: without it, "30x Gold Award Medals" split at
+    // BOTH index 0 ("30x …" matches) and index 1 ("0x …" also matches),
+    // producing the literal "3" / "0x Gold Award Medals" two-liner confirmed
+    // live in a seller's What's-in-the-box field. Only break where the count
+    // actually starts — i.e. not mid-number.
+    items = text.split(/(?<!\d)(?=\d+\s*x\s+)/i).map((s) => s.trim()).filter(Boolean);
   }
   if (items.length <= 1) return asHtml(text);
   return `<p>${items.join("<br>")}</p>`;
