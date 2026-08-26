@@ -64,17 +64,23 @@ const MODEL_PREMIUM    = "gemini-2.5-pro";                 // Business / Admin
 // we wanted in the first place.
 const MODEL_OWN_IMAGES_FLOW = "gemini-2.5-flash-lite";
 
-// The Chrome extension's autofill — a SEPARATE constant from
-// MODEL_OWN_IMAGES_FLOW above on purpose. That one is pinned to
-// flash-lite specifically because the main app's auto-analyze
-// pipeline does 3 passes per listing and needs to stay under
-// Vercel's 60s function ceiling. The extension's fill route
-// (app/api/extension/fill/route.ts) makes exactly ONE Gemini call
-// per autofill, so it can afford a slower, smarter model with no
-// timeout risk — bumped to the premium model (Aug 2026) for better
-// category-attribute accuracy and fewer hallucinated values. Trade-
-// off: noticeably slower per autofill than flash-lite was.
-const MODEL_EXTENSION_FILL = "gemini-2.5-pro";
+// The Chrome extension's autofill. Was gemini-2.5-pro (Aug 2026) for
+// better category-attribute accuracy and fewer hallucinated values, then
+// briefly gemini-2.5-flash-lite (same request, prioritizing speed), then
+// bumped to gemini-3.5-flash-lite — Google positions the 3.x flash-lite
+// line as matching or beating 2.5 Flash's quality at flash-lite speed/cost,
+// which is a better trade than plain 2.5-flash-lite gave up.
+//
+// Real risk carried over from MODEL_OWN_IMAGES_FLOW's own history just
+// above: this exact codebase 404'd on "gemini-3.1-flash-lite" in May 2026
+// because Vertex's catalogue only exposed the 2.5 generation at the time.
+// Google's rebrand to "Gemini Enterprise Agent Platform" plus 3.5's July
+// 2026 GA make that stale, but it's unverified on THIS project/region —
+// see aiFillRenderedFields()'s try/fallback in lib/ai/extension-fill.ts,
+// which catches exactly this and drops to MODEL_EXTENSION_FILL_FALLBACK
+// rather than failing (and charging nobody) an autofill outright.
+const MODEL_EXTENSION_FILL = "gemini-3.5-flash-lite";
+export const MODEL_EXTENSION_FILL_FALLBACK = MODEL_LITE; // gemini-2.5-flash-lite — proven working
 
 // Image editing — currently only one viable Gemini model. Used by
 // the "Polish" and "Rebuild as studio shot" buttons (which take an
