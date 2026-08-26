@@ -58,15 +58,22 @@ export interface FillResponse {
 
 /**
  * True for a product Name/title that's too degenerate to ever write into a
- * real listing — a bare "Generic" (the Brand field's own fallback word) or
- * anything under 15 non-space characters. Shared so lib/ai/extension-fill.ts
- * can also filter this OUT of what gets shown to the AI as "current
- * content" on an Edit page — confirmed live: showing the AI its own past
- * "Generic" back as existing content to weigh made it echo the same value
- * again instead of writing something real, defeating the guard below.
+ * real listing — the word "Generic" (the Brand field's own fallback word)
+ * appearing anywhere in it, or anything under 15 non-space characters.
+ * Shared so lib/ai/extension-fill.ts can also filter this OUT of what gets
+ * shown to the AI as "current content" on an Edit page — confirmed live:
+ * showing the AI its own past "Generic" back as existing content to weigh
+ * made it echo the same value again instead of writing something real,
+ * defeating the guard below.
+ *
+ * Confirmed live: a plain equality check on "generic" let a padded title
+ * like "Generic Product For This Item" straight through — well over 15
+ * characters, so the length check didn't catch it either, but just as
+ * useless a title as the bare word. Match "generic" as a whole word
+ * anywhere in the value, not just the entire string.
  */
 export function isDegenerateName(value: string): boolean {
-  return value.trim().toLowerCase() === "generic" || value.replace(/\s+/g, "").length < 15;
+  return /\bgeneric\b/i.test(value) || value.replace(/\s+/g, "").length < 15;
 }
 
 /**

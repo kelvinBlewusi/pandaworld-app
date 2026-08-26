@@ -169,6 +169,10 @@ describe("isDegenerateName", () => {
     expect(isDegenerateName("Watch")).toBe(true);
     expect(isDegenerateName("")).toBe(true);
   });
+  it("flags 'generic' padded into a longer title to dodge the length check — confirmed happening live on the flash-lite model", () => {
+    expect(isDegenerateName("Generic Product For This Item")).toBe(true);
+    expect(isDegenerateName("Wholesale Pack of 30 Generic Award Medals")).toBe(true);
+  });
   it("does not flag a real, specific title", () => {
     expect(isDegenerateName("Wholesale Pack of 30 Gold Award Medals with Ribbons")).toBe(false);
   });
