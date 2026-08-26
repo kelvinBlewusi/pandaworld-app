@@ -76,12 +76,22 @@ const MODEL_OWN_IMAGES_FLOW = "gemini-2.5-flash-lite";
 // serves it (same gap this codebase hit with 3.1 once before, May 2026 —
 // see MODEL_OWN_IMAGES_FLOW above).
 //
-// Back on gemini-2.5-pro (Aug 26 2026) to isolate a live "Name" bug report
-// (Name came back a bare "Generic" despite the isDegenerateName guard) —
-// comparing Pro's output against flash-lite's to see whether this is a
-// weaker-model quality issue or a guard bug. Revert to MODEL_LITE once
-// that's confirmed one way or the other; Pro is ~5-10x the per-call cost.
-const MODEL_EXTENSION_FILL = MODEL_PREMIUM;
+// Aug 26 2026: the "Name comes back Generic" report turned out NOT to be a
+// model-quality problem at all — the diagnostic proved Gemini returned real
+// titles and a client-side write clobbered them (fixed in content.js). So
+// there's no longer a reason to carry gemini-2.5-pro's cost and latency
+// here; Pro was also measured at ~50s per autofill against a 60s function
+// ceiling, which is too close to the edge for production.
+//
+// Now on gemini-3.5-flash-lite, routed through AI Studio rather than Vertex
+// (see aiFillRenderedFields) — Vertex's catalogue for this project 404s on
+// the 3.x line, AI Studio's carries it. Still UNVERIFIED on this account, so
+// the call site keeps a try/fallback to MODEL_EXTENSION_FILL_FALLBACK below:
+// a miss degrades quality instead of breaking the autofill. Swap in
+// "gemini-3.1-flash-lite" here if 3.5 turns out unavailable — it's cheaper
+// ($0.25/$1.50 per 1M vs $0.30/$2.50) and one generation older.
+const MODEL_EXTENSION_FILL = "gemini-3.5-flash-lite";
+export const MODEL_EXTENSION_FILL_FALLBACK = MODEL_LITE; // proven working on Vertex
 
 // Image editing — currently only one viable Gemini model. Used by
 // the "Polish" and "Rebuild as studio shot" buttons (which take an

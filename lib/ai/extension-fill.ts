@@ -14,7 +14,7 @@
  */
 
 import { callGeminiBackend, isVertexEnabled, type GeminiPart } from "@/lib/ai/gemini-client";
-import { pickModelForExtensionFill } from "@/lib/billing/ai-models";
+import { pickModelForExtensionFill, MODEL_EXTENSION_FILL_FALLBACK } from "@/lib/billing/ai-models";
 import { buildContentPolicyInstructions, stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
 import { stripRestrictedWords } from "@/lib/ai/restricted-words";
 import { buildStyleGuideBlock } from "@/lib/ai/content-style-rules";
@@ -236,11 +236,27 @@ Return ONLY the JSON object, no markdown, no commentary.`;
   // Studio's does — so this is the backend to be on when the model pinned in
   // lib/billing/ai-models.ts is anything past the 2.5 line. Degrades to
   // Vertex automatically when GOOGLE_API_KEY isn't set (see callGeminiBackend).
-  const model = pickModelForExtensionFill();
+  let model = pickModelForExtensionFill();
   const t0 = Date.now();
-  const { text, backend } = await callGeminiBackend(model, parts, {
-    preferBackend: "ai-studio",
-  });
+  let text: string, backend: string;
+  try {
+    ({ text, backend } = await callGeminiBackend(model, parts, { preferBackend: "ai-studio" }));
+    // Asking for AI Studio is a preference, not a guarantee — it silently
+    // resolves to Vertex when GOOGLE_API_KEY isn't set, which would put a
+    // 3.x model back on the one catalogue already proven not to carry it.
+    // Say so plainly rather than leaving that to be inferred from a 404.
+    if (backend !== "ai-studio") {
+      console.warn(
+        `[ext/ai-fill] wanted AI Studio for ${model} but the call was served by ${backend} — GOOGLE_API_KEY is probably unset in this environment`,
+      );
+    }
+  } catch (e) {
+    console.warn(
+      `[ext/ai-fill] primary model ${model} failed: ${(e as Error).message.slice(0, 150)} — falling back to ${MODEL_EXTENSION_FILL_FALLBACK}`,
+    );
+    model = MODEL_EXTENSION_FILL_FALLBACK;
+    ({ text, backend } = await callGeminiBackend(model, parts));
+  }
   console.info(`[ext/ai-fill] model=${model} backend=${backend} ms=${Date.now() - t0} fields=${fields.length}`);
 
   let parsed: Record<string, unknown>;
