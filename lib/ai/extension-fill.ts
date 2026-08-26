@@ -14,7 +14,7 @@
  */
 
 import { callGeminiBackend, isVertexEnabled, type GeminiPart } from "@/lib/ai/gemini-client";
-import { pickModelForExtensionFill, MODEL_EXTENSION_FILL_FALLBACK } from "@/lib/billing/ai-models";
+import { pickModelForExtensionFill } from "@/lib/billing/ai-models";
 import { buildContentPolicyInstructions, stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
 import { stripRestrictedWords } from "@/lib/ai/restricted-words";
 import { buildStyleGuideBlock } from "@/lib/ai/content-style-rules";
@@ -224,25 +224,15 @@ Return ONLY the JSON object, no markdown, no commentary.`;
     { inlineData: { data: imageBase64, mimeType } },
   ];
 
-  // The primary model (see MODEL_EXTENSION_FILL in lib/billing/ai-models.ts)
-  // is a newer Gemini generation this project hasn't confirmed live yet —
-  // this codebase has 404'd on an unavailable Gemini generation before
-  // (see MODEL_OWN_IMAGES_FLOW's history in that same file). Falling back
-  // to the proven flash-lite model on failure means a catalogue/region
-  // mismatch degrades quality instead of failing the autofill outright —
-  // and since the AI call sits inside the route's try block, a fallback
-  // that still succeeds costs credits like any other successful fill,
-  // exactly as it should.
-  let model = pickModelForExtensionFill();
+  // No primary/fallback split anymore — see MODEL_EXTENSION_FILL's comment
+  // in lib/billing/ai-models.ts. Both newer Gemini generations tried here
+  // 404'd live on this project's Vertex catalogue, so retrying a *different*
+  // model on failure isn't a thing this needs right now; retrying the SAME
+  // model (what a fallback would degenerate into today) only doubles
+  // latency on a genuine transient error for no benefit.
+  const model = pickModelForExtensionFill();
   const t0 = Date.now();
-  let text: string, backend: string;
-  try {
-    ({ text, backend } = await callGeminiBackend(model, parts));
-  } catch (e) {
-    console.warn(`[ext/ai-fill] primary model ${model} failed: ${(e as Error).message.slice(0, 150)} — falling back to ${MODEL_EXTENSION_FILL_FALLBACK}`);
-    model = MODEL_EXTENSION_FILL_FALLBACK;
-    ({ text, backend } = await callGeminiBackend(model, parts));
-  }
+  const { text, backend } = await callGeminiBackend(model, parts);
   console.info(`[ext/ai-fill] model=${model} backend=${backend} ms=${Date.now() - t0} fields=${fields.length}`);
 
   let parsed: Record<string, unknown>;

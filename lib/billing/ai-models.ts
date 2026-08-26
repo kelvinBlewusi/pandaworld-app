@@ -66,26 +66,19 @@ const MODEL_OWN_IMAGES_FLOW = "gemini-2.5-flash-lite";
 
 // The Chrome extension's autofill. Was gemini-2.5-pro (Aug 2026) for
 // better category-attribute accuracy and fewer hallucinated values, then
-// briefly gemini-2.5-flash-lite (same request, prioritizing speed), then
-// gemini-3.5-flash-lite — confirmed LIVE (Vercel logs, Aug 26 2026) to
-// 404 on this project's Vertex catalogue in us-central1: "Publisher model
+// briefly tried both gemini-3.5-flash-lite and gemini-3.1-flash-lite for
+// a quality bump at the flash-lite speed/cost tier — BOTH confirmed LIVE
+// (Vercel logs, Aug 26 2026) to 404 on this project's Vertex Publisher
+// Model catalogue in us-central1: "Publisher model
 // ...gen-lang-client-0721987658/locations/us-central1... not found".
-// Dropped a generation to gemini-3.1-flash-lite on that evidence — same
-// family of risk (this exact codebase already 404'd on 3.1 once before,
-// May 2026, back when Vertex only exposed the 2.5 generation at all) but
-// 3.1 has had 3 more months to roll out than 3.5 did, so worth one more
-// live try. If Vercel logs show this ALSO falling back to
-// MODEL_EXTENSION_FILL_FALLBACK, Vertex's Publisher Model catalogue for
-// this project/region genuinely hasn't caught up to the 3.x generation
-// yet regardless of what AI Studio's own model listing shows — stop
-// trying 3.x primaries here until that changes.
-//
-// aiFillRenderedFields()'s try/fallback in lib/ai/extension-fill.ts
-// catches a 404 on whichever model this constant names and drops to
-// MODEL_EXTENSION_FILL_FALLBACK rather than failing (and charging nobody)
-// an autofill outright.
-const MODEL_EXTENSION_FILL = "gemini-3.1-flash-lite";
-export const MODEL_EXTENSION_FILL_FALLBACK = MODEL_LITE; // gemini-2.5-flash-lite — proven working
+// Settled back on gemini-2.5-flash-lite: the 3.x generation genuinely
+// isn't in this project/region's Vertex catalogue yet, regardless of
+// what AI Studio's own model listing shows (same gap this codebase hit
+// with 3.1 once before, May 2026 — see MODEL_OWN_IMAGES_FLOW above).
+// Don't re-try a 3.x primary here without first confirming — via a live
+// call, not a marketing page — that Vertex's catalogue for THIS project
+// actually serves it.
+const MODEL_EXTENSION_FILL = MODEL_LITE;
 
 // Image editing — currently only one viable Gemini model. Used by
 // the "Polish" and "Rebuild as studio shot" buttons (which take an
