@@ -65,13 +65,22 @@ const MODEL_PREMIUM    = "gemini-2.5-pro";                 // Business / Admin
 const MODEL_OWN_IMAGES_FLOW = "gemini-2.5-flash-lite";
 
 // The Chrome extension's autofill. Was gemini-2.5-pro (Aug 2026) for
-// better category-attribute accuracy and fewer hallucinated values, but
-// switched to flash-lite at the seller's request to prioritize autofill
-// speed over that accuracy bump. Trade-off if this ever needs revisiting:
-// flash-lite is the same model Free-tier web-app users get — expect more
-// missed/guessed attributes and occasional hallucinated values than Pro
-// gave, in exchange for a noticeably faster autofill.
-const MODEL_EXTENSION_FILL = MODEL_LITE;
+// better category-attribute accuracy and fewer hallucinated values, then
+// briefly gemini-2.5-flash-lite (same request, prioritizing speed), then
+// bumped to gemini-3.5-flash-lite — Google positions the 3.x flash-lite
+// line as matching or beating 2.5 Flash's quality at flash-lite speed/cost,
+// which is a better trade than plain 2.5-flash-lite gave up.
+//
+// Real risk carried over from MODEL_OWN_IMAGES_FLOW's own history just
+// above: this exact codebase 404'd on "gemini-3.1-flash-lite" in May 2026
+// because Vertex's catalogue only exposed the 2.5 generation at the time.
+// Google's rebrand to "Gemini Enterprise Agent Platform" plus 3.5's July
+// 2026 GA make that stale, but it's unverified on THIS project/region —
+// see aiFillRenderedFields()'s try/fallback in lib/ai/extension-fill.ts,
+// which catches exactly this and drops to MODEL_EXTENSION_FILL_FALLBACK
+// rather than failing (and charging nobody) an autofill outright.
+const MODEL_EXTENSION_FILL = "gemini-3.5-flash-lite";
+export const MODEL_EXTENSION_FILL_FALLBACK = MODEL_LITE; // gemini-2.5-flash-lite — proven working
 
 // Image editing — currently only one viable Gemini model. Used by
 // the "Polish" and "Rebuild as studio shot" buttons (which take an
