@@ -64,17 +64,14 @@ const MODEL_PREMIUM    = "gemini-2.5-pro";                 // Business / Admin
 // we wanted in the first place.
 const MODEL_OWN_IMAGES_FLOW = "gemini-2.5-flash-lite";
 
-// The Chrome extension's autofill — a SEPARATE constant from
-// MODEL_OWN_IMAGES_FLOW above on purpose. That one is pinned to
-// flash-lite specifically because the main app's auto-analyze
-// pipeline does 3 passes per listing and needs to stay under
-// Vercel's 60s function ceiling. The extension's fill route
-// (app/api/extension/fill/route.ts) makes exactly ONE Gemini call
-// per autofill, so it can afford a slower, smarter model with no
-// timeout risk — bumped to the premium model (Aug 2026) for better
-// category-attribute accuracy and fewer hallucinated values. Trade-
-// off: noticeably slower per autofill than flash-lite was.
-const MODEL_EXTENSION_FILL = "gemini-2.5-pro";
+// The Chrome extension's autofill. Was gemini-2.5-pro (Aug 2026) for
+// better category-attribute accuracy and fewer hallucinated values, but
+// switched to flash-lite at the seller's request to prioritize autofill
+// speed over that accuracy bump. Trade-off if this ever needs revisiting:
+// flash-lite is the same model Free-tier web-app users get — expect more
+// missed/guessed attributes and occasional hallucinated values than Pro
+// gave, in exchange for a noticeably faster autofill.
+const MODEL_EXTENSION_FILL = MODEL_LITE;
 
 // Image editing — currently only one viable Gemini model. Used by
 // the "Polish" and "Rebuild as studio shot" buttons (which take an
