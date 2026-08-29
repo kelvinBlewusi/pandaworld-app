@@ -1004,14 +1004,42 @@
       }
       try {
         const ok = await writeValue(f, value);
-        results.push({ label, ok, reason: ok ? "" : "writer reported no change" });
+        results.push({ label, ok, reason: ok ? "" : "writer reported no change", field: f, value });
       } catch (e) {
         results.push({ label, ok: false, reason: e.message });
       }
     }
     await closeAnyLingeringOverlay();
-    console.debug(LOG, "apply results:", results);
-    return { ok: true, results };
+
+    // Confirmed live (Aug 29 2026, console label→element map + Vercel logs
+    // for the same request): writeInput's own synchronous check proved Name
+    // held the AI's real title the instant it was written, yet the visible
+    // field read "Generic" moments later — every time, always matching
+    // whatever Brand became in the SAME batch. Something downstream of the
+    // write (Angular change detection, or a Jumia-side form behavior this
+    // extension has no visibility into) reverts it after the fact. Rather
+    // than a guess at the platform mechanism, re-assert: give Angular a beat
+    // to settle, then re-check every plain text/textarea field this batch
+    // actually wrote and rewrite anything that drifted from what we set.
+    // Scoped to text/textarea only — richtext goes through a different
+    // read/write path, and re-clicking a combobox/select risks reopening an
+    // overlay mid-verification instead of just confirming a value.
+    await sleep(400);
+    for (const r of results) {
+      if (!r.ok || !r.field || r.field.type !== "text") continue;
+      const current = (r.field.el.value || "").trim();
+      if (current === r.value.trim()) continue;
+      console.warn(LOG, `"${r.label}" drifted from "${r.value}" to "${current}" after writing — reasserting`);
+      const reok = writeInput(r.field.el, r.value);
+      r.ok = reok;
+      r.reason = reok ? "" : "reasserted but writer reported no change";
+    }
+    // Drop the internal-only fields carried above for the reassertion pass —
+    // the caller only expects {label, ok, reason, skipped?}.
+    const publicResults = results.map(({ label, ok, reason, skipped }) => ({ label, ok, reason, skipped }));
+
+    console.debug(LOG, "apply results:", publicResults);
+    return { ok: true, results: publicResults };
   }
 
   function writeValue(field, value) {
