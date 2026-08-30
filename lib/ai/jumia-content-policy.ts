@@ -171,7 +171,7 @@ export const JUMIA_REJECTION_PATTERNS: ReadonlyArray<{
   },
   {
     reason: "Description too short — under 50 characters triggers automatic Jumia rejection",
-    fix:    "Floor at 80 characters. Description can run up to 3000 characters and may use prose, bullets, tables, HTML, or embedded images — pick whichever fits the product.",
+    fix:    "Floor at 80 characters, no upper limit — write as much genuine detail as the product warrants, in prose, bullets, tables, HTML, or embedded images, pick whichever fits the product.",
   },
   {
     reason: "Generic title pattern — \"Quality Product\", \"Best Item\", \"Cool Thing\", no brand or model",
@@ -285,7 +285,7 @@ TITLE / NAME RULES (15-200 characters, Title Case, ASCII only):
       brand field — restricted brands need seller authorisation and the
       AI defaults them to null; see brand rules below).
 
-DESCRIPTION RULES (80-3000 characters, any format that fits the product):
+DESCRIPTION RULES (80+ characters, no upper limit, any format that fits the product):
   - May be plain prose, bullet points, tables, or a mix. Use whichever
     format best showcases the product — long-form prose for a story-led
     item (e.g. handmade leather bag), bullets for spec-led tech, tables

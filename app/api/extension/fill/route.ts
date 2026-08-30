@@ -309,7 +309,7 @@ export async function POST(req: Request) {
   } catch (e) {
     console.error(`[ext/fill] AI call failed for user=${userId}:`, e);
     return NextResponse.json(
-      { error: "AI couldn't process this photo right now. Please try again." },
+      { error: "Agent couldn't process this photo right now. Please try again." },
       { status: 502, headers: CORS },
     );
   }

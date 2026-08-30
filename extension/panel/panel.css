@@ -157,11 +157,15 @@ button { cursor: pointer; border: none; border-radius: 8px; font: inherit; font-
   50% { opacity: .5; }
 }
 
-.status { margin: 12px 0 4px; font-size: 13px; min-height: 18px; }
+.status { margin: 12px 0 4px; font-size: 13px; min-height: 18px; transition: opacity .4s ease; }
 .status.err { color: var(--err); }
 .status.ok { color: var(--ok); }
 
-.results { list-style: none; margin: 6px 0; padding: 0; }
+/* Auto-dismiss for the "Filled N/14 fields…" summary + checklist — read,
+   then get out of the way rather than sitting there until the next run. */
+.status.fadeOut, .results.fadeOut { opacity: 0; }
+
+.results { list-style: none; margin: 6px 0; padding: 0; transition: opacity .4s ease; }
 .results li { display: flex; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
 .results li .mark { flex: 0 0 16px; }
 .results li.ok .mark { color: var(--ok); }
