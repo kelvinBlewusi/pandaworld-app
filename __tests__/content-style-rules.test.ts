@@ -51,6 +51,15 @@ describe("buildStyleGuideBlock", () => {
     expect(block).toMatch(/not capped at a?n? ?2-column|use as many columns/i);
   });
 
+  it("sets an explicit length floor so anti-padding language isn't read as 'stay short'", () => {
+    const withNarrative = buildStyleGuideBlock([
+      { label: "Product description", type: "richtext" },
+      { label: "Highlights", type: "richtext" },
+    ]);
+    expect(withNarrative).toMatch(/TOO SHORT|150.?350 words/);
+    expect(withNarrative).toContain("too thin to be useful");
+  });
+
   it("tells the AI to use web search for real facts, only on Description/Highlights", () => {
     const withNarrative = buildStyleGuideBlock([
       { label: "Product description", type: "richtext" },
