@@ -224,30 +224,28 @@ Return ONLY the JSON object, no markdown, no commentary.`;
     { inlineData: { data: imageBase64, mimeType } },
   ];
 
-  // No primary/fallback split anymore — see MODEL_EXTENSION_FILL's comment
-  // in lib/billing/ai-models.ts. Both newer Gemini generations tried here
-  // 404'd live on this project's Vertex catalogue, so retrying a *different*
-  // model on failure isn't a thing this needs right now; retrying the SAME
-  // model (what a fallback would degenerate into today) only doubles
-  // latency on a genuine transient error for no benefit.
-  // Routed through AI Studio rather than Vertex: Vertex's publisher catalogue
-  // for this project doesn't carry the newer Gemini generations (both
-  // gemini-3.5-flash-lite and gemini-3.1-flash-lite 404'd live), while AI
-  // Studio's does — so this is the backend to be on when the model pinned in
-  // lib/billing/ai-models.ts is anything past the 2.5 line. Degrades to
-  // Vertex automatically when GOOGLE_API_KEY isn't set (see callGeminiBackend).
+  // Aug 29 2026: switched back to preferring VERTEX after the seller attached
+  // real billing to the GCP project — both gemini-3.5-flash-lite and
+  // gemini-3.1-flash-lite had 404'd on this project's Vertex publisher
+  // catalogue BEFORE that (confirmed live), but Google gates some model
+  // availability on a project having active billing, so this is worth a
+  // fresh live test rather than assuming AI Studio is permanently required.
+  // If Vertex still 404s, the try/fallback below still lands on the proven
+  // gemini-2.5-flash-lite either way — this is a preference to retest, not a
+  // claim that Vertex definitely works now.
   let model = pickModelForExtensionFill();
   const t0 = Date.now();
   let text: string, backend: string;
   try {
-    ({ text, backend } = await callGeminiBackend(model, parts, { preferBackend: "ai-studio" }));
-    // Asking for AI Studio is a preference, not a guarantee — it silently
-    // resolves to Vertex when GOOGLE_API_KEY isn't set, which would put a
-    // 3.x model back on the one catalogue already proven not to carry it.
-    // Say so plainly rather than leaving that to be inferred from a 404.
-    if (backend !== "ai-studio") {
+    ({ text, backend } = await callGeminiBackend(model, parts, {
+      preferBackend: "vertex",
+      groundWithSearch: true,
+    }));
+    // preferBackend is only a preference — say plainly which backend actually
+    // served the call rather than leaving that to be inferred from a 404.
+    if (backend !== "vertex") {
       console.warn(
-        `[ext/ai-fill] wanted AI Studio for ${model} but the call was served by ${backend} — GOOGLE_API_KEY is probably unset in this environment`,
+        `[ext/ai-fill] wanted Vertex for ${model} but the call was served by ${backend} — GCP_PROJECT_ID/GOOGLE_APPLICATION_CREDENTIALS_JSON are probably unset in this environment`,
       );
     }
   } catch (e) {
@@ -255,7 +253,7 @@ Return ONLY the JSON object, no markdown, no commentary.`;
       `[ext/ai-fill] primary model ${model} failed: ${(e as Error).message.slice(0, 150)} — falling back to ${MODEL_EXTENSION_FILL_FALLBACK}`,
     );
     model = MODEL_EXTENSION_FILL_FALLBACK;
-    ({ text, backend } = await callGeminiBackend(model, parts));
+    ({ text, backend } = await callGeminiBackend(model, parts, { groundWithSearch: true }));
   }
   console.info(`[ext/ai-fill] model=${model} backend=${backend} ms=${Date.now() - t0} fields=${fields.length}`);
 

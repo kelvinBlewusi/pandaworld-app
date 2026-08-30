@@ -148,10 +148,27 @@ function getAIStudioClient(): GoogleGenerativeAI {
  *
  * Returns the extracted text + backend identity for telemetry.
  */
+/**
+ * Grounding tool declaration for both SDKs, as a raw pass-through object
+ * rather than either SDK's typed `Tool` union — both `@google/generative-ai`
+ * (0.24.1) and `@google-cloud/vertexai` (1.12.0) only type the OLDER
+ * `googleSearchRetrieval` tool (1.5-era, dynamic-retrieval-based); neither
+ * has caught up to `google_search`, the tool current Gemini generations use.
+ * Verified this is still safe: both SDKs' generateContent() passes `tools`
+ * straight through to `JSON.stringify(request)` with no key transformation
+ * or schema validation (checked their installed source directly, not just
+ * docs), and `{"google_search": {}}` is the documented current wire shape
+ * for the classic generateContent REST endpoint on both Vertex and AI
+ * Studio. Revisit this cast once either SDK ships a real `GoogleSearchTool`
+ * type — this is a deliberate, verified exception to "don't guess API
+ * shapes," not a habit to repeat elsewhere.
+ */
+const GOOGLE_SEARCH_TOOL = { google_search: {} };
+
 export async function callGeminiBackend(
   modelName: string,
   parts: GeminiPart[],
-  opts: { preferBackend?: "vertex" | "ai-studio" } = {},
+  opts: { preferBackend?: "vertex" | "ai-studio"; groundWithSearch?: boolean } = {},
 ): Promise<GeminiCallResult> {
   // Per-call backend preference. Vertex and AI Studio expose DIFFERENT model
   // catalogues despite sharing model names and pricing: confirmed live (Aug
@@ -172,6 +189,7 @@ export async function callGeminiBackend(
     const model: VertexModel = vertex.getGenerativeModel({ model: modelName });
     const result = await model.generateContent({
       contents: [{ role: "user", parts: parts as VertexPart[] }],
+      ...(opts.groundWithSearch ? { tools: [GOOGLE_SEARCH_TOOL] as unknown as import("@google-cloud/vertexai").Tool[] } : {}),
     });
     const candidate = result.response?.candidates?.[0];
     const responseParts = candidate?.content?.parts ?? [];
@@ -184,7 +202,14 @@ export async function callGeminiBackend(
 
   const ai = getAIStudioClient();
   const model: AIStudioModel = ai.getGenerativeModel({ model: modelName });
-  const result = await model.generateContent(parts);
+  const result = await model.generateContent(
+    opts.groundWithSearch
+      ? {
+          contents: [{ role: "user", parts: parts as import("@google/generative-ai").Part[] }],
+          tools: [GOOGLE_SEARCH_TOOL] as unknown as import("@google/generative-ai").Tool[],
+        }
+      : parts,
+  );
   return {
     text:    result.response.text(),
     model:   modelName,
