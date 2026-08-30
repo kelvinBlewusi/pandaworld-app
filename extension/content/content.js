@@ -27,13 +27,23 @@
     true, // capture phase — catches inputs added after load
   );
 
+  // Every message handler below responds via sendResponse — if the promise
+  // it's chained to ever rejects uncaught, sendResponse is never called and
+  // the panel hangs waiting forever with no error surfaced (confirmed live:
+  // this is exactly how one unguarded writeInput() throw inside applyValues
+  // turned into "the whole fill silently did nothing," see writeInput's own
+  // comment above for the full chain). Always resolve with SOMETHING.
+  const onReject = (sendResponse) => (e) => sendResponse({ ok: false, error: e?.message || String(e) });
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg?.type === "HARVEST") {
-      harvest().then(sendResponse);
+      harvest().then(sendResponse).catch(onReject(sendResponse));
       return true;
     }
     if (msg?.type === "APPLY") {
-      applyValues(msg.values || {}, { overwrite: !!msg.overwrite }).then(sendResponse);
+      applyValues(msg.values || {}, { overwrite: !!msg.overwrite })
+        .then(sendResponse)
+        .catch(onReject(sendResponse));
       return true;
     }
     return false;
@@ -1102,8 +1112,25 @@
   function writeInput(el, value) {
     const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
-    if (setter) setter.call(el, value);
-    else el.value = value;
+    try {
+      if (setter) setter.call(el, value);
+      else el.value = value;
+    } catch (e) {
+      // Confirmed live via chrome://extensions error log: a native
+      // type="number"/"date"/"range" input throws synchronously when the
+      // value it's given can't be parsed for that type ("The specified
+      // value 'N/A' cannot be parsed, or is out of range." — seen for
+      // "N/A", "Ghana", "GHS" landing on a numeric field). This call was
+      // reached unguarded from the post-write reassertion pass in
+      // applyValues(), so the throw propagated out of that whole async
+      // function — applyValues(...).then(sendResponse) has no .catch, so
+      // sendResponse was never called and the ENTIRE fill result (every
+      // field, including ones already written correctly, e.g. Seller SKU)
+      // never reached the panel. One field's unwritable value must not be
+      // able to take down the rest of the batch.
+      console.warn(LOG, `writeInput failed for value ${JSON.stringify(value)}: ${e.message}`);
+      return false;
+    }
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
     return el.value === value;
