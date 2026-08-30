@@ -291,12 +291,16 @@ DESCRIPTION RULES (80+ characters, no upper limit, any format that fits the prod
     item (e.g. handmade leather bag), bullets for spec-led tech, tables
     for comparison or spec-sheet style listings, mixed for products with
     both narrative and a feature list.
-  - All formatting styles allowed: bold, italics, line breaks, bullets,
-    short paragraphs, headings, tables. Use them where they help
+  - All formatting styles allowed: bold, italics, underline, line breaks,
+    bullets, short paragraphs, headings, tables. Use them where they help
     readability.
   - HTML may be used (e.g. <p>, <ul>, <li>, <table>, <tr>, <td>, <br>,
-    <strong>, <em>, <img>). Stick to safe, semantic tags — no <script>,
-    no inline JavaScript, no event handlers.
+    <strong>, <em>, <u>, <h3>, <h4>, <img>). <h3>/<h4> are for a standalone
+    section title (e.g. "Getting Started", "Common Questions") — for a
+    feature call-out INSIDE a flowing paragraph, use a bold lead-in
+    (<strong>...</strong>) instead of a heading tag, since a heading breaks
+    the paragraph into its own block. Stick to safe, semantic tags — no
+    <script>, no inline JavaScript, no event handlers.
   - Images may be embedded inline (<img src="...">) when they add value
     — for example a spec diagram, a size chart, or an in-use photo
     alongside the main gallery. Use full URLs that the seller will host.
@@ -316,10 +320,12 @@ HIGHLIGHTS RULES (free-form, any format that fits the product):
     common but NOT required — for a luxury / story-led item, two
     short prose paragraphs may sell better than five bullets; for a
     spec-led item a quick comparison table can outperform both.
-  - All formatting styles allowed: bold, italics, line breaks, bullets,
-    short paragraphs, tables. Use them where they help readability.
+  - All formatting styles allowed: bold, italics, underline, line breaks,
+    bullets, short paragraphs, headings, tables. Use them where they help
+    readability.
   - HTML may be used (the same safe-tag whitelist as Description —
-    <p>, <ul>, <li>, <table>, <tr>, <td>, <br>, <strong>, <em>, <img>).
+    <p>, <ul>, <li>, <table>, <tr>, <td>, <br>, <strong>, <em>, <u>, <h3>,
+    <h4>, <img>).
   - Images may be embedded inline (<img src="...">) when they
     illustrate a highlight (e.g. an icon-style feature graphic).
   - No word limit per bullet or per line — write as much or as little as
