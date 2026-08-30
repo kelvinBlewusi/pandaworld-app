@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Mail, Users } from "lucide-react";
 import { Wordmark } from "./wordmark";
+import { FooterPricingTrigger } from "./footer-pricing-trigger";
 import {
   SUPPORT_EMAIL,
   SUPPORT_MAILTO,
@@ -43,7 +44,19 @@ const SOCIAL_ICON_MAP: Record<string, (p: { className?: string }) => JSX.Element
  * able to navigate to drafts that haven't been lawyer-reviewed yet.
  */
 
-export function MarketingFooter() {
+export function MarketingFooter({
+  extensionPricing,
+}: {
+  /**
+   * Set on extension-flavored pages (/, /extension) so "Pricing" opens the
+   * same credit-pack card the hero nav's own "Pricing" button opens,
+   * instead of navigating to /pricing — the classic web app's unrelated
+   * monthly-plan pricing. Every other caller (/pricing, /landing,
+   * /push-listings, /terms, /privacy) omits this and keeps the plain link,
+   * which is the product those pages actually mean by "Pricing."
+   */
+  extensionPricing?: { signedIn: boolean; signInHref: string };
+} = {}) {
   return (
     <footer className="border-t border-zinc-100 bg-zinc-50">
       <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-6 px-6 py-10 sm:flex-row">
@@ -53,9 +66,13 @@ export function MarketingFooter() {
         </div>
 
         <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-zinc-500">
-          <Link href="/pricing" className="hover:text-zinc-900">
-            Pricing
-          </Link>
+          {extensionPricing ? (
+            <FooterPricingTrigger signedIn={extensionPricing.signedIn} signInHref={extensionPricing.signInHref} />
+          ) : (
+            <Link href="/pricing" className="hover:text-zinc-900">
+              Pricing
+            </Link>
+          )}
 
           {/* Terms + Privacy — intentionally non-responsive for now.
               Pages exist as drafts at /terms + /privacy but they need
