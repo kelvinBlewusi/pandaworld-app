@@ -979,7 +979,27 @@
       })),
     );
 
-    for (const [label, value] of Object.entries(values)) {
+    // Write the product-name field LAST, after every other field including
+    // Brand. This is a real attempt at PREVENTING the drift confirmed live
+    // (not just reacting to it via the re-assert pass below): in every
+    // occurrence, Name ended up matching whatever Brand became in the same
+    // batch, which is the signature of a "regenerate a suggested name from
+    // brand/category unless the seller already touched it" side effect —
+    // a common admin-form pattern. Angular has no reason to treat our write
+    // as "the seller already touched it" (that's a real per-form internal
+    // flag we can't set from outside), so if such a side effect exists, it
+    // fires on ITS OWN schedule after Brand changes regardless of write
+    // order — but writing Name after Brand at least means our value is the
+    // LAST thing set before that side effect would have already run, rather
+    // than being overwritten by it moments later. The re-assert pass further
+    // below stays as the safety net for whatever this ordering doesn't
+    // fully prevent — this narrows how often it needs to catch anything,
+    // it doesn't replace it (the exact underlying mechanism is still
+    // invisible to us — Jumia's own component code, not ours).
+    const entries = Object.entries(values);
+    entries.sort((a, b) => Number(labelIsProductName(a[0])) - Number(labelIsProductName(b[0])));
+
+    for (const [label, value] of entries) {
       const f = byLabel.get(label.toLowerCase());
       if (!f) {
         results.push({ label, ok: false, reason: "field not found on page" });
