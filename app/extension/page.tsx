@@ -86,6 +86,7 @@ export async function ExtensionPage() {
   // logged-out visitors sign up first (the dashboard requires an account).
   const ctaHref  = userId ? DASHBOARD_REDIRECT : `/sign-up?redirect_url=${DASHBOARD_REDIRECT}`;
   const ctaLabel = userId ? "Open your extension dashboard" : "Get Started";
+  const signInHref = `/sign-in?redirect_url=${DASHBOARD_REDIRECT}`;
 
   return (
     <div className="min-h-screen bg-white text-zinc-900">
@@ -96,7 +97,7 @@ export async function ExtensionPage() {
           Pricing/Sign in aren't persistently reachable while scrolled past
           the hero; MarketingFooter below still offers a way through. */}
       <ExtensionHeroBackdrop
-        signInHref={`/sign-in?redirect_url=${DASHBOARD_REDIRECT}`}
+        signInHref={signInHref}
         signUpHref={`/sign-up?redirect_url=${DASHBOARD_REDIRECT}`}
         ctaHref={ctaHref}
         ctaLabel={ctaLabel}
@@ -134,7 +135,7 @@ export async function ExtensionPage() {
         </div>
       </section>
 
-      <MarketingFooter />
+      <MarketingFooter extensionPricing={{ signedIn: Boolean(userId), signInHref }} />
     </div>
   );
 }
