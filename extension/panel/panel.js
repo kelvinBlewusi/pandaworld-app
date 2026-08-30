@@ -42,8 +42,30 @@ async function loadSettings() {
 // ── UI helpers ───────────────────────────────────────────────────────────────
 function setStatus(text, kind = "") {
   const s = $("status");
+  s.hidden = false;
   s.textContent = text;
-  s.className = `status ${kind}`;
+  s.className = `status ${kind}`; // full replace — also clears any "fadeOut" left from a prior run
+}
+
+// Auto-dismiss for the completed-fill summary (status text + checklist) —
+// read it, then get out of the panel's way instead of sitting there
+// forever. Only ever scheduled after a successful fill; error statuses
+// stay put since they're actionable ("reload the tab", etc).
+let resultsFadeTimer = null;
+function clearResultsFadeTimer() {
+  clearTimeout(resultsFadeTimer);
+  resultsFadeTimer = null;
+}
+function scheduleResultsFade(ms = 10000) {
+  clearResultsFadeTimer();
+  resultsFadeTimer = setTimeout(() => {
+    $("status").classList.add("fadeOut");
+    $("results").classList.add("fadeOut");
+    resultsFadeTimer = setTimeout(() => {
+      $("status").hidden = true;
+      $("results").hidden = true;
+    }, 400); // matches the CSS transition duration above
+  }, ms);
 }
 
 // Determinate steps for the parts we know finish fast (harvest, apply);
@@ -63,6 +85,8 @@ function hideProgress() {
 }
 function renderResults(results) {
   const ul = $("results");
+  ul.hidden = false;
+  ul.classList.remove("fadeOut");
   ul.innerHTML = "";
   for (const r of results || []) {
     const li = document.createElement("li");
@@ -299,6 +323,9 @@ $("openJumia").addEventListener("click", () => {
 $("autofill").addEventListener("click", async () => {
   const btn = $("autofill");
   btn.disabled = true;
+  clearResultsFadeTimer();
+  $("results").hidden = false;
+  $("results").classList.remove("fadeOut");
   $("results").innerHTML = "";
   $("warnings").innerHTML = "";
   try {
@@ -396,6 +423,7 @@ $("autofill").addEventListener("click", async () => {
     }
     const skipNote = skippedCount ? ` (${skippedCount} already had content, left as-is)` : "";
     setStatus(`Filled ${okCount}/${Object.keys(fill.data.values).length} fields${skipNote}. Review, then submit on Jumia.`, "ok");
+    scheduleResultsFade();
   } catch (e) {
     console.error("[PandaWorld] autofill failed:", e);
     setStatus("Something went wrong — please try again.", "err");
