@@ -14,7 +14,7 @@
  */
 
 import { callGeminiBackend, isVertexEnabled, type GeminiPart } from "@/lib/ai/gemini-client";
-import { pickModelForExtensionFill, MODEL_EXTENSION_FILL_FALLBACK } from "@/lib/billing/ai-models";
+import { pickModelForExtensionFill } from "@/lib/billing/ai-models";
 import { buildContentPolicyInstructions, stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
 import { stripRestrictedWords } from "@/lib/ai/restricted-words";
 import { buildStyleGuideBlock } from "@/lib/ai/content-style-rules";
@@ -224,37 +224,18 @@ Return ONLY the JSON object, no markdown, no commentary.`;
     { inlineData: { data: imageBase64, mimeType } },
   ];
 
-  // Aug 29 2026: switched back to preferring VERTEX after the seller attached
-  // real billing to the GCP project — both gemini-3.5-flash-lite and
-  // gemini-3.1-flash-lite had 404'd on this project's Vertex publisher
-  // catalogue BEFORE that (confirmed live), but Google gates some model
-  // availability on a project having active billing, so this is worth a
-  // fresh live test rather than assuming AI Studio is permanently required.
-  // If Vertex still 404s, the try/fallback below still lands on the proven
-  // gemini-2.5-flash-lite either way — this is a preference to retest, not a
-  // claim that Vertex definitely works now.
-  let model = pickModelForExtensionFill();
+  // Aug 30 2026: back on gemini-2.5-flash-lite on Vertex — see
+  // MODEL_EXTENSION_FILL's comment in lib/billing/ai-models.ts for why. No
+  // try/fallback needed: this model is already proven working on Vertex
+  // across many live calls this project has made, so there's nothing left
+  // to fall back FROM. preferBackend stays explicit for self-documentation
+  // even though Vertex is also the default when configured.
+  const model = pickModelForExtensionFill();
   const t0 = Date.now();
-  let text: string, backend: string;
-  try {
-    ({ text, backend } = await callGeminiBackend(model, parts, {
-      preferBackend: "vertex",
-      groundWithSearch: true,
-    }));
-    // preferBackend is only a preference — say plainly which backend actually
-    // served the call rather than leaving that to be inferred from a 404.
-    if (backend !== "vertex") {
-      console.warn(
-        `[ext/ai-fill] wanted Vertex for ${model} but the call was served by ${backend} — GCP_PROJECT_ID/GOOGLE_APPLICATION_CREDENTIALS_JSON are probably unset in this environment`,
-      );
-    }
-  } catch (e) {
-    console.warn(
-      `[ext/ai-fill] primary model ${model} failed: ${(e as Error).message.slice(0, 150)} — falling back to ${MODEL_EXTENSION_FILL_FALLBACK}`,
-    );
-    model = MODEL_EXTENSION_FILL_FALLBACK;
-    ({ text, backend } = await callGeminiBackend(model, parts, { groundWithSearch: true }));
-  }
+  const { text, backend } = await callGeminiBackend(model, parts, {
+    preferBackend: "vertex",
+    groundWithSearch: true,
+  });
   console.info(`[ext/ai-fill] model=${model} backend=${backend} ms=${Date.now() - t0} fields=${fields.length}`);
 
   let parsed: Record<string, unknown>;

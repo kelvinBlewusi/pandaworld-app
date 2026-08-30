@@ -216,6 +216,31 @@ function asHtml(text: string): string {
   return `<p>${text.replace(/\n{2,}/g, "</p><p>").replace(/\n/g, "<br>")}</p>`;
 }
 
+/**
+ * Hard character cap for a richtext field's FINAL wrapped output — confirmed
+ * live: Jumia rejects submission with "Attribute [manufacturer_txt] should
+ * have between [0] to [255] characters" when From the Manufacturer runs
+ * over. The prompt's "1-2 short sentences" hint doesn't reliably keep the
+ * AI under that once wrapped in <p></p>, same class of problem Price and
+ * Name needed a hard code-side limit for, not just a prompt line.
+ *
+ * Strips all HTML before measuring/cutting (rather than trying to truncate
+ * mid-markup and hope the result is still valid) and re-wraps in a plain
+ * <p> — an acceptable trade for a field that's only ever 1-2 sentences, in
+ * exchange for guaranteeing valid HTML and a hard length ceiling. Cuts at
+ * the last word boundary so it doesn't end mid-word.
+ */
+function capRichTextLength(html: string, max: number): string {
+  const stripped = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  const overhead = "<p></p>".length;
+  if (stripped.length + overhead <= max) return `<p>${stripped}</p>`;
+  const budget = max - overhead;
+  let cut = stripped.slice(0, budget);
+  const lastSpace = cut.lastIndexOf(" ");
+  if (lastSpace > budget * 0.5) cut = cut.slice(0, lastSpace);
+  return `<p>${cut.trim()}</p>`;
+}
+
 /** Turn "• a\n• b" or "a\nb" into <ul><li>a</li><li>b</li></ul>. */
 function bulletsToHtml(text: string): string {
   if (/<ul[\s>]/i.test(text)) return text;
@@ -461,6 +486,8 @@ export function finalizeAiValues(
       value = l.includes("highlight") ? bulletsToHtml(value)
         : l.includes("box") ? boxItemsToHtml(value)
         : asHtml(value);
+      // manufacturer_txt specifically — see capRichTextLength's doc comment.
+      if (l.includes("manufacturer")) value = capRichTextLength(value, 255);
     }
 
     if ((field.type === "select" || field.type === "combobox") && field.options?.length) {

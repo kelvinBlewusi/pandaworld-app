@@ -868,6 +868,23 @@
     return (l.includes("name") && !l.includes("brand")) || l.includes("description") || l.includes("highlight");
   }
 
+  /**
+   * Confirmed live: submitting an edited listing with an AI-regenerated
+   * Seller SKU failed with "Product Sid [...] and Seller SKU [...] do not
+   * match. Valid Seller SKU is [...]" — Jumia ties the Seller SKU to the
+   * product's SID once a listing exists, so it's not an editable attribute
+   * like Color or Warranty Type, it's closer to an immutable identifier.
+   * Unlike every other field, this needs protecting from the "Overwrite
+   * existing content" checkbox too, not just the default gate below — a
+   * seller ticking that box wants richer prose, not a broken submission.
+   * Only Seller SKU has direct evidence of this failure; GTIN Barcode is
+   * structurally similar (also a real-world identifier) but unconfirmed —
+   * left alone rather than guessed at.
+   */
+  function isLockedIdentifierLabel(label) {
+    return (label || "").toLowerCase().includes("seller sku");
+  }
+
   /** Plain-text snapshot of a narrative field's current content, sent to the
    *  AI so IT decides whether to keep, enhance, or replace it — rather than
    *  the extension either blindly skipping or blindly overwriting. Strips
@@ -1016,6 +1033,14 @@
           ok: false,
           reason: `would have overwritten the product name — left as-is`,
         });
+        continue;
+      }
+      // Locked identifiers (see isLockedIdentifierLabel) skip whenever they
+      // already have a value, ignoring `overwrite` entirely — unlike every
+      // other field, "the seller wants richer content" is never a reason to
+      // touch this one; Jumia's backend rejects the submission outright.
+      if (isLockedIdentifierLabel(f.label) && fieldHasValue(f)) {
+        results.push({ label, ok: false, skipped: true, reason: "locked to this listing — left as-is" });
         continue;
       }
       if (!overwrite && !isNarrativeLabel(f.label) && fieldHasValue(f)) {

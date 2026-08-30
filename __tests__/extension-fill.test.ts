@@ -184,6 +184,7 @@ describe("finalizeAiValues (real-AI post-processing)", () => {
     { label: "Product description", type: "richtext" },
     { label: "Highlights", type: "richtext" },
     { label: "What's in the box", type: "richtext" },
+    { label: "From the Manufacturer", type: "richtext" },
     { label: "Watch Type", type: "select", options: ["Analog", "Digital", "Smart"] },
     { label: "Price", type: "text" },
     { label: "Warranty Type", type: "select", options: ["Repair by Vendor", "N/A", "None"] },
@@ -215,6 +216,23 @@ describe("finalizeAiValues (real-AI post-processing)", () => {
     const { values } = finalizeAiValues(raw, fields, "");
     expect(values["What's in the box"]).not.toContain(">3<br>");
     expect(values["What's in the box"]).toContain("30x Gold Award Medals with Ribbons");
+  });
+
+  it("caps From the Manufacturer at 255 chars — confirmed live blocking submission with 'Attribute [manufacturer_txt] should have between [0] to [255] characters'", () => {
+    const long =
+      "Crafted with meticulous attention to detail, this timepiece combines a robust stainless steel case with a genuine leather strap for a look that balances durability and refined, understated elegance suitable for both formal occasions and everyday wear across every season.";
+    expect(long.length).toBeGreaterThan(255);
+    const { values } = finalizeAiValues({ "From the Manufacturer": long }, fields, "");
+    const out = values["From the Manufacturer"];
+    expect(out.length).toBeLessThanOrEqual(255);
+    expect(out.startsWith("<p>")).toBe(true);
+    expect(out.endsWith("</p>")).toBe(true);
+    // Cuts at a word boundary, not mid-word.
+    expect(out).not.toMatch(/\w-<\/p>$/);
+
+    const short = "Made from durable stainless steel with a genuine leather strap.";
+    const shortResult = finalizeAiValues({ "From the Manufacturer": short }, fields, "");
+    expect(shortResult.values["From the Manufacturer"]).toBe(`<p>${short}</p>`);
   });
 
   it("still splits a real multi-item list whose counts are multi-digit", () => {
