@@ -868,6 +868,23 @@
     return (l.includes("name") && !l.includes("brand")) || l.includes("description") || l.includes("highlight");
   }
 
+  /**
+   * Confirmed live: submitting an edited listing with an AI-regenerated
+   * Seller SKU failed with "Product Sid [...] and Seller SKU [...] do not
+   * match. Valid Seller SKU is [...]" — Jumia ties the Seller SKU to the
+   * product's SID once a listing exists, so it's not an editable attribute
+   * like Color or Warranty Type, it's closer to an immutable identifier.
+   * Unlike every other field, this needs protecting from the "Overwrite
+   * existing content" checkbox too, not just the default gate below — a
+   * seller ticking that box wants richer prose, not a broken submission.
+   * Only Seller SKU has direct evidence of this failure; GTIN Barcode is
+   * structurally similar (also a real-world identifier) but unconfirmed —
+   * left alone rather than guessed at.
+   */
+  function isLockedIdentifierLabel(label) {
+    return (label || "").toLowerCase().includes("seller sku");
+  }
+
   /** Plain-text snapshot of a narrative field's current content, sent to the
    *  AI so IT decides whether to keep, enhance, or replace it — rather than
    *  the extension either blindly skipping or blindly overwriting. Strips
@@ -979,7 +996,27 @@
       })),
     );
 
-    for (const [label, value] of Object.entries(values)) {
+    // Write the product-name field LAST, after every other field including
+    // Brand. This is a real attempt at PREVENTING the drift confirmed live
+    // (not just reacting to it via the re-assert pass below): in every
+    // occurrence, Name ended up matching whatever Brand became in the same
+    // batch, which is the signature of a "regenerate a suggested name from
+    // brand/category unless the seller already touched it" side effect —
+    // a common admin-form pattern. Angular has no reason to treat our write
+    // as "the seller already touched it" (that's a real per-form internal
+    // flag we can't set from outside), so if such a side effect exists, it
+    // fires on ITS OWN schedule after Brand changes regardless of write
+    // order — but writing Name after Brand at least means our value is the
+    // LAST thing set before that side effect would have already run, rather
+    // than being overwritten by it moments later. The re-assert pass further
+    // below stays as the safety net for whatever this ordering doesn't
+    // fully prevent — this narrows how often it needs to catch anything,
+    // it doesn't replace it (the exact underlying mechanism is still
+    // invisible to us — Jumia's own component code, not ours).
+    const entries = Object.entries(values);
+    entries.sort((a, b) => Number(labelIsProductName(a[0])) - Number(labelIsProductName(b[0])));
+
+    for (const [label, value] of entries) {
       const f = byLabel.get(label.toLowerCase());
       if (!f) {
         results.push({ label, ok: false, reason: "field not found on page" });
@@ -996,6 +1033,14 @@
           ok: false,
           reason: `would have overwritten the product name — left as-is`,
         });
+        continue;
+      }
+      // Locked identifiers (see isLockedIdentifierLabel) skip whenever they
+      // already have a value, ignoring `overwrite` entirely — unlike every
+      // other field, "the seller wants richer content" is never a reason to
+      // touch this one; Jumia's backend rejects the submission outright.
+      if (isLockedIdentifierLabel(f.label) && fieldHasValue(f)) {
+        results.push({ label, ok: false, skipped: true, reason: "locked to this listing — left as-is" });
         continue;
       }
       if (!overwrite && !isNarrativeLabel(f.label) && fieldHasValue(f)) {

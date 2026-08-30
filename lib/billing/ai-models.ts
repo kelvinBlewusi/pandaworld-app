@@ -83,15 +83,19 @@ const MODEL_OWN_IMAGES_FLOW = "gemini-2.5-flash-lite";
 // here; Pro was also measured at ~50s per autofill against a 60s function
 // ceiling, which is too close to the edge for production.
 //
-// Now on gemini-3.5-flash-lite, routed through AI Studio rather than Vertex
-// (see aiFillRenderedFields) — Vertex's catalogue for this project 404s on
-// the 3.x line, AI Studio's carries it. Still UNVERIFIED on this account, so
-// the call site keeps a try/fallback to MODEL_EXTENSION_FILL_FALLBACK below:
-// a miss degrades quality instead of breaking the autofill. Swap in
-// "gemini-3.1-flash-lite" here if 3.5 turns out unavailable — it's cheaper
-// ($0.25/$1.50 per 1M vs $0.30/$2.50) and one generation older.
-const MODEL_EXTENSION_FILL = "gemini-3.5-flash-lite";
-export const MODEL_EXTENSION_FILL_FALLBACK = MODEL_LITE; // proven working on Vertex
+// Aug 30 2026: moved BACK to gemini-2.5-flash-lite on Vertex, at the
+// seller's request — this was the last configuration that ran with no
+// model-side issues, before the 3.x detour. Confirmed live, AFTER real
+// billing was attached to the GCP project, that Vertex's Publisher Model
+// catalogue for this project STILL 404s on both gemini-3.5-flash-lite and
+// gemini-3.1-flash-lite — billing didn't change it. AI Studio does carry
+// the 3.x line if that's ever worth revisiting (see callGeminiBackend's
+// preferBackend option), but there's no proven quality reason to prefer it
+// over this model for this workload, and it adds a second backend's worth
+// of things that can go wrong. Removed the try/fallback that briefly lived
+// here too: with primary back to a model that just works, retrying on
+// failure would only double latency on a genuine transient error.
+const MODEL_EXTENSION_FILL = MODEL_LITE;
 
 // Image editing — currently only one viable Gemini model. Used by
 // the "Polish" and "Rebuild as studio shot" buttons (which take an
