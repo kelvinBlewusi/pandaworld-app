@@ -23,6 +23,22 @@ export const alt    = "PandaWorld — AI listings for Jumia Africa sellers";
 export const size   = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
+// Panda-face "o" mark — same shapes as components/marketing/wordmark.tsx's
+// PandaO, reproduced as raw JSX (Satori, next/og's renderer, doesn't run
+// through a normal React tree so the component can't be imported directly).
+function PandaMark({ size, color }: { size: number; color: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 62 62" style={{ margin: `0 ${size * 0.02}px` }}>
+      <circle cx="31" cy="34" r="26" fill="#ffffff" stroke={color} strokeWidth="5" />
+      <circle cx="14" cy="14" r="9" fill={color} />
+      <circle cx="48" cy="14" r="9" fill={color} />
+      <ellipse cx="22" cy="32" rx="5" ry="7" fill={color} transform="rotate(-18 22 32)" />
+      <ellipse cx="40" cy="32" rx="5" ry="7" fill={color} transform="rotate(18 40 32)" />
+      <ellipse cx="31" cy="43" rx="3" ry="2" fill={color} />
+    </svg>
+  );
+}
+
 export default async function OpenGraphImage() {
   return new ImageResponse(
     (
@@ -32,112 +48,63 @@ export default async function OpenGraphImage() {
           width:         "100%",
           display:       "flex",
           flexDirection: "column",
-          alignItems:    "flex-start",
           justifyContent: "center",
           padding:       "80px",
-          background:    "linear-gradient(135deg, #fff7ed 0%, #ffffff 60%, #faf5ff 100%)",
-          color:         "#18181b",
+          backgroundColor: "#050505",
+          backgroundImage:
+            "radial-gradient(circle at 12% 8%, rgba(249,115,22,0.30) 0%, rgba(249,115,22,0) 45%), " +
+            "radial-gradient(circle at 88% 92%, rgba(246,139,30,0.18) 0%, rgba(246,139,30,0) 45%)",
+          color:         "#f4f1ea",
           fontFamily:    "Inter, sans-serif",
         }}
       >
-        {/* Top-left brand chip */}
-        <div
-          style={{
-            display:        "flex",
-            alignItems:     "center",
-            gap:            "12px",
-            padding:        "8px 14px",
-            background:     "#fff7ed",
-            border:         "1px solid #fed7aa",
-            borderRadius:   "999px",
-            fontSize:       "20px",
-            color:          "#c2410c",
-            fontWeight:     500,
-          }}
-        >
-          <span style={{ fontSize: "24px" }}>🐼</span>
-          Built for Jumia Africa sellers
+        {/* Wordmark */}
+        <div style={{ display: "flex", alignItems: "center", fontSize: "36px", fontWeight: 800, letterSpacing: "-1.4px" }}>
+          <span>pandaw</span>
+          <PandaMark size={36} color="#161616" />
+          <span>rld</span>
         </div>
 
-        {/* Main headline */}
+        {/* Headline */}
         <div
           style={{
-            display:    "flex",
+            display:       "flex",
             flexDirection: "column",
-            marginTop:  "40px",
-            fontSize:   "72px",
-            fontWeight: 700,
-            lineHeight: 1.05,
+            marginTop:     "44px",
+            fontSize:      "74px",
+            fontWeight:    700,
+            lineHeight:    1.08,
             letterSpacing: "-0.02em",
-            maxWidth:   "900px",
+            maxWidth:      "980px",
+            color:         "#f7f4ee",
           }}
         >
-          <span>List your products</span>
-          <span>
-            to Jumia with{" "}
-            <span
-              style={{
-                background:           "linear-gradient(135deg, #f97316, #9333ea)",
-                backgroundClip:       "text",
-                color:                "transparent",
-              }}
-            >
-              one click.
-            </span>
-          </span>
+          <span>Automate your</span>
+          <div style={{ display: "flex", flexDirection: "row" }}>
+            <span style={{ color: "#f68b1e", marginRight: "22px" }}>Jumia</span>
+            <span>Listings with AI</span>
+          </div>
         </div>
 
-        {/* Subhead */}
+        {/* Chrome Extension badge */}
         <div
           style={{
-            marginTop:  "32px",
-            fontSize:   "28px",
-            color:      "#52525b",
-            maxWidth:   "900px",
-            lineHeight: 1.4,
+            display:       "flex",
+            alignItems:    "center",
+            gap:           "12px",
+            marginTop:     "40px",
+            alignSelf:     "flex-start",
+            border:        "1px solid rgba(255,255,255,0.3)",
+            borderRadius:  "999px",
+            padding:       "10px 22px",
+            fontSize:      "20px",
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+            color:         "rgba(239,236,230,0.9)",
           }}
         >
-          AI generates the listing, picks the right Jumia category,
-          fills attributes, and pushes straight to Vendor Center.
-        </div>
-
-        {/* Bottom-left price strip */}
-        <div
-          style={{
-            position:   "absolute",
-            bottom:     "60px",
-            left:       "80px",
-            display:    "flex",
-            alignItems: "center",
-            gap:        "24px",
-            fontSize:   "22px",
-            color:      "#71717a",
-          }}
-        >
-          <span style={{ fontWeight: 600, color: "#18181b" }}>
-            pandaworldai.site
-          </span>
-          <span>·</span>
-          <span>5 free listings every month</span>
-        </div>
-
-        {/* Bottom-right pricing chip */}
-        <div
-          style={{
-            position:     "absolute",
-            bottom:       "60px",
-            right:        "80px",
-            display:      "flex",
-            alignItems:   "center",
-            padding:      "12px 22px",
-            background:   "#18181b",
-            color:        "#fff",
-            borderRadius: "999px",
-            fontSize:     "22px",
-            fontWeight:   600,
-          }}
-        >
-          From GHS 30 / month
+          <span style={{ width: "10px", height: "10px", borderRadius: "999px", background: "#f97316" }} />
+          Chrome Extension
         </div>
       </div>
     ),
