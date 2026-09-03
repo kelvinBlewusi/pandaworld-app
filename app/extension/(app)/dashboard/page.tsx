@@ -7,6 +7,7 @@ import { getOrCreateCreditBalance } from "@/lib/billing/extension-credits";
 import { StatCard } from "@/components/ui/stat-card";
 import { ApiKeyCard } from "@/components/extension/api-key-card";
 import { CreditsPurchaseHandler } from "@/components/extension/credits-purchase-handler";
+import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 
 // ─── /extension/dashboard — the Chrome extension's own control room ─────────
 //
@@ -91,6 +92,7 @@ export default async function ExtensionDashboardPage() {
               Icon={Chrome}
               title="Install the extension"
               body="Add PandaWorld to Chrome. It opens as a side panel next to Jumia Vendor Center."
+              href={CHROME_WEB_STORE_URL}
             />
             <GuideStep
               Icon={KeyRound}
@@ -120,10 +122,13 @@ function GuideStep({
   Icon,
   title,
   body,
+  href,
 }: {
   Icon: React.ElementType;
   title: string;
   body: string;
+  /** When set, renders a link to it below the step (e.g. the Chrome Web Store listing). */
+  href?: string;
 }) {
   return (
     <li className="flex gap-3">
@@ -133,6 +138,16 @@ function GuideStep({
       <div>
         <p className="text-sm font-semibold text-zinc-900">{title}</p>
         <p className="mt-0.5 text-xs leading-relaxed text-zinc-600">{body}</p>
+        {href && (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-1 inline-block text-xs font-semibold text-orange-600 hover:text-orange-700"
+          >
+            Open Chrome Web Store →
+          </a>
+        )}
       </div>
     </li>
   );

@@ -20,6 +20,7 @@ import { ExtensionSidebar } from "./sidebar";
 import { Wordmark } from "@/components/marketing/wordmark";
 import { BuyCreditsModal } from "./buy-credits-modal";
 import { GoogleIcon } from "./google-icon";
+import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 
 const PAGE_TITLES: Record<string, string> = {
   "/extension/dashboard": "Dashboard",
@@ -119,7 +120,9 @@ export function ExtensionShell({
               <Bell className="h-4.5 w-4.5" />
             </button>
             <a
-              href="/extension/dashboard#setup-guide"
+              href={CHROME_WEB_STORE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
               className="flex items-center gap-2 rounded-full bg-zinc-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-zinc-800"
             >
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-white">
