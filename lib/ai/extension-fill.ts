@@ -235,16 +235,19 @@ Return ONLY the JSON object, no markdown, no commentary.`;
     ...images.map((img): GeminiPart => ({ inlineData: { data: img.base64, mimeType: img.mimeType } })),
   ];
 
-  // Aug 30 2026: back on gemini-2.5-flash-lite on Vertex — see
-  // MODEL_EXTENSION_FILL's comment in lib/billing/ai-models.ts for why. No
-  // try/fallback needed: this model is already proven working on Vertex
-  // across many live calls this project has made, so there's nothing left
-  // to fall back FROM. preferBackend stays explicit for self-documentation
-  // even though Vertex is also the default when configured.
+  // Sep 3 2026: gemini-3.1-flash-lite via AI STUDIO — see
+  // MODEL_EXTENSION_FILL's comment in lib/billing/ai-models.ts for the full
+  // history. This is NOT a repeat of the earlier 3.1-on-Vertex attempt: that
+  // one 404'd because Vertex's Publisher Model catalogue for this project
+  // doesn't carry the 3.x line at all (confirmed live, twice) — AI Studio's
+  // catalogue does, so preferBackend is switched to match. If GOOGLE_API_KEY
+  // is ever unset in the Vercel env, callGeminiBackend silently falls back
+  // to Vertex and this exact model 404s again — check the `[gemini]
+  // backend=` log line after deploying a change here, don't assume.
   const model = pickModelForExtensionFill();
   const t0 = Date.now();
   const { text, backend } = await callGeminiBackend(model, parts, {
-    preferBackend: "vertex",
+    preferBackend: "ai-studio",
     groundWithSearch: true,
   });
   console.info(`[ext/ai-fill] model=${model} backend=${backend} ms=${Date.now() - t0} images=${images.length} fields=${fields.length}`);

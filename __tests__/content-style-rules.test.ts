@@ -51,13 +51,33 @@ describe("buildStyleGuideBlock", () => {
     expect(block).toMatch(/not capped at a?n? ?2-column|use as many columns/i);
   });
 
-  it("sets an explicit length floor so anti-padding language isn't read as 'stay short'", () => {
+  it("sets explicit character-count floors (1500 Description / 800 Highlights), excluding tables", () => {
     const withNarrative = buildStyleGuideBlock([
       { label: "Product description", type: "richtext" },
       { label: "Highlights", type: "richtext" },
     ]);
-    expect(withNarrative).toMatch(/TOO SHORT|150.?350 words/);
+    expect(withNarrative).toMatch(/at least 1500 characters/);
+    expect(withNarrative).toMatch(/at least 800 characters/);
+    // Both floors must explicitly exclude table content, or a big <table>
+    // could satisfy the minimum with no real written substance.
+    expect(withNarrative.match(/not counting anything inside a <table>/g)?.length).toBe(2);
     expect(withNarrative).toContain("too thin to be useful");
+  });
+
+  it("leaves whether to use a table entirely up to the AI, for both fields", () => {
+    const block = buildStyleGuideBlock([
+      { label: "Product description", type: "richtext" },
+      { label: "Highlights", type: "richtext" },
+    ]);
+    expect(block).toMatch(/table at all is (entirely )?(your|its) own call/);
+  });
+
+  it("tells the AI structure should vary between listings, not follow one fixed template", () => {
+    const block = buildStyleGuideBlock([
+      { label: "Product description", type: "richtext" },
+      { label: "Highlights", type: "richtext" },
+    ]);
+    expect(block).toMatch(/vary from one listing to the next/);
   });
 
   it("no longer carries its own search-grounding instruction — that's unconditional now, in buildSearchGroundingInstruction", () => {
