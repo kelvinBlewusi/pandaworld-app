@@ -13,15 +13,21 @@
 (() => {
   const LOG = "[PandaWorld]";
 
-  // ── Capture the most recently chosen file (for image harvest) ──────────────
-  let lastFile = null;
+  // ── Capture chosen files per upload slot (for multi-image harvest) ─────────
+  // Jumia's Add/Edit form renders several independent file inputs — one per
+  // image slot (confirmed live: up to 8 thumbnail slots, several already
+  // filled on an Edit page). Keyed by the input ELEMENT so re-uploading into
+  // the same slot replaces its entry instead of accumulating duplicates;
+  // Map preserves insertion order, which keeps the seller's own upload order
+  // (main photo first) when harvestImages() reads it back.
+  const capturedFiles = new Map();
   document.addEventListener(
     "change",
     (e) => {
       const t = e.target;
       if (t && t.tagName === "INPUT" && t.type === "file" && t.files && t.files[0]) {
-        lastFile = t.files[0];
-        console.debug(LOG, "captured file:", lastFile.name, lastFile.type, lastFile.size);
+        capturedFiles.set(t, t.files[0]);
+        console.debug(LOG, "captured file:", t.files[0].name, t.files[0].type, t.files[0].size);
       }
     },
     true, // capture phase — catches inputs added after load
@@ -115,19 +121,21 @@
       }
     }
 
-    let image = null;
-    let imageUrl = null;
+    let images = [];
     try {
-      const got = await harvestImage();
-      image = got.dataUrl;
-      imageUrl = got.httpUrl;
-      diagnostics.push(got.dataUrl || got.httpUrl ? `Image harvested via ${got.source}` : "No image found — use the fallback drop zone");
+      const got = await harvestImages();
+      images = got.images;
+      diagnostics.push(
+        images.length
+          ? `${images.length} image(s) harvested via ${got.source}`
+          : "No image found — use the fallback drop zone",
+      );
     } catch (e) {
       diagnostics.push(`Image harvest error: ${e.message}`);
     }
 
     console.debug(LOG, "harvest diagnostics:", diagnostics);
-    return { ok: true, image, imageUrl, fields, diagnostics };
+    return { ok: true, images, fields, diagnostics };
   }
 
   // Matches Jumia's Edit-Product URL (…/products/edit/<id>) — the only place
@@ -137,27 +145,67 @@
   // an existing listing.
   const EDIT_PAGE_RE = /\/products\/edit\//i;
 
-  async function harvestImage() {
-    if (lastFile) {
-      return { dataUrl: await fileToDataUrl(lastFile), httpUrl: null, source: "file input" };
-    }
-    // Fallback 1: a freshly-uploaded preview. Restrict to blob:/data: URLs
-    // (what an upload preview uses) so we never grab Jumia's logo or a CDN icon.
-    const preview = [...document.querySelectorAll("img")].filter((img) => {
-      const src = img.currentSrc || img.src || "";
-      return /^blob:|^data:/i.test(src) && (img.naturalWidth || 0) > 120;
-    });
-    for (const img of preview) {
+  // Sends this many images at most, from whichever single tier below first
+  // yields any — a seller's own upload order (main photo first) is preserved
+  // since capturedFiles/DOM order both read oldest-first. Bounded rather than
+  // unlimited: every extra image is more Gemini input tokens (real per-call
+  // cost), and Jumia's own form tops out around 8 slots in practice — a
+  // handful of angles is already far more context than the single photo this
+  // sent before, without letting one very-photo-heavy listing blow up cost.
+  const MAX_IMAGES = 4;
+
+  /** Dedupe a list of <img> elements by src, keeping the first occurrence. */
+  function dedupeImgsBySrc(imgs) {
+    const seen = new Set();
+    return imgs.filter((img) => {
       const src = img.currentSrc || img.src;
-      try {
-        return { dataUrl: await urlToDataUrl(src), httpUrl: /^https?:/.test(src) ? src : null, source: "preview img" };
-      } catch {
-        /* try next */
+      if (seen.has(src)) return false;
+      seen.add(src);
+      return true;
+    });
+  }
+
+  async function harvestImages() {
+    // Tier 1: files captured straight from the upload <input>s — the most
+    // reliable source, and the only one that can't be a same-origin decoy.
+    if (capturedFiles.size) {
+      const out = [];
+      for (const file of capturedFiles.values()) {
+        if (out.length >= MAX_IMAGES) break;
+        try {
+          out.push({ dataUrl: await fileToDataUrl(file), httpUrl: null });
+        } catch {
+          /* skip this one, try the rest */
+        }
       }
+      if (out.length) return { images: out, source: "file input" };
     }
 
-    // Fallback 2: an already-uploaded photo hosted on Jumia's own dedicated
-    // product-image CDN path — confirmed live: uploaded photos land at
+    // Fallback 1: freshly-uploaded previews the input listener missed.
+    // Restrict to blob:/data: URLs (what an upload preview uses) so we
+    // never grab Jumia's logo or a CDN icon.
+    const preview = dedupeImgsBySrc(
+      [...document.querySelectorAll("img")].filter((img) => {
+        const src = img.currentSrc || img.src || "";
+        return /^blob:|^data:/i.test(src) && (img.naturalWidth || 0) > 120;
+      }),
+    );
+    if (preview.length) {
+      const out = [];
+      for (const img of preview) {
+        if (out.length >= MAX_IMAGES) break;
+        const src = img.currentSrc || img.src;
+        try {
+          out.push({ dataUrl: await urlToDataUrl(src), httpUrl: /^https?:/.test(src) ? src : null });
+        } catch {
+          /* try next */
+        }
+      }
+      if (out.length) return { images: out, source: "preview img" };
+    }
+
+    // Fallback 2: photos already hosted on Jumia's own dedicated product-image
+    // CDN path — confirmed live: uploaded photos land at
     // https://vendorcenter.jumia.com/product-set-images/YYYY/MM/DD/... .
     // That's an unambiguous, POSITIVE signal (nothing else on the page is
     // ever served from that path), so unlike the broader fallback below,
@@ -166,16 +214,19 @@
     // a blob: preview to this permanent CDN URL fairly quickly — even
     // mid-session on the Add-Products flow, well before the seller clicks
     // Autofill — and fallback 1 above only ever matches a blob:/data: src,
-    // so once that swap happens the photo goes invisible to it. Picks the
-    // largest by rendered area if more than one candidate matches.
-    const cdnCandidates = [...document.querySelectorAll("img")].filter((img) => {
-      const src = img.currentSrc || img.src || "";
-      return /product-set-images/i.test(src);
-    });
-    const bestCdn = cdnCandidates.sort((a, b) => b.naturalWidth * b.naturalHeight - a.naturalWidth * a.naturalHeight)[0];
-    if (bestCdn) {
-      const src = bestCdn.currentSrc || bestCdn.src;
-      return { dataUrl: null, httpUrl: src, source: "product-set-images CDN photo" };
+    // so once that swap happens the photo goes invisible to it. Takes every
+    // matching photo (not just the largest), by rendered area.
+    const cdnCandidates = dedupeImgsBySrc(
+      [...document.querySelectorAll("img")].filter((img) => {
+        const src = img.currentSrc || img.src || "";
+        return /product-set-images/i.test(src);
+      }),
+    ).sort((a, b) => b.naturalWidth * b.naturalHeight - a.naturalWidth * a.naturalHeight);
+    if (cdnCandidates.length) {
+      const out = cdnCandidates
+        .slice(0, MAX_IMAGES)
+        .map((img) => ({ dataUrl: null, httpUrl: img.currentSrc || img.src }));
+      return { images: out, source: "product-set-images CDN photo" };
     }
 
     // Fallback 3: Edit-Product-only, broader heuristic — kept as a last
@@ -193,31 +244,34 @@
     // or logo, not a photo; a real product photo is many KB). Excludes SVGs
     // (never a real product photo on a catalog like this) and obvious
     // icon/logo/placeholder filename patterns, and — since several images on
-    // the page can still pass those filters — picks the one with the
-    // LARGEST rendered area rather than just the first match, on the theory
-    // that a real product photo is the most prominent image on the page.
-    // Restricted to Edit pages only (unlike fallback 2 above): without a
-    // real photo present yet, this broader https://-image heuristic risks
-    // grabbing Jumia's own logo/chrome on a still-blank Add-Products form.
+    // the page can still pass those filters — takes them by LARGEST rendered
+    // area first, on the theory that a real product photo is more prominent
+    // than page chrome. Restricted to Edit pages only (unlike fallback 2
+    // above): without a real photo present yet, this broader https://-image
+    // heuristic risks grabbing Jumia's own logo/chrome on a still-blank
+    // Add-Products form.
     if (EDIT_PAGE_RE.test(location.pathname)) {
       const BAD_SRC_RE = /\.svg(\?|$)|logo|icon(?!ography)|placeholder|avatar|sprite|badge/i;
-      const candidates = [...document.querySelectorAll("img")].filter((img) => {
-        const src = img.currentSrc || img.src || "";
-        return (
-          /^https?:/i.test(src) &&
-          (img.naturalWidth || 0) > 200 &&
-          !BAD_SRC_RE.test(src) &&
-          !img.closest("nav, header, footer, aside")
-        );
-      });
-      const best = candidates.sort((a, b) => b.naturalWidth * b.naturalHeight - a.naturalWidth * a.naturalHeight)[0];
-      if (best) {
-        const src = best.currentSrc || best.src;
-        return { dataUrl: null, httpUrl: src, source: "existing product photo" };
+      const candidates = dedupeImgsBySrc(
+        [...document.querySelectorAll("img")].filter((img) => {
+          const src = img.currentSrc || img.src || "";
+          return (
+            /^https?:/i.test(src) &&
+            (img.naturalWidth || 0) > 200 &&
+            !BAD_SRC_RE.test(src) &&
+            !img.closest("nav, header, footer, aside")
+          );
+        }),
+      ).sort((a, b) => b.naturalWidth * b.naturalHeight - a.naturalWidth * a.naturalHeight);
+      if (candidates.length) {
+        const out = candidates
+          .slice(0, MAX_IMAGES)
+          .map((img) => ({ dataUrl: null, httpUrl: img.currentSrc || img.src }));
+        return { images: out, source: "existing product photo" };
       }
     }
 
-    return { dataUrl: null, httpUrl: null, source: "none" };
+    return { images: [], source: "none" };
   }
 
   // ── Field discovery ──────────────────────────────────────────────────────
@@ -870,7 +924,7 @@
    * "enhance" version of a fixed dropdown pick, so those keep the plain
    * "already has a value — leave it" gate in applyValues(). Product photos
    * are never in scope at all — findFields() excludes file/image inputs
-   * entirely, and harvestImage()/applyValues() never write to them, so
+   * entirely, and harvestImages()/applyValues() never write to them, so
    * images are always left exactly as the seller has them.
    */
   function isNarrativeLabel(label) {

@@ -94,18 +94,40 @@ async function fetchToBase64(url: string): Promise<{ base64: string; mimeType: s
   return { base64: buf.toString("base64"), mimeType };
 }
 
-async function resolveImage(body: FillRequest): Promise<{ base64: string; mimeType: string } | null> {
-  const fromData = parseDataUrl(body.image);
+async function resolveOneImage(item: { image?: string; imageUrl?: string }): Promise<{ base64: string; mimeType: string } | null> {
+  const fromData = parseDataUrl(item.image);
   if (fromData) return fromData;
-  if (body.imageUrl && /^https?:\/\//.test(body.imageUrl)) {
+  if (item.imageUrl && /^https?:\/\//.test(item.imageUrl)) {
     try {
-      return await fetchToBase64(body.imageUrl);
+      return await fetchToBase64(item.imageUrl);
     } catch (e) {
       console.warn(`[ext/fill] could not fetch/validate imageUrl: ${(e as Error).message}`);
       return null;
     }
   }
   return null;
+}
+
+// Server-side mirror of content.js's own MAX_IMAGES cap — enforced again
+// here since the request body is untrusted input, not just a courtesy from
+// a well-behaved extension build.
+const MAX_IMAGES = 4;
+
+/**
+ * Resolves every harvested photo to base64, preferring the new `images`
+ * array and falling back to the legacy singular `image`/`imageUrl` fields
+ * (see FillRequest's own comment on why that fallback has to stay). A photo
+ * that fails to resolve (bad URL, unrecognised format) is dropped rather
+ * than failing the whole request — the AI still gets whatever DID resolve.
+ */
+async function resolveImages(body: FillRequest): Promise<{ base64: string; mimeType: string }[]> {
+  const items: Array<{ image?: string; imageUrl?: string }> = body.images?.length
+    ? body.images.map((i) => ({ image: i.dataUrl, imageUrl: i.httpUrl }))
+    : body.image || body.imageUrl
+      ? [{ image: body.image, imageUrl: body.imageUrl }]
+      : [];
+  const resolved = await Promise.all(items.slice(0, MAX_IMAGES).map(resolveOneImage));
+  return resolved.filter((r): r is { base64: string; mimeType: string } => r !== null);
 }
 
 /**
@@ -271,8 +293,8 @@ export async function POST(req: Request) {
     return NextResponse.json(response, { status: 200, headers: CORS });
   }
 
-  const image = await resolveImage(body);
-  if (!image) {
+  const images = await resolveImages(body);
+  if (!images.length) {
     return NextResponse.json(
       { error: "No product photo detected. Upload a photo on Jumia, then try Autofill again." },
       { status: 400, headers: CORS },
@@ -293,8 +315,7 @@ export async function POST(req: Request) {
   try {
     const fillable = body.fields.filter((f) => !isSellerOwned(f.label));
     const { raw } = await aiFillRenderedFields({
-      imageBase64: image.base64,
-      mimeType: image.mimeType,
+      images: images.map((i) => ({ base64: i.base64, mimeType: i.mimeType })),
       fields: fillable,
       notes,
       market,
@@ -327,7 +348,7 @@ export async function POST(req: Request) {
   };
 
   console.info(
-    `[ext/fill] user=${userId} key=${keyId} market=${market} fields=${body.fields.length} ` +
+    `[ext/fill] user=${userId} key=${keyId} market=${market} images=${images.length} fields=${body.fields.length} ` +
       `filled=${Object.keys(values).length} warnings=${warnings.length}`,
   );
 
