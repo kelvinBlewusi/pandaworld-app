@@ -167,8 +167,18 @@ export async function aiFillRenderedFields(args: {
   // don't add a second copy here, that was ~1,000 wasted characters on
   // every single call for zero extra instruction value.
   const policy = buildContentPolicyInstructions({ categoryPath: null, includeImageRules: false });
+  // Bundles the free-text notes box AND every Advanced Option the panel
+  // exposes (Writing style, Refund policy, Warranty duration, Warranty
+  // address — see panel.js's extraNotes array) into one string before this
+  // function ever sees it. Framed as unconditional top priority, not just
+  // "fills factual gaps": a seller who explicitly picked a Writing style is
+  // giving a direct instruction, not a soft preference, and it must win
+  // over CONTENT STYLE's own default tone/structure below when the two
+  // disagree — that default exists for when the seller didn't specify one
+  // (SEO Optimized, the pre-selected option), not as a rule that overrides
+  // an explicit seller choice.
   const notesBlock = notes && notes.trim()
-    ? `\n\nSELLER NOTES (authoritative for anything the image doesn't show):\n"${notes.trim()}"\n`
+    ? `\n\nSELLER NOTES — HIGHEST PRIORITY, OVERRIDES ANY OTHER INSTRUCTION IN THIS PROMPT IF THEY CONFLICT:\n"${notes.trim()}"\nThis is the seller's own free text plus every Advanced Option they set (Writing style, Refund policy, Warranty duration, Warranty address, if present) — treat each one as a direct instruction, not a soft suggestion. If a "Writing style" is given (e.g. Storytelling, Fun & Playful, Professional & Clean, Friendly & Conversational), let it govern the tone and voice of Description/Highlights — CONTENT STYLE's own structural suggestions below (the hook, bold micro-headings, "Perfect for:" list) are the strong default for "SEO Optimized" or when no writing style is given, not a rule that overrides the seller's explicit choice.\n`
     : "";
 
   const notesOnlyFields = fields.filter((f) => isNotesOnlyField(f.label)).map((f) => f.label);
@@ -219,7 +229,7 @@ FIELDS TO FILL (return a value only for the ones you can confidently fill; omit 
 ${fields.map(fieldLine).join("\n")}
 
 RULES:
-- Return ONLY a JSON object mapping each field label EXACTLY as written above (including punctuation and capitalisation) to a string value.
+${notes && notes.trim() ? "- SELLER NOTES above beats every other instruction in this prompt when they conflict — that includes CONTENT STYLE's default tone/structure, not just factual details.\n" : ""}- Return ONLY a JSON object mapping each field label EXACTLY as written above (including punctuation and capitalisation) to a string value.
 - Rich-text fields: return HTML, well-structured (see CONTENT STYLE above) — not a single flat paragraph.
 - Fields listing options: return exactly one of the given options, or omit.
 - Numbers: digits only, no units or words.
