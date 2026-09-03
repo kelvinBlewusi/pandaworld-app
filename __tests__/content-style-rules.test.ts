@@ -1,4 +1,4 @@
-import { buildStyleGuideBlock } from "@/lib/ai/content-style-rules";
+import { buildStyleGuideBlock, buildSearchGroundingInstruction } from "@/lib/ai/content-style-rules";
 import type { HarvestedField } from "@/lib/extension/fill";
 
 describe("buildStyleGuideBlock", () => {
@@ -60,15 +60,38 @@ describe("buildStyleGuideBlock", () => {
     expect(withNarrative).toContain("too thin to be useful");
   });
 
-  it("tells the AI to use web search for real facts, only on Description/Highlights", () => {
+  it("no longer carries its own search-grounding instruction — that's unconditional now, in buildSearchGroundingInstruction", () => {
+    // Regression guard: this used to live as a field-gated CONTENT_STYLE_RULES
+    // entry here. It moved out to apply to structured attributes too (Model,
+    // Country of origin, ...), not just Description/Highlights — asserting
+    // its absence here prevents it silently coming back and duplicating.
     const withNarrative = buildStyleGuideBlock([
       { label: "Product description", type: "richtext" },
       { label: "Highlights", type: "richtext" },
     ]);
-    expect(withNarrative).toContain("You have web search available");
-    expect(withNarrative).toContain("Never surface the search itself in the copy");
+    expect(withNarrative).not.toContain("You have web search available");
+  });
+});
 
-    const nameOnly = buildStyleGuideBlock([{ label: "Name", type: "text" }]);
-    expect(nameOnly).not.toContain("You have web search available");
+describe("buildSearchGroundingInstruction", () => {
+  it("is unconditional — not gated by which fields are on the page", () => {
+    expect(buildSearchGroundingInstruction()).toContain("You have web search available");
+  });
+
+  it("covers structured attributes as well as Description/Highlights", () => {
+    const block = buildSearchGroundingInstruction();
+    expect(block).toContain("Description/Highlights");
+    expect(block).toMatch(/Model.*Main material.*Country of origin.*Certifications/);
+  });
+
+  it("still forbids citations from leaking into narrative copy or a structured field's value", () => {
+    const block = buildSearchGroundingInstruction();
+    expect(block).toContain("never surface the search itself in the copy");
+    expect(block).toMatch(/never a citation, URL/);
+  });
+
+  it("gates on confidence — never asserts a searched fact without it", () => {
+    const block = buildSearchGroundingInstruction();
+    expect(block).toMatch(/genuinely confident/);
   });
 });

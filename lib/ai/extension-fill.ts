@@ -17,7 +17,7 @@ import { callGeminiBackend, isVertexEnabled, type GeminiPart } from "@/lib/ai/ge
 import { pickModelForExtensionFill } from "@/lib/billing/ai-models";
 import { buildContentPolicyInstructions, stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
 import { stripRestrictedWords } from "@/lib/ai/restricted-words";
-import { buildStyleGuideBlock } from "@/lib/ai/content-style-rules";
+import { buildStyleGuideBlock, buildSearchGroundingInstruction } from "@/lib/ai/content-style-rules";
 import { isDegenerateName, type HarvestedField } from "@/lib/extension/fill";
 
 export interface AiFillResult {
@@ -179,6 +179,9 @@ export async function aiFillRenderedFields(args: {
   // See lib/ai/content-style-rules.ts — the file to edit when reviewing
   // real listings, not here.
   const styleGuideBlock = buildStyleGuideBlock(fields);
+  // Unconditional — see buildSearchGroundingInstruction's own doc comment
+  // for why this isn't gated to fields the way styleGuideBlock is.
+  const searchGroundingBlock = buildSearchGroundingInstruction();
 
   // Set only for Name/Description/Highlights on an Edit-Product page that
   // already carry real seller content — see isNarrativeLabel in content.js.
@@ -211,7 +214,7 @@ export async function aiFillRenderedFields(args: {
 
 ${policy}
 
-${notesBlock}${notesOnlyBlock}${styleGuideBlock}${existingContentBlock}${variantsBlock}
+${notesBlock}${notesOnlyBlock}${searchGroundingBlock}${styleGuideBlock}${existingContentBlock}${variantsBlock}
 FIELDS TO FILL (return a value only for the ones you can confidently fill; omit the rest):
 ${fields.map(fieldLine).join("\n")}
 

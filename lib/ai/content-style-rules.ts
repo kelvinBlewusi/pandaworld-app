@@ -40,10 +40,6 @@ export const CONTENT_STYLE_RULES: ContentStyleRule[] = [
     appliesTo: (l) => l.includes("highlight"),
     rule: `Highlights: free-form, like Description above — a <ul><li> list, prose paragraphs, a <table>, or any mix, whichever combination best fits what THIS product actually has to say. NOT locked to a fixed bullet format or a fixed item count. A bulleted list (each item like <li><strong>Short Feature Label</strong>: one or more sentences of real, specific benefit</li>) is a strong common default, especially for feature-dense products — but when the product has clear technical specs (dimensions, ingredients, materials, capacity, servings), lead with a <table> — not capped at 2 columns, use however many the specs actually need — and a story-led or premium product may read better as two short prose paragraphs than five clipped bullets. Write as much genuine, specific detail per point as the product warrants — don't cut yourself off at one short sentence if there's real substance to explain — but never pad with filler just to sound longer or more thorough. NEVER write a highlight as a single short clause restating the label (e.g. "Durable Design: Built to last as a lasting memento") — that's too thin to be useful. Every item needs the actual WHY or HOW behind it: what it's made of, how it achieves the benefit, or what makes this product's version of that feature genuinely good — if a highlight could be copy-pasted onto any competing product unchanged, it isn't specific enough yet.`,
   },
-  {
-    appliesTo: (l) => l.includes("description") || l.includes("highlight"),
-    rule: `You have web search available — use it. When you can identify the specific brand/model with real confidence from the image, look up and use genuine facts about it (verified specs, materials, certifications, typical dimensions/capacity, how it compares to similar products) instead of guessing from the photo alone; real, specific, searched-up facts make for a noticeably stronger listing than vague description. Only state something as fact if you're actually confident the search result is about THIS exact product, not a similar-looking or differently-specced one — when unsure, describe only what's visibly true rather than inventing or misattributing detail. Never surface the search itself in the copy — no source links, "according to [site]," citation markers, or anything that reads as a research summary; the listing should read as the seller's own confident description, with the sourcing invisible.`,
-  },
 ];
 
 /** Always-on closing rule, appended once whenever any rule above applies. */
@@ -61,4 +57,23 @@ export function buildStyleGuideBlock(fields: HarvestedField[]): string {
   if (!applicable.length) return "";
   const lines = applicable.map((r) => `- ${r.rule}`).join("\n");
   return `\n\nCONTENT STYLE:\n${lines}\n- ${CLOSING_RULE}\n`;
+}
+
+/**
+ * Always-on search-grounding instruction — covers structured attributes
+ * (Model, Main material, Country of origin, Certifications, and similar
+ * exact-value fields) as well as Description/Highlights. Previously this
+ * lived as one of the CONTENT_STYLE_RULES above, gated to only show up when
+ * a Description/Highlights field was present — but that gating only ever
+ * restricted the PROMPT INSTRUCTION telling the model to search; the
+ * `google_search` tool itself (see gemini-client.ts's `groundWithSearch`) is
+ * already enabled for the whole call regardless of which fields exist, so a
+ * category with, say, "Model" and "Country of origin" but no free-text
+ * Description was getting zero benefit from a tool it already had access to.
+ * Unconditional now — not filtered through buildStyleGuideBlock, since this
+ * isn't a narrative-writing style choice, it's a factual-accuracy aid that
+ * applies to any field.
+ */
+export function buildSearchGroundingInstruction(): string {
+  return `\n\nWEB SEARCH: You have web search available for every field below, not just Description/Highlights. When you can identify the specific brand/model with real confidence from the image, use it: for Description/Highlights, look up and use genuine facts (verified specs, materials, certifications, typical dimensions/capacity, how it compares to similar products) instead of guessing from the photo alone — real, specific, searched-up facts make for a noticeably stronger listing than vague description. For structured attributes (Model, Main material, Country of origin, Certifications, and similar exact-value fields), search to confirm the precise real value rather than guessing a plausible-sounding one. Only use a searched-up fact when you're genuinely confident the result is about THIS exact product, not a similar-looking or differently-specced one — when unsure, rely on what's visibly true or omit the field per the normal rules, rather than inventing or misattributing detail. For Description/Highlights specifically: never surface the search itself in the copy — no source links, "according to [site]," citation markers, or anything that reads as a research summary; the listing should read as the seller's own confident description, with the sourcing invisible. For a structured field, the value itself must be a real value in Jumia's own format for that field — never a citation, URL, or a phrase like "according to the manufacturer."\n`;
 }
