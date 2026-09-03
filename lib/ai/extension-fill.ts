@@ -138,13 +138,12 @@ function parseJsonObject(text: string): Record<string, unknown> {
  * fields (price/stock/etc.) — those are never AI-filled.
  */
 export async function aiFillRenderedFields(args: {
-  imageBase64: string;   // raw base64 (no data: prefix)
-  mimeType:    string;
+  images:      { base64: string; mimeType: string }[]; // one or more angles of the same product
   fields:      HarvestedField[];
   notes?:      string;
   market?:     string;
 }): Promise<AiFillResult> {
-  const { imageBase64, mimeType, notes, market = "GH" } = args;
+  const { images, notes, market = "GH" } = args;
   const warnings: string[] = [];
 
   // A field's currentValue that's already degenerate (a stale "Generic"
@@ -199,7 +198,16 @@ export async function aiFillRenderedFields(args: {
     ? `\n\nVARIANTS: This listing has ${variantCount} variants. Fields ending in "(Variant N)" belong to variant N — they are SEPARATE products sharing one listing, so give each its own DISTINCT values, never the same answer repeated. If the seller's notes name the variants (e.g. "two variations black and brown"), assign them in the order given: the first named goes to Variant 1, the second to Variant 2, and so on. Each variant's "Variation" field is its distinguishing attribute (its colour/size/material), and its "Seller SKU" must be unique — derive it from the shared product code plus that variant's own attribute (e.g. "WIG-ST18-BLK" and "WIG-ST18-BRN"). Every field WITHOUT a "(Variant N)" suffix is shared by the whole listing — fill it once, describing the product as a whole rather than any single variant.\n`
     : "";
 
-  const prompt = `You are a product-listing assistant for Jumia (market: ${market}). Look at the product image and fill the EXACT form fields listed below so the listing is accurate, SEO-friendly, and passes Jumia QC.
+  // Told explicitly when there's more than one photo — otherwise nothing
+  // here tells the model these images are several angles of the SAME item
+  // rather than unrelated pictures, which matters for it to actually use a
+  // second/third angle (a back-of-pack label, a size chart, a close-up)
+  // instead of just reading the first and ignoring the rest.
+  const imagesNote = images.length > 1
+    ? ` You are shown ${images.length} photos of the SAME product from different angles — use all of them together (a back label, a size chart, or a close-up may show details the main photo doesn't) rather than just the first.`
+    : "";
+
+  const prompt = `You are a product-listing assistant for Jumia (market: ${market}). Look at the product image${images.length > 1 ? "s" : ""} and fill the EXACT form fields listed below so the listing is accurate, SEO-friendly, and passes Jumia QC.${imagesNote}
 
 ${policy}
 
@@ -221,7 +229,7 @@ Return ONLY the JSON object, no markdown, no commentary.`;
 
   const parts: GeminiPart[] = [
     { text: prompt },
-    { inlineData: { data: imageBase64, mimeType } },
+    ...images.map((img): GeminiPart => ({ inlineData: { data: img.base64, mimeType: img.mimeType } })),
   ];
 
   // Aug 30 2026: back on gemini-2.5-flash-lite on Vertex — see
@@ -236,7 +244,7 @@ Return ONLY the JSON object, no markdown, no commentary.`;
     preferBackend: "vertex",
     groundWithSearch: true,
   });
-  console.info(`[ext/ai-fill] model=${model} backend=${backend} ms=${Date.now() - t0} fields=${fields.length}`);
+  console.info(`[ext/ai-fill] model=${model} backend=${backend} ms=${Date.now() - t0} images=${images.length} fields=${fields.length}`);
 
   let parsed: Record<string, unknown>;
   try {

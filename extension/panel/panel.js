@@ -358,7 +358,7 @@ $("autofill").addEventListener("click", async () => {
       hideProgress();
       return;
     }
-    if (!harvest.image && !harvest.imageUrl) {
+    if (!harvest.images || !harvest.images.length) {
       setStatus("No product photo detected — upload one on Jumia, then try again.", "err");
       hideProgress();
       return;
@@ -392,8 +392,7 @@ $("autofill").addEventListener("click", async () => {
       payload: {
         market: "GH",
         notes,
-        image: harvest.image || undefined,
-        imageUrl: harvest.imageUrl || undefined,
+        images: harvest.images,
         fields: harvest.fields,
       },
     });

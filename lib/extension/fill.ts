@@ -40,11 +40,23 @@ export interface HarvestedField {
   currentValue?: string;
 }
 
+/** One harvested product photo — exactly one of the two is normally set. */
+export interface HarvestedImage {
+  dataUrl?: string;  // data: URL (base64) — a freshly-uploaded file the extension read locally
+  httpUrl?: string;  // http(s) URL — an already-hosted photo (e.g. Jumia's own CDN)
+}
+
 export interface FillRequest {
   market?: string;            // e.g. "GH"
   notes?:  string;            // optional seller free-text (price, extra features)
-  imageUrl?: string;          // http(s) URL — used only when real AI is enabled
-  image?:  string;            // data: URL (base64) — Phase 1 uploads this to storage
+  images?: HarvestedImage[];  // up to a few angles of the same product — see lib/ai/extension-fill.ts
+  // Legacy single-image shape — kept so an extension build that hasn't
+  // picked up the multi-image update yet (Chrome Web Store auto-update can
+  // lag hours to days behind a backend deploy) still works. New callers
+  // should send `images` instead; resolveImages() in the fill route prefers
+  // it and only falls back to these when `images` is absent.
+  imageUrl?: string;
+  image?:  string;
   fields:  HarvestedField[];
 }
 
