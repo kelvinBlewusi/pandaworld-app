@@ -941,9 +941,23 @@
    * Unlike every other field, this needs protecting from the "Overwrite
    * existing content" checkbox too, not just the default gate below — a
    * seller ticking that box wants richer prose, not a broken submission.
+   *
+   * Variation confirmed live too (screenshot, Sep 2026): on an
+   * already-registered variant, Jumia renders BOTH Variation and Seller SKU
+   * in the exact same greyed-out, un-typeable style — Variation is tied to
+   * the same (SID, variant) registration Seller SKU is, not a freely
+   * editable attribute once that variant exists. With "Overwrite existing
+   * content" checked, the AI was free to regenerate Variation with no
+   * protection at all, breaking Jumia's registered (SID, Variation, Seller
+   * SKU) triple even when Seller SKU itself was correctly left untouched —
+   * same submission failure, different root field. A brand-new variant
+   * (via "+ Add Variation", or a fresh /products/add/new listing) still
+   * needs Variation AI-filled — fieldHasValue() below already draws that
+   * exact line for Seller SKU, so reusing the same guard costs nothing new.
+   *
    * GTIN Barcode was flagged as a suspected-similar case (also a real-world
    * identifier) but deliberately left unlocked pending real evidence either
-   * way. Now resolved: Jumia's own seller documentation (VendorHub's "GTIN
+   * way. Resolved: Jumia's own seller documentation (VendorHub's "GTIN
    * barcodes" article, all markets) documents gtin_barcode as a directly
    * editable field on the SAME edit-product screen — "Manage product > edit
    * product details > variations > gtin_barcode" — same as any other
@@ -951,13 +965,14 @@
    * uniqueness rule blocks reusing one GTIN across two DIFFERENT products
    * ("you cannot create more than one product with the same gtin barcode");
    * it says nothing about locking an existing listing's own GTIN once set.
-   * That's a structurally different constraint from Seller SKU's confirmed
-   * SID-tie above, so GTIN Barcode correctly stays OUT of
+   * That's a structurally different constraint from Seller SKU/Variation's
+   * confirmed SID-tie above, so GTIN Barcode correctly stays OUT of
    * isLockedIdentifierLabel below — locking it would block a legitimate
    * correction (e.g. a mistyped barcode) for no real reason.
    */
   function isLockedIdentifierLabel(label) {
-    return (label || "").toLowerCase().includes("seller sku");
+    const l = (label || "").toLowerCase();
+    return l.includes("seller sku") || l.includes("variation");
   }
 
   /** Plain-text snapshot of a narrative field's current content, sent to the
