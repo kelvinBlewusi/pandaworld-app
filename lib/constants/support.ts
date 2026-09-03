@@ -42,3 +42,11 @@ export const SOCIAL_LINKS = [
     url:    "https://www.instagram.com/pandaworldai",
   },
 ] as const;
+
+/**
+ * Published Chrome Web Store listing for the PandaWorldAI extension.
+ * Canonicalised (no `?authuser=`/`?hl=` session params — those are specific
+ * to whoever copied the link from their own Chrome Web Store dashboard).
+ */
+export const CHROME_WEB_STORE_URL =
+  "https://chromewebstore.google.com/detail/pandaworldai-ai-jumia-lis/cnhlcgjodedpppipancmomdfcgijmcae";

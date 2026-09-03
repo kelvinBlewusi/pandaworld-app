@@ -7,6 +7,7 @@ import {
 import { auth } from "@clerk/nextjs/server";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { ExtensionHeroBackdrop } from "@/components/marketing/extension-hero-backdrop";
+import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 
 // ─── /extension — public page for the Chrome extension flow ──────────────────
 //
@@ -49,6 +50,7 @@ const STEPS = [
     Icon: Chrome,
     title: "Install the extension",
     body: "Add PandaWorld to Chrome and pin it. It opens as a side panel next to Jumia Vendor Center",
+    href: CHROME_WEB_STORE_URL,
   },
   {
     Icon: KeyRound,
@@ -116,21 +118,34 @@ export async function ExtensionPage() {
             </h2>
           </div>
           <div className="mt-12 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-            {STEPS.map((step, i) => (
-              <div
-                key={step.title}
-                className="group relative rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-orange-200 hover:shadow-xl hover:shadow-orange-500/10"
-              >
-                <span className="absolute right-4 top-4 text-sm font-bold text-zinc-200 transition-colors duration-300 group-hover:text-orange-200">
-                  {String(i + 1).padStart(2, "0")}
-                </span>
-                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-orange-50 text-orange-600 transition-colors duration-300 group-hover:bg-orange-500 group-hover:text-white">
-                  <step.Icon className="h-5 w-5" />
+            {STEPS.map((step, i) => {
+              const cardClass =
+                "group relative rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-orange-200 hover:shadow-xl hover:shadow-orange-500/10";
+              const cardContent = (
+                <>
+                  <span className="absolute right-4 top-4 text-sm font-bold text-zinc-200 transition-colors duration-300 group-hover:text-orange-200">
+                    {String(i + 1).padStart(2, "0")}
+                  </span>
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-orange-50 text-orange-600 transition-colors duration-300 group-hover:bg-orange-500 group-hover:text-white">
+                    <step.Icon className="h-5 w-5" />
+                  </div>
+                  <h3 className="mt-4 text-base font-semibold">
+                    {step.title}
+                    {step.href && <span className="ml-2 text-xs font-medium text-orange-500">Open Chrome Web Store →</span>}
+                  </h3>
+                  <p className="mt-2 text-sm leading-relaxed text-zinc-600">{step.body}</p>
+                </>
+              );
+              return step.href ? (
+                <a key={step.title} href={step.href} target="_blank" rel="noopener noreferrer" className={cardClass}>
+                  {cardContent}
+                </a>
+              ) : (
+                <div key={step.title} className={cardClass}>
+                  {cardContent}
                 </div>
-                <h3 className="mt-4 text-base font-semibold">{step.title}</h3>
-                <p className="mt-2 text-sm leading-relaxed text-zinc-600">{step.body}</p>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </section>
