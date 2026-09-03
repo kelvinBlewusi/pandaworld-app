@@ -29,6 +29,7 @@ import { Space_Grotesk } from "next/font/google";
 import { ArrowRight } from "lucide-react";
 import { Wordmark } from "@/components/marketing/wordmark";
 import { BuyCreditsModal } from "@/components/extension/buy-credits-modal";
+import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 
 // Bold sans headline (700) unifies the type system with the nav/body, which
 // are already Space Grotesk — no separate serif face needed.
@@ -370,13 +371,15 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
               >
                 See how it works
               </a>
-              <Link
-                href={ctaHref}
+              <a
+                href={CHROME_WEB_STORE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
                 className="inline-flex items-center justify-center gap-2 rounded-full border px-6 py-3.5 text-sm transition-colors hover:!border-white/45 hover:!text-white"
                 style={{ borderColor: "rgba(255,255,255,0.18)", color: "rgba(239,236,230,0.85)" }}
               >
-                Try for free
-              </Link>
+                Add to Chrome — it&apos;s free
+              </a>
             </div>
           </div>
         </div>
