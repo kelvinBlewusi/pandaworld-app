@@ -17,7 +17,7 @@ import { callGeminiBackend, isVertexEnabled, type GeminiPart } from "@/lib/ai/ge
 import { pickModelForExtensionFill } from "@/lib/billing/ai-models";
 import { buildContentPolicyInstructions, stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
 import { stripRestrictedWords } from "@/lib/ai/restricted-words";
-import { buildStyleGuideBlock } from "@/lib/ai/content-style-rules";
+import { buildStyleGuideBlock, buildSearchGroundingInstruction } from "@/lib/ai/content-style-rules";
 import { isDegenerateName, type HarvestedField } from "@/lib/extension/fill";
 
 export interface AiFillResult {
@@ -167,8 +167,18 @@ export async function aiFillRenderedFields(args: {
   // don't add a second copy here, that was ~1,000 wasted characters on
   // every single call for zero extra instruction value.
   const policy = buildContentPolicyInstructions({ categoryPath: null, includeImageRules: false });
+  // Bundles the free-text notes box AND every Advanced Option the panel
+  // exposes (Writing style, Refund policy, Warranty duration, Warranty
+  // address — see panel.js's extraNotes array) into one string before this
+  // function ever sees it. Framed as unconditional top priority, not just
+  // "fills factual gaps": a seller who explicitly picked a Writing style is
+  // giving a direct instruction, not a soft preference, and it must win
+  // over CONTENT STYLE's own default tone/structure below when the two
+  // disagree — that default exists for when the seller didn't specify one
+  // (SEO Optimized, the pre-selected option), not as a rule that overrides
+  // an explicit seller choice.
   const notesBlock = notes && notes.trim()
-    ? `\n\nSELLER NOTES (authoritative for anything the image doesn't show):\n"${notes.trim()}"\n`
+    ? `\n\nSELLER NOTES — HIGHEST PRIORITY, OVERRIDES ANY OTHER INSTRUCTION IN THIS PROMPT IF THEY CONFLICT:\n"${notes.trim()}"\nThis is the seller's own free text plus every Advanced Option they set (Writing style, Refund policy, Warranty duration, Warranty address, if present) — treat each one as a direct instruction, not a soft suggestion. If a "Writing style" is given (e.g. Storytelling, Fun & Playful, Professional & Clean, Friendly & Conversational), let it govern the tone and voice of Description/Highlights — CONTENT STYLE's own structural suggestions below (the hook, bold micro-headings, "Perfect for:" list) are the strong default for "SEO Optimized" or when no writing style is given, not a rule that overrides the seller's explicit choice.\n`
     : "";
 
   const notesOnlyFields = fields.filter((f) => isNotesOnlyField(f.label)).map((f) => f.label);
@@ -179,6 +189,9 @@ export async function aiFillRenderedFields(args: {
   // See lib/ai/content-style-rules.ts — the file to edit when reviewing
   // real listings, not here.
   const styleGuideBlock = buildStyleGuideBlock(fields);
+  // Unconditional — see buildSearchGroundingInstruction's own doc comment
+  // for why this isn't gated to fields the way styleGuideBlock is.
+  const searchGroundingBlock = buildSearchGroundingInstruction();
 
   // Set only for Name/Description/Highlights on an Edit-Product page that
   // already carry real seller content — see isNarrativeLabel in content.js.
@@ -211,12 +224,12 @@ export async function aiFillRenderedFields(args: {
 
 ${policy}
 
-${notesBlock}${notesOnlyBlock}${styleGuideBlock}${existingContentBlock}${variantsBlock}
+${notesBlock}${notesOnlyBlock}${searchGroundingBlock}${styleGuideBlock}${existingContentBlock}${variantsBlock}
 FIELDS TO FILL (return a value only for the ones you can confidently fill; omit the rest):
 ${fields.map(fieldLine).join("\n")}
 
 RULES:
-- Return ONLY a JSON object mapping each field label EXACTLY as written above (including punctuation and capitalisation) to a string value.
+${notes && notes.trim() ? "- SELLER NOTES above beats every other instruction in this prompt when they conflict — that includes CONTENT STYLE's default tone/structure, not just factual details.\n" : ""}- Return ONLY a JSON object mapping each field label EXACTLY as written above (including punctuation and capitalisation) to a string value.
 - Rich-text fields: return HTML, well-structured (see CONTENT STYLE above) — not a single flat paragraph.
 - Fields listing options: return exactly one of the given options, or omit.
 - Numbers: digits only, no units or words.
@@ -232,16 +245,19 @@ Return ONLY the JSON object, no markdown, no commentary.`;
     ...images.map((img): GeminiPart => ({ inlineData: { data: img.base64, mimeType: img.mimeType } })),
   ];
 
-  // Aug 30 2026: back on gemini-2.5-flash-lite on Vertex — see
-  // MODEL_EXTENSION_FILL's comment in lib/billing/ai-models.ts for why. No
-  // try/fallback needed: this model is already proven working on Vertex
-  // across many live calls this project has made, so there's nothing left
-  // to fall back FROM. preferBackend stays explicit for self-documentation
-  // even though Vertex is also the default when configured.
+  // Sep 3 2026: gemini-3.1-flash-lite via AI STUDIO — see
+  // MODEL_EXTENSION_FILL's comment in lib/billing/ai-models.ts for the full
+  // history. This is NOT a repeat of the earlier 3.1-on-Vertex attempt: that
+  // one 404'd because Vertex's Publisher Model catalogue for this project
+  // doesn't carry the 3.x line at all (confirmed live, twice) — AI Studio's
+  // catalogue does, so preferBackend is switched to match. If GOOGLE_API_KEY
+  // is ever unset in the Vercel env, callGeminiBackend silently falls back
+  // to Vertex and this exact model 404s again — check the `[gemini]
+  // backend=` log line after deploying a change here, don't assume.
   const model = pickModelForExtensionFill();
   const t0 = Date.now();
   const { text, backend } = await callGeminiBackend(model, parts, {
-    preferBackend: "vertex",
+    preferBackend: "ai-studio",
     groundWithSearch: true,
   });
   console.info(`[ext/ai-fill] model=${model} backend=${backend} ms=${Date.now() - t0} images=${images.length} fields=${fields.length}`);

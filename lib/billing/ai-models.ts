@@ -70,11 +70,7 @@ const MODEL_OWN_IMAGES_FLOW = "gemini-2.5-flash-lite";
 // for a quality bump at the flash-lite tier — BOTH confirmed LIVE (Vercel
 // logs, Aug 26 2026) to 404 on this project's Vertex Publisher Model
 // catalogue in us-central1: "Publisher model
-// ...gen-lang-client-0721987658/locations/us-central1... not found". Don't
-// re-try a 3.x primary here without first confirming — via a live call,
-// not a marketing page — that Vertex's catalogue for THIS project actually
-// serves it (same gap this codebase hit with 3.1 once before, May 2026 —
-// see MODEL_OWN_IMAGES_FLOW above).
+// ...gen-lang-client-0721987658/locations/us-central1... not found".
 //
 // Aug 26 2026: the "Name comes back Generic" report turned out NOT to be a
 // model-quality problem at all — the diagnostic proved Gemini returned real
@@ -88,14 +84,26 @@ const MODEL_OWN_IMAGES_FLOW = "gemini-2.5-flash-lite";
 // model-side issues, before the 3.x detour. Confirmed live, AFTER real
 // billing was attached to the GCP project, that Vertex's Publisher Model
 // catalogue for this project STILL 404s on both gemini-3.5-flash-lite and
-// gemini-3.1-flash-lite — billing didn't change it. AI Studio does carry
-// the 3.x line if that's ever worth revisiting (see callGeminiBackend's
-// preferBackend option), but there's no proven quality reason to prefer it
-// over this model for this workload, and it adds a second backend's worth
-// of things that can go wrong. Removed the try/fallback that briefly lived
-// here too: with primary back to a model that just works, retrying on
-// failure would only double latency on a genuine transient error.
-const MODEL_EXTENSION_FILL = MODEL_LITE;
+// gemini-3.1-flash-lite — billing didn't change it.
+//
+// Sep 3 2026: moved to gemini-3.1-flash-lite again, this time via AI STUDIO
+// rather than Vertex — see extension-fill.ts's `preferBackend: "ai-studio"`
+// on the callGeminiBackend call, which is the actual fix here, not this
+// constant alone. AI Studio's catalogue has always carried the 3.x line;
+// only Vertex's Publisher Model catalogue 404s on it (confirmed twice
+// above). The "no proven quality reason to prefer it" reasoning from the
+// last round no longer holds: the extension prompt now carries a hard
+// 1500/800-character minimum for Description/Highlights, and 2.5-flash-lite
+// had already been caught live shipping under-length content despite an
+// explicit instruction not to — a newer-generation model is a direct,
+// targeted response to that failure mode, not a speculative upgrade.
+// REQUIRES GOOGLE_API_KEY to be set in the Vercel env for AI Studio to
+// actually be used — if it's ever unset, callGeminiBackend's preferBackend
+// silently falls back to Vertex, where this exact model 404s (confirmed
+// twice above). Verify via Vercel logs (`[gemini] backend=...`) after
+// deploying this, the same way every prior model change here was verified
+// — don't assume it worked from the code alone.
+const MODEL_EXTENSION_FILL = "gemini-3.1-flash-lite";
 
 // Image editing — currently only one viable Gemini model. Used by
 // the "Polish" and "Rebuild as studio shot" buttons (which take an

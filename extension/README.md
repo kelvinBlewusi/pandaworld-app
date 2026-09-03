@@ -4,7 +4,7 @@ A Manifest V3 Chrome extension that autofills the **Jumia Vendor Center**
 Add-Products form from AI. Design background in
 [`docs/chrome-extension-plan.md`](../docs/chrome-extension-plan.md).
 
-No build step — it's plain JS/HTML/CSS and loads unpacked as-is.
+No build step — it's plain JS/HTML/CSS. Loads unpacked as-is for local dev, and this same source is what gets zipped and uploaded to the [Chrome Web Store listing](https://chromewebstore.google.com/detail/pandaworldai-ai-jumia-lis/cnhlcgjodedpppipancmomdfcgijmcae) for real users — there's no separate build/publish pipeline, just re-zip this folder.
 
 ## What works
 
@@ -12,8 +12,14 @@ No build step — it's plain JS/HTML/CSS and loads unpacked as-is.
   when you're not on a Vendor Center tab, a status row (plan + credit balance,
   disconnect), notes box, Autofill button, per-field results/warnings, and a
   Dashboard/Help/Logout footer — see `panel/`.
-- Content script that harvests the rendered fields + the uploaded image.
-- DOM writers: React-safe inputs, native `<select>`, and CKEditor 5 rich-text.
+- Content script that harvests the rendered fields + up to 4 uploaded product
+  photos (several angles of the same product, not just one — see
+  `harvestImages()` in `content/content.js`).
+- DOM writers: React-safe inputs, native `<select>`, CKEditor 5 rich-text, and
+  click-driven comboboxes (Jumia's checkbox/radio-row attribute pickers —
+  Color family, Production country, Warranty Duration, etc. — opened, scraped,
+  and selected from programmatically; see `enrichComboboxOptions()` /
+  `writeCombobox()`).
 - Real auth (`pw_live_...` API keys, see `lib/security/extension-keys.ts`) and
   a credit ledger (`lib/billing/extension-credits.ts`) — 10 free credits on
   sign-up, 2.5 spent per real autofill, top-ups via Paystack on the dashboard.
@@ -26,9 +32,12 @@ No build step — it's plain JS/HTML/CSS and loads unpacked as-is.
 
 ## What's still deferred
 
-- Combobox / click-only dropdown option-picking (e.g. Color family) — the
-  extension writes typed inputs, native selects, and rich text.
-- Chrome Web Store listing (currently load-unpacked only).
+- No automated check that Description/Highlights actually cleared their
+  1500/800-character minimums (see `lib/ai/content-style-rules.ts`) before a
+  result ships — a model that under-delivers despite the prompt instruction
+  only gets caught by a human noticing, not by a retry.
+- `all_frames` is off in `manifest.json` — if a category ever renders its form
+  inside an iframe, the content script won't reach it.
 
 ## Run it
 
@@ -76,7 +85,14 @@ Everything logs to the console with a `[PandaWorld]` prefix.
 - **Content script logs** (harvest/apply diagnostics): open DevTools **on the
   Jumia page**.
 - **Panel logs**: right-click inside the side panel → Inspect.
-- **Backend logs**: your `npm run dev` terminal (look for `[ext/fill]`).
+- **Backend logs**: your `npm run dev` terminal locally, or Vercel's runtime
+  logs in production. Look for `[ext/fill]` (the route's own summary — fields
+  found/filled, warnings), `[ext/ai-fill]` (which model/backend actually
+  served the call and how long it took), and `[gemini] backend=` (confirms
+  Vertex vs. AI Studio — check this after any model/backend change in
+  `lib/billing/ai-models.ts` or `lib/ai/gemini-client.ts`, since a
+  misconfigured `preferBackend` fails silently by falling back rather than
+  erroring).
 
 The harvester is heuristic against a DOM we don't control, so **selector tuning
 is expected**. The `diagnostics[]` returned from each harvest (shown in the
@@ -84,22 +100,25 @@ panel's warnings and logged) tells you exactly which fields/labels matched — u
 it to refine `content/content.js` → `findLabel()` / `findFields()` against the
 real page.
 
-## Known limitations (Phase 0)
+## Known limitations
 
-- Field/label detection may miss or mislabel fields on the real Jumia DOM until
-  tuned — that's what this POC is for.
-- ProseMirror write uses `execCommand('insertHTML')` with a paste-event fallback;
-  if Jumia's editor rejects both, we log it and fall back to `innerHTML`.
-- Large images are sent as base64 in the POST (fine for localhost; Phase 1 uploads
-  to storage and sends a URL to stay under Vercel's body limit).
-- `all_frames` is off; if the form renders inside an iframe we'll need to enable it.
+- Field/label detection is heuristic against a DOM we don't control (see
+  `findLabel()`'s fallback chain in `content/content.js`) — it can still miss
+  or mislabel an edge case Jumia's category templates haven't hit yet.
+- Rich-text write is CKEditor 5's real `editor.setData()` API, not a DOM write
+  (see the "Rich-text note" below) — `execCommand('insertHTML')`/`innerHTML`
+  are only the last-resort fallback for when the MAIN-world bridge can't find
+  an editor instance on the editable at all.
+- Images are sent as base64 in the POST body, up to 4 per autofill — no
+  storage-upload path exists, so a very photo-heavy listing means a
+  correspondingly large request.
 
 ## Files
 
 ```
 manifest.json          MV3 manifest (side panel, host permissions, content scripts)
 background/worker.js   opens the panel; owns the API call
-content/content.js     harvest (image + fields) + DOM writers (isolated world)
+content/content.js     harvest (images + fields) + DOM writers (isolated world)
 content/mainworld.js   MAIN-world bridge: calls CKEditor's setData() for rich text
 panel/                 side-panel UI (html/css/js)
 ```

@@ -1,4 +1,4 @@
-import { buildStyleGuideBlock } from "@/lib/ai/content-style-rules";
+import { buildStyleGuideBlock, buildSearchGroundingInstruction } from "@/lib/ai/content-style-rules";
 import type { HarvestedField } from "@/lib/extension/fill";
 
 describe("buildStyleGuideBlock", () => {
@@ -51,24 +51,67 @@ describe("buildStyleGuideBlock", () => {
     expect(block).toMatch(/not capped at a?n? ?2-column|use as many columns/i);
   });
 
-  it("sets an explicit length floor so anti-padding language isn't read as 'stay short'", () => {
+  it("sets explicit character-count floors (1500 Description / 800 Highlights), excluding tables", () => {
     const withNarrative = buildStyleGuideBlock([
       { label: "Product description", type: "richtext" },
       { label: "Highlights", type: "richtext" },
     ]);
-    expect(withNarrative).toMatch(/TOO SHORT|150.?350 words/);
+    expect(withNarrative).toMatch(/at least 1500 characters/);
+    expect(withNarrative).toMatch(/at least 800 characters/);
+    // Both floors must explicitly exclude table content, or a big <table>
+    // could satisfy the minimum with no real written substance.
+    expect(withNarrative.match(/not counting anything inside a <table>/g)?.length).toBe(2);
     expect(withNarrative).toContain("too thin to be useful");
   });
 
-  it("tells the AI to use web search for real facts, only on Description/Highlights", () => {
+  it("leaves whether to use a table entirely up to the AI, for both fields", () => {
+    const block = buildStyleGuideBlock([
+      { label: "Product description", type: "richtext" },
+      { label: "Highlights", type: "richtext" },
+    ]);
+    expect(block).toMatch(/table at all is (entirely )?(your|its) own call/);
+  });
+
+  it("tells the AI structure should vary between listings, not follow one fixed template", () => {
+    const block = buildStyleGuideBlock([
+      { label: "Product description", type: "richtext" },
+      { label: "Highlights", type: "richtext" },
+    ]);
+    expect(block).toMatch(/vary from one listing to the next/);
+  });
+
+  it("no longer carries its own search-grounding instruction — that's unconditional now, in buildSearchGroundingInstruction", () => {
+    // Regression guard: this used to live as a field-gated CONTENT_STYLE_RULES
+    // entry here. It moved out to apply to structured attributes too (Model,
+    // Country of origin, ...), not just Description/Highlights — asserting
+    // its absence here prevents it silently coming back and duplicating.
     const withNarrative = buildStyleGuideBlock([
       { label: "Product description", type: "richtext" },
       { label: "Highlights", type: "richtext" },
     ]);
-    expect(withNarrative).toContain("You have web search available");
-    expect(withNarrative).toContain("Never surface the search itself in the copy");
+    expect(withNarrative).not.toContain("You have web search available");
+  });
+});
 
-    const nameOnly = buildStyleGuideBlock([{ label: "Name", type: "text" }]);
-    expect(nameOnly).not.toContain("You have web search available");
+describe("buildSearchGroundingInstruction", () => {
+  it("is unconditional — not gated by which fields are on the page", () => {
+    expect(buildSearchGroundingInstruction()).toContain("You have web search available");
+  });
+
+  it("covers structured attributes as well as Description/Highlights", () => {
+    const block = buildSearchGroundingInstruction();
+    expect(block).toContain("Description/Highlights");
+    expect(block).toMatch(/Model.*Main material.*Country of origin.*Certifications/);
+  });
+
+  it("still forbids citations from leaking into narrative copy or a structured field's value", () => {
+    const block = buildSearchGroundingInstruction();
+    expect(block).toContain("never surface the search itself in the copy");
+    expect(block).toMatch(/never a citation, URL/);
+  });
+
+  it("gates on confidence — never asserts a searched fact without it", () => {
+    const block = buildSearchGroundingInstruction();
+    expect(block).toMatch(/genuinely confident/);
   });
 });

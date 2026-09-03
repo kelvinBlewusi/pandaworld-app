@@ -941,9 +941,20 @@
    * Unlike every other field, this needs protecting from the "Overwrite
    * existing content" checkbox too, not just the default gate below — a
    * seller ticking that box wants richer prose, not a broken submission.
-   * Only Seller SKU has direct evidence of this failure; GTIN Barcode is
-   * structurally similar (also a real-world identifier) but unconfirmed —
-   * left alone rather than guessed at.
+   * GTIN Barcode was flagged as a suspected-similar case (also a real-world
+   * identifier) but deliberately left unlocked pending real evidence either
+   * way. Now resolved: Jumia's own seller documentation (VendorHub's "GTIN
+   * barcodes" article, all markets) documents gtin_barcode as a directly
+   * editable field on the SAME edit-product screen — "Manage product > edit
+   * product details > variations > gtin_barcode" — same as any other
+   * attribute, updatable via the UI, a file upload, or the API. Its only
+   * uniqueness rule blocks reusing one GTIN across two DIFFERENT products
+   * ("you cannot create more than one product with the same gtin barcode");
+   * it says nothing about locking an existing listing's own GTIN once set.
+   * That's a structurally different constraint from Seller SKU's confirmed
+   * SID-tie above, so GTIN Barcode correctly stays OUT of
+   * isLockedIdentifierLabel below — locking it would block a legitimate
+   * correction (e.g. a mistyped barcode) for no real reason.
    */
   function isLockedIdentifierLabel(label) {
     return (label || "").toLowerCase().includes("seller sku");
