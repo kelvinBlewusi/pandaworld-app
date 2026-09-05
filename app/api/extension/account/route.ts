@@ -9,9 +9,10 @@
 
 import { NextResponse } from "next/server";
 import { authenticateExtensionKey } from "@/lib/security/extension-keys";
-import { getOrCreateCreditBalance } from "@/lib/billing/extension-credits";
+import { getOrCreateCreditBalance, getMostRecentCreditPack } from "@/lib/billing/extension-credits";
 import { serializeCredits } from "@/lib/billing/credit-packs";
 import { getQuotaSummary } from "@/lib/billing/quota";
+import { isPaidPlan } from "@/lib/billing/plans";
 
 export const runtime = "nodejs";
 
@@ -31,14 +32,20 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: authResult.error }, { status: 401, headers: CORS });
   }
 
-  const [balance, quota] = await Promise.all([
+  const [balance, quota, recentPack] = await Promise.all([
     getOrCreateCreditBalance(authResult.userId),
     getQuotaSummary(authResult.userId),
+    getMostRecentCreditPack(authResult.userId),
   ]);
+
+  // Same precedence as the dashboard's Plan pill (app/extension/(app)/layout.tsx):
+  // a real paid subscription always wins; otherwise show the most recent
+  // credit pack instead of leaving extension-only sellers stuck on "free".
+  const plan = !isPaidPlan(quota.plan) && recentPack ? recentPack.id : quota.plan;
 
   const credits = serializeCredits(balance);
   return NextResponse.json(
-    { plan: quota.plan, credits: credits.value, unlimitedCredits: credits.unlimited },
+    { plan, credits: credits.value, unlimitedCredits: credits.unlimited },
     { status: 200, headers: CORS },
   );
 }

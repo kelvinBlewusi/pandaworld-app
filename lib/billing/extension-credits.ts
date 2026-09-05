@@ -35,6 +35,7 @@ export async function getRecentTransactions(userId: string, limit = 10): Promise
     .from("extension_credit_transactions")
     .select("id, type, amount, balance_after, description, created_at")
     .eq("user_id", userId)
+    .is("dismissed_at", null)
     .order("created_at", { ascending: false })
     .limit(limit);
 
@@ -43,6 +44,52 @@ export async function getRecentTransactions(userId: string, limit = 10): Promise
     return [];
   }
   return data ?? [];
+}
+
+/**
+ * When this user last opened the notification bell dropdown — anything
+ * newer is "new" (see shell.tsx). NULL means never opened it.
+ */
+export async function getNotificationsSeenAt(userId: string): Promise<string | null> {
+  if (isAdmin(userId)) return null;
+
+  const db = createServerClient();
+  const { data } = await db
+    .from("extension_credits")
+    .select("notifications_seen_at")
+    .eq("user_id", userId)
+    .maybeSingle();
+  return data?.notifications_seen_at ?? null;
+}
+
+/** Marks the notification bell as viewed right now — called when the dropdown opens. */
+export async function markNotificationsSeen(userId: string): Promise<void> {
+  if (isAdmin(userId)) return;
+
+  // Ensure the row exists first — a brand-new user opening the bell before
+  // any other extension_credits read/write would otherwise no-op silently.
+  await getOrCreateCreditBalance(userId);
+
+  const db = createServerClient();
+  await db
+    .from("extension_credits")
+    .update({ notifications_seen_at: new Date().toISOString() })
+    .eq("user_id", userId);
+}
+
+/**
+ * Hides one notification from the bell going forward (the "x" button). The
+ * ledger row itself is kept — it's still part of the credit balance's audit
+ * trail — this only sets dismissed_at so getRecentTransactions() skips it.
+ * Scoped to userId so one user can never dismiss another's row.
+ */
+export async function dismissNotification(userId: string, transactionId: string): Promise<void> {
+  const db = createServerClient();
+  await db
+    .from("extension_credit_transactions")
+    .update({ dismissed_at: new Date().toISOString() })
+    .eq("id", transactionId)
+    .eq("user_id", userId);
 }
 
 /**
