@@ -23,6 +23,18 @@ export function getCreditPack(id: string): CreditPack | undefined {
   return CREDIT_PACKS.find((p) => p.id === id);
 }
 
+/**
+ * Reverse lookup by credit count — each pack has a distinct `credits`
+ * value, so a purchase transaction's `amount` (see extension_credit_
+ * transactions) identifies which pack was bought without needing its own
+ * stored pack id. Used to show the dashboard's "Plan" pill for extension
+ * sellers who never subscribed to a classic-app plan tier (lib/billing/
+ * extension-credits.ts's getMostRecentCreditPack()).
+ */
+export function getCreditPackByCredits(credits: number): CreditPack | undefined {
+  return CREDIT_PACKS.find((p) => p.credits === credits);
+}
+
 /** Every sign-up starts with this many free credits (lib/billing/extension-credits.ts). */
 export const FREE_SIGNUP_CREDITS = 10;
 

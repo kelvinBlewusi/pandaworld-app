@@ -9,7 +9,7 @@
  */
 
 import { createServerClient } from "@/lib/supabase/server";
-import { FREE_SIGNUP_CREDITS } from "@/lib/billing/credit-packs";
+import { FREE_SIGNUP_CREDITS, getCreditPackByCredits, type CreditPack } from "@/lib/billing/credit-packs";
 import { isAdmin } from "@/lib/auth/is-admin";
 
 export interface CreditTransaction {
@@ -43,6 +43,35 @@ export async function getRecentTransactions(userId: string, limit = 10): Promise
     return [];
   }
   return data ?? [];
+}
+
+/**
+ * The credit pack from the user's most recent purchase, if any — lets the
+ * dashboard's "Plan" pill (components/extension/shell.tsx) show something
+ * meaningful for extension-only sellers, who never touch the classic app's
+ * subscription tiers (lib/billing/plans.ts) and would otherwise be stuck
+ * looking permanently "Free" no matter how many credits they've bought.
+ *
+ * Matched by credit amount rather than a stored pack id — see
+ * getCreditPackByCredits(). Returns null if the user has never purchased a
+ * pack, or if a since-removed/renamed pack no longer matches any credits
+ * value in CREDIT_PACKS.
+ */
+export async function getMostRecentCreditPack(userId: string): Promise<CreditPack | null> {
+  if (isAdmin(userId)) return null;
+
+  const db = createServerClient();
+  const { data, error } = await db
+    .from("extension_credit_transactions")
+    .select("amount")
+    .eq("user_id", userId)
+    .eq("type", "purchase")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return getCreditPackByCredits(Number(data.amount)) ?? null;
 }
 
 /**
