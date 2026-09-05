@@ -15,7 +15,7 @@ import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useUser } from "@clerk/nextjs";
-import { Menu, Plus, Bell } from "lucide-react";
+import { Menu, Plus, Bell, X } from "lucide-react";
 import { ExtensionSidebar } from "./sidebar";
 import { Wordmark } from "@/components/marketing/wordmark";
 import { BuyCreditsModal } from "./buy-credits-modal";
@@ -68,20 +68,56 @@ export function ExtensionShell({
   planLabel,
   creditsLabel,
   notifications,
+  notificationsSeenAt,
 }: {
   children: React.ReactNode;
   planLabel: string;
   creditsLabel: string;
   notifications: CreditTransaction[];
+  notificationsSeenAt: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const [buyOpen, setBuyOpen] = useState(false);
+  const [items, setItems] = useState(notifications);
+  // seenAt drives the bell's own alert dot — it clears the instant the
+  // dropdown opens. displaySeenAt drives each item's "new" highlight and
+  // deliberately lags one open behind: it only catches up to seenAt when
+  // the dropdown CLOSES, so a first-time viewer still gets to see which
+  // items were new during this viewing, and they stop looking new starting
+  // the next time the bell is opened.
+  const [seenAt, setSeenAt] = useState(notificationsSeenAt);
+  const [displaySeenAt, setDisplaySeenAt] = useState(notificationsSeenAt);
   const pathname = usePathname();
   const { user } = useUser();
   const pageTitle = PAGE_TITLES[pathname] ?? "Dashboard";
-  const hasRecentActivity =
-    notifications.length > 0 &&
-    Date.now() - new Date(notifications[0].created_at).getTime() < 24 * 60 * 60 * 1000;
+
+  useEffect(() => {
+    setItems(notifications);
+    setSeenAt(notificationsSeenAt);
+    setDisplaySeenAt(notificationsSeenAt);
+  }, [notifications, notificationsSeenAt]);
+
+  const hasUnseen = items.some((n) => !seenAt || new Date(n.created_at) > new Date(seenAt));
+  const isNew = (n: CreditTransaction) => !displaySeenAt || new Date(n.created_at) > new Date(displaySeenAt);
+
+  function handleOpenChange(next: boolean) {
+    if (next) {
+      if (!hasUnseen) return;
+      setSeenAt(new Date().toISOString());
+      fetch("/api/extension/notifications/seen", { method: "POST" }).catch(() => {});
+    } else {
+      setDisplaySeenAt(seenAt);
+    }
+  }
+
+  function dismiss(id: string) {
+    setItems((prev) => prev.filter((n) => n.id !== id));
+    fetch("/api/extension/notifications/dismiss", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    }).catch(() => {});
+  }
 
   useEffect(() => { setOpen(false); }, [pathname]);
 
@@ -151,14 +187,14 @@ export function ExtensionShell({
             <span className="flex items-center gap-1.5 rounded-full border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-600">
               <span className="h-1.5 w-1.5 rounded-full bg-orange-500" /> Credits: {creditsLabel}
             </span>
-            <DropdownMenu>
+            <DropdownMenu onOpenChange={handleOpenChange}>
               <DropdownMenuTrigger asChild>
                 <button
                   className="relative flex h-10 w-10 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600"
                   aria-label="Notifications"
                 >
                   <Bell className="h-4.5 w-4.5" />
-                  {hasRecentActivity && (
+                  {hasUnseen && (
                     <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-orange-500" />
                   )}
                 </button>
@@ -166,18 +202,34 @@ export function ExtensionShell({
               <DropdownMenuContent align="end" className="w-80 max-h-96 overflow-y-auto">
                 <DropdownMenuLabel>Account activity</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                {notifications.length === 0 ? (
+                {items.length === 0 ? (
                   <div className="px-2 py-6 text-center text-sm text-zinc-500">
                     No activity yet
                   </div>
                 ) : (
-                  notifications.map((n) => (
-                    <DropdownMenuItem key={n.id} className="flex-col items-start gap-1">
+                  items.map((n) => (
+                    <DropdownMenuItem
+                      key={n.id}
+                      onSelect={(e) => e.preventDefault()}
+                      className="flex-col items-start gap-1"
+                    >
                       <div className="flex w-full items-center gap-2">
                         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${TYPE_DOT[n.type]}`} />
-                        <span className="flex-1 truncate text-sm font-medium text-zinc-900">
+                        <span
+                          className={[
+                            "flex-1 truncate text-sm",
+                            isNew(n) ? "font-semibold text-zinc-900" : "font-medium text-zinc-500",
+                          ].join(" ")}
+                        >
                           {n.description ?? TYPE_LABEL[n.type]}
                         </span>
+                        <button
+                          onClick={() => dismiss(n.id)}
+                          className="shrink-0 rounded p-0.5 text-zinc-300 hover:bg-zinc-100 hover:text-zinc-600"
+                          aria-label="Dismiss notification"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
                       </div>
                       <div className="pl-3.5 text-xs text-zinc-500">
                         {n.amount > 0 ? "+" : "-"}

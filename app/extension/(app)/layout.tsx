@@ -6,6 +6,7 @@ import {
   getOrCreateCreditBalance,
   getRecentTransactions,
   getMostRecentCreditPack,
+  getNotificationsSeenAt,
 } from "@/lib/billing/extension-credits";
 import { ExtensionShell } from "@/components/extension/shell";
 
@@ -29,11 +30,12 @@ export default async function ExtensionAppLayout({
   const { userId } = await auth();
   if (!userId) redirect("/sign-in?redirect_url=/extension/dashboard");
 
-  const [quota, balance, notifications, recentPack] = await Promise.all([
+  const [quota, balance, notifications, recentPack, notificationsSeenAt] = await Promise.all([
     getQuotaSummary(userId),
     getOrCreateCreditBalance(userId),
     getRecentTransactions(userId),
     getMostRecentCreditPack(userId),
+    getNotificationsSeenAt(userId),
   ]);
 
   // A real (paid) subscription tier always wins — it's the more meaningful
@@ -46,7 +48,12 @@ export default async function ExtensionAppLayout({
   const creditsLabel = Number.isFinite(balance) ? String(balance) : "∞";
 
   return (
-    <ExtensionShell planLabel={planLabel} creditsLabel={creditsLabel} notifications={notifications}>
+    <ExtensionShell
+      planLabel={planLabel}
+      creditsLabel={creditsLabel}
+      notifications={notifications}
+      notificationsSeenAt={notificationsSeenAt}
+    >
       {children}
     </ExtensionShell>
   );
