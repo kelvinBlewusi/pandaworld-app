@@ -12,6 +12,39 @@ import { createServerClient } from "@/lib/supabase/server";
 import { FREE_SIGNUP_CREDITS } from "@/lib/billing/credit-packs";
 import { isAdmin } from "@/lib/auth/is-admin";
 
+export interface CreditTransaction {
+  id: string;
+  type: "grant" | "purchase" | "deduction" | "refund";
+  amount: number;
+  balance_after: number;
+  description: string | null;
+  created_at: string;
+}
+
+/**
+ * Recent entries from the credit ledger, newest first — powers the
+ * dashboard's notification bell (components/extension/shell.tsx). Admins
+ * never touch this ledger (getOrCreateCreditBalance short-circuits them to
+ * Infinity), so there's nothing to show them.
+ */
+export async function getRecentTransactions(userId: string, limit = 10): Promise<CreditTransaction[]> {
+  if (isAdmin(userId)) return [];
+
+  const db = createServerClient();
+  const { data, error } = await db
+    .from("extension_credit_transactions")
+    .select("id, type, amount, balance_after, description, created_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error("[extension-credits] getRecentTransactions failed:", error.message);
+    return [];
+  }
+  return data ?? [];
+}
+
 /**
  * Reads the user's credit balance, provisioning the free sign-up grant the
  * first time anyone asks (dashboard load, fill request, or the Clerk
