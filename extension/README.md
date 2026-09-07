@@ -38,6 +38,20 @@ No build step — it's plain JS/HTML/CSS. Loads unpacked as-is for local dev, an
   only gets caught by a human noticing, not by a retry.
 - `all_frames` is off in `manifest.json` — if a category ever renders its form
   inside an iframe, the content script won't reach it.
+- Jumia's Add/Edit-Products form becomes a 3-step wizard (Product Information
+  / Variants / Product Specification) whenever the visible viewport is
+  narrowed — including by opening this extension's own side panel, so most
+  sellers hit this layout, not a rare case. Every step's fields stay mounted
+  in the DOM the whole time (confirmed live), just hidden — `isVisible()` in
+  `content/content.js` treats that as visible enough to harvest and fill, so
+  plain text/select/rich-text fields on a step the seller hasn't clicked into
+  yet still get filled. **Combobox-type attribute pickers on a hidden step
+  (Certifications, Material family, Production country, Warranty
+  Duration/Type) are the one remaining gap** — they need a genuinely visible,
+  on-screen trigger to open their overlay, so one sitting on an inactive step
+  may silently fail to fill. The fix (walk the wizard's own Next control,
+  filling each step as it becomes active) needs the real "Next" button
+  markup to build safely — not yet done.
 
 ## Run it
 

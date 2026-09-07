@@ -851,6 +851,42 @@
     return best;
   }
 
+  // Jumia's Add/Edit-Products form renders as a 3-step wizard (Product
+  // Information / Variants / Product Specification) whenever the visible
+  // viewport is narrowed — confirmed live, Sep 2026: this includes opening
+  // our OWN side panel or DevTools, so most sellers using this extension hit
+  // it, not a rare device-specific case. Confirmed via a live console check
+  // that Jumia keeps every step's fields mounted in the DOM at all times
+  // rather than destroying/recreating them per step: `document.querySelector
+  // ('input[formcontrolname="variation"]')` resolved a real element while
+  // the Variants step wasn't active, just with a zero-size
+  // getBoundingClientRect() (its ancestor is display:none, not removed).
+  // Without this, labelTextOf() below (isVisible()'s only real gatekeeper
+  // for label discovery, since Jumia never uses a real <label> element —
+  // every field caption here is a styled <p class="label">, found only via
+  // the doc-order/closest-before fallback strategies in findLabel(), both of
+  // which route through isVisible()) rejects every hidden step's own label
+  // text, so findFields() drops the field entirely before the AI ever sees
+  // it — confirmed live via screenshot: an entire "Variants" step (Variation,
+  // Seller SKU, GTIN Barcode, Quantity) and "Product Specification" step
+  // (Material family, Model, Warranty Duration, …) silently never got filled.
+  // Treating a hidden-only-because-of-this-wizard element as "visible enough
+  // to harvest and write" fixes that — the actual writers (writeInput/
+  // writeSelect/writeRichText) have no visibility gate of their own and work
+  // fine on a display:none element already, since they just set the native
+  // value and dispatch the events Angular's reactive forms listen for.
+  // isVisible()'s OTHER callers (open-overlay/backdrop detection) are
+  // unaffected: a hidden step's controls can never be "the currently open
+  // overlay" in the first place, so this relaxation never changes their
+  // result. (One real gap this doesn't close: combobox-type attribute
+  // pickers — Certifications, Material family, Production country, Warranty
+  // Duration/Type — still need a genuinely visible, on-screen trigger to
+  // open their overlay; clicking one while hidden may silently do nothing,
+  // same as it silently does nothing today by never being attempted at all.)
+  const STEPPER_SECTION_SEL =
+    "#variants, #product-specification, #product-information, " +
+    ".product-variation, .product-specification, .product-information";
+
   /**
    * Return trimmed label text from an element, or null if it isn't label-like:
    * skips anything that contains a form control, a button, a toolbar, or an
@@ -859,7 +895,8 @@
    */
   function isVisible(elm) {
     if (!elm || !elm.getClientRects) return false;
-    return elm.getClientRects().length > 0;
+    if (elm.getClientRects().length > 0) return true;
+    return !!(elm.closest && elm.closest(STEPPER_SECTION_SEL));
   }
 
   /** True when text looks like Jumia's own helper/placeholder copy ("Ex: …",
