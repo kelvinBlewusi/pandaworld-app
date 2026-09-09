@@ -883,6 +883,25 @@
   // Duration/Type — still need a genuinely visible, on-screen trigger to
   // open their overlay; clicking one while hidden may silently do nothing,
   // same as it silently does nothing today by never being attempted at all.)
+  //
+  // BUG FIXED HERE (confirmed live via console dump, Sep 2026): the first
+  // version of this checked `elm.closest(STEPPER_SECTION_SEL)` — true for
+  // ANY descendant of a step container, not just "the step itself is
+  // hidden". Every step's CKEditor fields (Description/Highlights on
+  // Product Information; From the Manufacturer/etc. on Product
+  // Specification) have their OWN legitimately-hidden toolbar internals — a
+  // closed "Insert media" popup form, a collapsed heading dropdown — that
+  // are hidden for a real, unrelated reason even while their step IS the
+  // one currently on screen. Blanket-trusting any step-container descendant
+  // made those register as "visible" too: a hidden "Media URL" popup input
+  // started getting harvested as a bogus real field, and the noise it added
+  // to the label-discovery walk knocked Description/Highlights off the
+  // field list entirely — confirmed live: neither appeared in the 28-field
+  // harvest at all. Gating on the STEP CONTAINER's own rect (not the
+  // element's ancestor chain generally) fixes this: the override only fires
+  // when the whole step is the hidden one, so a currently-active step's own
+  // closed popups/dropdowns still correctly fail isVisible() exactly like
+  // before this feature existed.
   const STEPPER_SECTION_SEL =
     "#variants, #product-specification, #product-information, " +
     ".product-variation, .product-specification, .product-information";
@@ -896,7 +915,8 @@
   function isVisible(elm) {
     if (!elm || !elm.getClientRects) return false;
     if (elm.getClientRects().length > 0) return true;
-    return !!(elm.closest && elm.closest(STEPPER_SECTION_SEL));
+    const stepContainer = elm.closest && elm.closest(STEPPER_SECTION_SEL);
+    return !!(stepContainer && stepContainer.getClientRects().length === 0);
   }
 
   /** True when text looks like Jumia's own helper/placeholder copy ("Ex: …",
