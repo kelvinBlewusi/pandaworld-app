@@ -53,6 +53,10 @@ No build step — it's plain JS/HTML/CSS. Loads unpacked as-is for local dev, an
   their class names never overlap) to reach each one, then returns to step 1
   so the seller reviews from the top. A no-op on the classic single-page
   layout, since `.action-next` only gets clicked when it's actually visible.
+  `writeCombobox()` fails instantly on a hidden trigger rather than burning
+  ~4s per field on a 30-attempt retry loop that can only ever time out —
+  confirmed live: without that, 5 hidden comboboxes added ~20s of the page
+  visibly doing nothing before the wizard-walk above ever got a turn.
 
 ## Run it
 

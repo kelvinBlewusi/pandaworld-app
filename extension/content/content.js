@@ -915,6 +915,16 @@
   function isVisible(elm) {
     if (!elm || !elm.getClientRects) return false;
     if (elm.getClientRects().length > 0) return true;
+    // CKEditor's own toolbar/dropdown-panel internals (a closed "Insert
+    // media" popup, a collapsed heading menu, …) must never get the
+    // hidden-step leniency below — they're legitimately hidden regardless
+    // of which wizard step they belong to. Confirmed live: without this
+    // exclusion, a "Media URL" popup input leaked in as a bogus real field
+    // whenever ITS step (Product Information or Product Specification —
+    // whichever one wasn't the currently active step) was the hidden one.
+    // The real editable area (.ck-editor__main) is never inside a toolbar,
+    // so this doesn't affect Description/Highlights/etc. at all.
+    if (elm.closest && elm.closest(".ck-toolbar, .ck-dropdown__panel")) return false;
     const stepContainer = elm.closest && elm.closest(STEPPER_SECTION_SEL);
     return !!(stepContainer && stepContainer.getClientRects().length === 0);
   }
@@ -1481,8 +1491,21 @@
    * family or Material family (see splitComboValues). Reports success if at
    * least one choice landed, so a partly-matched multi-select still counts
    * as filled rather than silently reading as a total failure.
+   *
+   * Fails fast when the trigger isn't genuinely on-screen — a field on a
+   * hidden wizard step (see isVisible()'s big comment above) can never
+   * actually open an overlay; Angular Material's CDK positioning needs a
+   * real bounding rect. Without this check, writeComboboxOne's 30-attempt
+   * retry loop (30 × 130ms ≈ 4s) would still run to completion and fail
+   * anyway — confirmed live: with 5 hidden comboboxes on one listing, that
+   * added ~20 seconds of the page visibly doing nothing before
+   * applyValues()'s own wizard-walk (findNextStepButton, below the main
+   * per-field loop) ever got a turn, which read as "the fill just isn't
+   * doing anything" rather than "still working." Failing instantly here
+   * lets that walk start immediately instead.
    */
   async function writeCombobox(el, value, field) {
+    if (!isReallyVisible(el)) return false;
     const values = splitComboValues(value, field);
     let selected = 0;
     for (const v of values) {
