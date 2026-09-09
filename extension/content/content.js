@@ -919,6 +919,46 @@
     return !!(stepContainer && stepContainer.getClientRects().length === 0);
   }
 
+  /**
+   * A REAL, strict visibility check — deliberately separate from isVisible()
+   * above, which treats a hidden wizard step's fields as "visible enough to
+   * harvest/write". Clicking Jumia's own "Next" control must never rely on
+   * that relaxed definition: we only ever click something that is actually
+   * on-screen right now, confirmed by its own rendered size.
+   */
+  function isReallyVisible(elm) {
+    return !!(elm && elm.getClientRects && elm.getClientRects().length > 0);
+  }
+
+  /**
+   * The wizard's own "Next" control, confirmed live via inspected markup:
+   * `<button class="... action-next ...">Next<mat-icon>navigate_next</mat-
+   * icon></button>`, sitting inside a `.mobile-actions` block that is
+   * structurally separate from `.desktop-actions`' `.submit` button — their
+   * class names never appear on the same element and never will, so
+   * matching on `.action-next` can never be confused with the control that
+   * actually submits the listing (the one thing this extension must never
+   * click on a seller's behalf).
+   *
+   * Both action sets exist in the DOM at all times — Jumia toggles which
+   * one is visible via CSS at the current viewport width, it doesn't
+   * destroy/recreate them — so this selector matches something even on the
+   * classic wide single-page layout. Gating on isReallyVisible() is what
+   * makes that safe: a real click only ever happens when the button is
+   * genuinely on-screen, so this is a no-op there, exactly like before this
+   * feature existed.
+   */
+  function findNextStepButton() {
+    const btn = document.querySelector("button.action-next");
+    return btn && isReallyVisible(btn) ? btn : null;
+  }
+
+  /** Same idea as findNextStepButton, for returning to the first step once done. */
+  function findBackStepButton() {
+    const btn = document.querySelector("button.action-back");
+    return btn && isReallyVisible(btn) && !btn.disabled ? btn : null;
+  }
+
   /** True when text looks like Jumia's own helper/placeholder copy ("Ex: …",
    *  "Required to increase listing quality", size hints) rather than a real
    *  field label — checked against just the first line, same as
@@ -1202,6 +1242,51 @@
       }
     }
     await closeAnyLingeringOverlay();
+
+    // Combobox-type attribute pickers (Certifications, Material family,
+    // Production country, Warranty Duration/Type, …) need their trigger to
+    // be genuinely on-screen to open its overlay — unlike text/select/
+    // richtext fields, there's no native-value-setter shortcut that works
+    // while hidden (see isVisible()'s big comment above). Anything that
+    // failed for exactly that reason gets a second chance here: walk
+    // Jumia's own wizard forward one step at a time (only when the layout
+    // actually has one — findNextStepButton() returns null on the classic
+    // single-page layout, so this whole block is a no-op there) and retry
+    // once each field's step is actually visible. Bounded at 4 hops — more
+    // than the 3 steps seen live, in case a future category adds one — so
+    // a page that never settles can't spin this forever.
+    let pendingCombos = results.filter(
+      (r) => !r.ok && r.field?.type === "combobox" && !isReallyVisible(r.field.el),
+    );
+    for (let hop = 0; pendingCombos.length && hop < 4; hop++) {
+      const next = findNextStepButton();
+      if (!next) break;
+      next.click();
+      for (let attempt = 0; attempt < 20; attempt++) {
+        await sleep(100);
+        if (pendingCombos.some((r) => isReallyVisible(r.field.el))) break;
+      }
+      for (const r of pendingCombos) {
+        if (!isReallyVisible(r.field.el)) continue;
+        try {
+          const ok = await writeValue(r.field, r.value);
+          r.ok = ok;
+          r.reason = ok ? "" : "writer reported no change";
+        } catch (e) {
+          r.reason = e.message;
+        }
+      }
+      pendingCombos = pendingCombos.filter((r) => !r.ok);
+    }
+    // Leave the seller where they started (step 1) to review, same as the
+    // classic single-page layout always has — never on whatever step the
+    // walk above happened to end on.
+    for (let hop = 0; hop < 4; hop++) {
+      const back = findBackStepButton();
+      if (!back) break;
+      back.click();
+      await sleep(150);
+    }
 
     // Confirmed live (Aug 29 2026, console label→element map + Vercel logs
     // for the same request): writeInput's own synchronous check proved Name

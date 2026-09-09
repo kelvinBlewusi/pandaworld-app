@@ -45,13 +45,14 @@ No build step — it's plain JS/HTML/CSS. Loads unpacked as-is for local dev, an
   in the DOM the whole time (confirmed live), just hidden — `isVisible()` in
   `content/content.js` treats that as visible enough to harvest and fill, so
   plain text/select/rich-text fields on a step the seller hasn't clicked into
-  yet still get filled. **Combobox-type attribute pickers on a hidden step
-  (Certifications, Material family, Production country, Warranty
-  Duration/Type) are the one remaining gap** — they need a genuinely visible,
-  on-screen trigger to open their overlay, so one sitting on an inactive step
-  may silently fail to fill. The fix (walk the wizard's own Next control,
-  filling each step as it becomes active) needs the real "Next" button
-  markup to build safely — not yet done.
+  yet still get filled in one pass, no navigation required. Combobox-type
+  attribute pickers (Certifications, Material family, Production country,
+  Warranty Duration/Type) need their trigger genuinely on-screen to open its
+  overlay, so `applyValues()` walks the wizard's own `.action-next` control
+  forward (confirmed live, structurally separate from the `.submit` button —
+  their class names never overlap) to reach each one, then returns to step 1
+  so the seller reviews from the top. A no-op on the classic single-page
+  layout, since `.action-next` only gets clicked when it's actually visible.
 
 ## Run it
 
