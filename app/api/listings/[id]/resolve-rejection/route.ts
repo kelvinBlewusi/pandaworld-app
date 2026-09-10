@@ -60,8 +60,8 @@ export async function POST(
   if (!userId) return new NextResponse("Unauthorized", { status: 401 });
 
   // Parse trigger mode + optional caller-provided reason. Default mode is
-  // jumia_rejection so existing callers (the RejectionResolverBanner)
-  // continue to work without sending a body.
+  // jumia_rejection so the rejected-listing case in review-client.tsx's
+  // AiAssistCard continues to work without sending a body.
   let mode: "jumia_rejection" | "quality_score" = "jumia_rejection";
   let callerReason: string | null = null;
   try {

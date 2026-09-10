@@ -274,7 +274,7 @@ export default function TextToImageBatchPage() {
           </div>
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="icon" className="h-8 w-8 -ml-2" asChild>
-              <Link href="/listings/new"><ArrowLeft className="h-4 w-4" /></Link>
+              <Link href="/listings"><ArrowLeft className="h-4 w-4" /></Link>
             </Button>
             <h1 className="text-xl font-bold text-zinc-900 flex-1">
               Add Products — text-to-image

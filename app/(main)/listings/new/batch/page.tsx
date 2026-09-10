@@ -1,23 +1,18 @@
 "use client";
 
 /**
- * Multi-product batch "Add Products" page.
+ * Multi-product batch "Add Products" page — the entry point for creating a
+ * new listing. Every "New listing" CTA in the app (dashboard, sidebar,
+ * listings page, onboarding) links straight here with `count=1&mode=own`;
+ * there's no separate mode/count picker screen — "own images" is the only
+ * live mode, and the "+ Add product" / remove pills below already let the
+ * seller grow or shrink the batch inline without a picker round-trip.
  *
- * Mirrors Jumia Vendor Center's single-product page, but with a per-product
- * tab navigation in the breadcrumb area. Users prompted to list N products
- * land here with a fresh draft per product; switching tabs swaps the active
- * draft without losing edits.
- *
- * Routed from the sidebar:
- *   Sidebar → "Upload product from your own images"
- *     → /listings/new?mode=own&step=count
- *       → user picks N
- *         → /listings/new/batch?count=N
- *
- * Structural skeleton only — no Jumia push from this page yet. Each tab
- * shows the Product Information section (8-slot image grid + Name +
- * Category). Variants + Product Specification sections live in the existing
- * per-listing review form once each draft is finalised.
+ * Per-product tab navigation in the breadcrumb area: a fresh draft per
+ * product, switching tabs swaps the active draft without losing edits.
+ * Submitting uploads images, creates a draft per product, and runs the
+ * auto-analyze AI pipeline (with one retry) before routing to the first
+ * product's review page.
  */
 
 import { useEffect, useMemo, useState, useRef } from "react";
@@ -494,7 +489,7 @@ export default function BatchAddProductsPage() {
           {/* Title row */}
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="icon" className="h-8 w-8 -ml-2" asChild>
-              <Link href="/listings/new"><ArrowLeft className="h-4 w-4" /></Link>
+              <Link href="/listings"><ArrowLeft className="h-4 w-4" /></Link>
             </Button>
             <h1 className="text-xl font-bold text-zinc-900 flex-1">Add Products</h1>
             <span className="text-xs text-zinc-500">
