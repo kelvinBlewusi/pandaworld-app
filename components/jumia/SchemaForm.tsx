@@ -77,6 +77,15 @@ interface SchemaFormProps {
   onFillWithAI?: () => void | Promise<void>;
   /** Disable/loading state for the Fill-with-AI button. */
   fillWithAILoading?: boolean;
+  /**
+   * Collapse fields the AI filled with high confidence into a single
+   * "N fields look good" summary, showing only fields that genuinely need a
+   * look (required + empty, AI confidence < 0.75, or explicitly
+   * seller-required) expanded by default. Meant for a category schema that
+   * can run to dozens of fields — off by default so a small, fixed field
+   * set (e.g. Product Information) isn't affected.
+   */
+  collapseHighConfidence?: boolean;
 }
 
 export function SchemaForm({
@@ -95,10 +104,12 @@ export function SchemaForm({
   cols = 3,
   onFillWithAI,
   fillWithAILoading = false,
+  collapseHighConfidence = false,
 }: SchemaFormProps) {
   const [schema,    setSchema]    = useState<JumiaAttributeDef[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [showLooksGood, setShowLooksGood] = useState(false);
 
   // Single fetch — the server transparently syncs from Jumia on cache miss,
   // so by the time this promise resolves we have a fully-populated schema
@@ -346,12 +357,19 @@ export function SchemaForm({
     ? "sm:col-span-2 lg:col-span-4"
     : "sm:col-span-2 lg:col-span-3";
 
-  const renderField = (attr: JumiaAttributeDef) => {
+  // Shared by classification (below) and rendering — both need the same
+  // source/confidence lookup per attribute.
+  const fieldInfo = (attr: JumiaAttributeDef) => {
     const key        = `dynamic_attributes.${attr.name}`;
     const colKey     = columnFor(attr.name);
     const sourceKey  = colKey ?? key;
     const source     = fieldConfidence?.[sourceKey]?.source     ?? fieldConfidence?.[attr.name]?.source;
     const confidence = fieldConfidence?.[sourceKey]?.confidence ?? fieldConfidence?.[attr.name]?.confidence;
+    return { sourceKey, source, confidence };
+  };
+
+  const renderField = (attr: JumiaAttributeDef) => {
+    const { sourceKey, source, confidence } = fieldInfo(attr);
     const isText     = attr.type === "string" || attr.type === "textarea" || attr.type === "number";
     const wideSpan   = attr.type === "textarea";
     return (
@@ -370,6 +388,29 @@ export function SchemaForm({
       </div>
     );
   };
+
+  // Confidence-first grouping (Product Specification only — see
+  // collapseHighConfidence's doc comment). A field "needs attention" when
+  // it's required-and-empty (never hidden — blocks publish), explicitly
+  // seller-required, or has a value the AI wasn't confident about. 0.75
+  // matches the threshold review-client.tsx's AIConfidenceBanner already
+  // uses for its own category-confidence check, so "confident" means one
+  // consistent thing on the page rather than a second invented number.
+  // Everything else — a confident AI value, a seller-typed value with no
+  // confidence entry, or an empty optional field — collapses by default.
+  const needsAttention: JumiaAttributeDef[] = [];
+  const looksGood:      JumiaAttributeDef[] = [];
+  if (collapseHighConfidence) {
+    for (const attr of ordered) {
+      const { source, confidence } = fieldInfo(attr);
+      const value = getValue(attr.name)?.trim();
+      const flagged =
+        (attr.required && !value) ||
+        source === "seller-required" ||
+        (Boolean(value) && typeof confidence === "number" && confidence < 0.75);
+      (flagged ? needsAttention : looksGood).push(attr);
+    }
+  }
 
   return (
     <div className="space-y-3 relative">
@@ -425,8 +466,26 @@ export function SchemaForm({
         </div>
       )}
       <div className={cn(gridClass, loading && schema.length > 0 && "opacity-60 pointer-events-none transition-opacity")}>
-        {ordered.map(renderField)}
+        {(collapseHighConfidence ? needsAttention : ordered).map(renderField)}
       </div>
+      {collapseHighConfidence && looksGood.length > 0 && (
+        <div className="rounded-md border border-emerald-200 bg-emerald-50/50">
+          <button
+            type="button"
+            onClick={() => setShowLooksGood((v) => !v)}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-emerald-700 hover:bg-emerald-50"
+          >
+            <span className="text-emerald-500">✓</span>
+            {looksGood.length} field{looksGood.length === 1 ? "" : "s"} look{looksGood.length === 1 ? "s" : ""} good
+            <span className="ml-auto text-emerald-500">{showLooksGood ? "Hide" : "Review"}</span>
+          </button>
+          {showLooksGood && (
+            <div className={cn(gridClass, "p-3 pt-0")}>
+              {looksGood.map(renderField)}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

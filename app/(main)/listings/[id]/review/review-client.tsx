@@ -2758,6 +2758,7 @@ export function ReviewClient({
                 excludeVariants
                 onFillWithAI={handleFillWithAI}
                 fillWithAILoading={refillingAttributes}
+                collapseHighConfidence
                 renderConfidenceDot={({ source, confidence }) =>
                   source ? (
                     <ConfidenceDot
