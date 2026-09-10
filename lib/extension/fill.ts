@@ -150,6 +150,34 @@ export function parseNotes(notes: string | undefined | null): ParsedNotes {
   return { price, extraFeatures, raw };
 }
 
+/**
+ * Pull the seller's Advanced-Options warranty selections back out of the
+ * flattened notes string. panel.js appends "Warranty duration: X" and
+ * "Warranty address: Y" as their own sentences (in that order, joined with
+ * ". ") ONLY when the seller actually picked/typed something — the Warranty
+ * Duration select's "not set" option has an empty value, so it's never
+ * appended at all — so a match here means the seller genuinely set it via
+ * Advanced Options, not just that the word "warranty" appears somewhere in
+ * their free text. Used by finalizeAiValues() below to FORCE Warranty
+ * Duration to this exact value (the same deterministic-override treatment
+ * Price already gets) and to decide whether Warranty Type should default to
+ * a real value instead of staying blank.
+ */
+export function parseAdvancedWarrantyOptions(notes: string | undefined | null): {
+  duration: string | null;
+  address: string | null;
+} {
+  const raw = notes ?? "";
+  const addressMatch = raw.match(/Warranty address:\s*(.+)\s*$/i);
+  const durationMatch =
+    raw.match(/Warranty duration:\s*([^.]+?)\.\s*Warranty address:/i) ||
+    raw.match(/Warranty duration:\s*(.+?)\s*$/i);
+  return {
+    duration: durationMatch ? durationMatch[1].trim() : null,
+    address: addressMatch ? addressMatch[1].trim() : null,
+  };
+}
+
 // ─── Deterministic mock product (POC only) ───────────────────────────────────
 
 /**
@@ -547,11 +575,43 @@ export function finalizeAiValues(
     values[field.label] = value;
   }
 
+  const warrantyTypeField = fields.find((f) => { const l = norm(f.label); return l.includes("warranty") && l.includes("type"); });
+  const warrantyDurationField = fields.find((f) => { const l = norm(f.label); return l.includes("warranty") && l.includes("duration"); });
+
+  // Warranty Duration: when the seller picked one via the extension's
+  // Advanced Options, that choice is authoritative — force it here rather
+  // than leave it to the AI's own reading of the notes (same deterministic
+  // treatment Price already gets). snapToOption still runs so this only
+  // ever writes a value that's actually one of THIS listing's real options.
+  const advancedWarranty = parseAdvancedWarrantyOptions(notes);
+  if (warrantyDurationField && advancedWarranty.duration) {
+    const snapped = snapToOption(advancedWarranty.duration, warrantyDurationField.options);
+    if (snapped) values[warrantyDurationField.label] = snapped;
+  }
+
+  // Warranty Type: stays BLANK unless the seller actually set up warranty
+  // info somewhere (Advanced Options' Warranty duration/address, checked
+  // deterministically here; a warranty period/address stated directly in
+  // free text is covered by the prompt hint instead, since that can't be
+  // detected in code). When they did, default to a real "Repair by
+  // Vendor"/"Replacement by Vendor" option rather than leaving it blank or
+  // N/A — but only as a DEFAULT: if the AI already gave a real, non-blank,
+  // non-N/A answer (it may have picked up on "replacement" language itself),
+  // that stands.
+  const hasStructuredWarrantyInfo = Boolean(advancedWarranty.duration) || Boolean(advancedWarranty.address);
+  if (hasStructuredWarrantyInfo && warrantyTypeField) {
+    const current = (values[warrantyTypeField.label] ?? "").trim().toLowerCase();
+    if (!current || current === "n/a" || current === "none") {
+      const snapped =
+        snapToOption("Repair by Vendor", warrantyTypeField.options) ??
+        snapToOption("Replacement by Vendor", warrantyTypeField.options);
+      if (snapped) values[warrantyTypeField.label] = snapped;
+    }
+  }
+
   // If Warranty Type came out N/A (or wasn't filled at all), a duration
   // doesn't mean anything — drop it even if the AI filled one in, rather
   // than leaving a duration on a listing that says it has no warranty.
-  const warrantyTypeField = fields.find((f) => { const l = norm(f.label); return l.includes("warranty") && l.includes("type"); });
-  const warrantyDurationField = fields.find((f) => { const l = norm(f.label); return l.includes("warranty") && l.includes("duration"); });
   if (warrantyDurationField && values[warrantyDurationField.label]) {
     const typeVal = warrantyTypeField ? (values[warrantyTypeField.label] ?? "").trim().toLowerCase() : "";
     if (!warrantyTypeField || !typeVal || typeVal === "n/a" || typeVal === "none") {
