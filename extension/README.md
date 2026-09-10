@@ -29,6 +29,16 @@ No build step — it's plain JS/HTML/CSS. Loads unpacked as-is for local dev, an
 - **Live AI** (real Gemini reading the uploaded photo) when creds + a photo are
   present; deterministic **mock** fallback otherwise (mock fills don't spend
   credits).
+- Price, Sale Price, and the Sale Start/End Date window are all notes-only
+  fillable (never guessed from the photo) — a seller who writes e.g. "price
+  250, sale price 200 from Sept 20 to Sept 30" in their notes gets all four
+  filled from that one sentence. Jumia's own form disables Sale Price until
+  Price has a value, and disables Sale Start/End Date until Sale Price does
+  — `finalizeAiValues()` in `lib/extension/fill.ts` drops any of these
+  top-down if the field it depends on didn't actually get filled, and
+  `writeValue()` in `content/content.js` waits briefly for a field to
+  become enabled before writing it, since Angular needs a beat after the
+  earlier write to lift the `disabled` attribute.
 
 ## What's still deferred
 

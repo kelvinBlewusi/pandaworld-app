@@ -116,12 +116,12 @@ describe("mapProductToFields — Watches POC", () => {
 
 describe("isSellerOwned", () => {
   it("flags seller-owned fields", () => {
-    ["Sale Price", "Stock", "Category", "Country", "Currency"].forEach((l) =>
+    ["Stock", "Category", "Country", "Currency"].forEach((l) =>
       expect(isSellerOwned(l)).toBe(true),
     );
   });
-  it("does not flag AI/notes fields — Quantity, SKU, and base Price are all notes-fillable now", () => {
-    ["Name", "Brand", "Product description", "Weight (kg)", "Quantity", "Seller SKU", "Price"].forEach((l) =>
+  it("does not flag AI/notes fields — Quantity, SKU, base Price, and Sale Price are all notes-fillable now", () => {
+    ["Name", "Brand", "Product description", "Weight (kg)", "Quantity", "Seller SKU", "Price", "Sale Price"].forEach((l) =>
       expect(isSellerOwned(l)).toBe(false),
     );
   });
@@ -132,8 +132,9 @@ describe("isSellerOwned", () => {
 
 describe("variant-qualified labels (multi-variant listings)", () => {
   it("still recognises a seller-owned field through the variant suffix", () => {
-    expect(isSellerOwned("Sale Price (Variant 2)")).toBe(true);
+    expect(isSellerOwned("Stock (Variant 2)")).toBe(true);
     expect(isSellerOwned("Price (Variant 2)")).toBe(false);
+    expect(isSellerOwned("Sale Price (Variant 2)")).toBe(false);
     expect(isSellerOwned("Seller SKU (Variant 2)")).toBe(false);
   });
 
@@ -379,5 +380,50 @@ describe("finalizeAiValues (real-AI post-processing)", () => {
     );
     expect(values["Warranty Type"]).toBe("Repair by Vendor");
     expect(values["Warranty Duration"]).toBe("1 Year");
+  });
+
+  describe("Sale Price / Sale Start / Sale End Date cascade", () => {
+    const saleFields: HarvestedField[] = [
+      { label: "Price", type: "text" },
+      { label: "Sale Price", type: "text" },
+      { label: "Sale Start Date", type: "text" },
+      { label: "Sale End Date", type: "text" },
+    ];
+
+    it("fills Sale Price and the sale window from notes, alongside base Price", () => {
+      const { values } = finalizeAiValues(
+        { "Sale Price": "150", "Sale Start Date": "2026-09-20", "Sale End Date": "2026-09-30" },
+        saleFields,
+        "price 250, sale price 150 from Sept 20 to Sept 30",
+      );
+      expect(values["Price"]).toBe("250");
+      expect(values["Sale Price"]).toBe("150");
+      expect(values["Sale Start Date"]).toBe("2026-09-20");
+      expect(values["Sale End Date"]).toBe("2026-09-30");
+    });
+
+    it("drops Sale Price when notes give no base Price, even if the AI filled one in", () => {
+      const { values } = finalizeAiValues(
+        { "Sale Price": "150", "Sale Start Date": "2026-09-20", "Sale End Date": "2026-09-30" },
+        saleFields,
+        "", // no price stated at all
+      );
+      expect(values["Price"]).toBeUndefined();
+      expect(values["Sale Price"]).toBeUndefined();
+      expect(values["Sale Start Date"]).toBeUndefined();
+      expect(values["Sale End Date"]).toBeUndefined();
+    });
+
+    it("drops the sale window when Sale Price wasn't filled, even with a real base Price", () => {
+      const { values } = finalizeAiValues(
+        { "Sale Start Date": "2026-09-20", "Sale End Date": "2026-09-30" },
+        saleFields,
+        "price 250", // no sale price mentioned
+      );
+      expect(values["Price"]).toBe("250");
+      expect(values["Sale Price"]).toBeUndefined();
+      expect(values["Sale Start Date"]).toBeUndefined();
+      expect(values["Sale End Date"]).toBeUndefined();
+    });
   });
 });

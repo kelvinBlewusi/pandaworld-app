@@ -43,7 +43,7 @@ function isNotesOnlyField(label: string): boolean {
     l.includes("sku") ||
     l.includes("gtin") ||
     l.includes("barcode") ||
-    (l.includes("price") && !l.includes("sale")) ||
+    l.includes("price") || // both base Price and Sale Price
     (l.includes("sale") && (l.includes("start") || l.includes("end")))
   );
 }
@@ -67,8 +67,11 @@ function hintFor(f: HarvestedField): string {
   if (l.includes("sku")) return " — ONLY if the seller's notes give one; otherwise a short plausible SKU code (uppercase letters + digits, 6–10 chars).";
   if (l.includes("gtin") || l.includes("barcode")) return " — ONLY if the seller's notes give a real GTIN/barcode; otherwise omit entirely. NEVER invent one — unlike SKU this is a real-world product identifier, and a fabricated one can conflict with Jumia's catalog.";
   if (l.includes("price") && !l.includes("sale")) return " — ONLY if the seller's notes state an exact price figure; otherwise omit (never guess a price from the image). Digits only — no currency symbol, commas, or words (e.g. \"210\", not \"GHS 210\").";
+  if (l.includes("sale") && l.includes("price")) {
+    return " — ONLY if the seller's notes explicitly state a sale/discounted price (a figure lower than the regular price, e.g. \"sale price 150\" or \"discount to 150\"); otherwise omit entirely — never guess a promotional price on your own. Digits only, same format as Price.";
+  }
   if (l.includes("sale") && (l.includes("start") || l.includes("end"))) {
-    return " — ONLY if the seller's notes explicitly give this date; otherwise omit entirely.";
+    return " — ONLY if the seller's notes explicitly give this date, AND they also gave a sale price above; otherwise omit entirely — a sale window with no sale price attached doesn't mean anything.";
   }
   // Default every warranty-related field to N/A — only depart from that when
   // the seller's notes actually say something about warranty (including a

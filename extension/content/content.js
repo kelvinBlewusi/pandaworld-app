@@ -1339,8 +1339,24 @@
     return { ok: true, results: publicResults };
   }
 
-  function writeValue(field, value) {
+  async function writeValue(field, value) {
     const { el, type } = field;
+    // Some fields on Jumia's own form start out disabled until an earlier
+    // field gets a value — confirmed live: Sale Price stays disabled until
+    // Price has one, Sale Start/End Date stay disabled until Sale Price
+    // does. applyValues() already writes fields in the page's own
+    // top-to-bottom order (see its `entries` loop), so the field this one
+    // depends on has normally already been written by the time we get
+    // here — but Angular's own change detection needs a beat to actually
+    // flip the `disabled` attribute afterwards, so give it a short, bounded
+    // chance instead of failing instantly against a control that's about to
+    // open up. Generic (checks the DOM property, not any field name), so it
+    // also covers any other cascading field pair Jumia adds later. A no-op
+    // for anything not currently disabled — the common case — and safe on
+    // richtext/combobox elements that don't even have a `.disabled`
+    // property (reads as undefined, so the loop below never runs).
+    for (let attempt = 0; attempt < 10 && el.disabled; attempt++) await sleep(100);
+    if (el.disabled) throw new Error("field is disabled on the page — a dependency (e.g. Price) may need a value first");
     if (type === "richtext") {
       const merged = hasEmbeddedImage(field) ? mergePreservedImages(value, field) : value;
       return writeRichText(el, merged);
