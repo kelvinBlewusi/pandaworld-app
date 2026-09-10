@@ -17,7 +17,6 @@ import {
   Loader2,
   AlertCircle,
   Tag,
-  Search,
   X,
   ShieldAlert,
   CheckCircle2,
@@ -103,12 +102,6 @@ interface AttrSchema {
   is_variant:     boolean;
   min_length?:    number | null;
   max_length?:    number | null;
-}
-
-interface CategoryItem {
-  code: number;
-  name: string;
-  path: string;
 }
 
 // ─── Quality score badge (collapsible details) ───────────────────────────────
@@ -272,86 +265,6 @@ function BrandCombobox({
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-// ─── Category picker modal ────────────────────────────────────────────────────
-
-function CategoryPickerModal({
-  onSelect,
-  onClose,
-}: {
-  onSelect: (cat: CategoryItem) => void;
-  onClose: () => void;
-}) {
-  const [categories, setCategories] = useState<CategoryItem[]>([]);
-  const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetch("/api/jumia/categories")
-      .then((r) => r.json())
-      .then((d) => setCategories(d.categories ?? []))
-      .catch(() => setCategories([]))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const filtered = query
-    ? categories.filter(
-        (c) =>
-          c.name.toLowerCase().includes(query.toLowerCase()) ||
-          c.path.toLowerCase().includes(query.toLowerCase())
-      )
-    : categories;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-      <div className="mx-4 w-full max-w-lg rounded-2xl border bg-white shadow-xl flex flex-col max-h-[80vh]">
-        <div className="flex items-center justify-between p-4 border-b">
-          <p className="font-semibold text-zinc-900">Select a category</p>
-          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="p-3 border-b">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
-            <Input
-              autoFocus
-              placeholder="Search categories…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              className="pl-9"
-            />
-          </div>
-        </div>
-        <div className="overflow-y-auto flex-1">
-          {loading ? (
-            <div className="flex items-center justify-center py-10 text-zinc-400">
-              <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading…
-            </div>
-          ) : filtered.length === 0 ? (
-            <div className="py-10 text-center text-sm text-zinc-400">
-              {categories.length === 0
-                ? "No categories synced yet. Connect Jumia in Settings → Integrations."
-                : "No results for that query."}
-            </div>
-          ) : (
-            filtered.map((cat) => (
-              <button
-                key={cat.code}
-                type="button"
-                onClick={() => { onSelect(cat); onClose(); }}
-                className="w-full px-4 py-3 text-left border-b last:border-b-0 hover:bg-orange-50 transition-colors"
-              >
-                <p className="text-sm font-medium text-zinc-800">{cat.name}</p>
-                <p className="text-xs text-zinc-400 mt-0.5">{cat.path}</p>
-              </button>
-            ))
-          )}
-        </div>
-      </div>
     </div>
   );
 }

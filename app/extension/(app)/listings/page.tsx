@@ -4,7 +4,7 @@ import { Wand2, ListChecks } from "lucide-react";
 import { listRecentFillEvents } from "@/lib/security/extension-keys";
 
 export const metadata: import("next").Metadata = {
-  title: "My Listings — Extension",
+  title: "Autofill Activity — Extension",
   robots: { index: false },
 };
 
@@ -20,8 +20,10 @@ function formatDateTime(iso: string): string {
 
 // The extension writes straight into Jumia's own form — we never get the
 // finished listing back (title, price, category), only that a fill
-// happened and how many fields it touched. So "My listings" is an activity
-// log of autofills, not a listings table like the main app's /listings.
+// happened and how many fields it touched. So this is an activity log of
+// autofills, not a listings table like the main app's /listings — named
+// "Autofill Activity" everywhere (sidebar, page title, this eyebrow) to
+// keep that distinction obvious rather than calling both "My listings".
 export default async function ExtensionListingsPage() {
   const { userId } = await auth();
   if (!userId) redirect("/sign-in?redirect_url=/extension/listings");
@@ -31,7 +33,7 @@ export default async function ExtensionListingsPage() {
   return (
     <div className="mx-auto max-w-4xl">
       <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-orange-600">
-        <ListChecks className="h-3.5 w-3.5" /> My listings
+        <ListChecks className="h-3.5 w-3.5" /> Autofill Activity
       </div>
       <h1 className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">Recent autofills</h1>
       <p className="mt-2 max-w-xl text-sm text-zinc-600">

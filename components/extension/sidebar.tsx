@@ -31,7 +31,7 @@ import { Wordmark } from "@/components/marketing/wordmark";
 const primaryNav = [
   { href: "/extension/dashboard",  label: "Dashboard",   icon: LayoutDashboard },
   { href: "/extension/calculator", label: "Calculator",  icon: Calculator },
-  { href: "/extension/listings",   label: "My listings", icon: ListChecks },
+  { href: "/extension/listings",   label: "Autofill Activity", icon: ListChecks },
 ];
 
 // Content for these doesn't exist yet — shown so the shell reads complete,

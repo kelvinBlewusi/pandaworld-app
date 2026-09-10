@@ -34,7 +34,7 @@ import {
 const PAGE_TITLES: Record<string, string> = {
   "/extension/dashboard": "Dashboard",
   "/extension/calculator": "Calculator",
-  "/extension/listings": "My listings",
+  "/extension/listings": "Autofill Activity",
   "/extension/settings": "Settings",
 };
 
