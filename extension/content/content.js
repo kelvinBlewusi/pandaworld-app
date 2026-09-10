@@ -135,6 +135,10 @@
     }
 
     console.debug(LOG, "harvest diagnostics:", diagnostics);
+    // Console's own tree view is awkward to copy text out of — run
+    // copy(window.__pandaworldLastHarvest) in DevTools to put this on the
+    // clipboard as real text instead.
+    window.__pandaworldLastHarvest = { fields, diagnostics };
     return { ok: true, images, fields, diagnostics };
   }
 
@@ -1326,6 +1330,12 @@
     const publicResults = results.map(({ label, ok, reason, skipped }) => ({ label, ok, reason, skipped }));
 
     console.debug(LOG, "apply results:", publicResults);
+    // Same idea as __pandaworldLastHarvest above — run
+    // copy(window.__pandaworldLastApply) in DevTools for clipboard-ready
+    // text. Includes the raw AI values too, so it's possible to tell
+    // "the AI never returned this field" apart from "it did, and the
+    // write failed" — the two read identically from the page alone.
+    window.__pandaworldLastApply = { values, results: publicResults };
     return { ok: true, results: publicResults };
   }
 
