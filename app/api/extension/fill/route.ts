@@ -201,6 +201,43 @@ function applyQuantityDefault(values: Record<string, string>, fields: FillReques
   }
 }
 
+/**
+ * Seller SKU: the prompt tells the AI to always generate a plausible code
+ * when the seller doesn't give one (see hintFor() in extension-fill.ts) —
+ * this is the same hard-default backstop Quantity/Brand/Warranty Address
+ * already get for when that soft instruction still gets missed. A random
+ * code is fine here (unlike GTIN, this isn't a real-world identifier that
+ * has to correspond to anything) — the seller reviews before submitting.
+ */
+function applySellerSkuDefault(values: Record<string, string>, fields: FillRequest["fields"]) {
+  for (const sku of fields.filter((f) => /sku/i.test(f.label) && !/gtin/i.test(f.label))) {
+    if (!values[sku.label]) {
+      const rand = Math.random().toString(36).slice(2, 8).toUpperCase();
+      values[sku.label] = `PW-${rand}`;
+    }
+  }
+}
+
+/**
+ * Production country / Country of origin: the prompt tells the AI to always
+ * pick its single best guess from the real options rather than omit (see
+ * hintFor() in extension-fill.ts, requested explicitly since a blank one
+ * was showing up more than other fields) — this is the hard-default
+ * backstop for when that soft instruction still gets missed. Preferring
+ * "China" when it's a real option matches the most common real-world case
+ * for unbranded/generic goods on this marketplace (same reasoning as
+ * Brand's "Generic" fallback); otherwise fall back to the first real option
+ * on the list rather than leave a required-feeling field empty.
+ */
+function applyProductionCountryDefault(values: Record<string, string>, fields: FillRequest["fields"]) {
+  const country = fields.find(
+    (f) => /country/i.test(f.label) && (/production/i.test(f.label) || /origin/i.test(f.label)),
+  );
+  if (!country || values[country.label] || !country.options?.length) return;
+  const china = country.options.find((o) => o.trim().toLowerCase() === "china");
+  values[country.label] = china ?? country.options[0];
+}
+
 const stripTags = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 
 /**
@@ -325,7 +362,9 @@ export async function POST(req: Request) {
     warnings.push(...finalized.warnings);
     applyBrandDefault(values, body.fields, warnings);
     applyQuantityDefault(values, body.fields);
+    applySellerSkuDefault(values, body.fields);
     applyWarrantyAddressDefault(values, body.fields);
+    applyProductionCountryDefault(values, body.fields);
     noteExistingContentChanges(values, body.fields, warnings);
   } catch (e) {
     console.error(`[ext/fill] AI call failed for user=${userId}:`, e);
