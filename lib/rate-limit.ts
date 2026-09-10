@@ -131,6 +131,11 @@ export const RATE_LIMITS = {
   // unbounded loop here can spam a seller's Paystack account with pending
   // transactions.
   extensionCheckout: { max: 10, windowMs: 60 * 60 * 1000 }, // 10/hour
+
+  // WhatsApp account-link code generation. Free (one DB insert), but
+  // still capped — no legitimate reason a seller needs more than a
+  // handful of fresh codes in an hour.
+  whatsappLink:      { max: 10, windowMs: 60 * 60 * 1000 }, // 10/hour
 } as const;
 
 // ─── Convenience wrapper ─────────────────────────────────────────────────────

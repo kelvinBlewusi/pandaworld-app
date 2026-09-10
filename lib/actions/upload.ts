@@ -33,8 +33,14 @@ const ALLOWED_MIMES = new Set([
   "image/png",
 ]);
 
-/** Magic-byte validation. Returns the detected MIME or null when invalid. */
-async function validateImageBuffer(
+/**
+ * Magic-byte validation. Returns the detected MIME or null when invalid.
+ * Exported so other ingestion paths that don't go through a browser
+ * File/FormData (e.g. lib/whatsapp/media.ts, downloading an incoming
+ * WhatsApp attachment) can reuse the same size-cap + real-format checks
+ * instead of duplicating them.
+ */
+export async function validateImageBuffer(
   buf: Buffer,
   filenameHint: string,
 ): Promise<{ mime: string; ext: string } | null> {
