@@ -17,7 +17,6 @@ import {
   Loader2,
   AlertCircle,
   Tag,
-  Search,
   X,
   ShieldAlert,
   CheckCircle2,
@@ -103,12 +102,6 @@ interface AttrSchema {
   is_variant:     boolean;
   min_length?:    number | null;
   max_length?:    number | null;
-}
-
-interface CategoryItem {
-  code: number;
-  name: string;
-  path: string;
 }
 
 // ─── Quality score badge (collapsible details) ───────────────────────────────
@@ -272,86 +265,6 @@ function BrandCombobox({
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-// ─── Category picker modal ────────────────────────────────────────────────────
-
-function CategoryPickerModal({
-  onSelect,
-  onClose,
-}: {
-  onSelect: (cat: CategoryItem) => void;
-  onClose: () => void;
-}) {
-  const [categories, setCategories] = useState<CategoryItem[]>([]);
-  const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetch("/api/jumia/categories")
-      .then((r) => r.json())
-      .then((d) => setCategories(d.categories ?? []))
-      .catch(() => setCategories([]))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const filtered = query
-    ? categories.filter(
-        (c) =>
-          c.name.toLowerCase().includes(query.toLowerCase()) ||
-          c.path.toLowerCase().includes(query.toLowerCase())
-      )
-    : categories;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-      <div className="mx-4 w-full max-w-lg rounded-2xl border bg-white shadow-xl flex flex-col max-h-[80vh]">
-        <div className="flex items-center justify-between p-4 border-b">
-          <p className="font-semibold text-zinc-900">Select a category</p>
-          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="p-3 border-b">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
-            <Input
-              autoFocus
-              placeholder="Search categories…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              className="pl-9"
-            />
-          </div>
-        </div>
-        <div className="overflow-y-auto flex-1">
-          {loading ? (
-            <div className="flex items-center justify-center py-10 text-zinc-400">
-              <Loader2 className="h-5 w-5 animate-spin mr-2" /> Loading…
-            </div>
-          ) : filtered.length === 0 ? (
-            <div className="py-10 text-center text-sm text-zinc-400">
-              {categories.length === 0
-                ? "No categories synced yet. Connect Jumia in Settings → Integrations."
-                : "No results for that query."}
-            </div>
-          ) : (
-            filtered.map((cat) => (
-              <button
-                key={cat.code}
-                type="button"
-                onClick={() => { onSelect(cat); onClose(); }}
-                className="w-full px-4 py-3 text-left border-b last:border-b-0 hover:bg-orange-50 transition-colors"
-              >
-                <p className="text-sm font-medium text-zinc-800">{cat.name}</p>
-                <p className="text-xs text-zinc-400 mt-0.5">{cat.path}</p>
-              </button>
-            ))
-          )}
-        </div>
-      </div>
     </div>
   );
 }
@@ -987,126 +900,80 @@ function CategoryDynamicFields({
 //      alternates as quick-switch buttons (per PDF spec: needs_user_confirmation).
 
 // ─────────────────────────────────────────────────────────────────────────
-// Quality-score fix button — small inline CTA next to the Submit footer
-// that turns the Quality-Score gate into a self-service AI repair flow.
-// Closes the loop on the gate: instead of "Score 62/100, fix the issues
-// listed above", the seller can ask the AI to address them in one click.
+// AI Assist card — ONE place for every AI-remediation action on this page.
+// Used to be three separate components scattered across the page (a banner
+// near the top, a card inside Product Information, a button in the Submit
+// footer) — collapsed into one, since two of the three already hit the
+// EXACT SAME backend endpoint: /api/listings/[id]/resolve-rejection's own
+// doc comment describes its "Two trigger modes" (jumia_rejection /
+// quality_score). The split was purely a frontend/placement choice, not a
+// backend one, so consolidating costs nothing there.
 //
-// Reuses the same /resolve-rejection endpoint as RejectionResolverBanner,
-// just with mode='quality_score' and the listed issues as the reason.
+// Picks exactly one state, in priority order, so the seller never sees more
+// than one "ask the AI to help" surface at once:
+//   1. Jumia rejected this listing — most urgent, a real submission failure.
+//      (mode: jumia_rejection, no body — the route reads listing.jumia_error)
+//   2. The listing has real content but its quality score is below the
+//      publish threshold. (mode: quality_score, reason = the issues list)
+//   3. No AI content yet (or the seller just wants to re-run/improve) —
+//      the original one-click full-pipeline analyze.
 // ─────────────────────────────────────────────────────────────────────────
 
-function QualityFixButton({
-  listingId,
-  issues,
-  onApplied,
-}: {
-  listingId: string;
-  issues:    string[];
-  onApplied: () => void;
-}) {
-  const [working, setWorking] = useState(false);
-  const [error,   setError]   = useState<string | null>(null);
-
-  const fix = async () => {
-    setWorking(true);
-    setError(null);
-    try {
-      const reason = `The seller's quality score is below the publish threshold. Issues flagged by our checker:\n${issues.map((i) => `- ${i}`).join("\n")}\n\nPropose specific field changes that address these issues directly.`;
-      const res = await fetch(`/api/listings/${listingId}/resolve-rejection`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ mode: "quality_score", reason }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "AI fix failed");
-      onApplied();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "AI fix failed");
-    } finally {
-      setWorking(false);
-    }
-  };
-
-  return (
-    <div className="flex flex-col items-end gap-0.5">
-      <button
-        type="button"
-        onClick={fix}
-        disabled={working || issues.length === 0}
-        className={cn(
-          "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-colors",
-          working
-            ? "bg-violet-300 cursor-not-allowed"
-            : "bg-violet-600 hover:bg-violet-700"
-        )}
-      >
-        {working
-          ? <><Loader2 className="h-3 w-3 animate-spin" /> Fixing…</>
-          : <><Sparkles className="h-3 w-3" /> Fix with AI</>}
-      </button>
-      {error && <p className="text-[10px] text-red-600">{error}</p>}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// Rejection resolver banner — shown when the listing was pushed to Jumia
-// and rejected by QC. Offers a one-click "Resolve with AI" action that
-// passes the rejection reason + current fields to Gemini, applies the
-// suggested fixes, and resets the listing to draft so the seller can
-// review and re-push.
-// ─────────────────────────────────────────────────────────────────────────
-
-function RejectionResolverBanner({
+function AiAssistCard({
   listing,
   router,
+  qualityScore,
+  qualityIssues,
+  qualityThreshold,
+  analyzeStep,
+  analyzeError,
+  analyzeResult,
+  analyzePrompt,
+  onAnalyzePromptChange,
+  onAnalyzeStart,
 }: {
-  listing: ListingRow;
-  router:  ReturnType<typeof useRouter>;
+  listing:          ListingRow;
+  router:           ReturnType<typeof useRouter>;
+  qualityScore:     number;
+  qualityIssues:    string[];
+  qualityThreshold: number;
+  analyzeStep:      AnalyzeStep;
+  analyzeError:     string | null;
+  analyzeResult:    { title?: string; categoryPath?: string; confidence?: number; attributesFilled?: number; totalMs?: number } | null;
+  analyzePrompt:    string;
+  onAnalyzePromptChange: (v: string) => void;
+  onAnalyzeStart:   () => void;
 }) {
   const [working,    setWorking]    = useState(false);
-  const [error,      setError]      = useState<string | null>(null);
+  const [fixError,   setFixError]   = useState<string | null>(null);
   const [resolution, setResolution] = useState<{
     summary:   string;
     reasoning: string;
     updates:   Record<string, unknown>;
   } | null>(null);
 
-  // Only render when the listing actually failed AND has a rejection reason
-  // recorded. listing.status='failed' alone isn't enough — could be a
-  // transient network failure on push with no Jumia QC text to feed the AI.
-  if (listing.status !== "failed" || !listing.jumia_error) return null;
+  const rejected  = listing.status === "failed" && Boolean(listing.jumia_error);
+  const hasContent = Boolean(listing.title?.trim());
+  const qualityLow = hasContent && qualityScore < qualityThreshold;
 
-  // Parse the rejection — Supabase stores it as a JSON-stringified Jumia
-  // error object. Display the human-readable message; fall back to raw.
-  const rejectionText = (() => {
-    try {
-      const parsed = JSON.parse(listing.jumia_error as string);
-      if (typeof parsed === "string") return parsed;
-      const candidates = [
-        parsed?.message,
-        parsed?.errorMessage,
-        parsed?.error,
-        Array.isArray(parsed?.errors) && parsed.errors[0],
-      ].filter((x) => typeof x === "string" || typeof x === "object");
-      if (typeof candidates[0] === "string") return candidates[0] as string;
-      return JSON.stringify(parsed);
-    } catch {
-      return listing.jumia_error as string;
-    }
-  })();
-
-  const resolveWithAI = async () => {
+  const resolve = async (mode: "jumia_rejection" | "quality_score") => {
     setWorking(true);
-    setError(null);
+    setFixError(null);
     setResolution(null);
     try {
+      const body = mode === "quality_score"
+        ? {
+            mode,
+            reason: `The seller's quality score is below the publish threshold. Issues flagged by our checker:\n${qualityIssues.map((i) => `- ${i}`).join("\n")}\n\nPropose specific field changes that address these issues directly.`,
+          }
+        : undefined;
       const res = await fetch(`/api/listings/${listing.id}/resolve-rejection`, {
-        method: "POST",
+        method:  "POST",
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body:    body ? JSON.stringify(body) : undefined,
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Resolve failed");
+      if (!res.ok) throw new Error(data.error ?? "AI fix failed");
       setResolution({
         summary:   String(data.summary   ?? ""),
         reasoning: String(data.reasoning ?? ""),
@@ -1115,15 +982,15 @@ function RejectionResolverBanner({
       // Refresh server data so the form picks up the new field values.
       router.refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "AI resolve failed");
+      setFixError(e instanceof Error ? e.message : "AI fix failed");
     } finally {
       setWorking(false);
     }
   };
 
-  // Success state: the AI fixed the listing. Show the diff + a hint to
-  // push again. The seller still has to click the regular Submit button
-  // (we don't auto-push — gives them a chance to verify the AI's work).
+  // ── Case 1 & 2 success state: the AI fixed the listing. Show the diff +
+  // a hint to push again. The seller still has to click the regular Submit
+  // button (we don't auto-push — gives them a chance to verify the work).
   if (resolution) {
     const changedKeys = Object.keys(resolution.updates);
     return (
@@ -1151,47 +1018,124 @@ function RejectionResolverBanner({
           </div>
         )}
         <p className="text-[11px] text-emerald-700 pt-1">
-          Review the changes, then click <span className="font-semibold">Submit to Jumia</span> below to re-push.
+          Review the changes, then click <span className="font-semibold">Submit</span> below to re-push.
         </p>
       </div>
     );
   }
 
-  return (
-    <div className="rounded-md border border-red-200 bg-red-50 p-4 space-y-3">
-      <div className="flex items-start gap-3">
-        <AlertCircle className="h-5 w-5 text-red-500 mt-0.5 shrink-0" />
-        <div className="flex-1 space-y-1">
-          <p className="text-sm font-semibold text-red-900">
-            Jumia rejected this listing
-          </p>
-          <p className="text-xs text-red-800 break-words">{rejectionText}</p>
+  // ── Case 1: Jumia rejected this listing ──────────────────────────────────
+  if (rejected) {
+    // Parse the rejection — Supabase stores it as a JSON-stringified Jumia
+    // error object. Display the human-readable message; fall back to raw.
+    const rejectionText = (() => {
+      try {
+        const parsed = JSON.parse(listing.jumia_error as string);
+        if (typeof parsed === "string") return parsed;
+        const candidates = [
+          parsed?.message,
+          parsed?.errorMessage,
+          parsed?.error,
+          Array.isArray(parsed?.errors) && parsed.errors[0],
+        ].filter((x) => typeof x === "string" || typeof x === "object");
+        if (typeof candidates[0] === "string") return candidates[0] as string;
+        return JSON.stringify(parsed);
+      } catch {
+        return listing.jumia_error as string;
+      }
+    })();
+
+    return (
+      <div className="rounded-md border border-red-200 bg-red-50 p-4 space-y-3">
+        <div className="flex items-start gap-3">
+          <AlertCircle className="h-5 w-5 text-red-500 mt-0.5 shrink-0" />
+          <div className="flex-1 space-y-1">
+            <p className="text-sm font-semibold text-red-900">
+              Jumia rejected this listing
+            </p>
+            <p className="text-xs text-red-800 break-words">{rejectionText}</p>
+          </div>
         </div>
+        <div className="flex flex-wrap items-center gap-2 pl-8">
+          <button
+            type="button"
+            onClick={() => resolve("jumia_rejection")}
+            disabled={working}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors",
+              working
+                ? "bg-red-300 cursor-not-allowed"
+                : "bg-red-600 hover:bg-red-700"
+            )}
+          >
+            {working
+              ? <><Loader2 className="h-3 w-3 animate-spin" /> Resolving with AI…</>
+              : <><Sparkles className="h-3 w-3" /> Resolve with AI</>}
+          </button>
+          <span className="text-[11px] text-red-700/80">
+            AI reads the rejection, updates the fields, and resets the listing to draft.
+          </span>
+        </div>
+        {fixError && (
+          <p className="pl-8 text-[11px] text-red-700">⚠ {fixError}</p>
+        )}
       </div>
-      <div className="flex flex-wrap items-center gap-2 pl-8">
-        <button
-          type="button"
-          onClick={resolveWithAI}
-          disabled={working}
-          className={cn(
-            "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors",
-            working
-              ? "bg-red-300 cursor-not-allowed"
-              : "bg-red-600 hover:bg-red-700"
-          )}
-        >
-          {working
-            ? <><Loader2 className="h-3 w-3 animate-spin" /> Resolving with AI…</>
-            : <><Sparkles className="h-3 w-3" /> Resolve with AI</>}
-        </button>
-        <span className="text-[11px] text-red-700/80">
-          AI reads the rejection, updates the fields, and resets the listing to draft.
-        </span>
+    );
+  }
+
+  // ── Case 2: quality score below the publish threshold ────────────────────
+  if (qualityLow) {
+    return (
+      <div className="rounded-md border border-violet-200 bg-violet-50 p-4 space-y-2">
+        <div className="flex items-start gap-3">
+          <ShieldAlert className="h-5 w-5 text-violet-500 mt-0.5 shrink-0" />
+          <div className="flex-1 space-y-1">
+            <p className="text-sm font-semibold text-violet-900">
+              Quality score {qualityScore}/{qualityThreshold} — below the publish threshold
+            </p>
+            <ul className="text-xs text-violet-800 space-y-0.5">
+              {qualityIssues.slice(0, 4).map((iss, i) => (
+                <li key={i}>• {iss}</li>
+              ))}
+              {qualityIssues.length > 4 && (
+                <li className="text-violet-500">+{qualityIssues.length - 4} more…</li>
+              )}
+            </ul>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 pl-8">
+          <button
+            type="button"
+            onClick={() => resolve("quality_score")}
+            disabled={working || qualityIssues.length === 0}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors",
+              working
+                ? "bg-violet-300 cursor-not-allowed"
+                : "bg-violet-600 hover:bg-violet-700"
+            )}
+          >
+            {working
+              ? <><Loader2 className="h-3 w-3 animate-spin" /> Fixing…</>
+              : <><Sparkles className="h-3 w-3" /> Fix with AI</>}
+          </button>
+        </div>
+        {fixError && <p className="pl-8 text-[11px] text-red-600">{fixError}</p>}
       </div>
-      {error && (
-        <p className="pl-8 text-[11px] text-red-700">⚠ {error}</p>
-      )}
-    </div>
+    );
+  }
+
+  // ── Case 3: no AI content yet, or the seller wants to re-run/improve ─────
+  if ((listing.images?.length ?? 0) === 0) return null;
+  return (
+    <AnalyzeWithAICard
+      step={analyzeStep}
+      error={analyzeError}
+      result={analyzeResult}
+      prompt={analyzePrompt}
+      onPromptChange={onAnalyzePromptChange}
+      onStart={onAnalyzeStart}
+    />
   );
 }
 
@@ -2482,7 +2426,19 @@ export function ReviewClient({
             </div>
 
             {/* Banners */}
-            <RejectionResolverBanner listing={listing} router={router} />
+            <AiAssistCard
+              listing={listing}
+              router={router}
+              qualityScore={qualityResult.score}
+              qualityIssues={qualityResult.issues}
+              qualityThreshold={PUBLISH_THRESHOLD}
+              analyzeStep={analyzeStep}
+              analyzeError={analyzeError}
+              analyzeResult={analyzeResult}
+              analyzePrompt={analyzePrompt}
+              onAnalyzePromptChange={setAnalyzePrompt}
+              onAnalyzeStart={handleAutoAnalyze}
+            />
             {publishedRef && (
               <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 space-y-1">
                 <div className="flex items-center gap-3">
@@ -2530,18 +2486,6 @@ export function ReviewClient({
               />
               {imageError && (
                 <p className="text-xs text-red-600 -mt-1">{imageError}</p>
-              )}
-
-              {/* One-click Analyze with AI CTA — full pipeline */}
-              {(listing.images?.length ?? 0) > 0 && (
-                <AnalyzeWithAICard
-                  step={analyzeStep}
-                  error={analyzeError}
-                  result={analyzeResult}
-                  prompt={analyzePrompt}
-                  onPromptChange={setAnalyzePrompt}
-                  onStart={handleAutoAnalyze}
-                />
               )}
 
               {/* AI image features — TEMPORARILY DISABLED (May 2026).
@@ -2814,6 +2758,7 @@ export function ReviewClient({
                 excludeVariants
                 onFillWithAI={handleFillWithAI}
                 fillWithAILoading={refillingAttributes}
+                collapseHighConfidence
                 renderConfidenceDot={({ source, confidence }) =>
                   source ? (
                     <ConfidenceDot
@@ -2859,16 +2804,9 @@ export function ReviewClient({
         <div className="flex items-center gap-2">
           {syncStatus === "done"  && <span className="rounded-md bg-white border px-3 py-1 text-xs text-emerald-600 shadow-sm">✓ Submitted</span>}
           {canPublish && qualityResult.score < PUBLISH_THRESHOLD && (
-            <>
-              <span className="rounded-md bg-white border border-amber-200 px-3 py-1.5 text-[11px] text-amber-700 shadow-sm">
-                Quality {qualityResult.score}/{PUBLISH_THRESHOLD}
-              </span>
-              <QualityFixButton
-                listingId={listing.id}
-                issues={qualityResult.issues}
-                onApplied={() => router.refresh()}
-              />
-            </>
+            <span className="rounded-md bg-white border border-amber-200 px-3 py-1.5 text-[11px] text-amber-700 shadow-sm">
+              Quality {qualityResult.score}/{PUBLISH_THRESHOLD} — see Fix with AI above
+            </span>
           )}
           <Button
             type="button"

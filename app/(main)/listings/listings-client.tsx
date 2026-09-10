@@ -160,7 +160,7 @@ export function ListingsClient({ listings, categories }: ListingsClientProps) {
             </Tooltip>
           </TooltipProvider>
           <Button asChild className="gap-2">
-            <Link href="/listings/new">
+            <Link href="/listings/new/batch?count=1&mode=own">
               <Plus className="h-4 w-4" />
               New listing
             </Link>

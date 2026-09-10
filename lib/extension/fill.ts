@@ -598,7 +598,14 @@ export function finalizeAiValues(
   // N/A — but only as a DEFAULT: if the AI already gave a real, non-blank,
   // non-N/A answer (it may have picked up on "replacement" language itself),
   // that stands.
-  const hasStructuredWarrantyInfo = Boolean(advancedWarranty.duration) || Boolean(advancedWarranty.address);
+  //
+  // A duration/address of "N/A" or "None" is explicitly NOT real warranty
+  // info — the seller's own dropdown offers those as legitimate "there is no
+  // warranty" choices, not just "unset". Without this check, a seller who
+  // deliberately picked "N/A" for Warranty duration would still trigger the
+  // Repair/Replacement default here, contradicting their own explicit choice.
+  const isNoneish = (v: string | null) => !v || /^(n\/a|none)$/i.test(v.trim());
+  const hasStructuredWarrantyInfo = !isNoneish(advancedWarranty.duration) || !isNoneish(advancedWarranty.address);
   if (hasStructuredWarrantyInfo && warrantyTypeField) {
     const current = (values[warrantyTypeField.label] ?? "").trim().toLowerCase();
     if (!current || current === "n/a" || current === "none") {
@@ -609,10 +616,14 @@ export function finalizeAiValues(
     }
   }
 
-  // If Warranty Type came out N/A (or wasn't filled at all), a duration
-  // doesn't mean anything — drop it even if the AI filled one in, rather
-  // than leaving a duration on a listing that says it has no warranty.
-  if (warrantyDurationField && values[warrantyDurationField.label]) {
+  // If Warranty Type came out N/A (or wasn't filled at all), an AI-GUESSED
+  // duration doesn't mean anything — drop it even if the AI filled one in,
+  // rather than leaving a duration on a listing that says it has no
+  // warranty. Exempt a duration the seller explicitly set via Advanced
+  // Options (advancedWarranty.duration): that's their own deliberate
+  // choice — including "N/A"/"None" itself — not a guess to second-guess,
+  // and it's exactly why Type correctly stayed blank/N/A in that case.
+  if (warrantyDurationField && values[warrantyDurationField.label] && !advancedWarranty.duration) {
     const typeVal = warrantyTypeField ? (values[warrantyTypeField.label] ?? "").trim().toLowerCase() : "";
     if (!warrantyTypeField || !typeVal || typeVal === "n/a" || typeVal === "none") {
       delete values[warrantyDurationField.label];

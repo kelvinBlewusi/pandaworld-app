@@ -476,6 +476,23 @@ describe("finalizeAiValues (real-AI post-processing)", () => {
       expect(values["Warranty Type"]).toBeUndefined();
       expect(values["Warranty Duration"]).toBeUndefined();
     });
+
+    it("does NOT default Warranty Type when the seller explicitly picked N/A for Warranty duration", () => {
+      const { values } = finalizeAiValues({}, warrantyFields, "Warranty duration: N/A");
+      expect(values["Warranty Duration"]).toBe("N/A");
+      expect(values["Warranty Type"]).toBeUndefined();
+    });
+
+    it("does NOT default Warranty Type when the seller explicitly picked None for Warranty duration", () => {
+      const { values } = finalizeAiValues({}, warrantyFields, "Warranty duration: None");
+      expect(values["Warranty Duration"]).toBe("None");
+      expect(values["Warranty Type"]).toBeUndefined();
+    });
+
+    it("does NOT default Warranty Type when the seller typed N/A into the Warranty address box", () => {
+      const { values } = finalizeAiValues({}, warrantyFields, "Warranty address: N/A");
+      expect(values["Warranty Type"]).toBeUndefined();
+    });
   });
 });
 

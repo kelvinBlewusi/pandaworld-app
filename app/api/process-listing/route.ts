@@ -1,20 +1,34 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { uploadProductImages, uploadRemoteImages } from "@/lib/actions/upload";
-import { analyzeProductImages, analyzeProductDescription } from "@/lib/actions/ai";
+import { uploadProductImages } from "@/lib/actions/upload";
 import { createListing, updateListing } from "@/lib/actions/listings";
-import { scrapeProductUrl } from "@/lib/scraper";
 
 /**
  * POST /api/process-listing
  *
- * Multipart form fields:
- *   mode          "own" | "ai" | "url"
- *   files[]       image File objects (own / ai-ref modes)
- *   description   text description (ai text mode)
- *   url           product URL to scrape (url mode)
+ * Creates a bare draft listing from uploaded images (or, for the
+ * text-to-image flow, zero images — the seller generates one afterwards via
+ * /api/generate-product-image). The actual AI analysis runs separately via
+ * /api/listings/[id]/auto-analyze, called right after this returns — see
+ * app/(main)/listings/new/batch/page.tsx and .../text/page.tsx, the only two
+ * live callers, both of which always send skipAnalysis=true.
  *
- * Returns: { listingId, title, category, brand, color, weight_kg, selling_price }
+ * (A URL-scrape mode and a one-shot own-images/AI analysis path used to live
+ * here too, from before the batch/auto-analyze split existed. Removed: no UI
+ * caller has set mode to anything but "own", or omitted skipAnalysis, since
+ * that split shipped — see lib/scraper.ts's git history for the URL-import
+ * version if it's ever needed again.)
+ *
+ * Multipart form fields:
+ *   files[]         image File objects
+ *   skipAnalysis    must be "true" — the only supported mode now
+ *   textToImage     "true" allows zero images (text-to-image flow)
+ *   name            optional manual title override
+ *   categoryCode    optional manual category override
+ *   categoryPath    optional manual category override
+ *   userPrompt      optional "what do you want in the listing" free text
+ *
+ * Returns: { listingId, title, category, skipAnalysis: true }
  */
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
@@ -24,110 +38,6 @@ export async function POST(req: NextRequest) {
 
   try {
     const formData = await req.formData();
-    const mode = formData.get("mode") as string;
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // URL IMPORT MODE
-    // ─────────────────────────────────────────────────────────────────────────
-    if (mode === "url") {
-      const rawUrl = (formData.get("url") as string | null)?.trim();
-      if (!rawUrl) {
-        return NextResponse.json({ error: "No URL provided" }, { status: 400 });
-      }
-
-      // 1 — Scrape the product page
-      const scraped = await scrapeProductUrl(rawUrl);
-
-      if (scraped.imageUrls.length === 0 && !scraped.title && !scraped.description) {
-        return NextResponse.json(
-          { error: "Could not extract product data from that URL. Try a different link." },
-          { status: 422 }
-        );
-      }
-
-      // 2 — Download & re-upload scraped images to our storage
-      let imageUrls: string[] = [];
-      if (scraped.imageUrls.length > 0) {
-        imageUrls = await uploadRemoteImages(scraped.imageUrls, userId).catch(() => []);
-      }
-
-      // 3 — AI analysis
-      //     If we have images → vision mode (images are most accurate).
-      //     If no images but we have title/description → text mode.
-      //     (This handles sites that block scraping but have a descriptive URL slug.)
-      // userContext = seller's AI-chat override; pass-through so warranty /
-      // country / product_note defaults can be overridden per listing.
-      const userContext = (formData.get("userContext") as string | null) ?? null;
-      let analysis;
-      if (imageUrls.length > 0) {
-        analysis = await analyzeProductImages(imageUrls, userContext);
-      } else if (scraped.title || scraped.description) {
-        const textInput = [scraped.title, scraped.description]
-          .filter(Boolean)
-          .join(". ");
-        analysis = await analyzeProductDescription(textInput, userContext);
-      } else {
-        return NextResponse.json(
-          { error: "No images or text found at that URL. Try pasting the product name or description instead." },
-          { status: 422 }
-        );
-      }
-
-      // 4 — Prefer scraped metadata over AI where available
-      //     (source page data is usually more accurate for brand/price)
-      const finalBrand   = scraped.brand        ?? analysis.brand;
-      const finalPrice   = scraped.price        ?? analysis.selling_price;
-      const finalTitle   = scraped.title        ?? analysis.title;
-      const finalDesc    = scraped.description  ?? analysis.description;
-
-      // 5 — Persist listing
-      const listing = await createListing({
-        title:           finalTitle ?? analysis.title,
-        images:          imageUrls,
-        category_id:     analysis.category_id,
-        category_path:   analysis.category_path,
-        category_code:   analysis.category_code,
-        commission_rate: analysis.commission_rate,
-      });
-
-      await updateListing(listing.id, {
-        description:        finalDesc ?? analysis.description,
-        highlights:         analysis.highlights,
-        brand:              finalBrand  || null,
-        color:              analysis.color || null,
-        color_family:       analysis.color_family || null,
-        weight_kg:          analysis.weight_kg,
-        model:              analysis.model || null,
-        main_material:      analysis.main_material || null,
-        material_family:    analysis.material_family || null,
-        selling_price:      finalPrice ?? null,
-        // AI-filled defaults (May 2026) — overridable by seller's AI-chat
-        warranty_duration:  analysis.warranty_duration,
-        warranty_text:      analysis.warranty_text,
-        warranty_address:   analysis.warranty_address,
-        production_country: analysis.production_country,
-        dynamic_attributes: analysis.dynamic_attributes ?? {},
-        field_sources:      analysis.field_sources,
-        field_confidence:   analysis.field_confidence ?? null,
-        status:             "draft",
-      });
-
-      return NextResponse.json({
-        listingId:    listing.id,
-        title:        finalTitle ?? analysis.title,
-        category:     analysis.category_path,
-        brand:        finalBrand || null,
-        color:        analysis.color || null,
-        weight_kg:    analysis.weight_kg,
-        selling_price: finalPrice ?? null,
-        sourceUrl:    rawUrl,
-        imagesFound:  imageUrls.length,
-      });
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // OWN IMAGES / AI-REFERENCE / TEXT-DESCRIPTION MODES
-    // ─────────────────────────────────────────────────────────────────────────
 
     // Step 1: Upload images
     let imageUrls: string[] = [];
@@ -138,110 +48,42 @@ export async function POST(req: NextRequest) {
       imageUrls = await uploadProductImages(uploadForm);
     }
 
-    // skipAnalysis=true → just upload + create a bare draft. Used by the new
-    // batch page so that the (better) auto-analyze pipeline runs separately
-    // via /api/listings/[id]/auto-analyze with one call instead of three.
-    const skipAnalysis = (formData.get("skipAnalysis") as string | null) === "true";
     const manualName        = (formData.get("name")          as string | null)?.trim() || null;
     const manualCategoryCode = (formData.get("categoryCode") as string | null)?.trim() || null;
     const manualCategoryPath = (formData.get("categoryPath") as string | null)?.trim() || null;
 
-    if (skipAnalysis) {
-      // For text-to-image mode we accept zero images — the seller will
-      // generate the image via /api/generate-product-image which appends
-      // to listing.images. For all other modes we still require at least
-      // one source image.
-      const allowEmptyImages =
-        (formData.get("textToImage") as string | null) === "true";
-
-      if (imageUrls.length === 0 && !allowEmptyImages) {
-        throw new Error("At least one image is required");
-      }
-      const listing = await createListing({
-        title:         manualName ?? undefined,
-        images:        imageUrls,
-        category_id:   manualCategoryCode ?? undefined,
-        category_code: manualCategoryCode ?? undefined,
-        category_path: manualCategoryPath ?? undefined,
-      });
-
-      // Persist the seller's "what do you want in the listing" prompt
-      // so re-runs honour it without forcing the seller to retype.
-      // Done as a separate UPDATE because createListing doesn't accept
-      // user_prompt yet (would require a wider type change).
-      const userPrompt = (formData.get("userPrompt") as string | null)?.trim();
-      if (userPrompt) {
-        await updateListing(listing.id, {
-          user_prompt: userPrompt.slice(0, 1000),
-        });
-      }
-
-      return NextResponse.json({
-        listingId:    listing.id,
-        title:        manualName,
-        category:     manualCategoryPath,
-        skipAnalysis: true,
-      });
+    // For text-to-image mode we accept zero images — the seller will
+    // generate the image via /api/generate-product-image which appends
+    // to listing.images. Every other caller still requires at least one
+    // source image.
+    const allowEmptyImages = (formData.get("textToImage") as string | null) === "true";
+    if (imageUrls.length === 0 && !allowEmptyImages) {
+      throw new Error("At least one image is required");
     }
-
-    // Step 2: AI analysis (full one-shot pipeline — legacy).
-    // userContext = the seller's AI-chat free-text override. Pass-through
-    // so AI-default fields (warranty / country / product_note) can be
-    // overridden per listing.
-    let analysis;
-    const description = formData.get("description") as string | null;
-    const userContext = (formData.get("userContext") as string | null) ?? null;
-
-    if (mode === "ai" && description && !files.length) {
-      analysis = await analyzeProductDescription(description, userContext);
-    } else if (imageUrls.length > 0) {
-      analysis = await analyzeProductImages(imageUrls, userContext);
-    } else {
-      throw new Error("No images or description provided");
-    }
-
-    // Step 3: Create listing in DB
     const listing = await createListing({
-      title:           analysis.title,
-      images:          imageUrls,
-      category_id:     analysis.category_id,
-      category_path:   analysis.category_path,
-      category_code:   analysis.category_code,
-      commission_rate: analysis.commission_rate,
+      title:         manualName ?? undefined,
+      images:        imageUrls,
+      category_id:   manualCategoryCode ?? undefined,
+      category_code: manualCategoryCode ?? undefined,
+      category_path: manualCategoryPath ?? undefined,
     });
 
-    // Step 4: Populate all AI fields
-    await updateListing(listing.id, {
-      description:         analysis.description,
-      highlights:          analysis.highlights,
-      brand:               analysis.brand || null,
-      color:               analysis.color || null,
-      color_family:        analysis.color_family || null,
-      weight_kg:           analysis.weight_kg,
-      model:               analysis.model || null,
-      main_material:       analysis.main_material || null,
-      material_family:     analysis.material_family || null,
-      selling_price:       analysis.selling_price,
-      // AI-filled defaults (May 2026) — overridable by seller's AI-chat
-      warranty_duration:   analysis.warranty_duration,
-      warranty_text:       analysis.warranty_text,
-      warranty_address:    analysis.warranty_address,
-      production_country:  analysis.production_country,
-      dynamic_attributes:  analysis.dynamic_attributes ?? {},
-      field_sources:       analysis.field_sources,
-      field_confidence:    analysis.field_confidence ?? null,
-      category_alternates: analysis.category_alternates ?? null,
-      status:              "draft",
-    });
+    // Persist the seller's "what do you want in the listing" prompt
+    // so re-runs honour it without forcing the seller to retype.
+    // Done as a separate UPDATE because createListing doesn't accept
+    // user_prompt yet (would require a wider type change).
+    const userPrompt = (formData.get("userPrompt") as string | null)?.trim();
+    if (userPrompt) {
+      await updateListing(listing.id, {
+        user_prompt: userPrompt.slice(0, 1000),
+      });
+    }
 
     return NextResponse.json({
-      listingId:     listing.id,
-      title:         analysis.title,
-      category:      analysis.category_path,
-      brand:         analysis.brand || null,
-      color:         analysis.color || null,
-      weight_kg:     analysis.weight_kg,
-      selling_price: analysis.selling_price,
+      listingId:    listing.id,
+      title:        manualName,
+      category:     manualCategoryPath,
+      skipAnalysis: true,
     });
   } catch (err) {
     console.error("process-listing error:", err);

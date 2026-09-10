@@ -88,7 +88,7 @@ export default function OnboardingDonePage() {
           <Button
             variant="ghost"
             className="text-zinc-400 text-sm"
-            onClick={() => router.push("/listings/new")}
+            onClick={() => router.push("/listings/new/batch?count=1&mode=own")}
           >
             Create my first listing →
           </Button>

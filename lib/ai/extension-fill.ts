@@ -35,12 +35,18 @@ const norm = (s: string) => s.toLowerCase().replace(/\*/g, "").replace(/\s+/g, "
 
 /** Fields whose value must come ONLY from the seller's notes, never guessed
  *  or inferred from the image — see the SELLER-CONTROLLED block in the
- *  prompt built below. */
+ *  prompt built below. Seller SKU is deliberately NOT here: unlike GTIN/
+ *  barcode (a real-world identifier that can conflict with Jumia's catalog
+ *  if fabricated), a SKU is just an internal reference code — hintFor()
+ *  below already tells the AI to generate a plausible one when the seller
+ *  doesn't give one. Putting it in this list previously made the
+ *  SELLER-CONTROLLED block's blanket "omit if notes don't mention it"
+ *  override that instruction, leaving Seller SKU blank far more often than
+ *  intended — confirmed live across several test listings. */
 function isNotesOnlyField(label: string): boolean {
   const l = norm(label);
   return (
     l.includes("quantity") ||
-    l.includes("sku") ||
     l.includes("gtin") ||
     l.includes("barcode") ||
     l.includes("price") || // both base Price and Sale Price
@@ -62,9 +68,14 @@ function hintFor(f: HarvestedField): string {
   if (l.includes("manufacturer")) {
     return " — DO fill this: 1–2 short sentences in the manufacturer's own voice about how the product is made and what it's made of (materials, construction, quality standards). It is NOT a duplicate of the product description, so don't skip it as redundant — write it from the same facts with a maker's focus.";
   }
-  if (l.includes("weight")) return " — your best estimate in kg (e.g. 0.2) for a product like this, even if you can't be exact from the photo alone — only omit if the category makes weight meaningless.";
+  if (l.includes("weight")) {
+    return " — REQUIRED: always give a numeric estimate in kg (e.g. 0.2), even with low confidence. Every physical product has a real weight, so \"I'm not sure\" is never a reason to omit this — reason from the product's visible size/material/category (a phone case is ~0.05kg, a pair of shoes ~0.8kg, a blender ~2kg) the same way you'd estimate any everyday object's weight by eye. Only skip this for a category where weight is genuinely meaningless (e.g. a digital product).";
+  }
   if (l.includes("quantity")) return " — ONLY if the seller's notes state an exact quantity; otherwise omit (never guess a stock count from the image).";
-  if (l.includes("sku")) return " — ONLY if the seller's notes give one; otherwise a short plausible SKU code (uppercase letters + digits, 6–10 chars).";
+  if (l.includes("sku")) return " — the seller's notes' SKU if they give one; otherwise ALWAYS generate a plausible one yourself (uppercase letters + digits, 6–10 chars, loosely derived from the product name/category) — never omit this field, it's just an internal reference code, not a real-world identifier like GTIN.";
+  if (l.includes("country") && (l.includes("production") || l.includes("origin"))) {
+    return " — REQUIRED: never omit this field, even with low confidence. Look for a visible clue first (packaging text, a \"Made in ...\" mark, styling conventions). Absent any visible clue, give your single best guess from the options above based on what's typical for this exact kind of product (e.g. most inexpensive mass-market electronics/plastic housewares are made in China; textiles are often Bangladesh/Vietnam/India; adjust for what you actually see) — always pick ONE real option from the list, never leave this blank.";
+  }
   if (l.includes("gtin") || l.includes("barcode")) return " — ONLY if the seller's notes give a real GTIN/barcode; otherwise omit entirely. NEVER invent one — unlike SKU this is a real-world product identifier, and a fabricated one can conflict with Jumia's catalog.";
   if (l.includes("price") && !l.includes("sale")) return " — ONLY if the seller's notes state an exact price figure; otherwise omit (never guess a price from the image). Digits only — no currency symbol, commas, or words (e.g. \"210\", not \"GHS 210\").";
   if (l.includes("sale") && l.includes("price")) {
@@ -112,8 +123,8 @@ function hintFor(f: HarvestedField): string {
   // hint is what covers the free-text-only case that force can't detect.
   if (l.includes("warranty") && l.includes("type")) {
     return constrained
-      ? " — leave BLANK/omit by default, even if \"N/A\"/\"None\" is offered as an option — do NOT auto-default this one. ONLY fill it if the seller's notes give real warranty info (a \"Warranty duration\"/\"Warranty address\" note, or warranty terms stated directly): then pick whichever of \"Repair by Vendor\"/\"Replacement by Vendor\" is offered and fits (default to Repair unless the notes clearly describe a replacement), or the option that most specifically matches what they said. Omit if nothing in the notes justifies filling it."
-      : " — leave BLANK/omit by default. ONLY fill it if the seller's notes give real warranty info: then describe the warranty arrangement (repair vs. replacement, and who provides it) consistent with that.";
+      ? " — leave BLANK/omit by default, even if \"N/A\"/\"None\" is offered as an option — do NOT auto-default this one. ONLY fill it if the seller's notes give REAL warranty info (a \"Warranty duration\"/\"Warranty address\" note with an ACTUAL period/address, or warranty terms stated directly) — a \"Warranty duration: N/A\" or \"Warranty duration: None\" note means there IS NO warranty, so this stays blank even then. When real info IS given, pick whichever of \"Repair by Vendor\"/\"Replacement by Vendor\" is offered and fits (default to Repair unless the notes clearly describe a replacement), or the option that most specifically matches what they said."
+      : " — leave BLANK/omit by default. ONLY fill it if the seller's notes give REAL warranty info (not a \"Warranty duration: N/A\"/\"None\" note, which means there is no warranty): then describe the warranty arrangement (repair vs. replacement, and who provides it) consistent with that.";
   }
   // "Color family"/"Material family" are their own fields, distinct from
   // "Color"/"Main material" — confirmed live: giving them the same generic

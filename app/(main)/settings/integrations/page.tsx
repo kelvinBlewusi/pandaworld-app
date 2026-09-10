@@ -14,11 +14,189 @@ import {
   Info,
   Plug,
   Download,
+  MessageCircle,
+  Copy,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import type { JumiaConnectionPublic } from "@/lib/types/jumia";
+
+// ─── WhatsApp card ──────────────────────────────────────────────────────────
+//
+// Account linking for the WhatsApp chatbot (create + push a Jumia listing
+// from a chat) — see lib/whatsapp/link.ts. The seller taps a wa.me deep
+// link pre-filled with a one-time code; the webhook matches it back to
+// their account. No OAuth here (WhatsApp has no such flow for this) — just
+// a short-lived linking code, same idea as the extension's own API keys
+// but disposable rather than a standing credential.
+
+interface WhatsAppStatus {
+  connected: boolean;
+  phoneNumber?: string;
+  linkedAt?: string;
+}
+
+function WhatsAppCard() {
+  const [status, setStatus] = useState<WhatsAppStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [link, setLink] = useState<{ code: string; waLink: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const loadStatus = () => {
+    fetch("/api/whatsapp/status")
+      .then((r) => r.json())
+      .then((d) => setStatus(d))
+      .catch(() => setStatus({ connected: false }))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { loadStatus(); }, []);
+
+  async function handleGenerateLink() {
+    setGenerating(true);
+    setLink(null);
+    try {
+      const res = await fetch("/api/whatsapp/generate-link", { method: "POST" });
+      if (res.ok) setLink(await res.json());
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function handleDisconnect() {
+    setDisconnecting(true);
+    try {
+      await fetch("/api/whatsapp/disconnect", { method: "POST" });
+      setLink(null);
+      loadStatus();
+    } finally {
+      setDisconnecting(false);
+    }
+  }
+
+  function copyCode() {
+    if (!link) return;
+    navigator.clipboard.writeText(`LINK-${link.code}`).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  const linkedDate = status?.linkedAt
+    ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" }).format(
+        new Date(status.linkedAt),
+      )
+    : null;
+
+  return (
+    <section className="rounded-2xl border bg-white p-6 shadow-sm space-y-5">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+            <MessageCircle className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="font-semibold text-zinc-900">WhatsApp</p>
+            <p className="text-xs text-zinc-400">Create and push listings from a chat</p>
+          </div>
+        </div>
+        {!loading && (
+          <span
+            className={cn(
+              "rounded-full px-2.5 py-1 text-xs font-semibold",
+              status?.connected ? "bg-emerald-50 text-emerald-700" : "bg-zinc-100 text-zinc-500",
+            )}
+          >
+            {status?.connected ? "Connected" : "Not connected"}
+          </span>
+        )}
+      </div>
+
+      <Separator />
+
+      {loading ? (
+        <div className="flex items-center gap-2 text-sm text-zinc-400">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Checking connection…
+        </div>
+      ) : status?.connected ? (
+        <div className="space-y-4">
+          <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4 space-y-2">
+            <div className="flex items-center gap-2 text-emerald-700 font-semibold text-sm">
+              <CheckCircle2 className="h-4 w-4 shrink-0" />
+              {status.phoneNumber} is linked
+            </div>
+            {linkedDate && <p className="text-xs text-zinc-500">Linked {linkedDate}</p>}
+          </div>
+          <p className="text-sm text-zinc-600">
+            Send a product photo to this number on WhatsApp to start a new listing.
+          </p>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="gap-2 text-red-400 hover:text-red-600"
+            onClick={handleDisconnect}
+            disabled={disconnecting}
+          >
+            <Unlink className="h-3.5 w-3.5" />
+            Disconnect
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <p className="text-sm text-zinc-600 leading-relaxed">
+            Send a photo on WhatsApp, get an AI-drafted listing back, confirm or fix it in chat, and push it
+            straight to Jumia — no need to open PandaWorld at all.
+          </p>
+          {link ? (
+            <div className="rounded-xl bg-blue-50 border border-blue-100 p-4 space-y-3 text-sm">
+              {link.waLink ? (
+                <>
+                  <p className="text-blue-700">Tap below to open WhatsApp with your code pre-filled:</p>
+                  <a
+                    href={link.waLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 rounded-md bg-emerald-500 px-4 py-2 text-white font-semibold hover:bg-emerald-600"
+                  >
+                    <MessageCircle className="h-4 w-4" />
+                    Open WhatsApp to link
+                  </a>
+                </>
+              ) : (
+                <p className="text-blue-700">
+                  Send this code as a WhatsApp message to the PandaWorld bot number:
+                </p>
+              )}
+              <div className="flex items-center gap-2">
+                <code className="rounded bg-blue-100 px-2.5 py-1.5 font-mono text-sm text-blue-900">
+                  LINK-{link.code}
+                </code>
+                <button
+                  type="button"
+                  onClick={copyCode}
+                  className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800"
+                >
+                  <Copy className="h-3 w-3" />
+                  {copied ? "Copied!" : "Copy"}
+                </button>
+              </div>
+              <p className="text-xs text-blue-500">This code expires in 15 minutes.</p>
+            </div>
+          ) : (
+            <Button onClick={handleGenerateLink} disabled={generating} className="gap-2 bg-emerald-500 hover:bg-emerald-600">
+              {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}
+              {generating ? "Generating…" : "Connect WhatsApp"}
+            </Button>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
 
 // ─── Inner page (needs useSearchParams — must be inside Suspense) ─────────────
 
@@ -379,6 +557,8 @@ function IntegrationsPageInner() {
           </div>
         )}
       </section>
+
+      <WhatsAppCard />
 
       {/* Coming soon — other platforms */}
       <section className="rounded-2xl border border-dashed bg-zinc-50/50 p-6 space-y-3">
