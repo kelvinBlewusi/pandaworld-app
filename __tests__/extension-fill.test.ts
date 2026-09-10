@@ -1,5 +1,6 @@
 import {
   parseNotes,
+  parseAdvancedWarrantyOptions,
   buildMockProduct,
   mapProductToFields,
   finalizeAiValues,
@@ -116,12 +117,12 @@ describe("mapProductToFields — Watches POC", () => {
 
 describe("isSellerOwned", () => {
   it("flags seller-owned fields", () => {
-    ["Sale Price", "Stock", "Category", "Country", "Currency"].forEach((l) =>
+    ["Stock", "Category", "Country", "Currency"].forEach((l) =>
       expect(isSellerOwned(l)).toBe(true),
     );
   });
-  it("does not flag AI/notes fields — Quantity, SKU, and base Price are all notes-fillable now", () => {
-    ["Name", "Brand", "Product description", "Weight (kg)", "Quantity", "Seller SKU", "Price"].forEach((l) =>
+  it("does not flag AI/notes fields — Quantity, SKU, base Price, and Sale Price are all notes-fillable now", () => {
+    ["Name", "Brand", "Product description", "Weight (kg)", "Quantity", "Seller SKU", "Price", "Sale Price"].forEach((l) =>
       expect(isSellerOwned(l)).toBe(false),
     );
   });
@@ -132,8 +133,9 @@ describe("isSellerOwned", () => {
 
 describe("variant-qualified labels (multi-variant listings)", () => {
   it("still recognises a seller-owned field through the variant suffix", () => {
-    expect(isSellerOwned("Sale Price (Variant 2)")).toBe(true);
+    expect(isSellerOwned("Stock (Variant 2)")).toBe(true);
     expect(isSellerOwned("Price (Variant 2)")).toBe(false);
+    expect(isSellerOwned("Sale Price (Variant 2)")).toBe(false);
     expect(isSellerOwned("Seller SKU (Variant 2)")).toBe(false);
   });
 
@@ -379,5 +381,129 @@ describe("finalizeAiValues (real-AI post-processing)", () => {
     );
     expect(values["Warranty Type"]).toBe("Repair by Vendor");
     expect(values["Warranty Duration"]).toBe("1 Year");
+  });
+
+  describe("Sale Price / Sale Start / Sale End Date cascade", () => {
+    const saleFields: HarvestedField[] = [
+      { label: "Price", type: "text" },
+      { label: "Sale Price", type: "text" },
+      { label: "Sale Start Date", type: "text" },
+      { label: "Sale End Date", type: "text" },
+    ];
+
+    it("fills Sale Price and the sale window from notes, alongside base Price", () => {
+      const { values } = finalizeAiValues(
+        { "Sale Price": "150", "Sale Start Date": "2026-09-20", "Sale End Date": "2026-09-30" },
+        saleFields,
+        "price 250, sale price 150 from Sept 20 to Sept 30",
+      );
+      expect(values["Price"]).toBe("250");
+      expect(values["Sale Price"]).toBe("150");
+      expect(values["Sale Start Date"]).toBe("2026-09-20");
+      expect(values["Sale End Date"]).toBe("2026-09-30");
+    });
+
+    it("drops Sale Price when notes give no base Price, even if the AI filled one in", () => {
+      const { values } = finalizeAiValues(
+        { "Sale Price": "150", "Sale Start Date": "2026-09-20", "Sale End Date": "2026-09-30" },
+        saleFields,
+        "", // no price stated at all
+      );
+      expect(values["Price"]).toBeUndefined();
+      expect(values["Sale Price"]).toBeUndefined();
+      expect(values["Sale Start Date"]).toBeUndefined();
+      expect(values["Sale End Date"]).toBeUndefined();
+    });
+
+    it("drops the sale window when Sale Price wasn't filled, even with a real base Price", () => {
+      const { values } = finalizeAiValues(
+        { "Sale Start Date": "2026-09-20", "Sale End Date": "2026-09-30" },
+        saleFields,
+        "price 250", // no sale price mentioned
+      );
+      expect(values["Price"]).toBe("250");
+      expect(values["Sale Price"]).toBeUndefined();
+      expect(values["Sale Start Date"]).toBeUndefined();
+      expect(values["Sale End Date"]).toBeUndefined();
+    });
+  });
+
+  describe("Warranty Duration/Type — Advanced Options force", () => {
+    const warrantyFields: HarvestedField[] = [
+      { label: "Warranty Type", type: "select", options: ["Repair by Vendor", "Replacement by Vendor", "N/A", "None"] },
+      { label: "Warranty Duration", type: "select", options: ["1 Year", "2 Years", "N/A", "None"] },
+    ];
+
+    it("forces Warranty Duration to the Advanced-Options value, ignoring whatever the AI itself returned", () => {
+      const { values } = finalizeAiValues(
+        { "Warranty Duration": "N/A" },
+        warrantyFields,
+        "Warranty duration: 2 Years",
+      );
+      expect(values["Warranty Duration"]).toBe("2 Years");
+    });
+
+    it("defaults Warranty Type to Repair by Vendor when Advanced Options set a duration, even though the AI left it blank", () => {
+      const { values } = finalizeAiValues(
+        { "Warranty Duration": "1 Year" },
+        warrantyFields,
+        "Warranty duration: 1 Year",
+      );
+      expect(values["Warranty Type"]).toBe("Repair by Vendor");
+      expect(values["Warranty Duration"]).toBe("1 Year");
+    });
+
+    it("defaults Warranty Type to Repair by Vendor when Advanced Options set a warranty address instead of a duration", () => {
+      const { values } = finalizeAiValues(
+        {},
+        warrantyFields,
+        "Warranty address: 123 Repair Street, Accra",
+      );
+      expect(values["Warranty Type"]).toBe("Repair by Vendor");
+    });
+
+    it("respects a real, non-blank Warranty Type the AI already picked instead of forcing the default over it", () => {
+      const { values } = finalizeAiValues(
+        { "Warranty Type": "Replacement by Vendor", "Warranty Duration": "1 Year" },
+        warrantyFields,
+        "Warranty duration: 1 Year, replacements only",
+      );
+      expect(values["Warranty Type"]).toBe("Replacement by Vendor");
+    });
+
+    it("leaves Warranty Type blank when Advanced Options weren't used and the AI didn't fill it", () => {
+      const { values } = finalizeAiValues({}, warrantyFields, "");
+      expect(values["Warranty Type"]).toBeUndefined();
+      expect(values["Warranty Duration"]).toBeUndefined();
+    });
+  });
+});
+
+describe("parseAdvancedWarrantyOptions", () => {
+  it("returns nulls when neither Advanced Option was set", () => {
+    expect(parseAdvancedWarrantyOptions("")).toEqual({ duration: null, address: null });
+    expect(parseAdvancedWarrantyOptions("just some free text notes")).toEqual({ duration: null, address: null });
+  });
+
+  it("parses duration only", () => {
+    expect(parseAdvancedWarrantyOptions("price 250. Warranty duration: 2 Years")).toEqual({
+      duration: "2 Years",
+      address: null,
+    });
+  });
+
+  it("parses address only", () => {
+    expect(parseAdvancedWarrantyOptions("Warranty address: 123 Repair Street, Accra")).toEqual({
+      duration: null,
+      address: "123 Repair Street, Accra",
+    });
+  });
+
+  it("parses both together, in panel.js's own emitted order", () => {
+    expect(
+      parseAdvancedWarrantyOptions(
+        "leather strap. Writing style: Storytelling. Warranty duration: 1 Year. Warranty address: 123 Repair Street, Accra",
+      ),
+    ).toEqual({ duration: "1 Year", address: "123 Repair Street, Accra" });
   });
 });

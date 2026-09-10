@@ -29,6 +29,31 @@ No build step — it's plain JS/HTML/CSS. Loads unpacked as-is for local dev, an
 - **Live AI** (real Gemini reading the uploaded photo) when creds + a photo are
   present; deterministic **mock** fallback otherwise (mock fills don't spend
   credits).
+- Price, Sale Price, and the Sale Start/End Date window are all notes-only
+  fillable (never guessed from the photo) — a seller who writes e.g. "price
+  250, sale price 200 from Sept 20 to Sept 30" in their notes gets all four
+  filled from that one sentence. Jumia's own form disables Sale Price until
+  Price has a value, and disables Sale Start/End Date until Sale Price does
+  — `finalizeAiValues()` in `lib/extension/fill.ts` drops any of these
+  top-down if the field it depends on didn't actually get filled, and
+  `writeValue()` in `content/content.js` waits briefly for a field to
+  become enabled before writing it, since Angular needs a beat after the
+  earlier write to lift the `disabled` attribute.
+- Warranty Duration mirrors the panel's Advanced Options selection exactly
+  (forced server-side, not just AI-guessed — see
+  `parseAdvancedWarrantyOptions()` in `lib/extension/fill.ts`). Warranty
+  Type stays blank by default — it's never auto-set to "N/A" — and only
+  gets a "Repair by Vendor" (or "Replacement by Vendor") default when the
+  seller actually set a Warranty duration/address or asked for one in their
+  own notes; a real, more specific answer the AI already gave is left as-is.
+- Search grounding (Gemini's `google_search` tool, always on for the fill
+  call — see `groundWithSearch` in `gemini-client.ts`) is what a photo alone
+  can't provide for exact-value fields like Model/Country of origin/
+  Certifications: the prompt tells the AI to search once it can identify
+  the specific brand/model with confidence (`buildSearchGroundingInstruction()`
+  in `content-style-rules.ts`). A "Generic"-branded item with no
+  identifiable model has nothing to search for, so those fields staying
+  blank in that case is expected, not a gap.
 
 ## What's still deferred
 

@@ -150,6 +150,34 @@ export function parseNotes(notes: string | undefined | null): ParsedNotes {
   return { price, extraFeatures, raw };
 }
 
+/**
+ * Pull the seller's Advanced-Options warranty selections back out of the
+ * flattened notes string. panel.js appends "Warranty duration: X" and
+ * "Warranty address: Y" as their own sentences (in that order, joined with
+ * ". ") ONLY when the seller actually picked/typed something — the Warranty
+ * Duration select's "not set" option has an empty value, so it's never
+ * appended at all — so a match here means the seller genuinely set it via
+ * Advanced Options, not just that the word "warranty" appears somewhere in
+ * their free text. Used by finalizeAiValues() below to FORCE Warranty
+ * Duration to this exact value (the same deterministic-override treatment
+ * Price already gets) and to decide whether Warranty Type should default to
+ * a real value instead of staying blank.
+ */
+export function parseAdvancedWarrantyOptions(notes: string | undefined | null): {
+  duration: string | null;
+  address: string | null;
+} {
+  const raw = notes ?? "";
+  const addressMatch = raw.match(/Warranty address:\s*(.+)\s*$/i);
+  const durationMatch =
+    raw.match(/Warranty duration:\s*([^.]+?)\.\s*Warranty address:/i) ||
+    raw.match(/Warranty duration:\s*(.+?)\s*$/i);
+  return {
+    duration: durationMatch ? durationMatch[1].trim() : null,
+    address: addressMatch ? addressMatch[1].trim() : null,
+  };
+}
+
 // ─── Deterministic mock product (POC only) ───────────────────────────────────
 
 /**
@@ -215,10 +243,15 @@ const norm = (s: string) => s.toLowerCase().replace(/\*/g, "").replace(/\s+/g, "
  * Base "Price" is NOT in this list any more — it's now notes-only
  * AI-fillable (see isNotesOnlyField in lib/ai/extension-fill.ts): written as
  * digits only when the seller's notes state one explicitly, left blank
- * otherwise, never guessed from the photo. "Sale Price" stays fully
- * seller-owned (a promotional discount the seller sets deliberately) — see
- * isSellerOwned() below, which excludes it by name rather than by the bare
- * "price" substring.
+ * otherwise, never guessed from the photo. "Sale Price" (and Sale Start/End
+ * Date) now follow the exact same notes-only rule — see isNotesOnlyField —
+ * rather than being permanently seller-owned: a seller who writes "sale
+ * price 150 from Sept 20 to Sept 30" in their notes gets all three filled
+ * from that one sentence. Jumia's own form gates them behind each other
+ * (Sale Price stays disabled until Price has a value; Sale Start/End Date
+ * stay disabled until Sale Price does) — see the cascade drop in
+ * finalizeAiValues below, and content.js's writeValue() for the matching
+ * DOM-side wait-until-enabled retry.
  */
 const SELLER_OWNED = ["category", "stock", "currency"];
 
@@ -407,18 +440,19 @@ export function mapProductToFields(
   return { values, warnings };
 }
 
-/** True for fields the seller owns — never AI-filled (sale price, stock, category, currency, country). */
+/** True for fields the seller owns — never AI-filled (stock, category, currency, country). */
 export function isSellerOwned(label: string): boolean {
   const l = norm(label);
   // Exact match only — a substring match on "country" would also catch a
   // legitimate "Country of origin" product attribute some categories ask
   // for, which SHOULD stay AI/notes-fillable like Brand.
   if (l === "country") return true;
-  // Sale Price is a promotional discount the seller sets deliberately —
-  // always seller-owned. Checked here (not via the bare "price" substring in
-  // SELLER_OWNED) so the base "Price" field is free to be notes-only
-  // AI-fillable instead.
-  if (l.includes("sale") && l.includes("price")) return true;
+  // Sale Price/Sale Start/End Date used to be permanently seller-owned here;
+  // they're now notes-only AI-fillable like base Price (see
+  // isNotesOnlyField in lib/ai/extension-fill.ts) — a seller who states a
+  // sale price and window in their own notes gets all three filled from
+  // that. The cascade drop below still protects against writing one without
+  // the field it depends on.
   return SELLER_OWNED.some((k) => l.includes(k));
 }
 
@@ -541,16 +575,66 @@ export function finalizeAiValues(
     values[field.label] = value;
   }
 
+  const warrantyTypeField = fields.find((f) => { const l = norm(f.label); return l.includes("warranty") && l.includes("type"); });
+  const warrantyDurationField = fields.find((f) => { const l = norm(f.label); return l.includes("warranty") && l.includes("duration"); });
+
+  // Warranty Duration: when the seller picked one via the extension's
+  // Advanced Options, that choice is authoritative — force it here rather
+  // than leave it to the AI's own reading of the notes (same deterministic
+  // treatment Price already gets). snapToOption still runs so this only
+  // ever writes a value that's actually one of THIS listing's real options.
+  const advancedWarranty = parseAdvancedWarrantyOptions(notes);
+  if (warrantyDurationField && advancedWarranty.duration) {
+    const snapped = snapToOption(advancedWarranty.duration, warrantyDurationField.options);
+    if (snapped) values[warrantyDurationField.label] = snapped;
+  }
+
+  // Warranty Type: stays BLANK unless the seller actually set up warranty
+  // info somewhere (Advanced Options' Warranty duration/address, checked
+  // deterministically here; a warranty period/address stated directly in
+  // free text is covered by the prompt hint instead, since that can't be
+  // detected in code). When they did, default to a real "Repair by
+  // Vendor"/"Replacement by Vendor" option rather than leaving it blank or
+  // N/A — but only as a DEFAULT: if the AI already gave a real, non-blank,
+  // non-N/A answer (it may have picked up on "replacement" language itself),
+  // that stands.
+  const hasStructuredWarrantyInfo = Boolean(advancedWarranty.duration) || Boolean(advancedWarranty.address);
+  if (hasStructuredWarrantyInfo && warrantyTypeField) {
+    const current = (values[warrantyTypeField.label] ?? "").trim().toLowerCase();
+    if (!current || current === "n/a" || current === "none") {
+      const snapped =
+        snapToOption("Repair by Vendor", warrantyTypeField.options) ??
+        snapToOption("Replacement by Vendor", warrantyTypeField.options);
+      if (snapped) values[warrantyTypeField.label] = snapped;
+    }
+  }
+
   // If Warranty Type came out N/A (or wasn't filled at all), a duration
   // doesn't mean anything — drop it even if the AI filled one in, rather
   // than leaving a duration on a listing that says it has no warranty.
-  const warrantyTypeField = fields.find((f) => { const l = norm(f.label); return l.includes("warranty") && l.includes("type"); });
-  const warrantyDurationField = fields.find((f) => { const l = norm(f.label); return l.includes("warranty") && l.includes("duration"); });
   if (warrantyDurationField && values[warrantyDurationField.label]) {
     const typeVal = warrantyTypeField ? (values[warrantyTypeField.label] ?? "").trim().toLowerCase() : "";
     if (!warrantyTypeField || !typeVal || typeVal === "n/a" || typeVal === "none") {
       delete values[warrantyDurationField.label];
     }
+  }
+
+  // Same cascade for Sale Price / Sale Start / Sale End Date: Jumia's own
+  // form disables Sale Price's input until Price has a value, and disables
+  // Sale Start/End Date until Sale Price has one. Writing a value into a
+  // field the page won't even let script populate is pointless at best, so
+  // drop top-down rather than leave a Sale Price with no base Price, or a
+  // sale window with no Sale Price to attach to. `price` (parsed above) is
+  // the one deterministic source of truth for whether Price will actually
+  // land on the page — not whatever the AI itself returned for it.
+  const salePriceField = fields.find((f) => { const l = norm(f.label); return l.includes("sale") && l.includes("price"); });
+  if (salePriceField && values[salePriceField.label] && price == null) {
+    delete values[salePriceField.label];
+  }
+  const saleWindowFields = fields.filter((f) => { const l = norm(f.label); return l.includes("sale") && (l.includes("start") || l.includes("end")); });
+  const saleFilled = Boolean(salePriceField && values[salePriceField.label]);
+  if (!saleFilled) {
+    for (const f of saleWindowFields) delete values[f.label];
   }
 
   if (price != null) {

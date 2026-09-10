@@ -370,15 +370,17 @@ $("autofill").addEventListener("click", async () => {
     setProgress(35, { pulsing: true });
 
     // Every Advanced Option rides along as extra freeform context, same as
-    // the notes box — the AI fill pass reads notes as authoritative guidance
-    // (lib/ai/extension-fill.ts) and, for a constrained dropdown like
-    // Warranty Duration, is told to match it against the field's real
-    // harvested options — no separate backend fields needed.
+    // the notes box. The AI fill pass reads notes as authoritative guidance
+    // (lib/ai/extension-fill.ts) — but Warranty duration/address specifically
+    // are ALSO parsed back out of this exact "Warranty duration: X"/"Warranty
+    // address: Y" sentence format server-side (parseAdvancedWarrantyOptions
+    // in lib/extension/fill.ts) and force-applied regardless of what the AI
+    // itself returns, so keep this format ("Label: value", in this order) if
+    // you touch it — no separate backend fields needed, but the label text
+    // and ordering are load-bearing.
     const extraNotes = [];
     const writingStyle = $("writingStyle").value;
     if (writingStyle && writingStyle !== "SEO Optimized") extraNotes.push(`Writing style: ${writingStyle}`);
-    const refundPolicy = $("refundPolicy").value;
-    if (refundPolicy) extraNotes.push(`Refund policy: ${refundPolicy}`);
     const warrantyDuration = $("warrantyDuration").value;
     if (warrantyDuration) extraNotes.push(`Warranty duration: ${warrantyDuration}`);
     const warrantyAddress = $("warrantyAddress").value.trim();

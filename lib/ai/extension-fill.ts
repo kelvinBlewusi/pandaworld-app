@@ -43,7 +43,7 @@ function isNotesOnlyField(label: string): boolean {
     l.includes("sku") ||
     l.includes("gtin") ||
     l.includes("barcode") ||
-    (l.includes("price") && !l.includes("sale")) ||
+    l.includes("price") || // both base Price and Sale Price
     (l.includes("sale") && (l.includes("start") || l.includes("end")))
   );
 }
@@ -67,8 +67,11 @@ function hintFor(f: HarvestedField): string {
   if (l.includes("sku")) return " — ONLY if the seller's notes give one; otherwise a short plausible SKU code (uppercase letters + digits, 6–10 chars).";
   if (l.includes("gtin") || l.includes("barcode")) return " — ONLY if the seller's notes give a real GTIN/barcode; otherwise omit entirely. NEVER invent one — unlike SKU this is a real-world product identifier, and a fabricated one can conflict with Jumia's catalog.";
   if (l.includes("price") && !l.includes("sale")) return " — ONLY if the seller's notes state an exact price figure; otherwise omit (never guess a price from the image). Digits only — no currency symbol, commas, or words (e.g. \"210\", not \"GHS 210\").";
+  if (l.includes("sale") && l.includes("price")) {
+    return " — ONLY if the seller's notes explicitly state a sale/discounted price (a figure lower than the regular price, e.g. \"sale price 150\" or \"discount to 150\"); otherwise omit entirely — never guess a promotional price on your own. Digits only, same format as Price.";
+  }
   if (l.includes("sale") && (l.includes("start") || l.includes("end"))) {
-    return " — ONLY if the seller's notes explicitly give this date; otherwise omit entirely.";
+    return " — ONLY if the seller's notes explicitly give this date, AND they also gave a sale price above; otherwise omit entirely — a sale window with no sale price attached doesn't mean anything.";
   }
   // Default every warranty-related field to N/A — only depart from that when
   // the seller's notes actually say something about warranty (including a
@@ -85,10 +88,32 @@ function hintFor(f: HarvestedField): string {
       ? " — pick the option matching the seller's notes (including any \"Warranty address\" note), or omit if none fit."
       : " — the seller's warranty address if their notes give one (including any \"Warranty address\" note); otherwise \"N/A\".";
   }
-  if (l.includes("warranty")) {
+  // Warranty Duration: when the seller picked one via the extension's
+  // Advanced Options, lib/extension/fill.ts's finalizeAiValues() forces this
+  // field to that EXACT value afterwards regardless of what's returned here
+  // — see parseAdvancedWarrantyOptions() there. This hint only matters for
+  // the case that force can't reach: a warranty period stated directly in
+  // the seller's own free-text notes instead of via Advanced Options.
+  if (l.includes("warranty") && l.includes("duration")) {
     return constrained
       ? " — default to whichever of \"N/A\"/\"None\" is LITERALLY PRESENT in THIS field's own option list above (some categories offer neither — check before writing it, and omit instead if neither is there), UNLESS the seller's notes state a warranty period (including any \"Warranty duration\" note) matching one of the OTHER options above — then pick that instead."
-      : " — default to \"N/A\", UNLESS the seller's notes state a warranty period or terms (including any \"Warranty duration\" note) — then describe that SAME period here, consistent with whatever you picked for a Warranty Duration field if the page has one.";
+      : " — default to \"N/A\", UNLESS the seller's notes state a warranty period or terms (including any \"Warranty duration\" note) — then describe that SAME period here.";
+  }
+  // Warranty Type: leave BLANK by default — never default to "N/A"/"None"
+  // the way Duration/Address do. Only fill it when the seller's notes give
+  // real warranty info to attach it to (a "Warranty duration"/"Warranty
+  // address" Advanced-Options note, or a warranty period/address/terms
+  // stated directly in their own free text) — in that case default to
+  // "Repair by Vendor" (or "Replacement by Vendor" if the notes clearly
+  // describe a replacement rather than a repair policy), since a seller who
+  // set up warranty terms at all almost always means one of those two, not
+  // some other arrangement. lib/extension/fill.ts's finalizeAiValues() also
+  // enforces this default in code when Advanced Options were used — this
+  // hint is what covers the free-text-only case that force can't detect.
+  if (l.includes("warranty") && l.includes("type")) {
+    return constrained
+      ? " — leave BLANK/omit by default, even if \"N/A\"/\"None\" is offered as an option — do NOT auto-default this one. ONLY fill it if the seller's notes give real warranty info (a \"Warranty duration\"/\"Warranty address\" note, or warranty terms stated directly): then pick whichever of \"Repair by Vendor\"/\"Replacement by Vendor\" is offered and fits (default to Repair unless the notes clearly describe a replacement), or the option that most specifically matches what they said. Omit if nothing in the notes justifies filling it."
+      : " — leave BLANK/omit by default. ONLY fill it if the seller's notes give real warranty info: then describe the warranty arrangement (repair vs. replacement, and who provides it) consistent with that.";
   }
   // "Color family"/"Material family" are their own fields, distinct from
   // "Color"/"Main material" — confirmed live: giving them the same generic
@@ -181,8 +206,8 @@ export async function aiFillRenderedFields(args: {
   // every single call for zero extra instruction value.
   const policy = buildContentPolicyInstructions({ categoryPath: null, includeImageRules: false });
   // Bundles the free-text notes box AND every Advanced Option the panel
-  // exposes (Writing style, Refund policy, Warranty duration, Warranty
-  // address — see panel.js's extraNotes array) into one string before this
+  // exposes (Writing style, Warranty duration, Warranty address — see
+  // panel.js's extraNotes array) into one string before this
   // function ever sees it. Framed as unconditional top priority, not just
   // "fills factual gaps": a seller who explicitly picked a Writing style is
   // giving a direct instruction, not a soft preference, and it must win
@@ -191,7 +216,7 @@ export async function aiFillRenderedFields(args: {
   // (SEO Optimized, the pre-selected option), not as a rule that overrides
   // an explicit seller choice.
   const notesBlock = notes && notes.trim()
-    ? `\n\nSELLER NOTES — HIGHEST PRIORITY, OVERRIDES ANY OTHER INSTRUCTION IN THIS PROMPT IF THEY CONFLICT:\n"${notes.trim()}"\nThis is the seller's own free text plus every Advanced Option they set (Writing style, Refund policy, Warranty duration, Warranty address, if present) — treat each one as a direct instruction, not a soft suggestion. If a "Writing style" is given (e.g. Storytelling, Fun & Playful, Professional & Clean, Friendly & Conversational), let it govern the tone and voice of Description/Highlights — CONTENT STYLE's own structural suggestions below (the hook, bold micro-headings, "Perfect for:" list) are the strong default for "SEO Optimized" or when no writing style is given, not a rule that overrides the seller's explicit choice.\n`
+    ? `\n\nSELLER NOTES — HIGHEST PRIORITY, OVERRIDES ANY OTHER INSTRUCTION IN THIS PROMPT IF THEY CONFLICT:\n"${notes.trim()}"\nThis is the seller's own free text plus every Advanced Option they set (Writing style, Warranty duration, Warranty address, if present) — treat each one as a direct instruction, not a soft suggestion. If a "Writing style" is given (e.g. Storytelling, Fun & Playful, Professional & Clean, Friendly & Conversational), let it govern the tone and voice of Description/Highlights — CONTENT STYLE's own structural suggestions below (the hook, bold micro-headings, "Perfect for:" list) are the strong default for "SEO Optimized" or when no writing style is given, not a rule that overrides the seller's explicit choice.\n`
     : "";
 
   const notesOnlyFields = fields.filter((f) => isNotesOnlyField(f.label)).map((f) => f.label);
