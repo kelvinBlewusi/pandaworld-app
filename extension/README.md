@@ -38,6 +38,25 @@ No build step — it's plain JS/HTML/CSS. Loads unpacked as-is for local dev, an
   only gets caught by a human noticing, not by a retry.
 - `all_frames` is off in `manifest.json` — if a category ever renders its form
   inside an iframe, the content script won't reach it.
+- Jumia's Add/Edit-Products form becomes a 3-step wizard (Product Information
+  / Variants / Product Specification) whenever the visible viewport is
+  narrowed — including by opening this extension's own side panel, so most
+  sellers hit this layout, not a rare case. Every step's fields stay mounted
+  in the DOM the whole time (confirmed live), just hidden — `isVisible()` in
+  `content/content.js` treats that as visible enough to harvest and fill, so
+  plain text/select/rich-text fields on a step the seller hasn't clicked into
+  yet still get filled in one pass, no navigation required. Combobox-type
+  attribute pickers (Certifications, Material family, Production country,
+  Warranty Duration/Type) need their trigger genuinely on-screen to open its
+  overlay, so `applyValues()` walks the wizard's own `.action-next` control
+  forward (confirmed live, structurally separate from the `.submit` button —
+  their class names never overlap) to reach each one, then returns to step 1
+  so the seller reviews from the top. A no-op on the classic single-page
+  layout, since `.action-next` only gets clicked when it's actually visible.
+  `writeCombobox()` fails instantly on a hidden trigger rather than burning
+  ~4s per field on a 30-attempt retry loop that can only ever time out —
+  confirmed live: without that, 5 hidden comboboxes added ~20s of the page
+  visibly doing nothing before the wizard-walk above ever got a turn.
 
 ## Run it
 

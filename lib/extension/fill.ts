@@ -288,12 +288,28 @@ function boxItemsToHtml(text: string): string {
   return `<p>${items.join("<br>")}</p>`;
 }
 
+/**
+ * Generic "this field doesn't apply" filler words — not tied to any
+ * particular field name, since which of these (if any) a category's own
+ * option list actually offers varies field to field and category to
+ * category. Only used to treat two different SPELLINGS of the same
+ * not-applicable concept as equivalent (e.g. the AI writes "N/A" but the
+ * real option is spelled "Not Applicable") — it does NOT invent a filler
+ * answer for a field whose options don't offer one of these at all, which
+ * stays a plain unmatched value (see below).
+ */
+const FILLER_SYNONYMS = ["n/a", "na", "none", "not applicable", "not available", "no warranty", "nil"];
+
 /** Snap a value to the closest allowed option (case-insensitive), or null. */
 function snapToOption(value: string, options: string[] | undefined): string | null {
   if (!options?.length) return value;
-  const v = value.toLowerCase();
+  const v = value.toLowerCase().trim();
   const exact = options.find((o) => o.toLowerCase() === v);
   if (exact) return exact;
+  if (FILLER_SYNONYMS.includes(v)) {
+    const fillerOption = options.find((o) => FILLER_SYNONYMS.includes(o.toLowerCase().trim()));
+    if (fillerOption) return fillerOption;
+  }
   const partial = options.find((o) => o.toLowerCase().includes(v) || v.includes(o.toLowerCase()));
   return partial ?? null;
 }

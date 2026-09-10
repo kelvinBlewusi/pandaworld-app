@@ -87,7 +87,7 @@ function hintFor(f: HarvestedField): string {
   }
   if (l.includes("warranty")) {
     return constrained
-      ? " — default to \"N/A\"/\"None\" if the options above offer one, UNLESS the seller's notes state a warranty period (including any \"Warranty duration\" note) matching one of the OTHER options above — then pick that instead. If neither fits, omit."
+      ? " — default to whichever of \"N/A\"/\"None\" is LITERALLY PRESENT in THIS field's own option list above (some categories offer neither — check before writing it, and omit instead if neither is there), UNLESS the seller's notes state a warranty period (including any \"Warranty duration\" note) matching one of the OTHER options above — then pick that instead."
       : " — default to \"N/A\", UNLESS the seller's notes state a warranty period or terms (including any \"Warranty duration\" note) — then describe that SAME period here, consistent with whatever you picked for a Warranty Duration field if the page has one.";
   }
   // "Color family"/"Material family" are their own fields, distinct from
@@ -118,7 +118,20 @@ function fieldLine(f: HarvestedField): string {
   const choose = f.multi
     ? "choose one or MORE of (comma-separate several only when they genuinely all apply)"
     : "choose ONE of";
-  const opts = f.options?.length ? `; ${choose}: ${f.options.slice(0, 250).join(" | ")}` : "";
+  // Generic, per-field enforcement — applies to EVERY constrained field
+  // regardless of what it's called, since the exact set of options (and
+  // whether a filler choice like "N/A"/"None" is even offered) differs by
+  // Jumia category and by field. Stated right next to THIS field's own list
+  // rather than only once globally, so it can't get lost across a long
+  // FIELDS TO FILL block. Confirmed live: the model wrote "N/A" for a
+  // "Warranty Type" whose real options didn't include any N/A-like choice —
+  // it gets silently dropped downstream (finalizeAiValues' snapToOption),
+  // so a guessed filler is strictly worse than omitting: same end result
+  // (blank field) but sometimes it accidentally overwrites a value the
+  // fuzzy matcher WOULD have accepted (a close real option).
+  const opts = f.options?.length
+    ? `; ${choose}: ${f.options.slice(0, 250).join(" | ")}. Copy your answer EXACTLY as printed in THIS list (same spelling/punctuation) or omit the field — never write "N/A"/"None"/"Not Applicable"/"Other" or any other filler UNLESS that exact text is itself one of the options printed above for this field.`
+    : "";
   const current = f.currentValue ? `; CURRENT CONTENT: "${f.currentValue.replace(/"/g, "'")}"` : "";
   return `- "${f.label}" [${f.type}${opts}]${current}${hintFor(f)}`;
 }
@@ -231,7 +244,7 @@ ${fields.map(fieldLine).join("\n")}
 RULES:
 ${notes && notes.trim() ? "- SELLER NOTES above beats every other instruction in this prompt when they conflict — that includes CONTENT STYLE's default tone/structure, not just factual details.\n" : ""}- Return ONLY a JSON object mapping each field label EXACTLY as written above (including punctuation and capitalisation) to a string value.
 - Rich-text fields: return HTML, well-structured (see CONTENT STYLE above) — not a single flat paragraph.
-- Fields listing options: return exactly one of the given options, or omit.
+- Fields listing options: copy your answer EXACTLY as printed in THAT field's own list (same spelling/punctuation), or omit. Never write "N/A"/"None"/"Not Applicable"/"Other" as a safe-looking default — only write it when that exact text is itself one of the options listed for that specific field, which varies by field and by category.
 - Numbers: digits only, no units or words.
 - NEVER invent price or stock.
 - For the seller-controlled fields listed above (if any): only from the seller's notes, never from the photo.

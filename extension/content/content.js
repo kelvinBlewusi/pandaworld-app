@@ -135,6 +135,10 @@
     }
 
     console.debug(LOG, "harvest diagnostics:", diagnostics);
+    // Console's own tree view is awkward to copy text out of — run
+    // copy(window.__pandaworldLastHarvest) in DevTools to put this on the
+    // clipboard as real text instead.
+    window.__pandaworldLastHarvest = { fields, diagnostics };
     return { ok: true, images, fields, diagnostics };
   }
 
@@ -851,6 +855,61 @@
     return best;
   }
 
+  // Jumia's Add/Edit-Products form renders as a 3-step wizard (Product
+  // Information / Variants / Product Specification) whenever the visible
+  // viewport is narrowed — confirmed live, Sep 2026: this includes opening
+  // our OWN side panel or DevTools, so most sellers using this extension hit
+  // it, not a rare device-specific case. Confirmed via a live console check
+  // that Jumia keeps every step's fields mounted in the DOM at all times
+  // rather than destroying/recreating them per step: `document.querySelector
+  // ('input[formcontrolname="variation"]')` resolved a real element while
+  // the Variants step wasn't active, just with a zero-size
+  // getBoundingClientRect() (its ancestor is display:none, not removed).
+  // Without this, labelTextOf() below (isVisible()'s only real gatekeeper
+  // for label discovery, since Jumia never uses a real <label> element —
+  // every field caption here is a styled <p class="label">, found only via
+  // the doc-order/closest-before fallback strategies in findLabel(), both of
+  // which route through isVisible()) rejects every hidden step's own label
+  // text, so findFields() drops the field entirely before the AI ever sees
+  // it — confirmed live via screenshot: an entire "Variants" step (Variation,
+  // Seller SKU, GTIN Barcode, Quantity) and "Product Specification" step
+  // (Material family, Model, Warranty Duration, …) silently never got filled.
+  // Treating a hidden-only-because-of-this-wizard element as "visible enough
+  // to harvest and write" fixes that — the actual writers (writeInput/
+  // writeSelect/writeRichText) have no visibility gate of their own and work
+  // fine on a display:none element already, since they just set the native
+  // value and dispatch the events Angular's reactive forms listen for.
+  // isVisible()'s OTHER callers (open-overlay/backdrop detection) are
+  // unaffected: a hidden step's controls can never be "the currently open
+  // overlay" in the first place, so this relaxation never changes their
+  // result. (One real gap this doesn't close: combobox-type attribute
+  // pickers — Certifications, Material family, Production country, Warranty
+  // Duration/Type — still need a genuinely visible, on-screen trigger to
+  // open their overlay; clicking one while hidden may silently do nothing,
+  // same as it silently does nothing today by never being attempted at all.)
+  //
+  // BUG FIXED HERE (confirmed live via console dump, Sep 2026): the first
+  // version of this checked `elm.closest(STEPPER_SECTION_SEL)` — true for
+  // ANY descendant of a step container, not just "the step itself is
+  // hidden". Every step's CKEditor fields (Description/Highlights on
+  // Product Information; From the Manufacturer/etc. on Product
+  // Specification) have their OWN legitimately-hidden toolbar internals — a
+  // closed "Insert media" popup form, a collapsed heading dropdown — that
+  // are hidden for a real, unrelated reason even while their step IS the
+  // one currently on screen. Blanket-trusting any step-container descendant
+  // made those register as "visible" too: a hidden "Media URL" popup input
+  // started getting harvested as a bogus real field, and the noise it added
+  // to the label-discovery walk knocked Description/Highlights off the
+  // field list entirely — confirmed live: neither appeared in the 28-field
+  // harvest at all. Gating on the STEP CONTAINER's own rect (not the
+  // element's ancestor chain generally) fixes this: the override only fires
+  // when the whole step is the hidden one, so a currently-active step's own
+  // closed popups/dropdowns still correctly fail isVisible() exactly like
+  // before this feature existed.
+  const STEPPER_SECTION_SEL =
+    "#variants, #product-specification, #product-information, " +
+    ".product-variation, .product-specification, .product-information";
+
   /**
    * Return trimmed label text from an element, or null if it isn't label-like:
    * skips anything that contains a form control, a button, a toolbar, or an
@@ -859,7 +918,59 @@
    */
   function isVisible(elm) {
     if (!elm || !elm.getClientRects) return false;
-    return elm.getClientRects().length > 0;
+    if (elm.getClientRects().length > 0) return true;
+    // CKEditor's own toolbar/dropdown-panel internals (a closed "Insert
+    // media" popup, a collapsed heading menu, …) must never get the
+    // hidden-step leniency below — they're legitimately hidden regardless
+    // of which wizard step they belong to. Confirmed live: without this
+    // exclusion, a "Media URL" popup input leaked in as a bogus real field
+    // whenever ITS step (Product Information or Product Specification —
+    // whichever one wasn't the currently active step) was the hidden one.
+    // The real editable area (.ck-editor__main) is never inside a toolbar,
+    // so this doesn't affect Description/Highlights/etc. at all.
+    if (elm.closest && elm.closest(".ck-toolbar, .ck-dropdown__panel")) return false;
+    const stepContainer = elm.closest && elm.closest(STEPPER_SECTION_SEL);
+    return !!(stepContainer && stepContainer.getClientRects().length === 0);
+  }
+
+  /**
+   * A REAL, strict visibility check — deliberately separate from isVisible()
+   * above, which treats a hidden wizard step's fields as "visible enough to
+   * harvest/write". Clicking Jumia's own "Next" control must never rely on
+   * that relaxed definition: we only ever click something that is actually
+   * on-screen right now, confirmed by its own rendered size.
+   */
+  function isReallyVisible(elm) {
+    return !!(elm && elm.getClientRects && elm.getClientRects().length > 0);
+  }
+
+  /**
+   * The wizard's own "Next" control, confirmed live via inspected markup:
+   * `<button class="... action-next ...">Next<mat-icon>navigate_next</mat-
+   * icon></button>`, sitting inside a `.mobile-actions` block that is
+   * structurally separate from `.desktop-actions`' `.submit` button — their
+   * class names never appear on the same element and never will, so
+   * matching on `.action-next` can never be confused with the control that
+   * actually submits the listing (the one thing this extension must never
+   * click on a seller's behalf).
+   *
+   * Both action sets exist in the DOM at all times — Jumia toggles which
+   * one is visible via CSS at the current viewport width, it doesn't
+   * destroy/recreate them — so this selector matches something even on the
+   * classic wide single-page layout. Gating on isReallyVisible() is what
+   * makes that safe: a real click only ever happens when the button is
+   * genuinely on-screen, so this is a no-op there, exactly like before this
+   * feature existed.
+   */
+  function findNextStepButton() {
+    const btn = document.querySelector("button.action-next");
+    return btn && isReallyVisible(btn) ? btn : null;
+  }
+
+  /** Same idea as findNextStepButton, for returning to the first step once done. */
+  function findBackStepButton() {
+    const btn = document.querySelector("button.action-back");
+    return btn && isReallyVisible(btn) && !btn.disabled ? btn : null;
   }
 
   /** True when text looks like Jumia's own helper/placeholder copy ("Ex: …",
@@ -1146,6 +1257,51 @@
     }
     await closeAnyLingeringOverlay();
 
+    // Combobox-type attribute pickers (Certifications, Material family,
+    // Production country, Warranty Duration/Type, …) need their trigger to
+    // be genuinely on-screen to open its overlay — unlike text/select/
+    // richtext fields, there's no native-value-setter shortcut that works
+    // while hidden (see isVisible()'s big comment above). Anything that
+    // failed for exactly that reason gets a second chance here: walk
+    // Jumia's own wizard forward one step at a time (only when the layout
+    // actually has one — findNextStepButton() returns null on the classic
+    // single-page layout, so this whole block is a no-op there) and retry
+    // once each field's step is actually visible. Bounded at 4 hops — more
+    // than the 3 steps seen live, in case a future category adds one — so
+    // a page that never settles can't spin this forever.
+    let pendingCombos = results.filter(
+      (r) => !r.ok && r.field?.type === "combobox" && !isReallyVisible(r.field.el),
+    );
+    for (let hop = 0; pendingCombos.length && hop < 4; hop++) {
+      const next = findNextStepButton();
+      if (!next) break;
+      next.click();
+      for (let attempt = 0; attempt < 20; attempt++) {
+        await sleep(100);
+        if (pendingCombos.some((r) => isReallyVisible(r.field.el))) break;
+      }
+      for (const r of pendingCombos) {
+        if (!isReallyVisible(r.field.el)) continue;
+        try {
+          const ok = await writeValue(r.field, r.value);
+          r.ok = ok;
+          r.reason = ok ? "" : "writer reported no change";
+        } catch (e) {
+          r.reason = e.message;
+        }
+      }
+      pendingCombos = pendingCombos.filter((r) => !r.ok);
+    }
+    // Leave the seller where they started (step 1) to review, same as the
+    // classic single-page layout always has — never on whatever step the
+    // walk above happened to end on.
+    for (let hop = 0; hop < 4; hop++) {
+      const back = findBackStepButton();
+      if (!back) break;
+      back.click();
+      await sleep(150);
+    }
+
     // Confirmed live (Aug 29 2026, console label→element map + Vercel logs
     // for the same request): writeInput's own synchronous check proved Name
     // held the AI's real title the instant it was written, yet the visible
@@ -1174,6 +1330,12 @@
     const publicResults = results.map(({ label, ok, reason, skipped }) => ({ label, ok, reason, skipped }));
 
     console.debug(LOG, "apply results:", publicResults);
+    // Same idea as __pandaworldLastHarvest above — run
+    // copy(window.__pandaworldLastApply) in DevTools for clipboard-ready
+    // text. Includes the raw AI values too, so it's possible to tell
+    // "the AI never returned this field" apart from "it did, and the
+    // write failed" — the two read identically from the page alone.
+    window.__pandaworldLastApply = { values, results: publicResults };
     return { ok: true, results: publicResults };
   }
 
@@ -1339,8 +1501,21 @@
    * family or Material family (see splitComboValues). Reports success if at
    * least one choice landed, so a partly-matched multi-select still counts
    * as filled rather than silently reading as a total failure.
+   *
+   * Fails fast when the trigger isn't genuinely on-screen — a field on a
+   * hidden wizard step (see isVisible()'s big comment above) can never
+   * actually open an overlay; Angular Material's CDK positioning needs a
+   * real bounding rect. Without this check, writeComboboxOne's 30-attempt
+   * retry loop (30 × 130ms ≈ 4s) would still run to completion and fail
+   * anyway — confirmed live: with 5 hidden comboboxes on one listing, that
+   * added ~20 seconds of the page visibly doing nothing before
+   * applyValues()'s own wizard-walk (findNextStepButton, below the main
+   * per-field loop) ever got a turn, which read as "the fill just isn't
+   * doing anything" rather than "still working." Failing instantly here
+   * lets that walk start immediately instead.
    */
   async function writeCombobox(el, value, field) {
+    if (!isReallyVisible(el)) return false;
     const values = splitComboValues(value, field);
     let selected = 0;
     for (const v of values) {
