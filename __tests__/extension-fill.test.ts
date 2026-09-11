@@ -363,14 +363,14 @@ describe("finalizeAiValues (real-AI post-processing)", () => {
     expect(values["Warranty Address"]).toBe("Accra, Ghana");
   });
 
-  it("drops Warranty Duration when Warranty Type is N/A, even if the AI filled a duration in", () => {
+  it("forces Warranty Duration to N/A when Warranty Type is N/A, even if the AI filled a real-sounding duration in", () => {
     const { values } = finalizeAiValues(
       { "Warranty Type": "N/A", "Warranty Duration": "1 Year" },
       fields,
       "",
     );
     expect(values["Warranty Type"]).toBe("N/A");
-    expect(values["Warranty Duration"]).toBeUndefined();
+    expect(values["Warranty Duration"]).toBe("N/A");
   });
 
   it("keeps Warranty Duration when Warranty Type is a real warranty", () => {
@@ -471,9 +471,27 @@ describe("finalizeAiValues (real-AI post-processing)", () => {
       expect(values["Warranty Type"]).toBe("Replacement by Vendor");
     });
 
-    it("leaves Warranty Type blank when Advanced Options weren't used and the AI didn't fill it", () => {
+    it("leaves Warranty Type blank but forces Warranty Duration to N/A when Advanced Options weren't used and the AI didn't fill either", () => {
       const { values } = finalizeAiValues({}, warrantyFields, "");
       expect(values["Warranty Type"]).toBeUndefined();
+      expect(values["Warranty Duration"]).toBe("N/A");
+    });
+
+    it("falls back to whichever none-ish option exists when N/A isn't offered", () => {
+      const durationOnlyNone: HarvestedField[] = [
+        { label: "Warranty Type", type: "select", options: ["Repair by Vendor", "None"] },
+        { label: "Warranty Duration", type: "select", options: ["1 Year", "2 Years", "None"] },
+      ];
+      const { values } = finalizeAiValues({}, durationOnlyNone, "");
+      expect(values["Warranty Duration"]).toBe("None");
+    });
+
+    it("deletes rather than invents a none-ish Warranty Duration value when the field offers neither N/A nor None", () => {
+      const noFillerOption: HarvestedField[] = [
+        { label: "Warranty Type", type: "select", options: ["Repair by Vendor"] },
+        { label: "Warranty Duration", type: "select", options: ["1 Year", "2 Years"] },
+      ];
+      const { values } = finalizeAiValues({ "Warranty Duration": "1 Year" }, noFillerOption, "");
       expect(values["Warranty Duration"]).toBeUndefined();
     });
 
@@ -491,6 +509,38 @@ describe("finalizeAiValues (real-AI post-processing)", () => {
 
     it("does NOT default Warranty Type when the seller typed N/A into the Warranty address box", () => {
       const { values } = finalizeAiValues({}, warrantyFields, "Warranty address: N/A");
+      expect(values["Warranty Type"]).toBeUndefined();
+    });
+  });
+
+  describe("Product warranty default", () => {
+    const productWarrantyFields: HarvestedField[] = [
+      { label: "Product warranty", type: "richtext" },
+    ];
+
+    it("defaults to N/A when the AI left it blank", () => {
+      const { values } = finalizeAiValues({}, productWarrantyFields, "");
+      expect(values["Product warranty"]).toBe("N/A");
+    });
+
+    it("keeps a real value the AI already gave", () => {
+      const { values } = finalizeAiValues(
+        { "Product warranty": "1 year manufacturer warranty, repair only" },
+        productWarrantyFields,
+        "",
+      );
+      expect(values["Product warranty"]).toBe("<p>1 year manufacturer warranty, repair only</p>");
+    });
+
+    it("does not confuse the bare 'Product warranty' field with Warranty Type/Duration/Address", () => {
+      const allWarrantyFields: HarvestedField[] = [
+        { label: "Product warranty", type: "richtext" },
+        { label: "Warranty Type", type: "select", options: ["Repair by Vendor", "N/A", "None"] },
+        { label: "Warranty Duration", type: "select", options: ["1 Year", "N/A", "None"] },
+        { label: "Warranty Address", type: "text" },
+      ];
+      const { values } = finalizeAiValues({}, allWarrantyFields, "");
+      expect(values["Product warranty"]).toBe("N/A");
       expect(values["Warranty Type"]).toBeUndefined();
     });
   });

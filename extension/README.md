@@ -41,11 +41,15 @@ No build step — it's plain JS/HTML/CSS. Loads unpacked as-is for local dev, an
   earlier write to lift the `disabled` attribute.
 - Warranty Duration mirrors the panel's Advanced Options selection exactly
   (forced server-side, not just AI-guessed — see
-  `parseAdvancedWarrantyOptions()` in `lib/extension/fill.ts`). Warranty
-  Type stays blank by default — it's never auto-set to "N/A" — and only
-  gets a "Repair by Vendor" (or "Replacement by Vendor") default when the
-  seller actually set a Warranty duration/address or asked for one in their
-  own notes; a real, more specific answer the AI already gave is left as-is.
+  `parseAdvancedWarrantyOptions()` in `lib/extension/fill.ts`). When the
+  seller didn't set anything via Advanced Options and no real warranty was
+  determined, Warranty Duration and Product warranty both get forced to
+  whichever "N/A"/"None"-style option the listing's own fields actually
+  offer, rather than sitting blank. Warranty Type stays blank by default —
+  it's never auto-set to "N/A" — and only gets a "Repair by Vendor" (or
+  "Replacement by Vendor") default when the seller actually set a Warranty
+  duration/address or asked for one in their own notes; a real, more
+  specific answer the AI already gave is left as-is.
 - Search grounding (Gemini's `google_search` tool, always on for the fill
   call — see `groundWithSearch` in `gemini-client.ts`) is what a photo alone
   can't provide for exact-value fields like Model/Country of origin/

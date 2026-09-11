@@ -95,6 +95,21 @@ export async function sendButtons(
 }
 
 /**
+ * Send a text reply, or log-and-skip when WhatsApp isn't configured yet
+ * (local dev, or before the Meta app credentials exist). Shared by the
+ * webhook route and the conversation orchestration in
+ * lib/whatsapp/intake.ts so neither has to duplicate the "not configured"
+ * guard.
+ */
+export async function sendTextIfConfigured(to: string, text: string): Promise<void> {
+  if (!isWhatsAppConfigured()) {
+    console.warn(`[whatsapp] not configured — would have sent to ${to}: ${text}`);
+    return;
+  }
+  await sendText(to, text);
+}
+
+/**
  * Fetch an incoming media attachment's bytes. WhatsApp gives you a media ID
  * in the webhook payload, not a direct URL — two hops: resolve the ID to a
  * short-lived authenticated URL, then fetch that URL with the same bearer

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { redeemLinkCode, getUserIdForPhoneNumber } from "@/lib/whatsapp/link";
-import { sendText, isWhatsAppConfigured } from "@/lib/whatsapp/client";
+import { sendTextIfConfigured } from "@/lib/whatsapp/client";
 import { verifyWhatsAppSignature, extractLinkCode } from "@/lib/whatsapp/webhook-verify";
+import { handleLinkedMessage } from "@/lib/whatsapp/intake";
 
 /**
  * WhatsApp Business Cloud API webhook.
@@ -10,11 +11,18 @@ import { verifyWhatsAppSignature, extractLinkCode } from "@/lib/whatsapp/webhook
  *        your app → WhatsApp → Configuration → Webhook → Verify and save).
  * POST — every inbound event (messages, status updates, etc.).
  *
- * Stage 1 of the plan: only account-linking ("LINK-<code>" messages) is
- * handled here. Everything else from a linked number gets a placeholder
- * reply — the photo-intake → analyze → confirm → push conversation lands
- * in later stages, once whatsapp_sessions exists.
+ * Stage 1 handles account-linking ("LINK-<code>" messages). Stage 3 (this
+ * revision) adds the photo-intake → analyze → draft-reply loop for already-
+ * linked numbers — see lib/whatsapp/intake.ts for the conversation state
+ * machine. Chat-native confirm/fix/push (Stage 4) isn't wired up yet.
  */
+
+// Auto-analyze runs inline within this handler (see lib/whatsapp/intake.ts)
+// so the seller's draft reply arrives as a proactive WhatsApp send once it
+// finishes — same worst-case duration as the web route, same headroom
+// needed. See app/api/listings/[id]/auto-analyze/route.ts for the full
+// reasoning.
+export const maxDuration = 60;
 
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
@@ -29,9 +37,11 @@ export async function GET(req: NextRequest) {
 }
 
 interface IncomingMessage {
+  id:   string; // Meta's wamid — used to de-dupe retried webhook deliveries
   from: string;
   type: string;
   text?: { body: string };
+  image?: { id: string; mime_type?: string };
   button?: { text: string; payload: string };
   interactive?: { button_reply?: { id: string; title: string } };
 }
@@ -98,10 +108,10 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
         result.error === "expired" ? "That code has expired — generate a new one from Settings → Integrations."
         : result.error === "used"    ? "That code was already used — generate a new one if you need to link another number."
         :                               "That code isn't valid — check Settings → Integrations for the right one.";
-      await replyIfConfigured(msg.from, `⚠️ ${reason}`);
+      await sendTextIfConfigured(msg.from, `⚠️ ${reason}`);
       return;
     }
-    await replyIfConfigured(
+    await sendTextIfConfigured(
       msg.from,
       "✅ Your WhatsApp is now linked to PandaWorld! Send a product photo to start a new listing.",
     );
@@ -110,25 +120,19 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
 
   const userId = await getUserIdForPhoneNumber(msg.from);
   if (!userId) {
-    await replyIfConfigured(
+    await sendTextIfConfigured(
       msg.from,
       "👋 This number isn't linked to a PandaWorld account yet. Open Settings → Integrations in the app and tap \"Connect WhatsApp\" to get a linking code.",
     );
     return;
   }
 
-  // Linked, but the photo-intake conversation isn't wired up yet (later
-  // stages) — acknowledge rather than going silent.
-  await replyIfConfigured(
-    msg.from,
-    "You're linked! Listing creation from WhatsApp is coming very soon — hang tight.",
-  );
+  await handleLinkedMessage(userId, msg.from, msg.id, contentOf(msg));
 }
 
-async function replyIfConfigured(to: string, text: string): Promise<void> {
-  if (!isWhatsAppConfigured()) {
-    console.warn(`[whatsapp webhook] WHATSAPP_ACCESS_TOKEN/PHONE_NUMBER_ID not set — would have replied to ${to}: ${text}`);
-    return;
-  }
-  await sendText(to, text);
+/** Reduce Meta's message shape to the bit lib/whatsapp/intake.ts cares about. */
+function contentOf(msg: IncomingMessage): { text?: string; imageMediaId?: string } {
+  if (msg.type === "image" && msg.image?.id) return { imageMediaId: msg.image.id };
+  if (msg.text?.body) return { text: msg.text.body };
+  return {};
 }
