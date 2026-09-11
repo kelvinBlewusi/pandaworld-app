@@ -302,7 +302,7 @@ export async function POST(req: Request) {
   if (balance < LISTING_CREDIT_COST) {
     return NextResponse.json(
       {
-        error: `You have ${balance} credits left — an autofill costs ${LISTING_CREDIT_COST}. Buy more credits on your dashboard.`,
+        error: `You have ${balance} listing credit${balance === 1 ? "" : "s"} left — Purchase on your Dashboard.`,
         creditsRemaining: balance,
       },
       { status: 402, headers: CORS },

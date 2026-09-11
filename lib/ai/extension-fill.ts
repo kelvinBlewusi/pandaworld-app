@@ -126,6 +126,18 @@ function hintFor(f: HarvestedField): string {
       ? " — leave BLANK/omit by default, even if \"N/A\"/\"None\" is offered as an option — do NOT auto-default this one. ONLY fill it if the seller's notes give REAL warranty info (a \"Warranty duration\"/\"Warranty address\" note with an ACTUAL period/address, or warranty terms stated directly) — a \"Warranty duration: N/A\" or \"Warranty duration: None\" note means there IS NO warranty, so this stays blank even then. When real info IS given, pick whichever of \"Repair by Vendor\"/\"Replacement by Vendor\" is offered and fits (default to Repair unless the notes clearly describe a replacement), or the option that most specifically matches what they said."
       : " — leave BLANK/omit by default. ONLY fill it if the seller's notes give REAL warranty info (not a \"Warranty duration: N/A\"/\"None\" note, which means there is no warranty): then describe the warranty arrangement (repair vs. replacement, and who provides it) consistent with that.";
   }
+  // "Product warranty": the free-text warranty-terms field, distinct from
+  // Warranty Type/Duration/Address above. Falls into this bare branch
+  // precisely because its real Jumia label contains none of "address"/
+  // "duration"/"type" — lib/extension/fill.ts's finalizeAiValues() also
+  // forces this to "N/A" in code whenever it ends up blank, so this hint
+  // mainly matters for getting real warranty terms written the first time
+  // instead of relying on that fallback.
+  if (l.includes("warranty")) {
+    return constrained
+      ? " — default to whichever of \"N/A\"/\"None\" is LITERALLY PRESENT in THIS field's own option list above, UNLESS the seller's notes state real warranty terms — then describe those instead."
+      : " — default to \"N/A\", UNLESS the seller's notes state real warranty terms or a period (including any \"Warranty duration\"/\"Warranty address\" note) — then describe that SAME warranty here.";
+  }
   // "Color family"/"Material family" are their own fields, distinct from
   // "Color"/"Main material" — confirmed live: giving them the same generic
   // hint as the base attribute made the AI fill the base field from an

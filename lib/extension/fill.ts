@@ -616,18 +616,48 @@ export function finalizeAiValues(
     }
   }
 
-  // If Warranty Type came out N/A (or wasn't filled at all), an AI-GUESSED
-  // duration doesn't mean anything — drop it even if the AI filled one in,
-  // rather than leaving a duration on a listing that says it has no
-  // warranty. Exempt a duration the seller explicitly set via Advanced
-  // Options (advancedWarranty.duration): that's their own deliberate
-  // choice — including "N/A"/"None" itself — not a guess to second-guess,
-  // and it's exactly why Type correctly stayed blank/N/A in that case.
-  if (warrantyDurationField && values[warrantyDurationField.label] && !advancedWarranty.duration) {
+  // When there's no real warranty (Warranty Type ended up blank/N/A/None)
+  // AND the seller didn't set a duration via Advanced Options, Warranty
+  // Duration should say so explicitly rather than sit blank — confirmed
+  // live: this used to just DELETE an AI-guessed value like "1 Year" with
+  // nothing to replace it, so the field showed up empty on the actual page
+  // instead of an explicit "no warranty" answer. Force it to whichever
+  // N/A-ish option THIS field's own list actually offers (same lookup
+  // FILLER_SYNONYMS already powers for snapToOption) — some categories
+  // only offer "N/A", others only "None". Exempt a duration the seller
+  // explicitly set via Advanced Options (advancedWarranty.duration):
+  // that's their own deliberate choice — including "N/A"/"None" itself —
+  // not a guess to second-guess, and it's exactly why Type correctly
+  // stayed blank/N/A in that case.
+  if (warrantyDurationField && !advancedWarranty.duration) {
     const typeVal = warrantyTypeField ? (values[warrantyTypeField.label] ?? "").trim().toLowerCase() : "";
-    if (!warrantyTypeField || !typeVal || typeVal === "n/a" || typeVal === "none") {
-      delete values[warrantyDurationField.label];
+    const hasRealWarranty = Boolean(warrantyTypeField && typeVal && typeVal !== "n/a" && typeVal !== "none");
+    if (!hasRealWarranty) {
+      const noneish = warrantyDurationField.options?.find((o) => FILLER_SYNONYMS.includes(o.toLowerCase().trim()));
+      if (noneish) {
+        values[warrantyDurationField.label] = noneish;
+      } else {
+        delete values[warrantyDurationField.label];
+      }
     }
+  }
+
+  // "Product warranty" (free-text terms — distinct from the Warranty Type/
+  // Duration/Address fields above) has no dedicated hint in
+  // lib/ai/extension-fill.ts's hintFor(): that function only special-cases
+  // labels containing "address"/"duration"/"type", and this field's real
+  // Jumia label contains none of those, so it silently fell through to the
+  // generic "infer from the image, or omit" hint and usually came back
+  // blank. Force the same "no warranty = N/A" default the other warranty
+  // fields already get whenever it ends up blank — mapProductToFields
+  // above (the mock pathway) has always done this; this mirrors it for the
+  // real AI pathway.
+  const productWarrantyField = fields.find((f) => {
+    const l = norm(f.label);
+    return l.includes("warranty") && !l.includes("type") && !l.includes("duration") && !l.includes("address");
+  });
+  if (productWarrantyField && !(values[productWarrantyField.label] ?? "").trim()) {
+    values[productWarrantyField.label] = "N/A";
   }
 
   // Same cascade for Sale Price / Sale Start / Sale End Date: Jumia's own

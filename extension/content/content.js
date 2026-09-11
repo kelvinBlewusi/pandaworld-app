@@ -1315,15 +1315,30 @@
     // Scoped to text/textarea only — richtext goes through a different
     // read/write path, and re-clicking a combobox/select risks reopening an
     // overlay mid-verification instead of just confirming a value.
-    await sleep(400);
-    for (const r of results) {
-      if (!r.ok || !r.field || r.field.type !== "text") continue;
-      const current = (r.field.el.value || "").trim();
-      if (current === r.value.trim()) continue;
-      console.warn(LOG, `"${r.label}" drifted from "${r.value}" to "${current}" after writing — reasserting`);
-      const reok = writeInput(r.field.el, r.value);
-      r.ok = reok;
-      r.reason = reok ? "" : "reasserted but writer reported no change";
+    //
+    // Looped up to 3 rounds rather than a single check — confirmed live
+    // (Sep 2026): "Variation" drifted to what looked like a Production-
+    // Country value on a single-variant listing, got caught and reasserted
+    // by exactly this mechanism, and STILL showed the wrong value in the
+    // final screenshot — i.e. one reassertion isn't always enough, whatever
+    // reverts the value can apparently fire again after the first fix
+    // lands. Stops early the moment a full round finds nothing drifted, so
+    // the common case (no drift, or one drift fixed on the first pass)
+    // behaves exactly as before.
+    for (let round = 0; round < 3; round++) {
+      await sleep(400);
+      let driftedAny = false;
+      for (const r of results) {
+        if (!r.ok || !r.field || r.field.type !== "text") continue;
+        const current = (r.field.el.value || "").trim();
+        if (current === r.value.trim()) continue;
+        driftedAny = true;
+        console.warn(LOG, `"${r.label}" drifted from "${r.value}" to "${current}" after writing — reasserting (round ${round + 1})`);
+        const reok = writeInput(r.field.el, r.value);
+        r.ok = reok;
+        r.reason = reok ? "" : "reasserted but writer reported no change";
+      }
+      if (!driftedAny) break;
     }
     // Drop the internal-only fields carried above for the reassertion pass —
     // the caller only expects {label, ok, reason, skipped?}.
