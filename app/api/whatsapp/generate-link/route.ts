@@ -16,6 +16,14 @@ export async function POST() {
   const limited = checkRateLimit(`whatsapp-link:${userId}`, RATE_LIMITS.whatsappLink);
   if (limited) return limited;
 
-  const { code, waLink } = await createLinkCode(userId);
-  return NextResponse.json({ code, waLink });
+  try {
+    const { code, waLink } = await createLinkCode(userId);
+    return NextResponse.json({ code, waLink });
+  } catch (e) {
+    console.error("[whatsapp generate-link]", e);
+    return NextResponse.json(
+      { error: (e as Error).message ?? "Failed to generate a link code." },
+      { status: 500 },
+    );
+  }
 }
