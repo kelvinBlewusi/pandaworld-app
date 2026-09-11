@@ -24,10 +24,17 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 //                            lib/security/extension-keys.ts), not Clerk.
 //   /api/extension/account   — same story: the panel's status row (plan +
 //                            credits), authed by the same API key.
-//   NOTE: /extension/dashboard and /api/extension/keys are intentionally NOT
-//   listed here — they're the logged-in dashboard + its API, called by the
-//   browser with a real Clerk session, so they go through the normal
-//   auth.protect() gate below like any other app route.
+//   /api/whatsapp/webhook    — incoming WhatsApp Business Cloud API webhook,
+//                            called directly by Meta's servers with no Clerk
+//                            session. Verifies its own X-Hub-Signature-256
+//                            HMAC (see lib/whatsapp/webhook-verify.ts) and the
+//                            GET handshake's hub.verify_token, same pattern as
+//                            /api/paystack/webhook above.
+//   NOTE: /extension/dashboard, /api/extension/keys, and the other
+//   /api/whatsapp/* routes (status/generate-link/disconnect) are
+//   intentionally NOT listed here — they're the logged-in dashboard + its
+//   API, called by the browser with a real Clerk session, so they go through
+//   the normal auth.protect() gate below like any other app route.
 //
 // SEO convention routes — Next.js renders these as dynamic server
 // routes (NOT static files), so they're caught by the matcher below
@@ -53,6 +60,7 @@ const isPublicRoute = createRouteMatcher([
   '/extension',
   '/api/extension/fill',
   '/api/extension/account',
+  '/api/whatsapp/webhook',
   // SEO + crawler routes — keep these PUBLIC or Google rejects the
   // sitemap and the OG link previews render as broken images.
   '/sitemap.xml',
