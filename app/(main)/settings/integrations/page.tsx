@@ -44,6 +44,7 @@ function WhatsAppCard() {
   const [disconnecting, setDisconnecting] = useState(false);
   const [link, setLink] = useState<{ code: string; waLink: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
 
   const loadStatus = () => {
     fetch("/api/whatsapp/status")
@@ -58,9 +59,17 @@ function WhatsAppCard() {
   async function handleGenerateLink() {
     setGenerating(true);
     setLink(null);
+    setLinkError(null);
     try {
       const res = await fetch("/api/whatsapp/generate-link", { method: "POST" });
-      if (res.ok) setLink(await res.json());
+      if (res.ok) {
+        setLink(await res.json());
+      } else {
+        const data = await res.json().catch(() => null);
+        setLinkError(data?.error ?? `Couldn't generate a link (HTTP ${res.status}). Try again.`);
+      }
+    } catch {
+      setLinkError("Network error — check your connection and try again.");
     } finally {
       setGenerating(false);
     }
@@ -187,10 +196,13 @@ function WhatsAppCard() {
               <p className="text-xs text-blue-500">This code expires in 15 minutes.</p>
             </div>
           ) : (
-            <Button onClick={handleGenerateLink} disabled={generating} className="gap-2 bg-emerald-500 hover:bg-emerald-600">
-              {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}
-              {generating ? "Generating…" : "Connect WhatsApp"}
-            </Button>
+            <div className="space-y-2">
+              <Button onClick={handleGenerateLink} disabled={generating} className="gap-2 bg-emerald-500 hover:bg-emerald-600">
+                {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}
+                {generating ? "Generating…" : "Connect WhatsApp"}
+              </Button>
+              {linkError && <p className="text-sm text-red-600">{linkError}</p>}
+            </div>
           )}
         </div>
       )}
