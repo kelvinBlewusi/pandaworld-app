@@ -547,13 +547,19 @@ async function startBatchAnalysis(
             // moment this product's draft is ready — see
             // components/extension/whatsapp-focused-editor.tsx — rather
             // than making the seller wait for the batch-wide summary or
-            // hunt for it on the review page.
-            await replyCta(
-              phoneNumber,
-              `✅ Product ${seq} drafted: ${result.title ?? "(untitled)"}.`,
-              `Edit product ${seq}`,
-              focusedEditorUrl(listing.id),
-            );
+            // hunt for it on the review page. Only worth doing mid-batch
+            // when there ARE other products still drafting (batchSize>1);
+            // a 1-product batch's single "drafted" event folds straight
+            // into the one combined completion message below instead of
+            // sending this as a separate message first.
+            if (batchSize > 1) {
+              await replyCta(
+                phoneNumber,
+                `✅ Product ${seq} drafted: ${result.title ?? "(untitled)"}.`,
+                `Edit product ${seq}`,
+                focusedEditorUrl(listing.id),
+              );
+            }
           } else {
             await replyCta(
               phoneNumber,
@@ -585,18 +591,40 @@ async function startBatchAnalysis(
     }
 
     await updateSession(phoneNumber, { state: "awaiting_confirmation" });
-    // Two sends, not one — Meta's cta_url and button interactive types
-    // can't share a single message.
-    await replyCta(
-      phoneNumber,
-      `🎉 Done drafting your ${batchSize} product${batchSize === 1 ? "" : "s"}! Review each one below.`,
-      "Review listings",
-      whatsappListingsUrl(batchId),
-    );
+
+    if (batchSize === 1) {
+      // Meta's interactive "button" type allows up to 3 reply-buttons in
+      // ONE message (unlike cta_url, which only ever supports a single
+      // button) — so a 1-product batch's whole completion fits in one
+      // send instead of three. Tapping "Edit"/"Review" costs one extra
+      // round trip vs. the old direct-open cta_url (a reply-button can't
+      // open a URL itself — see the "edit:"/"review" handling above), a
+      // trade worth making for one consolidated message over three.
+      const refreshed = await getBatchListings(batchId);
+      const only = refreshed[0];
+      if (only?.title) {
+        await replyButtons(
+          phoneNumber,
+          `✅ Product drafted: ${only.title}.\n\n🎉 Ready to submit? Reply *submit all*, or say something like "change the price to 150" to edit it first.`,
+          [
+            { id: `edit:${only.id}`, title: "Edit product" },
+            { id: "review", title: "Review listing" },
+            { id: "submit all", title: "Submit all ✅" },
+          ],
+        );
+      }
+      // else: the one product's own failure message (sent above, inside
+      // the Promise.all) already covers what happened — nothing to add.
+      return;
+    }
+
     await replyButtons(
       phoneNumber,
-      `Ready to submit? Reply *submit all*, or tell me a product number (e.g. *submit 2*). You can also say "2: change the price to 150" to edit one first.`,
-      [{ id: "submit all", title: "Submit all ✅" }],
+      `🎉 Done drafting your ${batchSize} products! Reply *submit all*, or tell me a product number (e.g. *submit 2*) — or say "2: change the price to 150" to edit one first.`,
+      [
+        { id: "review", title: "Review listings" },
+        { id: "submit all", title: "Submit all ✅" },
+      ],
     );
   } catch (e) {
     console.error(`[whatsapp intake] startBatchAnalysis failed for batch ${batchId}: ${(e as Error).message}`);
@@ -629,6 +657,28 @@ async function handleAwaitingBatchConfirmation(
   const submitCmd = parseSubmitCommand(text);
   if (submitCmd) {
     await handleSubmit(userId, phoneNumber, batchId, submitCmd);
+    return;
+  }
+
+  // "Review listing(s)" button tap — reply-buttons can't open a URL
+  // directly (only a standalone cta_url message can), so tapping this one
+  // costs an extra round trip: we reply with the link as its own tappable
+  // button. Checked before parseEditCommand so it can never be swallowed
+  // by the batchSize===1 implicit-edit fallback (plain "review" contains
+  // no action word, so looksActionable would reject it there anyway, but
+  // handling it explicitly here is clearer than relying on that).
+  if (/^review( listings?)?[.!]?$/i.test(text)) {
+    await replyCta(phoneNumber, "Here's your batch:", "Review listings", whatsappListingsUrl(batchId));
+    return;
+  }
+
+  // "Edit product" button tap for a specific listing — id is `edit:<uuid>`,
+  // set when that listing was drafted (see startBatchAnalysis). Same
+  // round-trip reasoning as "review" above: reply with the focused
+  // editor's link as its own button rather than trying to open it directly.
+  const editButtonMatch = text.match(/^edit:(.+)$/);
+  if (editButtonMatch) {
+    await replyCta(phoneNumber, "Here's the form for this product:", "Open editor", focusedEditorUrl(editButtonMatch[1]));
     return;
   }
 
