@@ -58,7 +58,7 @@ export async function testJumiaCredentials(appId: string, secretKey: string): Pr
   }
 }
 
-export type JumiaConnectionKind = "connected" | "needs_credentials" | "needs_oauth";
+export type JumiaConnectionKind = "connected" | "needs_credentials" | "needs_oauth" | "needs_reconnect";
 
 /**
  * Classifies a seller's Jumia connection for the WhatsApp connect-from-chat
@@ -68,12 +68,20 @@ export type JumiaConnectionKind = "connected" | "needs_credentials" | "needs_oau
  *   - access_token is the "credential_auth" sentinel -> needs_oauth
  *     (creds already saved — either from the web form or from a previous
  *     chat attempt — just needs the browser OAuth consent step).
- *   - anything else (active with a real token, OR needs_reconnect) ->
- *     connected. needs_reconnect deliberately isn't gated here — it's a
- *     working setup whose token expired, and the seller's existing
- *     one-click "Re-authorise" flow (Settings -> Integrations, or the web
- *     onboarding reconnect screen) already handles it; the chat flow only
- *     exists to get a NEVER-connected seller unblocked.
+ *   - status "needs_reconnect" -> needs_reconnect (was fully working, the
+ *     access/refresh token expired — app_id/app_secret are still valid,
+ *     so this only needs a fresh OAuth consent tap, same mechanism as
+ *     needs_oauth, just different messaging).
+ *   - anything else (active with a real token) -> connected.
+ *
+ * Earlier versions of this function folded needs_reconnect into
+ * "connected" on the theory that the seller's existing one-click
+ * "Re-authorise" web flow already covered it — but that flow lives in
+ * Settings -> Integrations, which the chat flow exists specifically to
+ * let a seller avoid. Left ungated, a needs_reconnect seller sailed
+ * straight into "how many products?", drafted a full batch, and only
+ * discovered Jumia would reject every submission at the very end.
+ * Gating it here catches that before any drafting starts.
  */
 export async function getJumiaConnectionKind(userId: string): Promise<JumiaConnectionKind> {
   const db = createServerClient();
@@ -85,6 +93,7 @@ export async function getJumiaConnectionKind(userId: string): Promise<JumiaConne
 
   if (!conn || conn.status === "revoked") return "needs_credentials";
   if (conn.access_token === "credential_auth") return "needs_oauth";
+  if (conn.status === "needs_reconnect") return "needs_reconnect";
   return "connected";
 }
 

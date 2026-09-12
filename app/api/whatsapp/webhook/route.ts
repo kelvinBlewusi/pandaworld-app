@@ -4,9 +4,8 @@ import { sendTextIfConfigured, markReadWithTypingIfConfigured } from "@/lib/what
 import { verifyWhatsAppSignature, extractLinkCode } from "@/lib/whatsapp/webhook-verify";
 import { handleLinkedMessage } from "@/lib/whatsapp/intake";
 import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
-import { createConnectToken } from "@/lib/jumia/connect-token";
 import { getOrCreateSession, updateSession } from "@/lib/whatsapp/session";
-import { buildConnectInstructions, jumiaConnectLink } from "@/lib/whatsapp/jumia-connect";
+import { promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
 
 /**
  * WhatsApp Business Cloud API webhook.
@@ -45,7 +44,7 @@ interface IncomingMessage {
   from: string;
   type: string;
   text?: { body: string };
-  image?: { id: string; mime_type?: string };
+  image?: { id: string; mime_type?: string; caption?: string };
   button?: { text: string; payload: string };
   interactive?: { button_reply?: { id: string; title: string } };
 }
@@ -86,11 +85,10 @@ export async function POST(req: NextRequest) {
   }
 
   const { messages, contactName } = extractMessages(body);
-  const origin = req.nextUrl.origin;
 
   for (const msg of messages) {
     try {
-      await handleMessage(msg, origin, contactName);
+      await handleMessage(msg, contactName);
     } catch (e) {
       // One malformed/unexpected message must never take down the rest of
       // the batch, or cause Meta to retry the whole webhook delivery.
@@ -103,7 +101,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ received: true });
 }
 
-async function handleMessage(msg: IncomingMessage, origin: string, contactName?: string): Promise<void> {
+async function handleMessage(msg: IncomingMessage, contactName?: string): Promise<void> {
   // Fired, not awaited — shows the seller blue ticks + the animated
   // "typing…" indicator right away, while everything below (image
   // download, AI analyze, Jumia push) can take several seconds. Never
@@ -124,20 +122,22 @@ async function handleMessage(msg: IncomingMessage, origin: string, contactName?:
       return;
     }
 
-    // A brand-new seller (or one who never finished connecting Jumia) gets
-    // walked through it right here instead of straight into "how many
-    // products?" — see lib/jumia/credentials.ts's getJumiaConnectionKind
-    // and lib/whatsapp/intake.ts's awaiting_jumia_credentials/
-    // awaiting_jumia_oauth states. Always ensure a session row exists
-    // first, then overwrite its state explicitly — a returning number
-    // relinking to a different account, or one with stale state from a
-    // past session, must not carry any of that into this fresh link.
+    // A brand-new seller (or one who never finished connecting Jumia, or
+    // whose connection has since expired) gets walked through it right
+    // here instead of straight into "how many products?" — see
+    // lib/jumia/credentials.ts's getJumiaConnectionKind and
+    // lib/whatsapp/jumia-connect.ts's promptJumiaConnection. Always
+    // ensure a session row exists first, then overwrite its state
+    // explicitly — a returning number relinking to a different account,
+    // or one with stale state from a past session, must not carry any
+    // of that into this fresh link.
     const kind = await getJumiaConnectionKind(result.userId);
     await getOrCreateSession(result.userId, msg.from);
-    const clearBatch = { listingId: null, batchId: null, batchSize: null, batchSeq: null, pendingAppId: null } as const;
 
     if (kind === "connected") {
-      await updateSession(msg.from, { state: "awaiting_count", ...clearBatch });
+      await updateSession(msg.from, {
+        state: "awaiting_count", listingId: null, batchId: null, batchSize: null, batchSeq: null, pendingAppId: null,
+      });
       await sendTextIfConfigured(
         msg.from,
         "✅ Your WhatsApp is now linked to PandaWorld! How many products are you listing today? Reply with a number to get started.",
@@ -145,23 +145,7 @@ async function handleMessage(msg: IncomingMessage, origin: string, contactName?:
       return;
     }
 
-    if (kind === "needs_oauth") {
-      await updateSession(msg.from, { state: "awaiting_jumia_oauth", ...clearBatch });
-      const token = await createConnectToken(result.userId);
-      await sendTextIfConfigured(
-        msg.from,
-        `✅ Your WhatsApp is now linked to PandaWorld! Your Jumia credentials are already on file — tap this link to finish connecting:\n${jumiaConnectLink(token)}\n\nI'll message you here once it's done.`,
-      );
-      return;
-    }
-
-    // needs_credentials — never connected at all
-    await updateSession(msg.from, { state: "awaiting_jumia_credentials", ...clearBatch });
-    const redirectUri = `${origin}/api/jumia/callback`;
-    await sendTextIfConfigured(
-      msg.from,
-      `✅ Your WhatsApp is now linked to PandaWorld!\n\n${buildConnectInstructions(redirectUri)}`,
-    );
+    await promptJumiaConnection(result.userId, msg.from, kind, "✅ Your WhatsApp is now linked to PandaWorld!\n\n");
     return;
   }
 
@@ -177,9 +161,19 @@ async function handleMessage(msg: IncomingMessage, origin: string, contactName?:
   await handleLinkedMessage(userId, msg.from, msg.id, contentOf(msg));
 }
 
-/** Reduce Meta's message shape to the bit lib/whatsapp/intake.ts cares about. */
+/**
+ * Reduce Meta's message shape to the bit lib/whatsapp/intake.ts cares
+ * about. A WhatsApp image can carry a caption in the SAME message (e.g. a
+ * seller attaching "Price 40, done" to a photo) — surfaced as `text`
+ * alongside `imageMediaId` so intake.ts sees both instead of silently
+ * dropping the caption (which used to mean "done" or a price typed as a
+ * caption was never detected — the seller had to send it again as a
+ * separate message).
+ */
 function contentOf(msg: IncomingMessage): { text?: string; imageMediaId?: string } {
-  if (msg.type === "image" && msg.image?.id) return { imageMediaId: msg.image.id };
+  if (msg.type === "image" && msg.image?.id) {
+    return { imageMediaId: msg.image.id, text: msg.image.caption };
+  }
   if (msg.text?.body) return { text: msg.text.body };
   return {};
 }

@@ -6,10 +6,10 @@ import { createListingForUser } from "@/lib/listings/create";
 import { runAutoAnalyze } from "@/lib/actions/auto-analyze";
 import { pushListingToJumia } from "@/lib/jumia/push-listing";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
-import { testJumiaCredentials, saveJumiaCredentialsForUser } from "@/lib/jumia/credentials";
+import { getJumiaConnectionKind, testJumiaCredentials, saveJumiaCredentialsForUser } from "@/lib/jumia/credentials";
 import { createConnectToken } from "@/lib/jumia/connect-token";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
-import { isDoneMessage, reviewUrl } from "@/lib/whatsapp/draft";
+import { endsWithDoneSignal, stripDoneSignal } from "@/lib/whatsapp/draft";
 import {
   parseProductCount,
   parseSubmitCommand,
@@ -18,19 +18,23 @@ import {
   extractStock,
   whatsappListingsUrl,
 } from "@/lib/whatsapp/batch";
-import { splitCredentialTokens, isResendCommand, jumiaConnectLink } from "@/lib/whatsapp/jumia-connect";
+import { splitCredentialTokens, isResendCommand, jumiaConnectLink, promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
+import { classifyBatchIntent, looksActionable } from "@/lib/whatsapp/intent";
 import type { ListingRow } from "@/lib/supabase/types";
 
 /**
  * WhatsApp chatbot, Stage 4: multi-product batches, entirely in chat.
  *
  * Flow: link -> "how many products?" (awaiting_count) -> for each product,
- * photos + optional notes then "done" (awaiting_photos, batch-scoped) ->
- * once the last product is drafted, one consolidated review link
+ * photos + notes then "done" (awaiting_photos, batch-scoped, no AI calls
+ * yet) -> once the LAST product's "done" arrives, every product in the
+ * batch is analyzed together (concurrently, with a live per-product
+ * update as each finishes) -> one consolidated review link
  * (awaiting_confirmation) -> "submit" / "submit 2 4" / "2: change the
- * price to 150" all handled right here, no app visit required unless the
- * seller wants the fuller editor or needs to set a price/stock the chat
- * text didn't state explicitly.
+ * price to 150" (or free-form phrasing the AI fallback in
+ * lib/whatsapp/intent.ts interprets) all handled right here, no app visit
+ * required unless the seller wants the fuller editor or needs to set a
+ * price/stock the chat text didn't state explicitly.
  */
 
 const MAX_LISTING_IMAGES = 8;
@@ -47,6 +51,21 @@ async function getBatchListings(batchId: string): Promise<ListingRow[]> {
     .eq("whatsapp_batch_id", batchId)
     .order("whatsapp_seq", { ascending: true });
   return (data ?? []) as ListingRow[];
+}
+
+/** Saves a seller's free-text note against a product, plus a deterministic
+ *  (non-AI) pass for an explicit price/stock — see batch.ts for why this
+ *  is regex, not an AI guess: those two fields are seller-owned everywhere
+ *  else in this codebase and stay that way here. */
+async function applyNotes(listingId: string, text: string): Promise<void> {
+  if (!text) return;
+  const db = createServerClient();
+  const updates: Record<string, unknown> = { user_prompt: text.slice(0, 1000), updated_at: new Date().toISOString() };
+  const price = extractPrice(text);
+  const stock = extractStock(text);
+  if (price != null) updates.selling_price = price;
+  if (stock != null) updates.quantity = stock;
+  await db.from("listings").update(updates).eq("id", listingId);
 }
 
 /**
@@ -78,13 +97,13 @@ export async function handleLinkedMessage(
       await handleAwaitingJumiaOauth(userId, phoneNumber, content);
       break;
     case "awaiting_count":
-      await handleAwaitingCount(phoneNumber, content);
+      await handleAwaitingCount(userId, phoneNumber, content);
       break;
     case "awaiting_photos":
       await handleAwaitingPhotos(userId, phoneNumber, session, content);
       break;
     case "analyzing":
-      await replyText(phoneNumber, "⏳ Still working on your last product — one sec.");
+      await replyText(phoneNumber, "⏳ Still drafting your products — one sec.");
       break;
     case "awaiting_confirmation":
       await handleAwaitingBatchConfirmation(userId, phoneNumber, session, content);
@@ -99,9 +118,22 @@ export async function handleLinkedMessage(
 }
 
 async function handleAwaitingCount(
+  userId: string,
   phoneNumber: string,
   content: { text?: string; imageMediaId?: string },
 ): Promise<void> {
+  // Defense in depth: the LINK-code branch in app/api/whatsapp/webhook/
+  // route.ts already checks this once, right after linking. Re-checking
+  // here catches a connection that broke (or was never real) in between
+  // — a seller whose Jumia connection needs reconnecting or was somehow
+  // never actually gated should never be allowed to draft a whole batch
+  // only to discover at submit time that Jumia will reject everything.
+  const kind = await getJumiaConnectionKind(userId);
+  if (kind !== "connected") {
+    await promptJumiaConnection(userId, phoneNumber, kind);
+    return;
+  }
+
   const count = content.text ? parseProductCount(content.text) : null;
 
   if (!count) {
@@ -219,9 +251,10 @@ async function handleAwaitingPhotos(
 ): Promise<void> {
   const batchSize = session.batchSize ?? 1;
   const seq = session.batchSeq ?? 1;
+  let listingId = session.listingId;
 
+  // ── Photo, with or without a caption in the same message ────────────────
   if (content.imageMediaId) {
-    let listingId = session.listingId;
     if (!listingId) {
       try {
         const listing = await createListingForUser(userId, {});
@@ -246,7 +279,7 @@ async function handleAwaitingPhotos(
     if (current.length >= MAX_LISTING_IMAGES) {
       await replyText(
         phoneNumber,
-        `You've already sent ${MAX_LISTING_IMAGES} photos (the max) for product ${seq} — reply *done* to analyze it.`,
+        `You've already sent ${MAX_LISTING_IMAGES} photos (the max) for product ${seq} — reply *done* when you're finished with this one.`,
       );
       return;
     }
@@ -260,92 +293,131 @@ async function handleAwaitingPhotos(
     const next = [...current, url].slice(0, MAX_LISTING_IMAGES);
     await db.from("listings").update({ images: next, updated_at: new Date().toISOString() }).eq("id", listingId);
 
-    await replyText(
-      phoneNumber,
-      `📸 Product ${seq}: got it (${next.length}/${MAX_LISTING_IMAGES} photo${next.length === 1 ? "" : "s"}). Send more, or reply *done* when ready.`,
-    );
-    return;
+    // Falls through to the text handling below — a caption ("Price 40,
+    // done") sent alongside this photo used to be silently dropped
+    // because this branch returned early. Now the caption (if any) is
+    // processed exactly like a standalone message in the same turn.
   }
 
   const text = content.text?.trim();
+
   if (!text) {
-    await replyText(phoneNumber, `Send a photo for product ${seq} (or reply *done* once you've sent its photos).`);
+    if (content.imageMediaId) {
+      await replyText(
+        phoneNumber,
+        `📸 Product ${seq}: got it. Send more photos, or reply *done* once you're finished with this one.`,
+      );
+    } else {
+      await replyText(phoneNumber, `Send a photo for product ${seq} (or reply *done* once you've sent its photos).`);
+    }
     return;
   }
 
-  if (isDoneMessage(text)) {
-    if (!session.listingId) {
+  if (endsWithDoneSignal(text)) {
+    // The done-signal can be the WHOLE message ("done") or trail a
+    // caption/note ("Price 40\nDone") — strip it so anything before it
+    // still gets saved instead of discarded.
+    const notes = stripDoneSignal(text);
+    if (notes && listingId) await applyNotes(listingId, notes);
+
+    if (!listingId) {
       await replyText(phoneNumber, `Send at least one photo for product ${seq} first, then reply *done*.`);
       return;
     }
-    await runAnalyzeAndAdvance(phoneNumber, userId, session, session.listingId, seq, batchSize);
+
+    if (seq < batchSize) {
+      await updateSession(phoneNumber, { state: "awaiting_photos", listingId: null, batchSeq: seq + 1 });
+      await replyText(
+        phoneNumber,
+        `✅ Product ${seq} saved. Now send photos for product ${seq + 1} of ${batchSize}, plus any notes, then reply *done*.`,
+      );
+      return;
+    }
+
+    await startBatchAnalysis(phoneNumber, userId, session);
     return;
   }
 
-  // Free text before "done" = seller notes on this product — the same
-  // free-text field the web flow threads through auto-analyze as "SELLER
-  // CONTEXT" (e.g. "this is a pack of 6", "the colour is teal not blue").
-  // Price/stock get a deterministic (non-AI) pass too — see batch.ts for
-  // why this is regex, not an AI guess.
-  if (session.listingId) {
-    const db = createServerClient();
-    const updates: Record<string, unknown> = { user_prompt: text.slice(0, 1000), updated_at: new Date().toISOString() };
-    const price = extractPrice(text);
-    const stock = extractStock(text);
-    if (price != null) updates.selling_price = price;
-    if (stock != null) updates.quantity = stock;
-    await db.from("listings").update(updates).eq("id", session.listingId);
-  }
-  await replyText(phoneNumber, `Got it — noted for product ${seq}. Send more photos, or reply *done* when ready.`);
+  // Free text (or a caption without a done-signal) = seller notes on this
+  // product — the same free-text field the web flow threads through
+  // auto-analyze as "SELLER CONTEXT" (e.g. "this is a pack of 6", "the
+  // colour is teal not blue").
+  if (listingId) await applyNotes(listingId, text);
+  await replyText(
+    phoneNumber,
+    content.imageMediaId
+      ? `📸 Product ${seq}: got it, notes saved. Send more photos, or reply *done* once you're finished with this one.`
+      : `Got it — noted for product ${seq}. Send more photos, or reply *done* when ready.`,
+  );
 }
 
-async function runAnalyzeAndAdvance(
+/**
+ * Fires once the LAST product's "done" arrives — every product in the
+ * batch is drafted together at this point, not one at a time as each
+ * "done" came in. Runs all N analyses concurrently (not sequentially: N
+ * products at ~10-15s each could otherwise exceed this route's 60s
+ * ceiling — see maxDuration in app/api/whatsapp/webhook/route.ts) and
+ * sends a live update the moment each one finishes, so the seller sees
+ * real progress instead of one long silence.
+ */
+async function startBatchAnalysis(
   phoneNumber: string,
   userId: string,
   session: WhatsAppSession,
-  listingId: string,
-  seq: number,
-  batchSize: number,
 ): Promise<void> {
-  // Reuse the exact same per-user rate limit as the web app's Analyze
-  // button — same Gemini cost profile (~$0.02/call), same abuse surface.
-  const limited = rateLimit(`auto-analyze:${userId}`, RATE_LIMITS.autoAnalyze.max, RATE_LIMITS.autoAnalyze.windowMs);
-  if (!limited.success) {
-    await replyText(phoneNumber, "You've hit the hourly analyze limit — try again in a bit, or finish this listing in the app.");
-    return;
-  }
+  const batchId = session.batchId;
+  const batchSize = session.batchSize ?? 1;
+  if (!batchId) return;
 
   await updateSession(phoneNumber, { state: "analyzing" });
-  await replyText(phoneNumber, `🔎 Looking at product ${seq}'s photos — this takes about 10-15 seconds…`);
+  await replyText(
+    phoneNumber,
+    `🔎 Got everything for all ${batchSize} product${batchSize === 1 ? "" : "s"} — drafting them now. I'll update you as each one finishes…`,
+  );
 
-  const result = await runAutoAnalyze(userId, listingId, null);
+  const listings = await getBatchListings(batchId);
 
-  if (!result.ok) {
-    await updateSession(phoneNumber, { state: "error" });
-    await replyText(
-      phoneNumber,
-      `⚠️ Couldn't finish analyzing product ${seq}: ${result.message}\n\nYou can still finish it in the app: ${reviewUrl(listingId)}\n\nSend anything to start a new batch (your other drafted products are safe — find them at ${whatsappListingsUrl()}).`,
-    );
-    return;
+  // Reserve rate-limit slots for the whole batch up front — cheap,
+  // synchronous checks — so a seller without quota for all N finds out
+  // before any (expensive) AI calls fire, rather than partway through a
+  // concurrent batch. Same per-user limit the web app's Analyze button
+  // and the old single-product flow both used.
+  const withQuota: ListingRow[] = [];
+  const overQuota: ListingRow[] = [];
+  for (const listing of listings) {
+    const limited = rateLimit(`auto-analyze:${userId}`, RATE_LIMITS.autoAnalyze.max, RATE_LIMITS.autoAnalyze.windowMs);
+    (limited.success ? withQuota : overQuota).push(listing);
   }
 
-  if (seq < batchSize) {
-    await updateSession(phoneNumber, { state: "awaiting_photos", listingId: null, batchSeq: seq + 1 });
+  await Promise.all(
+    withQuota.map(async (listing) => {
+      const seq = listing.whatsapp_seq;
+      const result = await runAutoAnalyze(userId, listing.id, null);
+      if (result.ok) {
+        await replyText(phoneNumber, `✅ Product ${seq} drafted: ${result.title ?? "(untitled)"}.`);
+      } else {
+        await replyText(
+          phoneNumber,
+          `⚠️ Product ${seq} couldn't be drafted: ${result.message} Fix it at ${whatsappListingsUrl(batchId)}.`,
+        );
+      }
+    }),
+  );
+
+  for (const listing of overQuota) {
     await replyText(
       phoneNumber,
-      `✅ Product ${seq} drafted. Now send photos for product ${seq + 1} of ${batchSize}, plus any notes, then reply *done*.`,
+      `⚠️ Product ${listing.whatsapp_seq}: hourly analyze limit reached — finish it at ${whatsappListingsUrl(batchId)} once it resets.`,
     );
-    return;
   }
 
   await updateSession(phoneNumber, { state: "awaiting_confirmation" });
   await replyText(
     phoneNumber,
     [
-      `🎉 All ${batchSize} product${batchSize === 1 ? "" : "s"} drafted!`,
-      `Review them here: ${whatsappListingsUrl(session.batchId ?? undefined)}`,
+      `🎉 Done drafting! Review everything here: ${whatsappListingsUrl(batchId)}`,
       "",
-      `Reply *submit* to push them all to Jumia, *submit 2 4* for specific ones, or "2: change the price to 150" to fix one before submitting.`,
+      `Reply *submit all* to push your drafted listings to Jumia after your review, or tell me the product number you want to submit (e.g. *submit 2*). You can also say "2: change the price to 150" to fix one first.`,
     ].join("\n"),
   );
 }
@@ -363,7 +435,7 @@ async function handleAwaitingBatchConfirmation(
   if (!batchId || !text) {
     await replyText(
       phoneNumber,
-      `Reply *submit* to push your drafted products to Jumia, *submit 2 4* for specific ones, or "2: change the price to 150" to edit one. Review them here: ${whatsappListingsUrl(batchId ?? undefined)}`,
+      `Reply *submit all* to push your drafted listings to Jumia, or tell me the product number you want to submit. Review them here: ${whatsappListingsUrl(batchId ?? undefined)}`,
     );
     return;
   }
@@ -384,9 +456,33 @@ async function handleAwaitingBatchConfirmation(
     return;
   }
 
+  // Neither deterministic parser matched — try to understand what the
+  // seller actually meant before falling back to a generic help message.
+  // Kept as a fallback (not the primary path) so well-formed commands
+  // above stay fast, free, and fully deterministic. looksActionable is a
+  // cheap pre-filter so an off-topic reply ("thanks", "ok") never costs a
+  // Gemini call for nothing.
+  if (looksActionable(text)) {
+    const listings = await getBatchListings(batchId);
+    const intent = await classifyBatchIntent(text, listings.map((l) => ({ seq: l.whatsapp_seq ?? 0, title: l.title })));
+
+    if (intent.type === "submit_all") {
+      await handleSubmit(userId, phoneNumber, batchId, { all: true });
+      return;
+    }
+    if (intent.type === "submit_specific") {
+      await handleSubmit(userId, phoneNumber, batchId, { all: false, seqs: intent.seqs });
+      return;
+    }
+    if (intent.type === "edit") {
+      await handleEdit(userId, phoneNumber, batchId, intent.seq, intent.instruction);
+      return;
+    }
+  }
+
   await replyText(
     phoneNumber,
-    `Reply *submit* to push your drafted products to Jumia, *submit 2 4* for specific ones, or "2: change the price to 150" to edit one. Review them here: ${whatsappListingsUrl(batchId)}`,
+    `Reply *submit all* to push your drafted listings to Jumia, or tell me the product number you want to submit. You can also say "2: change the price to 150" to edit one. Review them here: ${whatsappListingsUrl(batchId)}`,
   );
 }
 
