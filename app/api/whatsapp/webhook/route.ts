@@ -11,10 +11,10 @@ import { handleLinkedMessage } from "@/lib/whatsapp/intake";
  *        your app → WhatsApp → Configuration → Webhook → Verify and save).
  * POST — every inbound event (messages, status updates, etc.).
  *
- * Stage 1 handles account-linking ("LINK-<code>" messages). Stage 3 (this
- * revision) adds the photo-intake → analyze → draft-reply loop for already-
- * linked numbers — see lib/whatsapp/intake.ts for the conversation state
- * machine. Chat-native confirm/fix/push (Stage 4) isn't wired up yet.
+ * Stage 1 handles account-linking ("LINK-<code>" messages). Stage 4 adds
+ * the full multi-product batch flow (how many? → photos+notes per product
+ * → submit/edit entirely in chat) for already-linked numbers — see
+ * lib/whatsapp/intake.ts for the conversation state machine.
  */
 
 // Auto-analyze runs inline within this handler (see lib/whatsapp/intake.ts)
@@ -113,7 +113,7 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
     }
     await sendTextIfConfigured(
       msg.from,
-      "✅ Your WhatsApp is now linked to PandaWorld! Send a product photo to start a new listing.",
+      "✅ Your WhatsApp is now linked to PandaWorld! How many products are you listing today? Reply with a number to get started.",
     );
     return;
   }

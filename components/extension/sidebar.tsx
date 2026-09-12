@@ -18,6 +18,7 @@ import {
   LayoutDashboard,
   Calculator,
   ListChecks,
+  MessageCircle,
   HelpCircle,
   BookOpen,
   LifeBuoy,
@@ -30,6 +31,7 @@ import { Wordmark } from "@/components/marketing/wordmark";
 
 const primaryNav = [
   { href: "/extension/dashboard",  label: "Dashboard",   icon: LayoutDashboard },
+  { href: "/extension/whatsapp-listings", label: "WhatsApp Listings", icon: MessageCircle },
   { href: "/extension/calculator", label: "Calculator",  icon: Calculator },
   { href: "/extension/listings",   label: "Autofill Activity", icon: ListChecks },
 ];

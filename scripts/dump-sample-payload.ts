@@ -61,6 +61,8 @@ const SAMPLE_LISTING: ListingRow = {
   field_sources:    { title: "ai", brand: "ai" },
   quality_score:    85,
   quantity:         10,
+  whatsapp_batch_id: null,
+  whatsapp_seq:      null,
   update_feed_ref:    null,
   update_feed_status: null,
   image_variants:     null,
