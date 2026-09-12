@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getListing } from "@/lib/actions/listings";
+import { getListing, getVariantsForListing } from "@/lib/actions/listings";
 import { WhatsAppFocusedEditor } from "@/components/extension/whatsapp-focused-editor";
 
 // ─── /extension/whatsapp-listings/[id] ───────────────────────────────────────
@@ -21,7 +21,14 @@ export default async function WhatsAppFocusedEditorPage({
 }: {
   params: { id: string };
 }) {
-  const listing = await getListing(params.id);
+  // Load alongside the listing, same as the full editor's page.tsx — the
+  // variants table is the source of truth for variation labels and
+  // per-variant SKU/price/stock/dates, so the seller sees exactly what
+  // would be pushed rather than an empty form that fills in after a push.
+  const [listing, variants] = await Promise.all([
+    getListing(params.id),
+    getVariantsForListing(params.id),
+  ]);
   if (!listing) notFound();
-  return <WhatsAppFocusedEditor listing={listing} />;
+  return <WhatsAppFocusedEditor listing={listing} initialVariants={variants} />;
 }
