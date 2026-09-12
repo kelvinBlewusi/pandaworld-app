@@ -1,4 +1,4 @@
-import { splitCredentialTokens, isResendCommand, buildConnectInstructions, jumiaConnectLink } from "@/lib/whatsapp/jumia-connect";
+import { splitCredentialTokens, identifyCredentials, isResendCommand, buildConnectInstructions, jumiaConnectLink } from "@/lib/whatsapp/jumia-connect";
 
 describe("splitCredentialTokens", () => {
   it("splits on whitespace", () => {
@@ -18,6 +18,31 @@ describe("splitCredentialTokens", () => {
 
   it("returns an empty array for blank text", () => {
     expect(splitCredentialTokens("   ")).toEqual([]);
+  });
+});
+
+describe("identifyCredentials", () => {
+  const uuid = "b827fe1b-72c7-4851-83b8-a1c8508dd967";
+  const secret = "YmLqm5GVeMCQWhwK4pxm0i-Q7vNSGXN2SVV5IqRKxGQ=";
+
+  it("keeps (appId, secretKey) as given when pasted in the documented order", () => {
+    expect(identifyCredentials(uuid, secret)).toEqual({ appId: uuid, secretKey: secret });
+  });
+
+  it("re-sorts by shape when pasted in reverse order — confirmed live failure", () => {
+    // Same two values as above, pasted Secret-then-ID: a purely
+    // positional assignment would swap them and send the wrong pair to
+    // Jumia ("Invalid App ID or Secret Key") even though they're correct.
+    expect(identifyCredentials(secret, uuid)).toEqual({ appId: uuid, secretKey: secret });
+  });
+
+  it("falls back to the given order when neither token looks like a UUID", () => {
+    expect(identifyCredentials("foo", "bar")).toEqual({ appId: "foo", secretKey: "bar" });
+  });
+
+  it("falls back to the given order when both tokens look like a UUID", () => {
+    const other = "11111111-2222-3333-4444-555555555555";
+    expect(identifyCredentials(uuid, other)).toEqual({ appId: uuid, secretKey: other });
   });
 });
 

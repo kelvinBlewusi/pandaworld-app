@@ -32,6 +32,27 @@ export function splitCredentialTokens(text: string): string[] {
   return text.trim().split(/\s+/).filter(Boolean);
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Jumia's Client ID is always a UUID; the Client Secret never is — so
+ * sort the pasted pair by shape rather than trusting paste order.
+ * Confirmed live: a seller pasted Secret-then-ID (the reverse of the
+ * connect instructions' own "Client ID, then Client Secret" order),
+ * which a purely positional [appId, secretKey] = tokens assignment
+ * silently swapped, sending the wrong values to Jumia and failing with
+ * "Invalid App ID or Secret Key" even though the same credentials worked
+ * fine on the website's own labeled-field form. Falls back to the given
+ * order when neither or both tokens look like a UUID — still the
+ * seller's best guess, and no worse than before this existed.
+ */
+export function identifyCredentials(a: string, b: string): { appId: string; secretKey: string } {
+  const aIsUuid = UUID_RE.test(a.trim());
+  const bIsUuid = UUID_RE.test(b.trim());
+  if (bIsUuid && !aIsUuid) return { appId: b, secretKey: a };
+  return { appId: a, secretKey: b };
+}
+
 export function isResendCommand(text: string): boolean {
   return /^resend[.!]?$/i.test(text.trim());
 }
@@ -44,8 +65,10 @@ export function buildConnectInstructions(redirectUri: string): string {
     "",
     `1. Open Jumia Vendor Center and sign in (tap below, or go to ${VENDOR_CENTER_URL}).`,
     "2. Go to Settings → Applications → Create Application → Web Application (OAuth).",
-    `3. Set the Redirect URI to: ${redirectUri}`,
-    "4. Copy the Client ID and Client Secret, then paste them here — together, or one at a time.",
+    `3. Set Application name to "Pandaworld".`,
+    `4. Set Manage applications (Redirect URL) to: ${redirectUri}`,
+    "5. Create Application.",
+    "6. Copy the Client ID and Client Secret, then paste them here — together, or one at a time.",
   ].join("\n");
 }
 

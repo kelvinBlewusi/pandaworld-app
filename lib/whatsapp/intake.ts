@@ -20,7 +20,7 @@ import {
   whatsappListingsUrl,
   focusedEditorUrl,
 } from "@/lib/whatsapp/batch";
-import { splitCredentialTokens, isResendCommand, jumiaConnectLink, promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
+import { splitCredentialTokens, identifyCredentials, isResendCommand, jumiaConnectLink, promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
 import { classifyBatchIntent, looksActionable } from "@/lib/whatsapp/intent";
 import type { ListingRow } from "@/lib/supabase/types";
 
@@ -343,10 +343,9 @@ async function handleAwaitingJumiaCredentials(
   // these", not "append this to what I sent before". Only a single token
   // ever consults pendingAppId, to complete whichever half is missing.
   if (tokens.length >= 2) {
-    [appId, secretKey] = tokens;
+    ({ appId, secretKey } = identifyCredentials(tokens[0], tokens[1]));
   } else if (tokens.length === 1 && session.pendingAppId) {
-    appId = session.pendingAppId;
-    secretKey = tokens[0];
+    ({ appId, secretKey } = identifyCredentials(session.pendingAppId, tokens[0]));
   } else if (tokens.length === 1) {
     await updateSession(phoneNumber, { pendingAppId: tokens[0] });
     await replyText(phoneNumber, "Got the Client ID — now paste the Client Secret.");
