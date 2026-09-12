@@ -68,7 +68,7 @@ export default async function WhatsAppListingsPage() {
   return (
     <div className="mx-auto max-w-5xl">
       <p className="mb-6 text-sm text-zinc-500">
-        Products drafted from a WhatsApp chat — review, fill in price/stock if it's missing, and push to Jumia.
+        Products drafted from a WhatsApp chat show here. You may edit and submit manually from here.
       </p>
 
       {batches.length === 0 ? (
