@@ -261,7 +261,7 @@ async function handleAwaitingCount(
   const count = content.text ? parseProductCount(content.text) : null;
 
   if (!count) {
-    await replyText(phoneNumber, "How many products are you listing today? Reply with a number (1–20) to get started.");
+    await replyText(phoneNumber, "⚠️ I need a number to get started — reply with how many products you're listing today (1–20), e.g. *3*.");
     return;
   }
 
