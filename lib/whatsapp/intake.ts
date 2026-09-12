@@ -286,7 +286,7 @@ async function handleAwaitingCount(
   });
   await replyText(
     phoneNumber,
-    `Let's go — product 1 of ${count}.\n\nSend its photos, plus any notes (price, sizes, variations, etc.), then reply *done*.`,
+    `Let's go — product 1 of ${count}.\n\nSend its photos, and tell me the price plus any other notes (variations, sizes, sale price etc.), then reply *done*.`,
   );
 }
 
@@ -469,7 +469,7 @@ async function handleAwaitingPhotos(
       await updateSession(phoneNumber, { state: "awaiting_photos", listingId: null, batchSeq: seq + 1 });
       await replyText(
         phoneNumber,
-        `✅ Product ${seq} saved. Now send photos for product ${seq + 1} of ${batchSize}, plus any notes, then reply *done*.`,
+        `✅ Product ${seq} saved. Now send photos for product ${seq + 1} of ${batchSize}, and tell me the price plus any other notes (variations, sizes, sale price etc.), then reply *done*.`,
       );
       return;
     }
@@ -605,25 +605,23 @@ async function startBatchAnalysis(
 
     await updateSession(phoneNumber, { state: "awaiting_confirmation" });
 
+    // "Edit"/"Review" are cta_url buttons — they leave the chat and open a
+    // browser, which Meta's API only allows as a standalone button, never
+    // sharing a message with a reply-button. Tried folding all three into
+    // one reply-buttons message (so "Edit"/"Review" round-tripped through
+    // the bot instead of opening directly); confirmed live that leaving
+    // the chat as a real link matters more than one fewer message, so
+    // this stays three sends: cta_url, cta_url, then the reply-button.
     if (batchSize === 1) {
-      // Meta's interactive "button" type allows up to 3 reply-buttons in
-      // ONE message (unlike cta_url, which only ever supports a single
-      // button) — so a 1-product batch's whole completion fits in one
-      // send instead of three. Tapping "Edit"/"Review" costs one extra
-      // round trip vs. the old direct-open cta_url (a reply-button can't
-      // open a URL itself — see the "edit:"/"review" handling above), a
-      // trade worth making for one consolidated message over three.
       const refreshed = await getBatchListings(batchId);
       const only = refreshed[0];
       if (only?.title) {
+        await replyCta(phoneNumber, `✅ Product drafted: ${only.title}.`, "Edit product", focusedEditorUrl(only.id));
+        await replyCta(phoneNumber, "🎉 Ready to submit? Review it below first if you like.", "Review listing", whatsappListingsUrl(batchId));
         await replyButtons(
           phoneNumber,
-          `✅ Product drafted: ${only.title}.\n\n🎉 Ready to submit? Reply *submit all*, or say something like "change the price to 150" to edit it first.`,
-          [
-            { id: `edit:${only.id}`, title: "Edit product" },
-            { id: "review", title: "Review listing" },
-            { id: "submit all", title: "Submit all ✅" },
-          ],
+          `Reply *submit all*, or say something like "change the price to 150" to edit it first.`,
+          [{ id: "submit all", title: "Submit all ✅" }],
         );
       }
       // else: the one product's own failure message (sent above, inside
@@ -631,13 +629,16 @@ async function startBatchAnalysis(
       return;
     }
 
+    await replyCta(
+      phoneNumber,
+      `🎉 Done drafting your ${batchSize} products! Review each one below.`,
+      "Review listings",
+      whatsappListingsUrl(batchId),
+    );
     await replyButtons(
       phoneNumber,
-      `🎉 Done drafting your ${batchSize} products! Reply *submit all*, or tell me a product number (e.g. *submit 2*) — or say "2: change the price to 150" to edit one first.`,
-      [
-        { id: "review", title: "Review listings" },
-        { id: "submit all", title: "Submit all ✅" },
-      ],
+      `Reply *submit all*, or tell me a product number (e.g. *submit 2*) — or say "2: change the price to 150" to edit one first.`,
+      [{ id: "submit all", title: "Submit all ✅" }],
     );
   } catch (e) {
     console.error(`[whatsapp intake] startBatchAnalysis failed for batch ${batchId}: ${(e as Error).message}`);
