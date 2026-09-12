@@ -20,10 +20,11 @@
  */
 
 import { useState, useEffect } from "react";
-import { CheckCircle2, Loader2, Unlink, MessageCircle, Copy } from "lucide-react";
+import { CheckCircle2, Loader2, Unlink, MessageCircle, Copy, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
+import type { JumiaConnectionPublic } from "@/lib/types/jumia";
 
 interface WhatsAppStatus {
   connected: boolean;
@@ -36,9 +37,15 @@ export function WhatsAppCard() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
   const [link, setLink] = useState<{ code: string; waLink: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
+  // Flags the Jumia connection right alongside the WhatsApp one — a seller
+  // could otherwise have a linked WhatsApp number with no Jumia connection
+  // (or a broken one) and no way to tell short of the chatbot mentioning
+  // it reactively mid-flow.
+  const [jumiaStatus, setJumiaStatus] = useState<JumiaConnectionPublic | null>(null);
 
   const loadStatus = () => {
     fetch("/api/whatsapp/status")
@@ -49,6 +56,14 @@ export function WhatsAppCard() {
   };
 
   useEffect(() => { loadStatus(); }, []);
+
+  useEffect(() => {
+    if (!status?.connected) return;
+    fetch("/api/jumia/status")
+      .then((r) => r.json())
+      .then((d) => setJumiaStatus(d))
+      .catch(() => setJumiaStatus(null));
+  }, [status?.connected]);
 
   async function handleGenerateLink() {
     setGenerating(true);
@@ -77,6 +92,7 @@ export function WhatsAppCard() {
       loadStatus();
     } finally {
       setDisconnecting(false);
+      setConfirmingDisconnect(false);
     }
   }
 
@@ -134,19 +150,68 @@ export function WhatsAppCard() {
             </div>
             {linkedDate && <p className="text-xs text-zinc-500">Linked {linkedDate}</p>}
           </div>
+
+          {jumiaStatus && (
+            <div
+              className={cn(
+                "flex items-start gap-2 rounded-xl border p-3 text-xs",
+                jumiaStatus.connected
+                  ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+                  : "border-amber-200 bg-amber-50 text-amber-800",
+              )}
+            >
+              {jumiaStatus.connected ? (
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              ) : (
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              )}
+              <span>
+                {jumiaStatus.connected
+                  ? `Jumia connected${jumiaStatus.store_name ? ` — ${jumiaStatus.store_name}` : ""}.`
+                  : jumiaStatus.needs_reconnect
+                  ? `Jumia needs reconnecting — message ${status.phoneNumber ?? "the bot"} on WhatsApp to fix it.`
+                  : jumiaStatus.oauth_required
+                  ? `Jumia setup incomplete — message ${status.phoneNumber ?? "the bot"} on WhatsApp to finish connecting.`
+                  : `Jumia isn't connected yet — message ${status.phoneNumber ?? "the bot"} on WhatsApp to connect your store.`}
+              </span>
+            </div>
+          )}
+
           <p className="text-sm text-zinc-600">
             Send a product photo to this number on WhatsApp to start a new listing.
           </p>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="gap-2 text-red-400 hover:text-red-600"
-            onClick={handleDisconnect}
-            disabled={disconnecting}
-          >
-            <Unlink className="h-3.5 w-3.5" />
-            Disconnect
-          </Button>
+          {confirmingDisconnect ? (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-red-100 bg-red-50 p-3">
+              <p className="text-xs text-red-700">
+                Unlink this number? You&apos;ll need a new code to reconnect.
+              </p>
+              <div className="ml-auto flex gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setConfirmingDisconnect(false)} disabled={disconnecting}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="gap-2"
+                  onClick={handleDisconnect}
+                  disabled={disconnecting}
+                >
+                  {disconnecting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Yes, disconnect
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-2 text-red-400 hover:text-red-600"
+              onClick={() => setConfirmingDisconnect(true)}
+            >
+              <Unlink className="h-3.5 w-3.5" />
+              Disconnect
+            </Button>
+          )}
         </div>
       ) : (
         <div className="space-y-4">

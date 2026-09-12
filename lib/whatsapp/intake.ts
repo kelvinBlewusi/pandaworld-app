@@ -555,9 +555,11 @@ async function startBatchAnalysis(
               focusedEditorUrl(listing.id),
             );
           } else {
-            await replyText(
+            await replyCta(
               phoneNumber,
-              `⚠️ Product ${seq} couldn't be drafted: ${result.message} Fix it at ${whatsappListingsUrl(batchId)}.`,
+              `⚠️ Product ${seq} couldn't be drafted: ${result.message}`,
+              `Fix product ${seq}`,
+              focusedEditorUrl(listing.id),
             );
           }
         } catch (e) {
@@ -565,9 +567,11 @@ async function startBatchAnalysis(
           // the batch — every other entry in this Promise.all still
           // needs to resolve, or the whole session stays wedged.
           console.error(`[whatsapp intake] product ${seq} analysis threw: ${(e as Error).message}`);
-          await replyText(
+          await replyCta(
             phoneNumber,
-            `⚠️ Product ${seq} couldn't be drafted (unexpected error) — finish it at ${whatsappListingsUrl(batchId)}.`,
+            `⚠️ Product ${seq} couldn't be drafted (unexpected error).`,
+            `Fix product ${seq}`,
+            focusedEditorUrl(listing.id),
           );
         }
       }),
@@ -629,21 +633,28 @@ async function handleAwaitingBatchConfirmation(
   }
 
   const editCmd = parseEditCommand(text, batchSize);
-  if (editCmd?.needsSeq) {
+  // Only the explicit "N: text" form is unambiguous. needsSeq and the
+  // batchSize===1 implicit-edit fallback both match ANY text at all
+  // (confirmed live: "Hi", "New listing", "Done", "Delete" were all
+  // getting treated as edit attempts for a 1-product batch) — gate those
+  // on looksActionable so plain chit-chat falls through to the generic
+  // help message (or the AI classifier below) instead of misfiring.
+  if (editCmd?.needsSeq && looksActionable(text)) {
     await replyText(phoneNumber, `Which product number is this for? e.g. "2: change the price to 150" (review at ${whatsappListingsUrl(batchId)}).`);
     return;
   }
-  if (editCmd) {
+  if (editCmd && !editCmd.needsSeq && (editCmd.explicit || looksActionable(text))) {
     await handleEdit(userId, phoneNumber, batchId, editCmd.seq, editCmd.text);
     return;
   }
 
-  // Neither deterministic parser matched — try to understand what the
-  // seller actually meant before falling back to a generic help message.
-  // Kept as a fallback (not the primary path) so well-formed commands
-  // above stay fast, free, and fully deterministic. looksActionable is a
-  // cheap pre-filter so an off-topic reply ("thanks", "ok") never costs a
-  // Gemini call for nothing.
+  // Neither deterministic parser matched (or matched but didn't look
+  // actionable) — try to understand what the seller actually meant before
+  // falling back to a generic help message. Kept as a fallback (not the
+  // primary path) so well-formed commands above stay fast, free, and
+  // fully deterministic. looksActionable is a cheap pre-filter so an
+  // off-topic reply ("thanks", "ok") never costs a Gemini call for
+  // nothing.
   if (looksActionable(text)) {
     const listings = await getBatchListings(batchId);
     const intent = await classifyBatchIntent(text, listings.map((l) => ({ seq: l.whatsapp_seq ?? 0, title: l.title })));
@@ -720,7 +731,7 @@ async function handleSubmit(
       const seq = listing.whatsapp_seq;
       const result = await pushListingToJumia(userId, listing.id);
       if (result.ok) return `Product ${seq}: ✅ submitted — pending Jumia review.`;
-      if (result.code === "validation") return `Product ${seq}: ⚠️ ${result.message} Fix it at ${whatsappListingsUrl(batchId)} then reply submit again.`;
+      if (result.code === "validation") return `Product ${seq}: ⚠️ ${result.message} Fix it at ${focusedEditorUrl(listing.id)} then reply submit again.`;
       if (result.needsReconnect) {
         // Same one-time-link mechanism as lib/whatsapp/jumia-connect.ts's
         // promptJumiaConnection, used inline here rather than through it —

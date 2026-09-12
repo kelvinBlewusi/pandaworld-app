@@ -53,24 +53,24 @@ describe("parseSubmitCommand", () => {
 });
 
 describe("parseEditCommand", () => {
-  it("extracts a numbered edit", () => {
+  it("extracts a numbered edit as explicit", () => {
     expect(parseEditCommand("2: change the price to 150", 4)).toEqual({
-      needsSeq: false, seq: 2, text: "change the price to 150",
+      needsSeq: false, seq: 2, text: "change the price to 150", explicit: true,
     });
   });
 
-  it("accepts 'product N -' and '#N:' forms", () => {
+  it("accepts 'product N -' and '#N:' forms, both explicit", () => {
     expect(parseEditCommand("product 3 - make it size L", 4)).toEqual({
-      needsSeq: false, seq: 3, text: "make it size L",
+      needsSeq: false, seq: 3, text: "make it size L", explicit: true,
     });
     expect(parseEditCommand("#1: it's blue not black", 4)).toEqual({
-      needsSeq: false, seq: 1, text: "it's blue not black",
+      needsSeq: false, seq: 1, text: "it's blue not black", explicit: true,
     });
   });
 
-  it("applies directly to product 1 with no number when the batch has one product", () => {
+  it("applies directly to product 1 with no number when the batch has one product, marked not explicit", () => {
     expect(parseEditCommand("change the color to blue", 1)).toEqual({
-      needsSeq: false, seq: 1, text: "change the color to blue",
+      needsSeq: false, seq: 1, text: "change the color to blue", explicit: false,
     });
   });
 
