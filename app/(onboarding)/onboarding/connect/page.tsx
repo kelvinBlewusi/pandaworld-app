@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   ExternalLink,
   Copy,
@@ -13,6 +13,7 @@ import {
   XCircle,
   ArrowLeft,
   ShieldCheck,
+  RefreshCw,
 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -65,8 +66,54 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-export default function ConnectPage() {
-  const router = useRouter();
+function ConnectPageInner() {
+  const searchParams = useSearchParams();
+
+  // Reached from (main)/layout.tsx's gate when a connection row exists but
+  // needs re-authorization (refresh token stopped working — see
+  // markNeedsReconnect in lib/jumia/api.ts). app_id/app_secret are already
+  // on file and never change, so this is a single click straight to
+  // Jumia's OAuth screen via /api/jumia/connect (same shortcut Settings →
+  // Integrations' "Re-authorise" button uses) — not the full form below,
+  // which is only for a seller who's never connected at all.
+  const [reconnecting, setReconnecting] = useState(false);
+  if (searchParams.get("reason") === "disconnected") {
+    return (
+      <div className="mx-auto max-w-[600px] rounded-2xl border bg-white shadow-sm overflow-hidden">
+        <div className="border-b bg-gradient-to-r from-orange-50 to-amber-50 px-6 py-5 flex items-center gap-4">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-orange-400 to-orange-500 text-2xl shadow-sm">
+            🛒
+          </div>
+          <div>
+            <h1 className="text-lg font-bold text-zinc-900">Reconnect Jumia</h1>
+            <p className="text-sm text-zinc-500">Your access needs to be renewed</p>
+          </div>
+        </div>
+        <div className="px-6 py-6 space-y-4">
+          <p className="text-sm text-zinc-600">
+            Your Jumia session expired and couldn&apos;t refresh automatically. Your app credentials are
+            already on file — no need to re-enter them. Just re-authorise to restore the connection.
+          </p>
+          <Button
+            className="w-full h-11 gap-2 bg-gradient-to-r from-orange-400 to-orange-500 hover:from-orange-500 hover:to-orange-600 text-white"
+            disabled={reconnecting}
+            onClick={() => { setReconnecting(true); window.location.href = "/api/jumia/connect"; }}
+          >
+            {reconnecting ? (
+              <><Loader2 className="h-4 w-4 animate-spin" />Redirecting to Jumia…</>
+            ) : (
+              <><RefreshCw className="h-4 w-4" />Re-authorise with Jumia</>
+            )}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return <ConnectForm />;
+}
+
+function ConnectForm() {
   const [redirectUri, setRedirectUri] = useState("");
   const [appId, setAppId]             = useState("");
   const [secretKey, setSecretKey]     = useState("");
@@ -358,5 +405,15 @@ export default function ConnectPage() {
         </Button>
       </div>
     </div>
+  );
+}
+
+// useSearchParams() requires a Suspense boundary — same pattern
+// Settings → Integrations uses for the same reason.
+export default function ConnectPage() {
+  return (
+    <Suspense fallback={null}>
+      <ConnectPageInner />
+    </Suspense>
   );
 }

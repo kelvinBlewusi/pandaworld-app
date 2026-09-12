@@ -34,6 +34,7 @@ async function getJumiaStatus(): Promise<JumiaConnectionPublic | null> {
     return {
       connected:        data.status === "active" && !oauthRequired,
       oauth_required:   oauthRequired,
+      needs_reconnect:  data.status === "needs_reconnect",
       status:           data.status as JumiaConnectionPublic["status"],
       store_name:       data.store_name ?? null,
       seller_name:      null,
@@ -105,7 +106,9 @@ export default async function DashboardPage() {
         />
       </div>
 
-      {/* Jumia connection health */}
+      {/* Jumia connection health — jumia.needs_reconnect (not a literal
+          status === "expired" string, which the API never actually
+          returns) is what flips this to the amber "re-authorise" state. */}
       {jumia !== null && (
         <div className={cn(
           "flex items-center justify-between rounded-2xl border px-5 py-4",
@@ -113,7 +116,7 @@ export default async function DashboardPage() {
             ? "border-emerald-100 bg-emerald-50"
             : jumia.oauth_required
             ? "border-blue-100 bg-blue-50"
-            : jumia.status === "expired"
+            : jumia.needs_reconnect
             ? "border-amber-100 bg-amber-50"
             : "border-zinc-200 bg-zinc-50"
         )}>
@@ -133,14 +136,14 @@ export default async function DashboardPage() {
                 "text-xs",
                 jumia.connected ? "text-emerald-600"
                   : jumia.oauth_required ? "text-blue-600"
-                  : jumia.status === "expired" ? "text-amber-600"
+                  : jumia.needs_reconnect ? "text-amber-600"
                   : "text-zinc-400"
               )}>
                 {jumia.connected
                   ? `Connected${jumia.seller_email ? ` as ${jumia.seller_email}` : ""}`
                   : jumia.oauth_required
                   ? "One more step — authorise PandaWorld in Jumia Vendor Center"
-                  : jumia.status === "expired"
+                  : jumia.needs_reconnect
                   ? "Token expired — re-authorise to push listings"
                   : "Not connected — connect to publish directly from PandaWorld"}
               </p>
@@ -148,7 +151,7 @@ export default async function DashboardPage() {
           </div>
           <div className="flex items-center gap-2">
             {!jumia.connected && (
-              <AlertCircle className={cn("h-4 w-4", jumia.oauth_required ? "text-blue-400" : jumia.status === "expired" ? "text-amber-500" : "text-zinc-300")} />
+              <AlertCircle className={cn("h-4 w-4", jumia.oauth_required ? "text-blue-400" : jumia.needs_reconnect ? "text-amber-500" : "text-zinc-300")} />
             )}
             {jumia.connected ? (
               <CheckCircle className="h-4 w-4 text-emerald-500" />
@@ -156,7 +159,7 @@ export default async function DashboardPage() {
               <Button asChild size="sm" variant="outline" className="gap-1.5 text-xs">
                 <Link href={jumia.oauth_required ? "/api/jumia/connect" : "/settings/integrations"}>
                   <Plug className="h-3 w-3" />
-                  {jumia.oauth_required ? "Authorise" : jumia.status === "expired" ? "Re-authorise" : "Connect"}
+                  {jumia.oauth_required ? "Authorise" : jumia.needs_reconnect ? "Re-authorise" : "Connect"}
                 </Link>
               </Button>
             )}
