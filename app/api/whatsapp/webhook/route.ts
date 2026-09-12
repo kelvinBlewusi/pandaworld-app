@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { redeemLinkCode, getUserIdForPhoneNumber } from "@/lib/whatsapp/link";
-import { sendTextIfConfigured } from "@/lib/whatsapp/client";
+import { sendTextIfConfigured, markReadWithTypingIfConfigured } from "@/lib/whatsapp/client";
 import { verifyWhatsAppSignature, extractLinkCode } from "@/lib/whatsapp/webhook-verify";
 import { handleLinkedMessage } from "@/lib/whatsapp/intake";
 import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
@@ -104,6 +104,13 @@ export async function POST(req: NextRequest) {
 }
 
 async function handleMessage(msg: IncomingMessage, origin: string, contactName?: string): Promise<void> {
+  // Fired, not awaited — shows the seller blue ticks + the animated
+  // "typing…" indicator right away, while everything below (image
+  // download, AI analyze, Jumia push) can take several seconds. Never
+  // let a slow/failed typing-indicator call hold up real message
+  // handling — see markReadWithTypingIfConfigured's own error handling.
+  void markReadWithTypingIfConfigured(msg.id);
+
   const linkCode = extractLinkCode(msg.text?.body);
 
   if (linkCode) {
