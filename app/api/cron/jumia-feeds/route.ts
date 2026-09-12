@@ -5,6 +5,8 @@ import { encrypt, decrypt } from "@/lib/security/token-crypto";
 export const dynamic = "force-dynamic";
 import { getFeedStatus, getFeedProductDetails } from "@/lib/jumia/api";
 import { refreshAccessToken } from "@/lib/jumia/oauth";
+import { getWhatsAppConnection } from "@/lib/whatsapp/link";
+import { sendTextIfConfigured } from "@/lib/whatsapp/client";
 
 // ─── GET /api/cron/jumia-feeds ────────────────────────────────────────────────
 // Vercel cron — runs every 5 minutes (see vercel.json)
@@ -32,7 +34,7 @@ export async function GET(req: NextRequest) {
   // ── Fetch all pending listings with a feedId ──────────────────────────────
   const { data: pending } = await db
     .from("listings")
-    .select("id, user_id, jumia_ref")
+    .select("id, user_id, jumia_ref, title, whatsapp_batch_id")
     .eq("status", "pending_approval")
     .not("jumia_ref", "is", null);
 
@@ -143,6 +145,26 @@ export async function GET(req: NextRequest) {
         updated++;
         if (!(feedStatus.status === "DONE" && newStatus === "live")) {
           console.info(`[Cron] ${listing.id} → ${newStatus}`);
+        }
+
+        // Notify over WhatsApp when this listing came from that chat flow
+        // (see lib/whatsapp/intake.ts) — the seller asked to be told once
+        // their submission clears Jumia's review, one way or another.
+        // Listings pushed from the web app don't get this; they check
+        // status in the app itself.
+        if (listing.whatsapp_batch_id) {
+          try {
+            const wa = await getWhatsAppConnection(userId as string);
+            if (wa.connected && wa.phoneNumber) {
+              const name = (listing.title as string | null) ?? "Your product";
+              const text = newStatus === "live"
+                ? `🎉 "${name}" is now live on Jumia!`
+                : `⚠️ "${name}" was rejected by Jumia: ${errorMsg ?? "see the app for details"}`;
+              await sendTextIfConfigured(wa.phoneNumber, text);
+            }
+          } catch (e) {
+            console.warn(`[Cron] WhatsApp notify failed for listing ${listing.id}: ${(e as Error).message}`);
+          }
         }
       }
     }

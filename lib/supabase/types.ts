@@ -89,6 +89,12 @@ export interface ListingRow {
   jumia_product_sid?:  string | null;
   jumia_qc_status?:    string | null;
   jumia_product_map?:  Record<string, { sid: string | null; qc: string | null }> | null;
+  // Set when this listing was created via the WhatsApp chatbot's
+  // multi-product batch flow (see lib/whatsapp/intake.ts) — groups every
+  // listing from one "how many products?" run and its 1-based position
+  // within it. Null for listings created any other way.
+  whatsapp_batch_id: string | null;
+  whatsapp_seq:      number | null;
   created_at: string;
   updated_at: string;
 }
@@ -126,7 +132,7 @@ export type ListingInsert = Omit<
   | "jumia_ref" | "jumia_error" | "jumia_synced_at"
   | "dynamic_attributes" | "field_sources" | "quality_score"
   | "quantity" | "update_feed_ref" | "update_feed_status"
-  | "image_variants" | "user_prompt"
+  | "image_variants" | "user_prompt" | "whatsapp_batch_id" | "whatsapp_seq"
 > & {
   id?: string;
   created_at?: string;
@@ -142,6 +148,8 @@ export type ListingInsert = Omit<
   update_feed_status?: string | null;
   image_variants?: Record<string, { polish?: string; rebuild?: string }> | null;
   user_prompt?: string | null;
+  whatsapp_batch_id?: string | null;
+  whatsapp_seq?: number | null;
 };
 
 export type VariantInsert = Omit<VariantRow, "id" | "created_at"> & {
