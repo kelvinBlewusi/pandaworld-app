@@ -503,10 +503,26 @@ function IntegrationsPageInner() {
                 Your Jumia access token has expired. Re-authorise PandaWorld to restore the connection.
               </span>
             </div>
-            <Button onClick={handleConnect} disabled={connecting} className="gap-2">
-              {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              Re-authorise with Jumia
-            </Button>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button onClick={handleConnect} disabled={connecting} className="gap-2">
+                {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                Re-authorise with Jumia
+              </Button>
+              {/* If the app was deleted/recreated in Jumia Vendor Center, the
+                  stored app_id is gone and re-authorising sends the seller
+                  into Jumia's raw "unable to retrieve client by id" error
+                  page with no way back — disconnecting here lets them start
+                  fresh with new credentials instead of getting stuck there. */}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-2 text-red-400 hover:text-red-600"
+                onClick={() => setShowConfirm(true)}
+              >
+                <Unlink className="h-3.5 w-3.5" />
+                Disconnect &amp; use new credentials
+              </Button>
+            </div>
           </div>
         ) : (
           /* ── Not connected state ────────────────────────────────────────── */

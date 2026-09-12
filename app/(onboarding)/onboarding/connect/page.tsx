@@ -77,7 +77,14 @@ function ConnectPageInner() {
   // Integrations' "Re-authorise" button uses) — not the full form below,
   // which is only for a seller who's never connected at all.
   const [reconnecting, setReconnecting] = useState(false);
-  if (searchParams.get("reason") === "disconnected") {
+  // Escape hatch: if the seller deleted or recreated the OAuth application
+  // in Jumia Vendor Center (Settings → Applications), the stored app_id is
+  // no longer valid and clicking "Re-authorise" sends them straight into
+  // Jumia's raw, unbranded "unable to retrieve client by id" error page —
+  // a dead end, since that page has no link back into PandaWorld. This lets
+  // them bail out to the full credentials form instead of getting stuck.
+  const [showFullForm, setShowFullForm] = useState(false);
+  if (searchParams.get("reason") === "disconnected" && !showFullForm) {
     return (
       <div className="mx-auto max-w-[600px] rounded-2xl border bg-white shadow-sm overflow-hidden">
         <div className="border-b bg-gradient-to-r from-orange-50 to-amber-50 px-6 py-5 flex items-center gap-4">
@@ -105,6 +112,13 @@ function ConnectPageInner() {
               <><RefreshCw className="h-4 w-4" />Re-authorise with Jumia</>
             )}
           </Button>
+          <button
+            type="button"
+            onClick={() => setShowFullForm(true)}
+            className="w-full text-center text-xs text-zinc-400 hover:text-zinc-600 hover:underline"
+          >
+            Getting a &quot;client not found&quot; error from Jumia? Enter new credentials instead
+          </button>
         </div>
       </div>
     );
