@@ -1,3 +1,5 @@
+import { appUrl } from "@/lib/whatsapp/app-url";
+
 /**
  * Pure parsing/formatting helpers for the WhatsApp multi-product batch
  * flow, split out from lib/whatsapp/intake.ts for the same reason
@@ -89,9 +91,6 @@ export function extractStock(text: string): number | null {
 }
 
 export function whatsappListingsUrl(batchId?: string): string {
-  const appUrl =
-    process.env.NEXT_PUBLIC_APP_URL ??
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "https://pandaworld.gh");
-  const base = `${appUrl.replace(/\/$/, "")}/extension/whatsapp-listings`;
+  const base = `${appUrl()}/extension/whatsapp-listings`;
   return batchId ? `${base}?batch=${batchId}` : base;
 }

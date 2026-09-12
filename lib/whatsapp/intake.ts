@@ -6,6 +6,8 @@ import { createListingForUser } from "@/lib/listings/create";
 import { runAutoAnalyze } from "@/lib/actions/auto-analyze";
 import { pushListingToJumia } from "@/lib/jumia/push-listing";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
+import { testJumiaCredentials, saveJumiaCredentialsForUser } from "@/lib/jumia/credentials";
+import { createConnectToken } from "@/lib/jumia/connect-token";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { isDoneMessage, reviewUrl } from "@/lib/whatsapp/draft";
 import {
@@ -16,6 +18,7 @@ import {
   extractStock,
   whatsappListingsUrl,
 } from "@/lib/whatsapp/batch";
+import { splitCredentialTokens, isResendCommand, jumiaConnectLink } from "@/lib/whatsapp/jumia-connect";
 import type { ListingRow } from "@/lib/supabase/types";
 
 /**
@@ -68,6 +71,12 @@ export async function handleLinkedMessage(
   }
 
   switch (session.state) {
+    case "awaiting_jumia_credentials":
+      await handleAwaitingJumiaCredentials(userId, phoneNumber, session, content);
+      break;
+    case "awaiting_jumia_oauth":
+      await handleAwaitingJumiaOauth(userId, phoneNumber, content);
+      break;
     case "awaiting_count":
       await handleAwaitingCount(phoneNumber, content);
       break;
@@ -111,6 +120,94 @@ async function handleAwaitingCount(
   await replyText(
     phoneNumber,
     `Let's go — product 1 of ${count}.\n\nSend its photos, plus any notes (price, sizes, variations, etc.), then reply *done*.`,
+  );
+}
+
+async function sendJumiaConnectLink(userId: string, phoneNumber: string): Promise<void> {
+  const token = await createConnectToken(userId);
+  await replyText(
+    phoneNumber,
+    `Tap this link to finish connecting Jumia:\n${jumiaConnectLink(token)}\n\nI'll message you here once it's done.`,
+  );
+}
+
+/**
+ * Waiting for the seller to paste their Jumia Client ID + Client Secret
+ * (see the instructions sent right after linking — buildConnectInstructions
+ * in lib/whatsapp/jumia-connect.ts). Accepts both together in one message
+ * or one at a time; pendingAppId on the session holds the first half
+ * across messages.
+ */
+async function handleAwaitingJumiaCredentials(
+  userId: string,
+  phoneNumber: string,
+  session: WhatsAppSession,
+  content: { text?: string; imageMediaId?: string },
+): Promise<void> {
+  const text = content.text?.trim();
+  if (!text) {
+    await replyText(phoneNumber, "Paste your Jumia Client ID and Client Secret here to continue connecting.");
+    return;
+  }
+
+  const tokens = splitCredentialTokens(text);
+  let appId: string;
+  let secretKey: string;
+
+  // A 2+-token message always wins as a fresh (appId, secretKey) pair —
+  // even if a pendingAppId was already waiting — since a seller who
+  // changes their mind and re-pastes both clearly means "start over with
+  // these", not "append this to what I sent before". Only a single token
+  // ever consults pendingAppId, to complete whichever half is missing.
+  if (tokens.length >= 2) {
+    [appId, secretKey] = tokens;
+  } else if (tokens.length === 1 && session.pendingAppId) {
+    appId = session.pendingAppId;
+    secretKey = tokens[0];
+  } else if (tokens.length === 1) {
+    await updateSession(phoneNumber, { pendingAppId: tokens[0] });
+    await replyText(phoneNumber, "Got the Client ID — now paste the Client Secret.");
+    return;
+  } else {
+    await replyText(phoneNumber, "Paste your Jumia Client ID and Client Secret here to continue connecting.");
+    return;
+  }
+
+  const testResult = await testJumiaCredentials(appId, secretKey);
+  if (!testResult.ok) {
+    await updateSession(phoneNumber, { pendingAppId: null });
+    await replyText(phoneNumber, `⚠️ ${testResult.error}\n\nPaste your Client ID and Client Secret again.`);
+    return;
+  }
+
+  const saveResult = await saveJumiaCredentialsForUser(userId, appId, secretKey);
+  if (!saveResult.ok) {
+    await updateSession(phoneNumber, { pendingAppId: null });
+    await replyText(phoneNumber, `⚠️ ${saveResult.error}\n\nPaste your Client ID and Client Secret again.`);
+    return;
+  }
+
+  await updateSession(phoneNumber, { pendingAppId: null, state: "awaiting_jumia_oauth" });
+  await replyText(phoneNumber, "✅ Credentials saved! For your security, please delete that message from this chat now.");
+  await sendJumiaConnectLink(userId, phoneNumber);
+}
+
+/** Waiting for the seller to tap the one-time link and approve in Jumia
+ *  Vendor Center — app/api/jumia/callback/route.ts flips the session to
+ *  awaiting_count and messages back here once that completes. */
+async function handleAwaitingJumiaOauth(
+  userId: string,
+  phoneNumber: string,
+  content: { text?: string; imageMediaId?: string },
+): Promise<void> {
+  const text = content.text?.trim();
+  if (text && isResendCommand(text)) {
+    await sendJumiaConnectLink(userId, phoneNumber);
+    return;
+  }
+  await replyText(
+    phoneNumber,
+    "Still waiting for you to finish connecting Jumia — tap the link I sent earlier, or reply *resend* for a new one.",
   );
 }
 

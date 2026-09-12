@@ -32,7 +32,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 const PAGE_TITLES: Record<string, string> = {
-  "/extension/dashboard": "Dashboard",
+  "/extension/dashboard": "Extension Dashboard",
+  "/extension/whatsapp-listings": "List from WhatsApp",
   "/extension/calculator": "Calculator",
   "/extension/listings": "Autofill Activity",
   "/extension/settings": "Settings",
@@ -89,7 +90,7 @@ export function ExtensionShell({
   const [displaySeenAt, setDisplaySeenAt] = useState(notificationsSeenAt);
   const pathname = usePathname();
   const { user } = useUser();
-  const pageTitle = PAGE_TITLES[pathname] ?? "Dashboard";
+  const pageTitle = PAGE_TITLES[pathname] ?? "Extension Dashboard";
 
   useEffect(() => {
     setItems(notifications);

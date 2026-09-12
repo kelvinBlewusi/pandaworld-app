@@ -1,4 +1,5 @@
 import type { AutoAnalyzeResult } from "@/lib/actions/auto-analyze";
+import { appUrl } from "@/lib/whatsapp/app-url";
 
 /**
  * Pure text-shaping helpers for the WhatsApp draft-reply flow, split out
@@ -11,10 +12,7 @@ import type { AutoAnalyzeResult } from "@/lib/actions/auto-analyze";
  */
 
 export function reviewUrl(listingId: string): string {
-  const appUrl =
-    process.env.NEXT_PUBLIC_APP_URL ??
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "https://pandaworld.gh");
-  return `${appUrl.replace(/\/$/, "")}/listings/${listingId}/review`;
+  return `${appUrl()}/listings/${listingId}/review`;
 }
 
 /** Matches "done", "Done.", "DONE!" — tolerant of case and trailing punctuation. */
