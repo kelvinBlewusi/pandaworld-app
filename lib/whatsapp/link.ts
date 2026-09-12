@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { createServerClient } from "@/lib/supabase/server";
+import { sendTextIfConfigured } from "@/lib/whatsapp/client";
+import { appUrl } from "@/lib/whatsapp/app-url";
 
 /**
  * Account linking for the WhatsApp chatbot (server-only — imported by API
@@ -129,8 +131,28 @@ export async function getWhatsAppConnection(userId: string): Promise<WhatsAppCon
   return { connected: true, phoneNumber: data.phone_number as string, linkedAt: data.linked_at as string };
 }
 
-/** Disconnect — removes the link so this number stops being actionable. */
+/**
+ * Disconnect — removes the link so this number stops being actionable.
+ * Sends the number a final notice first (fetched before the row is gone) —
+ * a disconnect triggered from the website would otherwise be invisible to
+ * the seller until they next tried messaging the bot and got "this number
+ * isn't linked yet", with no idea why.
+ */
 export async function disconnectWhatsApp(userId: string): Promise<void> {
   const db = createServerClient();
+  const { data } = await db
+    .from("whatsapp_connections")
+    .select("phone_number")
+    .eq("user_id", userId)
+    .maybeSingle();
+
   await db.from("whatsapp_connections").delete().eq("user_id", userId);
+
+  const phoneNumber = data?.phone_number as string | undefined;
+  if (phoneNumber) {
+    await sendTextIfConfigured(
+      phoneNumber,
+      `🔌 This number has been disconnected from PandaWorld from the website. Reconnect any time from ${appUrl()}/extension/whatsapp-listings.`,
+    ).catch((e) => console.warn(`[whatsapp] disconnect notice failed for ${phoneNumber}: ${(e as Error).message}`));
+  }
 }
