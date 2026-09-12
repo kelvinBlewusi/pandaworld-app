@@ -8,7 +8,8 @@
  */
 
 import { createServerClient } from "@/lib/supabase/server";
-import { encrypt } from "@/lib/security/token-crypto";
+import { encrypt, decrypt } from "@/lib/security/token-crypto";
+import { revokeToken } from "@/lib/jumia/oauth";
 
 const JUMIA_TOKEN_URL = "https://auth-external.jumia.com/connect/token";
 
@@ -174,4 +175,50 @@ export async function saveJumiaCredentialsForUser(
   }
 
   return { ok: true, migrationPending: true };
+}
+
+export type DisconnectResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Revokes the seller's Jumia tokens (best-effort — Jumia being unreachable
+ * doesn't block the local disconnect) and deletes the connection row
+ * entirely, matching the original behind POST /api/jumia/disconnect. Also
+ * the target of the WhatsApp chat's "confirm disconnect" global command
+ * (lib/whatsapp/commands.ts / lib/whatsapp/intake.ts) — same action, same
+ * consequences (store data cleared, seller must reconnect) regardless of
+ * which surface triggers it.
+ */
+export async function disconnectJumiaForUser(userId: string): Promise<DisconnectResult> {
+  const db = createServerClient();
+
+  const { data: conn } = await db
+    .from("jumia_connections")
+    .select("access_token, refresh_token")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  // Decrypt before calling revokeToken — Jumia's revoke endpoint takes the
+  // raw token, not our enc:v1: wrapper. decrypt() returns plaintext
+  // strings unchanged so legacy rows still work.
+  if (conn?.access_token && conn.access_token !== "credential_auth") {
+    try {
+      await revokeToken(decrypt(conn.access_token as string));
+    } catch (e) {
+      console.warn(`[credentials] access-token revoke failed: ${(e as Error).message}`);
+    }
+  }
+  if (conn?.refresh_token) {
+    try {
+      await revokeToken(decrypt(conn.refresh_token as string));
+    } catch (e) {
+      console.warn(`[credentials] refresh-token revoke failed: ${(e as Error).message}`);
+    }
+  }
+
+  const { error } = await db.from("jumia_connections").delete().eq("user_id", userId);
+  if (error) {
+    console.error("[credentials] disconnect DB error:", error);
+    return { ok: false, error: "Database error" };
+  }
+  return { ok: true };
 }
