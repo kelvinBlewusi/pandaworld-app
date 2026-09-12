@@ -498,7 +498,7 @@ async function handleSubmit(
     : listings.filter((l) => l.whatsapp_seq != null && cmd.seqs.includes(l.whatsapp_seq));
 
   if (targets.length === 0) {
-    await replyText(phoneNumber, "I couldn't find those product numbers in this batch — check the review page and try again.");
+    await replyText(phoneNumber, `I couldn't find those product numbers in this batch — check the review page and try again: ${whatsappListingsUrl(batchId)}`);
     return;
   }
 
@@ -524,7 +524,16 @@ async function handleSubmit(
       const result = await pushListingToJumia(userId, listing.id);
       if (result.ok) return `Product ${seq}: ✅ submitted — pending Jumia review.`;
       if (result.code === "validation") return `Product ${seq}: ⚠️ ${result.message} Fix it at ${whatsappListingsUrl(batchId)} then reply submit again.`;
-      if (result.needsReconnect) return `Product ${seq}: ⚠️ Jumia needs to be reconnected — Settings → Integrations in the app, then reply submit again.`;
+      if (result.needsReconnect) {
+        // Same one-time-link mechanism as lib/whatsapp/jumia-connect.ts's
+        // promptJumiaConnection, used inline here rather than through it —
+        // this must NOT touch session state (still awaiting_confirmation),
+        // since the seller is mid-review of this batch, not starting a
+        // fresh connect flow. They just tap the link, reconnect, and reply
+        // submit again from right where they left off.
+        const token = await createConnectToken(userId);
+        return `Product ${seq}: ⚠️ Jumia needs to be reconnected — tap here: ${jumiaConnectLink(token)}, then reply submit again.`;
+      }
       return `Product ${seq}: ❌ ${result.message}`;
     }),
   );

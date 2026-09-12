@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Settings as SettingsIcon, KeyRound, CreditCard } from "lucide-react";
 import { listExtensionApiKeys } from "@/lib/security/extension-keys";
 import { RegenerateKeyButton } from "@/components/extension/regenerate-key-button";
+import { WhatsAppCard } from "@/components/whatsapp/whatsapp-card";
 
 export const metadata: import("next").Metadata = {
   title: "Settings — Extension",
@@ -49,6 +50,10 @@ export default async function ExtensionSettingsPage() {
         >
           <CreditCard className="h-3.5 w-3.5" /> Manage plan & billing
         </Link>
+      </div>
+
+      <div className="mt-6">
+        <WhatsAppCard />
       </div>
 
       <div className="mt-6 rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">

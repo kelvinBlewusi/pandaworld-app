@@ -6,6 +6,7 @@ import { handleLinkedMessage } from "@/lib/whatsapp/intake";
 import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
 import { getOrCreateSession, updateSession } from "@/lib/whatsapp/session";
 import { promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
+import { appUrl } from "@/lib/whatsapp/app-url";
 
 /**
  * WhatsApp Business Cloud API webhook.
@@ -114,10 +115,11 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
   if (linkCode) {
     const result = await redeemLinkCode(linkCode, msg.from, contactName);
     if ("error" in result) {
+      const connectPage = `${appUrl()}/extension/whatsapp-listings`;
       const reason =
-        result.error === "expired" ? "That code has expired — generate a new one from Settings → Integrations."
-        : result.error === "used"    ? "That code was already used — generate a new one if you need to link another number."
-        :                               "That code isn't valid — check Settings → Integrations for the right one.";
+        result.error === "expired" ? `That code has expired — get a new one here: ${connectPage}`
+        : result.error === "used"    ? `That code was already used — get a new one here if you need to link another number: ${connectPage}`
+        :                               `That code isn't valid — get the right one here: ${connectPage}`;
       await sendTextIfConfigured(msg.from, `⚠️ ${reason}`);
       return;
     }
@@ -153,7 +155,7 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
   if (!userId) {
     await sendTextIfConfigured(
       msg.from,
-      "👋 This number isn't linked to a PandaWorld account yet. Open the app → List from WhatsApp (or Settings → Integrations) and tap \"Connect WhatsApp\" to get a linking code.",
+      `👋 This number isn't linked to a PandaWorld account yet. Tap here to connect WhatsApp and get a linking code: ${appUrl()}/extension/whatsapp-listings`,
     );
     return;
   }
