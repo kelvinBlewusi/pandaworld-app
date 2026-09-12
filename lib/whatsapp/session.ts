@@ -2,12 +2,15 @@ import { createServerClient } from "@/lib/supabase/server";
 
 /**
  * Per-phone-number conversation state for the WhatsApp chatbot. See
- * supabase/migrations/2026-09-10_whatsapp-sessions.sql and
- * supabase/migrations/2026-09-12_whatsapp-batches.sql for the schema and
- * the state machine's shape.
+ * supabase/migrations/2026-09-10_whatsapp-sessions.sql,
+ * supabase/migrations/2026-09-12_whatsapp-batches.sql, and
+ * supabase/migrations/2026-09-12_whatsapp-jumia-connect.sql for the
+ * schema and the state machine's shape.
  */
 
 export type WhatsAppSessionState =
+  | "awaiting_jumia_credentials"
+  | "awaiting_jumia_oauth"
   | "awaiting_count"
   | "awaiting_photos"
   | "analyzing"
@@ -27,6 +30,10 @@ export interface WhatsAppSession {
   batchId:       string | null;
   batchSize:     number | null;
   batchSeq:      number | null;
+  // Holds the Client ID while awaiting_jumia_credentials and the seller
+  // has pasted it but not yet the Client Secret (or vice versa — see
+  // lib/whatsapp/intake.ts's handleAwaitingJumiaCredentials).
+  pendingAppId:  string | null;
 }
 
 function fromRow(row: Record<string, unknown>): WhatsAppSession {
@@ -39,15 +46,25 @@ function fromRow(row: Record<string, unknown>): WhatsAppSession {
     batchId:       (row.batch_id as string | null) ?? null,
     batchSize:     (row.batch_size as number | null) ?? null,
     batchSeq:      (row.batch_seq as number | null) ?? null,
+    pendingAppId:  (row.pending_app_id as string | null) ?? null,
   };
 }
 
 /**
- * Fetch the session for a linked number, creating a fresh `awaiting_count`
- * one if this is the seller's first message since linking (or since their
- * last completed/reset batch).
+ * Fetch the session for a linked number, creating a fresh one if this is
+ * the seller's first message since linking (or since their last
+ * completed/reset batch). `initialState` lets the caller start a
+ * brand-new number in `awaiting_jumia_credentials`/`awaiting_jumia_oauth`
+ * instead of the usual `awaiting_count` default — see the LINK-code
+ * handling in app/api/whatsapp/webhook/route.ts, which already knows
+ * whether this seller has Jumia connected before any session row exists.
+ * Has no effect on an existing row.
  */
-export async function getOrCreateSession(userId: string, phoneNumber: string): Promise<WhatsAppSession> {
+export async function getOrCreateSession(
+  userId: string,
+  phoneNumber: string,
+  initialState: WhatsAppSessionState = "awaiting_count",
+): Promise<WhatsAppSession> {
   const db = createServerClient();
 
   const { data: existing } = await db
@@ -59,7 +76,7 @@ export async function getOrCreateSession(userId: string, phoneNumber: string): P
 
   const { data: created, error } = await db
     .from("whatsapp_sessions")
-    .insert({ phone_number: phoneNumber, user_id: userId, state: "awaiting_count" })
+    .insert({ phone_number: phoneNumber, user_id: userId, state: initialState })
     .select()
     .single();
 
@@ -87,6 +104,7 @@ export async function updateSession(
     batchId:       string | null;
     batchSize:     number | null;
     batchSeq:      number | null;
+    pendingAppId:  string | null;
   }>,
 ): Promise<void> {
   const db = createServerClient();
@@ -97,6 +115,7 @@ export async function updateSession(
   if (patch.batchId       !== undefined) update.batch_id        = patch.batchId;
   if (patch.batchSize     !== undefined) update.batch_size      = patch.batchSize;
   if (patch.batchSeq      !== undefined) update.batch_seq       = patch.batchSeq;
+  if (patch.pendingAppId  !== undefined) update.pending_app_id  = patch.pendingAppId;
   await db.from("whatsapp_sessions").update(update).eq("phone_number", phoneNumber);
 }
 

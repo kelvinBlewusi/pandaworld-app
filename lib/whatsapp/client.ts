@@ -110,6 +110,32 @@ export async function sendTextIfConfigured(to: string, text: string): Promise<vo
 }
 
 /**
+ * Marks an incoming message as read (blue ticks) and shows the animated
+ * "typing…" indicator in the chat for up to 25 seconds or until the next
+ * message is sent, whichever comes first — Meta's Cloud API ties both to
+ * the same call, keyed by the incoming message's id. Called once per
+ * incoming message right as the webhook receives it (see
+ * app/api/whatsapp/webhook/route.ts), before any of the actual handling
+ * (image download, AI analyze, Jumia push) that can take several seconds —
+ * without it the seller sees dead air the whole time.
+ *
+ * Best-effort and silent: a seller never needs to know this failed, and it
+ * must never take down real message handling over a cosmetic indicator.
+ */
+export async function markReadWithTypingIfConfigured(messageId: string): Promise<void> {
+  if (!isWhatsAppConfigured()) return;
+  try {
+    await callGraphApi({
+      status: "read",
+      message_id: messageId,
+      typing_indicator: { type: "text" },
+    });
+  } catch (e) {
+    console.warn(`[whatsapp] typing indicator failed for message ${messageId}: ${(e as Error).message}`);
+  }
+}
+
+/**
  * Fetch an incoming media attachment's bytes. WhatsApp gives you a media ID
  * in the webhook payload, not a direct URL — two hops: resolve the ID to a
  * short-lived authenticated URL, then fetch that URL with the same bearer

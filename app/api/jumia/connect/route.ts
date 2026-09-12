@@ -2,15 +2,30 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { buildAuthorizationUrl } from "@/lib/jumia/oauth";
+import { redeemConnectToken } from "@/lib/jumia/connect-token";
 
 // ─── GET /api/jumia/connect ───────────────────────────────────────────────────
 // Looks up the seller's stored app_id, builds the Jumia OAuth authorization
 // URL using it as the client_id, and redirects the browser there.
+//
+// Normally identifies the seller via their Clerk session (the Settings ->
+// Integrations / onboarding "Authorise" buttons). A `wa_token` query param
+// is the alternative entry point for the WhatsApp connect-Jumia-from-chat
+// flow (lib/whatsapp/intake.ts) — a one-time token so tapping the link the
+// bot sent works even if this browser has no active PandaWorld session.
+// See lib/jumia/connect-token.ts for why that's safe: single-use,
+// short-lived, and it only ever triggers a redirect to Jumia's OWN
+// login/consent page.
 
 export async function GET(req: NextRequest) {
-  const { userId } = await auth();
+  const waToken = req.nextUrl.searchParams.get("wa_token");
+  const userId = waToken ? await redeemConnectToken(waToken) : (await auth()).userId;
+
   if (!userId) {
-    return new NextResponse("Unauthorized", { status: 401 });
+    return new NextResponse(
+      waToken ? "This link has expired or was already used — ask the bot for a new one." : "Unauthorized",
+      { status: waToken ? 400 : 401 },
+    );
   }
 
   // Derive origin from the actual request so redirect_uri always matches

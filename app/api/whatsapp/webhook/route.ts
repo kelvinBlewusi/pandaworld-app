@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { redeemLinkCode, getUserIdForPhoneNumber } from "@/lib/whatsapp/link";
-import { sendTextIfConfigured } from "@/lib/whatsapp/client";
+import { sendTextIfConfigured, markReadWithTypingIfConfigured } from "@/lib/whatsapp/client";
 import { verifyWhatsAppSignature, extractLinkCode } from "@/lib/whatsapp/webhook-verify";
 import { handleLinkedMessage } from "@/lib/whatsapp/intake";
+import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
+import { createConnectToken } from "@/lib/jumia/connect-token";
+import { getOrCreateSession, updateSession } from "@/lib/whatsapp/session";
+import { buildConnectInstructions, jumiaConnectLink } from "@/lib/whatsapp/jumia-connect";
 
 /**
  * WhatsApp Business Cloud API webhook.
@@ -82,10 +86,11 @@ export async function POST(req: NextRequest) {
   }
 
   const { messages, contactName } = extractMessages(body);
+  const origin = req.nextUrl.origin;
 
   for (const msg of messages) {
     try {
-      await handleMessage(msg, contactName);
+      await handleMessage(msg, origin, contactName);
     } catch (e) {
       // One malformed/unexpected message must never take down the rest of
       // the batch, or cause Meta to retry the whole webhook delivery.
@@ -98,7 +103,14 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ received: true });
 }
 
-async function handleMessage(msg: IncomingMessage, contactName?: string): Promise<void> {
+async function handleMessage(msg: IncomingMessage, origin: string, contactName?: string): Promise<void> {
+  // Fired, not awaited — shows the seller blue ticks + the animated
+  // "typing…" indicator right away, while everything below (image
+  // download, AI analyze, Jumia push) can take several seconds. Never
+  // let a slow/failed typing-indicator call hold up real message
+  // handling — see markReadWithTypingIfConfigured's own error handling.
+  void markReadWithTypingIfConfigured(msg.id);
+
   const linkCode = extractLinkCode(msg.text?.body);
 
   if (linkCode) {
@@ -111,9 +123,44 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
       await sendTextIfConfigured(msg.from, `⚠️ ${reason}`);
       return;
     }
+
+    // A brand-new seller (or one who never finished connecting Jumia) gets
+    // walked through it right here instead of straight into "how many
+    // products?" — see lib/jumia/credentials.ts's getJumiaConnectionKind
+    // and lib/whatsapp/intake.ts's awaiting_jumia_credentials/
+    // awaiting_jumia_oauth states. Always ensure a session row exists
+    // first, then overwrite its state explicitly — a returning number
+    // relinking to a different account, or one with stale state from a
+    // past session, must not carry any of that into this fresh link.
+    const kind = await getJumiaConnectionKind(result.userId);
+    await getOrCreateSession(result.userId, msg.from);
+    const clearBatch = { listingId: null, batchId: null, batchSize: null, batchSeq: null, pendingAppId: null } as const;
+
+    if (kind === "connected") {
+      await updateSession(msg.from, { state: "awaiting_count", ...clearBatch });
+      await sendTextIfConfigured(
+        msg.from,
+        "✅ Your WhatsApp is now linked to PandaWorld! How many products are you listing today? Reply with a number to get started.",
+      );
+      return;
+    }
+
+    if (kind === "needs_oauth") {
+      await updateSession(msg.from, { state: "awaiting_jumia_oauth", ...clearBatch });
+      const token = await createConnectToken(result.userId);
+      await sendTextIfConfigured(
+        msg.from,
+        `✅ Your WhatsApp is now linked to PandaWorld! Your Jumia credentials are already on file — tap this link to finish connecting:\n${jumiaConnectLink(token)}\n\nI'll message you here once it's done.`,
+      );
+      return;
+    }
+
+    // needs_credentials — never connected at all
+    await updateSession(msg.from, { state: "awaiting_jumia_credentials", ...clearBatch });
+    const redirectUri = `${origin}/api/jumia/callback`;
     await sendTextIfConfigured(
       msg.from,
-      "✅ Your WhatsApp is now linked to PandaWorld! How many products are you listing today? Reply with a number to get started.",
+      `✅ Your WhatsApp is now linked to PandaWorld!\n\n${buildConnectInstructions(redirectUri)}`,
     );
     return;
   }
@@ -122,7 +169,7 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
   if (!userId) {
     await sendTextIfConfigured(
       msg.from,
-      "👋 This number isn't linked to a PandaWorld account yet. Open Settings → Integrations in the app and tap \"Connect WhatsApp\" to get a linking code.",
+      "👋 This number isn't linked to a PandaWorld account yet. Open the app → List from WhatsApp (or Settings → Integrations) and tap \"Connect WhatsApp\" to get a linking code.",
     );
     return;
   }

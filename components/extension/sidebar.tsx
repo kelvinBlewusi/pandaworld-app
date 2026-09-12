@@ -30,8 +30,8 @@ import { cn } from "@/lib/utils";
 import { Wordmark } from "@/components/marketing/wordmark";
 
 const primaryNav = [
-  { href: "/extension/dashboard",  label: "Dashboard",   icon: LayoutDashboard },
-  { href: "/extension/whatsapp-listings", label: "WhatsApp Listings", icon: MessageCircle },
+  { href: "/extension/dashboard",  label: "Extension Dashboard", icon: LayoutDashboard },
+  { href: "/extension/whatsapp-listings", label: "List from WhatsApp", icon: MessageCircle },
   { href: "/extension/calculator", label: "Calculator",  icon: Calculator },
   { href: "/extension/listings",   label: "Autofill Activity", icon: ListChecks },
 ];
