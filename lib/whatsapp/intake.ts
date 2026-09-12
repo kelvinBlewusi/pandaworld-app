@@ -286,7 +286,7 @@ async function handleAwaitingCount(
   });
   await replyText(
     phoneNumber,
-    `Let's go — product 1 of ${count}.\n\nSend its photos, plus any notes (price, sizes, variations, etc.), then reply *done*.`,
+    `Let's go — product 1 of ${count}.\n\nSend its photos, and tell me the price plus any other notes (variations, sizes, sale price etc.), then reply *done*.`,
   );
 }
 
@@ -469,7 +469,7 @@ async function handleAwaitingPhotos(
       await updateSession(phoneNumber, { state: "awaiting_photos", listingId: null, batchSeq: seq + 1 });
       await replyText(
         phoneNumber,
-        `✅ Product ${seq} saved. Now send photos for product ${seq + 1} of ${batchSize}, plus any notes, then reply *done*.`,
+        `✅ Product ${seq} saved. Now send photos for product ${seq + 1} of ${batchSize}, and tell me the price plus any other notes (variations, sizes, sale price etc.), then reply *done*.`,
       );
       return;
     }
