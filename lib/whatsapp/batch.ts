@@ -38,15 +38,24 @@ export function parseSubmitCommand(text: string): SubmitCommand | null {
 }
 
 export type EditCommand =
-  | { needsSeq: false; seq: number; text: string }
+  | { needsSeq: false; seq: number; text: string; explicit: boolean }
   | { needsSeq: true; text: string };
 
 /**
  * "2: change the color to blue" / "product 3 - make it size L" → an edit
- * targeting that product number. When the batch has exactly one product,
- * a leading number isn't required — "change the color to blue" applies to
- * product 1 directly. Returns null if the message doesn't look like an
- * edit instruction at all (e.g. it's a submit command, or just chit-chat).
+ * targeting that product number (`explicit: true` — the "N:" syntax is an
+ * unambiguous, deliberate edit regardless of what follows). When the batch
+ * has exactly one product, a leading number isn't required — any other
+ * text is treated as applying to product 1 directly (`explicit: false`),
+ * and when the batch has more than one, `needsSeq: true` asks which
+ * product it's for.
+ *
+ * Returns null only for a submit command or empty text. The `explicit:
+ * false` / `needsSeq: true` cases are NOT reliable signals that the
+ * seller actually meant an edit — "Hi" or "New listing" match them too —
+ * callers should gate those two on something like looksActionable() from
+ * lib/whatsapp/intent.ts before acting, and only ever treat the explicit
+ * numbered form as a sure thing.
  */
 export function parseEditCommand(text: string, batchSize: number): EditCommand | null {
   const trimmed = text.trim();
@@ -56,10 +65,10 @@ export function parseEditCommand(text: string, batchSize: number): EditCommand |
   if (numbered) {
     const seq = parseInt(numbered[1], 10);
     const editText = numbered[2].trim();
-    if (editText) return { needsSeq: false, seq, text: editText };
+    if (editText) return { needsSeq: false, seq, text: editText, explicit: true };
   }
 
-  if (batchSize === 1) return { needsSeq: false, seq: 1, text: trimmed };
+  if (batchSize === 1) return { needsSeq: false, seq: 1, text: trimmed, explicit: false };
 
   return { needsSeq: true, text: trimmed };
 }
