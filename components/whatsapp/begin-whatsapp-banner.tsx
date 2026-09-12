@@ -10,22 +10,34 @@
  */
 
 import { useState } from "react";
-import { Loader2, MessageCircle } from "lucide-react";
+import { Loader2, MessageCircle, Copy } from "lucide-react";
 
 export function BeginWhatsAppBanner() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set only when the code was generated but WHATSAPP_BOT_NUMBER isn't
+  // configured (so there's no wa.me link to open automatically) — same
+  // degraded case WhatsAppCard handles by showing the code as text
+  // instead of a button. Not an error: the code is real and usable.
+  const [manualCode, setManualCode] = useState<string | null>(null);
 
   async function handleClick() {
     setLoading(true);
     setError(null);
+    setManualCode(null);
     try {
       const res = await fetch("/api/whatsapp/generate-link", { method: "POST" });
       const data = await res.json().catch(() => null);
-      if (res.ok && data?.waLink) {
+      if (!res.ok) {
+        setError(data?.error ?? `Couldn't generate a link (HTTP ${res.status}). Try again.`);
+        return;
+      }
+      if (data?.waLink) {
         window.open(data.waLink, "_blank", "noopener,noreferrer");
+      } else if (data?.code) {
+        setManualCode(data.code);
       } else {
-        setError(data?.error ?? "Couldn't generate a link — try again.");
+        setError("Couldn't generate a link — try again.");
       }
     } catch {
       setError("Network error — check your connection and try again.");
@@ -50,6 +62,26 @@ export function BeginWhatsAppBanner() {
           {loading ? "Opening WhatsApp…" : "Tap to open WhatsApp — we'll connect your Jumia account right there in chat"}
         </p>
       </button>
+
+      {manualCode && (
+        <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4 text-center text-sm">
+          <p className="text-emerald-700">Send this code as a WhatsApp message to the PandaWorld bot number:</p>
+          <div className="mt-2 flex items-center justify-center gap-2">
+            <code className="rounded bg-emerald-100 px-2.5 py-1.5 font-mono text-sm text-emerald-900">
+              LINK-{manualCode}
+            </code>
+            <button
+              type="button"
+              onClick={() => navigator.clipboard.writeText(`LINK-${manualCode}`)}
+              className="flex items-center gap-1 text-xs text-emerald-700 hover:text-emerald-900"
+            >
+              <Copy className="h-3 w-3" />
+              Copy
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-emerald-500">This code expires in 15 minutes.</p>
+        </div>
+      )}
       {error && <p className="text-center text-sm text-red-600">{error}</p>}
     </div>
   );
