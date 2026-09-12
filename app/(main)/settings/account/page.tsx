@@ -227,7 +227,7 @@ export default function AccountSettingsPage() {
             <h2 className="text-sm font-semibold text-zinc-700">Connected stores</h2>
           </div>
           <Button variant="outline" size="sm" asChild>
-            <a href="/onboarding/channel">Add store</a>
+            <a href="/onboarding/connect">Add store</a>
           </Button>
         </div>
         <Separator />
@@ -243,7 +243,7 @@ export default function AccountSettingsPage() {
               <p className="text-sm font-medium text-zinc-500">No stores connected yet</p>
               <p className="mt-0.5 text-xs text-zinc-400">Connect your first store to start publishing listings</p>
               <Button asChild size="sm" className="mt-4">
-                <a href="/onboarding/channel">Add your first store</a>
+                <a href="/onboarding/connect">Add your first store</a>
               </Button>
             </div>
           ) : (

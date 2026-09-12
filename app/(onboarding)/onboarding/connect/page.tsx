@@ -11,11 +11,9 @@ import {
   Loader2,
   CheckCircle2,
   XCircle,
-  ArrowLeft,
   ShieldCheck,
   RefreshCw,
 } from "lucide-react";
-import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -28,7 +26,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
-const progressSteps = ["Select channel", "Connect", "Done"];
+const progressSteps = ["Connect", "Done"];
 
 const COUNTRIES = [
   { code: "GH", label: "Ghana 🇬🇭",      url: "vendorcenter.jumia.com.gh"  },
@@ -206,15 +204,15 @@ function ConnectForm() {
           <div key={step} className="flex items-center gap-2">
             <div className={cn(
               "flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold",
-              i <= 1 ? "bg-fuchsia-500 text-white shadow-lg shadow-fuchsia-500/40" : "bg-white/10 text-white/40"
+              i === 0 ? "bg-fuchsia-500 text-white shadow-lg shadow-fuchsia-500/40" : "bg-white/10 text-white/40"
             )}>
-              {i === 0 ? <Check className="h-3.5 w-3.5" /> : i + 1}
+              {i + 1}
             </div>
-            <span className={cn("text-xs", i <= 1 ? "font-medium text-white" : "text-white/35")}>
+            <span className={cn("text-xs", i === 0 ? "font-medium text-white" : "text-white/35")}>
               {step}
             </span>
             {i < progressSteps.length - 1 && (
-              <div className={cn("h-px w-8", i === 0 ? "bg-fuchsia-500/60" : "bg-white/15")} />
+              <div className="h-px w-8 bg-white/15" />
             )}
           </div>
         ))}
@@ -408,15 +406,6 @@ function ConnectForm() {
             )}
           </Button>
         </div>
-      </div>
-
-      <div className="mx-auto max-w-[600px]">
-        <Button variant="ghost" size="sm" asChild className="w-full text-white/40 hover:text-white/70 hover:bg-white/5">
-          <Link href="/onboarding/channel">
-            <ArrowLeft className="mr-1 h-3.5 w-3.5" />
-            Back to channel selection
-          </Link>
-        </Button>
       </div>
     </div>
   );

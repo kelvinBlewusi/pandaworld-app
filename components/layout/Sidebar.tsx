@@ -20,7 +20,6 @@ import {
   Settings,
   CreditCard,
   Plug,
-  Zap,
   LogOut,
   X,
   Database,
@@ -351,22 +350,8 @@ export function Sidebar({
         )}
       </nav>
 
-      {/* Upsell card */}
+      {/* User chip */}
       <div className="px-3 pb-4">
-        <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 p-4 text-white">
-          <div className="absolute -right-3 -top-3 h-16 w-16 rounded-full bg-white/10" />
-          <Zap className="mb-2 h-4 w-4 text-yellow-300" />
-          <p className="text-xs font-semibold leading-snug">Connect more channels</p>
-          <p className="mt-0.5 text-[10px] text-blue-100">Sell on Shopify, Amazon & more</p>
-          <Link
-            href="/onboarding/channel"
-            className="mt-3 inline-block rounded-lg bg-white px-3 py-1.5 text-[11px] font-semibold text-blue-600 transition-opacity hover:opacity-90"
-          >
-            Set up
-          </Link>
-        </div>
-
-        {/* User chip */}
         <UserChip />
       </div>
     </aside>

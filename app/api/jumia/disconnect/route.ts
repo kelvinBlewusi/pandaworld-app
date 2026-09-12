@@ -42,7 +42,7 @@ export async function POST() {
   }
 
   // Delete the row entirely — this clears all shop data and
-  // causes the root page to redirect the user to /onboarding/channel on next login
+  // causes the root page to redirect the user to /onboarding/connect on next login
   const { error } = await db
     .from("jumia_connections")
     .delete()

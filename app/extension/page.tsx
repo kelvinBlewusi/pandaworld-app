@@ -75,7 +75,7 @@ const STEPS = [
 // web app and structurally unreachable from /extension/dashboard anyway
 // (that route lives outside the (main) group). Without redirect_url, Clerk's
 // default post-auth destination is "/", whose own gate sends any brand-new
-// user straight into /onboarding/channel.
+// user straight into /onboarding/connect.
 const DASHBOARD_REDIRECT = "/extension/dashboard";
 
 // Named export (in addition to the default below) so app/page.tsx can

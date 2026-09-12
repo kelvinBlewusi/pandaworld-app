@@ -17,7 +17,7 @@ import { ExtensionShell } from "@/components/extension/shell";
 // keep their existing paths while sharing this sidebar + utility-bar shell.
 //
 // Deliberately OUTSIDE (main): (main)/layout.tsx redirects anyone without an
-// ACTIVE Jumia OAuth connection to /onboarding/channel — but reaching
+// ACTIVE Jumia OAuth connection to /onboarding/connect — but reaching
 // sellers who don't want to do that OAuth dance is the whole point of the
 // extension flow (docs/chrome-extension-plan.md). So auth here is just
 // Clerk's session check, no Jumia-connection gate.

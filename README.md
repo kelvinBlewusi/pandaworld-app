@@ -149,7 +149,6 @@ lib/
 | `/listings/[id]/review` | Side-by-side AI preview + editable form |
 | `/price-calculator` | Fee breakdown tool (commission + shipping) |
 | `/imports` | Bulk CSV import placeholder |
-| `/onboarding/channel` | Select selling channel (Jumia enabled, others "coming soon") |
 | `/onboarding/connect` | OAuth connect or spreadsheet fallback |
 | `/settings/account` | Profile, connected stores, warranty defaults, notifications |
 | `/settings/billing` | Plan tiers (Free / Pro / Business) |

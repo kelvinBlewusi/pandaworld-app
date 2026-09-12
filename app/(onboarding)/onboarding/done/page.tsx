@@ -7,7 +7,7 @@ import { CheckCircle2, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-const progressSteps = ["Select channel", "Connect", "Done"];
+const progressSteps = ["Connect", "Done"];
 
 export default function OnboardingDonePage() {
   const router = useRouter();
@@ -32,7 +32,7 @@ export default function OnboardingDonePage() {
                 "bg-blue-600 text-white"
               )}
             >
-              {i < 2 ? <span>✓</span> : i + 1}
+              {i < progressSteps.length - 1 ? <span>✓</span> : i + 1}
             </div>
             <span className="text-xs font-medium text-zinc-700">{step}</span>
             {i < progressSteps.length - 1 && (
