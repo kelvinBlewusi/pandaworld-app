@@ -94,3 +94,9 @@ export function whatsappListingsUrl(batchId?: string): string {
   const base = `${appUrl()}/extension/whatsapp-listings`;
   return batchId ? `${base}?batch=${batchId}` : base;
 }
+
+/** The focused single-product editor for one chat-drafted listing — see
+ *  app/extension/(app)/whatsapp-listings/[id]/page.tsx. */
+export function focusedEditorUrl(listingId: string): string {
+  return `${appUrl()}/extension/whatsapp-listings/${listingId}`;
+}

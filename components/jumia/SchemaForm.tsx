@@ -63,10 +63,11 @@ interface SchemaFormProps {
    * Grid density at the large breakpoint. 3-col is the default and works
    * well for the wide Product Specification (lots of small fields). 4-col
    * is right for the more compact Product Information row (Brand / Color /
-   * Color family / Weight on one line). Sub-lg breakpoints always render
-   * 1- or 2-col regardless of this prop.
+   * Color family / Weight on one line). 2-col suits a narrower single-column
+   * page layout (e.g. the WhatsApp focused editor). Sub-lg breakpoints
+   * always render 1- or 2-col regardless of this prop.
    */
-  cols?: 3 | 4;
+  cols?: 2 | 3 | 4;
   /**
    * When set, a "Fill empty fields with AI" button renders at the top of
    * the form. Click → caller runs Gemini fill against the current category
@@ -351,10 +352,12 @@ export function SchemaForm({
 
   const gridClass = cn(
     "grid grid-cols-1 gap-4 sm:grid-cols-2",
-    cols === 4 ? "lg:grid-cols-4" : "lg:grid-cols-3",
+    cols === 4 ? "lg:grid-cols-4" : cols === 2 ? "lg:grid-cols-2" : "lg:grid-cols-3",
   );
   const wideSpanClass = cols === 4
     ? "sm:col-span-2 lg:col-span-4"
+    : cols === 2
+    ? "sm:col-span-2 lg:col-span-2"
     : "sm:col-span-2 lg:col-span-3";
 
   // Shared by classification (below) and rendering — both need the same

@@ -22,11 +22,17 @@ export type GlobalCommand =
   | { type: "restart" }
   | { type: "disconnect" }
   | { type: "confirm_disconnect" }
+  | { type: "keep_connected" }
   | { type: "status" }
   | { type: "help" };
 
 const RESTART_RE = /^(restart|start over|start again|cancel|stop|new batch|reset)[.!]?$/i;
 const CONFIRM_DISCONNECT_RE = /^confirm disconnect[.!]?$/i;
+// A dedicated phrase for "no, don't disconnect" — deliberately NOT "cancel"
+// (already claimed by RESTART_RE above to mean "abandon the current batch").
+// Reusing "cancel" here would let tapping the disconnect prompt's "no"
+// button be misread as restarting a batch instead of just declining.
+const KEEP_CONNECTED_RE = /^keep jumia connected[.!]?$/i;
 const DISCONNECT_RE = /^disconnect( jumia)?[.!]?$/i;
 const STATUS_RE = /^(status|where am i)[.!?]?$/i;
 const HELP_RE = /^(help|\?|commands)[.!]?$/i;
@@ -37,6 +43,7 @@ export function parseGlobalCommand(text: string): GlobalCommand | null {
   const t = text.trim();
   if (!t) return null;
   if (CONFIRM_DISCONNECT_RE.test(t)) return { type: "confirm_disconnect" };
+  if (KEEP_CONNECTED_RE.test(t)) return { type: "keep_connected" };
   if (DISCONNECT_RE.test(t)) return { type: "disconnect" };
   if (RESTART_RE.test(t)) return { type: "restart" };
   if (STATUS_RE.test(t)) return { type: "status" };

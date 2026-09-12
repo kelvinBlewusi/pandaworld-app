@@ -1,5 +1,5 @@
 import { createServerClient } from "@/lib/supabase/server";
-import { sendTextIfConfigured } from "@/lib/whatsapp/client";
+import { sendTextIfConfigured, sendCtaUrlIfConfigured, sendButtonsIfConfigured } from "@/lib/whatsapp/client";
 import { ingestWhatsAppImage } from "@/lib/whatsapp/media";
 import { getOrCreateSession, updateSession, resetSession, type WhatsAppSession } from "@/lib/whatsapp/session";
 import { createListingForUser } from "@/lib/listings/create";
@@ -18,6 +18,7 @@ import {
   extractPrice,
   extractStock,
   whatsappListingsUrl,
+  focusedEditorUrl,
 } from "@/lib/whatsapp/batch";
 import { splitCredentialTokens, isResendCommand, jumiaConnectLink, promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
 import { classifyBatchIntent, looksActionable } from "@/lib/whatsapp/intent";
@@ -42,6 +43,18 @@ const MAX_LISTING_IMAGES = 8;
 
 function replyText(to: string, text: string): Promise<void> {
   return sendTextIfConfigured(to, text);
+}
+
+// replyButtons/replyCta always keep the same body text a plain-text send
+// would have used, spelling out the exact phrase to type — a button is
+// additive convenience, never a requirement, so a WhatsApp client that
+// can't render interactive messages loses no functionality.
+function replyButtons(to: string, bodyText: string, buttons: { id: string; title: string }[]): Promise<void> {
+  return sendButtonsIfConfigured(to, bodyText, buttons);
+}
+
+function replyCta(to: string, bodyText: string, buttonText: string, url: string): Promise<void> {
+  return sendCtaUrlIfConfigured(to, bodyText, buttonText, url);
 }
 
 async function getBatchListings(batchId: string): Promise<ListingRow[]> {
@@ -156,13 +169,20 @@ async function handleGlobalCommand(
       await replyText(phoneNumber, HELP_TEXT);
       return;
     case "disconnect":
-      await replyText(
+      await replyButtons(
         phoneNumber,
-        "This disconnects your Jumia store from PandaWorld — you'll need to reconnect (new credentials or reauthorize) before listing again. Any drafts you've already made stay saved. Reply *confirm disconnect* to proceed, or anything else to cancel.",
+        "This disconnects your Jumia store from PandaWorld — you'll need to reconnect (new credentials or reauthorize) before listing again. Any drafts you've already made stay saved.\n\nReply *confirm disconnect* to proceed, or *keep jumia connected* to cancel.",
+        [
+          { id: "confirm disconnect", title: "Yes, disconnect" },
+          { id: "keep jumia connected", title: "No, keep it" },
+        ],
       );
       return;
     case "confirm_disconnect":
       await handleGlobalConfirmDisconnect(userId, phoneNumber);
+      return;
+    case "keep_connected":
+      await replyText(phoneNumber, "👍 No changes made — Jumia stays connected.");
       return;
   }
 }
@@ -261,9 +281,11 @@ async function handleAwaitingCount(
 
 async function sendJumiaConnectLink(userId: string, phoneNumber: string): Promise<void> {
   const token = await createConnectToken(userId);
-  await replyText(
+  await sendCtaUrlIfConfigured(
     phoneNumber,
-    `Tap this link to finish connecting Jumia:\n${jumiaConnectLink(token)}\n\nI'll message you here once it's done.`,
+    "Let's finish connecting your Jumia store. I'll message you here once it's done.",
+    "Connect Jumia",
+    jumiaConnectLink(token),
   );
 }
 
@@ -341,9 +363,10 @@ async function handleAwaitingJumiaOauth(
     await sendJumiaConnectLink(userId, phoneNumber);
     return;
   }
-  await replyText(
+  await replyButtons(
     phoneNumber,
     "Still waiting for you to finish connecting Jumia — tap the link I sent earlier, or reply *resend* for a new one.",
+    [{ id: "resend", title: "Resend link" }],
   );
 }
 
@@ -381,9 +404,10 @@ async function handleAwaitingPhotos(
     const current = (row?.images ?? []) as string[];
 
     if (current.length >= MAX_LISTING_IMAGES) {
-      await replyText(
+      await replyButtons(
         phoneNumber,
         `You've already sent ${MAX_LISTING_IMAGES} photos (the max) for product ${seq} — reply *done* when you're finished with this one.`,
+        [{ id: "done", title: "Done ✅" }],
       );
       return;
     }
@@ -407,9 +431,10 @@ async function handleAwaitingPhotos(
 
   if (!text) {
     if (content.imageMediaId) {
-      await replyText(
+      await replyButtons(
         phoneNumber,
         `📸 Product ${seq}: got it. Send more photos, or reply *done* once you're finished with this one.`,
+        [{ id: "done", title: "Done ✅" }],
       );
     } else {
       await replyText(phoneNumber, `Send a photo for product ${seq} (or reply *done* once you've sent its photos).`);
@@ -447,12 +472,19 @@ async function handleAwaitingPhotos(
   // auto-analyze as "SELLER CONTEXT" (e.g. "this is a pack of 6", "the
   // colour is teal not blue").
   if (listingId) await applyNotes(listingId, text);
-  await replyText(
-    phoneNumber,
-    content.imageMediaId
-      ? `📸 Product ${seq}: got it, notes saved. Send more photos, or reply *done* once you're finished with this one.`
-      : `Got it — noted for product ${seq}. Send more photos, or reply *done* when ready.`,
-  );
+  if (listingId) {
+    await replyButtons(
+      phoneNumber,
+      content.imageMediaId
+        ? `📸 Product ${seq}: got it, notes saved. Send more photos, or reply *done* once you're finished with this one.`
+        : `Got it — noted for product ${seq}. Send more photos, or reply *done* when ready.`,
+      [{ id: "done", title: "Done ✅" }],
+    );
+  } else {
+    // No photo yet for this product — "done" isn't a real option, so no
+    // button; the seller still needs to send at least one photo first.
+    await replyText(phoneNumber, `Got it — noted for product ${seq}. Send a photo to get started.`);
+  }
 }
 
 /**
@@ -511,7 +543,17 @@ async function startBatchAnalysis(
         try {
           const result = await runAutoAnalyze(userId, listing.id, null);
           if (result.ok) {
-            await replyText(phoneNumber, `✅ Product ${seq} drafted: ${result.title ?? "(untitled)"}.`);
+            // Gives access to the focused single-product editor the
+            // moment this product's draft is ready — see
+            // components/extension/whatsapp-focused-editor.tsx — rather
+            // than making the seller wait for the batch-wide summary or
+            // hunt for it on the review page.
+            await replyCta(
+              phoneNumber,
+              `✅ Product ${seq} drafted: ${result.title ?? "(untitled)"}.`,
+              `Edit product ${seq}`,
+              focusedEditorUrl(listing.id),
+            );
           } else {
             await replyText(
               phoneNumber,
@@ -539,13 +581,18 @@ async function startBatchAnalysis(
     }
 
     await updateSession(phoneNumber, { state: "awaiting_confirmation" });
-    await replyText(
+    // Two sends, not one — Meta's cta_url and button interactive types
+    // can't share a single message.
+    await replyCta(
       phoneNumber,
-      [
-        `🎉 Done drafting! Review everything here: ${whatsappListingsUrl(batchId)}`,
-        "",
-        `Reply *submit all* to push your drafted listings to Jumia after your review, or tell me the product number you want to submit (e.g. *submit 2*). You can also say "2: change the price to 150" to fix one first.`,
-      ].join("\n"),
+      `🎉 Done drafting your ${batchSize} product${batchSize === 1 ? "" : "s"}! Review each one below.`,
+      "Review listings",
+      whatsappListingsUrl(batchId),
+    );
+    await replyButtons(
+      phoneNumber,
+      `Ready to submit? Reply *submit all*, or tell me a product number (e.g. *submit 2*). You can also say "2: change the price to 150" to edit one first.`,
+      [{ id: "submit all", title: "Submit all ✅" }],
     );
   } catch (e) {
     console.error(`[whatsapp intake] startBatchAnalysis failed for batch ${batchId}: ${(e as Error).message}`);
@@ -698,6 +745,18 @@ async function handleSubmit(
   }
 }
 
+/**
+ * Reached from both parseEditCommand's deterministic "N: text" pattern and
+ * classifyBatchIntent's AI-fallback {type:"edit"} guess. Deliberately does
+ * NOT re-run AI analysis on editText anymore — that used to call
+ * runAutoAnalyze(userId, listing.id, editText) here, which was slow (a full
+ * Gemini pass), imprecise (asking the AI to guess which field a free-form
+ * instruction meant), and cost a real API call for what's often a one-field
+ * change. Any explicit price/stock in the text is still applied instantly
+ * (cheap, deterministic, unchanged) — everything else gets pointed at the
+ * focused single-product editor instead, where the seller can change the
+ * exact field they meant directly.
+ */
 async function handleEdit(
   userId: string,
   phoneNumber: string,
@@ -721,22 +780,25 @@ async function handleEdit(
   }
 
   const db = createServerClient();
-  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   const price = extractPrice(editText);
   const stock = extractStock(editText);
-  if (price != null) updates.selling_price = price;
-  if (stock != null) updates.quantity = stock;
-  if (Object.keys(updates).length > 1) {
-    await db.from("listings").update(updates).eq("id", listing.id);
+  const applied: string[] = [];
+  if (price != null) { applied.push(`price to GH₵${price}`); }
+  if (stock != null) { applied.push(`stock to ${stock}`); }
+  if (applied.length > 0) {
+    await db
+      .from("listings")
+      .update({
+        ...(price != null ? { selling_price: price } : {}),
+        ...(stock != null ? { quantity: stock } : {}),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", listing.id);
   }
 
-  await replyText(phoneNumber, `✏️ Updating product ${seq}…`);
-  const result = await runAutoAnalyze(userId, listing.id, editText);
-
-  if (!result.ok) {
-    await replyText(phoneNumber, `⚠️ Couldn't update product ${seq}: ${result.message}`);
-    return;
-  }
-
-  await replyText(phoneNumber, `✅ Updated product ${seq}. Review: ${whatsappListingsUrl(batchId)}`);
+  const ack = applied.length > 0 ? `✅ Updated product ${seq}'s ${applied.join(" and ")}. ` : "";
+  await replyText(
+    phoneNumber,
+    `${ack}For anything else, edit product ${seq} here: ${focusedEditorUrl(listing.id)}`,
+  );
 }

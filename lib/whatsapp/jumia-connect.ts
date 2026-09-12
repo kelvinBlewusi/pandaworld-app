@@ -1,7 +1,7 @@
 import { appUrl } from "@/lib/whatsapp/app-url";
 import { createConnectToken } from "@/lib/jumia/connect-token";
 import { updateSession } from "@/lib/whatsapp/session";
-import { sendTextIfConfigured } from "@/lib/whatsapp/client";
+import { sendTextIfConfigured, sendCtaUrlIfConfigured } from "@/lib/whatsapp/client";
 import type { JumiaConnectionKind } from "@/lib/jumia/credentials";
 
 /**
@@ -67,9 +67,14 @@ export async function promptJumiaConnection(
     await updateSession(phoneNumber, { state: "awaiting_jumia_oauth", ...CLEAR_BATCH });
     const token = await createConnectToken(userId);
     const body = kind === "needs_reconnect"
-      ? `Your Jumia connection expired — tap this link to reconnect (no need to re-enter anything):\n${jumiaConnectLink(token)}\n\nI'll message you here once it's done.`
-      : `Your Jumia credentials are already on file — tap this link to finish connecting:\n${jumiaConnectLink(token)}\n\nI'll message you here once it's done.`;
-    await sendTextIfConfigured(phoneNumber, `${prefix}${body}`);
+      ? `${prefix}Your Jumia connection expired — tap below to reconnect (no need to re-enter anything). I'll message you here once it's done.`
+      : `${prefix}Your Jumia credentials are already on file — tap below to finish connecting. I'll message you here once it's done.`;
+    await sendCtaUrlIfConfigured(
+      phoneNumber,
+      body,
+      kind === "needs_reconnect" ? "Reconnect Jumia" : "Connect Jumia",
+      jumiaConnectLink(token),
+    );
     return;
   }
 
