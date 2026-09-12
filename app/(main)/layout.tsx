@@ -21,8 +21,8 @@ export default async function MainLayout({
     // Only filtering on status = "active" here meant a row stuck at
     // needs_reconnect (refresh token failed — see markNeedsReconnect in
     // lib/jumia/api.ts) matched ZERO rows, indistinguishable from never
-    // having connected at all — bouncing the seller to the full channel
-    // picker, which re-collects app_id/app_secret they already have on
+    // having connected at all — bouncing the seller to the full connect
+    // form, which re-collects app_id/app_secret they already have on
     // file, instead of the lighter one-click re-authorize flow. Fetch the
     // row regardless of status so needs_reconnect can be routed correctly
     // below.
@@ -33,7 +33,7 @@ export default async function MainLayout({
       .maybeSingle();
 
     if (!conn || conn.status === "revoked") {
-      redirect("/onboarding/channel");
+      redirect("/onboarding/connect");
     }
 
     if (conn.status === "needs_reconnect") {

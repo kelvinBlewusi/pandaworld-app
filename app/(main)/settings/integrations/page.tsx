@@ -277,7 +277,7 @@ function IntegrationsPageInner() {
       const res = await fetch("/api/jumia/disconnect", { method: "POST" });
       if (res.ok) {
         // Row deleted — redirect to onboarding so user can reconnect a store
-        window.location.href = "/onboarding/channel";
+        window.location.href = "/onboarding/connect";
       } else {
         showToast("error", "Failed to disconnect. Please try again.");
       }
