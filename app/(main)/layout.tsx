@@ -17,14 +17,27 @@ export default async function MainLayout({
     const db = createServerClient();
 
     // First gate: do we have a connection row at all?
-    const { count } = await db
+    //
+    // Only filtering on status = "active" here meant a row stuck at
+    // needs_reconnect (refresh token failed — see markNeedsReconnect in
+    // lib/jumia/api.ts) matched ZERO rows, indistinguishable from never
+    // having connected at all — bouncing the seller to the full channel
+    // picker, which re-collects app_id/app_secret they already have on
+    // file, instead of the lighter one-click re-authorize flow. Fetch the
+    // row regardless of status so needs_reconnect can be routed correctly
+    // below.
+    const { data: conn } = await db
       .from("jumia_connections")
-      .select("id", { count: "exact", head: true })
+      .select("status")
       .eq("user_id", userId)
-      .eq("status", "active");
+      .maybeSingle();
 
-    if (!count || count === 0) {
+    if (!conn || conn.status === "revoked") {
       redirect("/onboarding/channel");
+    }
+
+    if (conn.status === "needs_reconnect") {
+      redirect("/onboarding/connect?reason=disconnected");
     }
 
     // Second gate: is that connection ACTUALLY still valid on Jumia's

@@ -287,7 +287,15 @@ function IntegrationsPageInner() {
   }
 
   const isConnected    = conn?.connected && conn?.status === "active";
-  const isExpired      = conn?.status === "expired";
+  // The API returns this as `needs_reconnect` — the actual status string
+  // written to the DB (see markNeedsReconnect in lib/jumia/api.ts) is
+  // "needs_reconnect", never the literal "expired". Comparing against
+  // "expired" here meant this branch never matched: a seller whose token
+  // failed to refresh fell through to the "Not connected" view instead of
+  // this one-click Re-authorise button, forcing them through the full
+  // onboarding flow (re-entering/testing credentials) every time — even
+  // though app_id/app_secret never change and OAuth is all that's needed.
+  const isExpired      = !!conn?.needs_reconnect;
   const oauthRequired  = !!conn?.oauth_required;
   const connectedDate = conn?.connected_at
     ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" }).format(
@@ -495,10 +503,26 @@ function IntegrationsPageInner() {
                 Your Jumia access token has expired. Re-authorise PandaWorld to restore the connection.
               </span>
             </div>
-            <Button onClick={handleConnect} disabled={connecting} className="gap-2">
-              {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              Re-authorise with Jumia
-            </Button>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button onClick={handleConnect} disabled={connecting} className="gap-2">
+                {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                Re-authorise with Jumia
+              </Button>
+              {/* If the app was deleted/recreated in Jumia Vendor Center, the
+                  stored app_id is gone and re-authorising sends the seller
+                  into Jumia's raw "unable to retrieve client by id" error
+                  page with no way back — disconnecting here lets them start
+                  fresh with new credentials instead of getting stuck there. */}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-2 text-red-400 hover:text-red-600"
+                onClick={() => setShowConfirm(true)}
+              >
+                <Unlink className="h-3.5 w-3.5" />
+                Disconnect &amp; use new credentials
+              </Button>
+            </div>
           </div>
         ) : (
           /* ── Not connected state ────────────────────────────────────────── */

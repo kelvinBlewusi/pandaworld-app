@@ -11,9 +11,20 @@ import { createServerClient } from "@/lib/supabase/server";
 
 const LINK_CODE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
-/** Generates an 8-char uppercase alphanumeric code, e.g. "A1B2C3D4". */
-function generateCode(): string {
-  return randomBytes(6).toString("base64url").replace(/[^A-Za-z0-9]/g, "").slice(0, 8).toUpperCase();
+/**
+ * Generates an 8-char uppercase alphanumeric code, e.g. "A1B2C3D4".
+ *
+ * base64url's `-`/`_` characters get stripped below, which can leave fewer
+ * than 8 characters from a single 6-byte draw (~23% of the time). Keep
+ * drawing more bytes and appending until there's enough to slice — never
+ * return a code shorter than 8, since LINK_CODE_RE requires exactly 8.
+ */
+export function generateCode(): string {
+  let out = "";
+  while (out.length < 8) {
+    out += randomBytes(6).toString("base64url").replace(/[^A-Za-z0-9]/g, "");
+  }
+  return out.slice(0, 8).toUpperCase();
 }
 
 /**
