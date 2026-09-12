@@ -1,7 +1,7 @@
 import { appUrl } from "@/lib/whatsapp/app-url";
 import { createConnectToken } from "@/lib/jumia/connect-token";
 import { updateSession } from "@/lib/whatsapp/session";
-import { sendTextIfConfigured, sendCtaUrlIfConfigured } from "@/lib/whatsapp/client";
+import { sendCtaUrlIfConfigured } from "@/lib/whatsapp/client";
 import type { JumiaConnectionKind } from "@/lib/jumia/credentials";
 
 /**
@@ -36,11 +36,13 @@ export function isResendCommand(text: string): boolean {
   return /^resend[.!]?$/i.test(text.trim());
 }
 
+export const VENDOR_CENTER_URL = "https://vendorcenter.jumia.com";
+
 export function buildConnectInstructions(redirectUri: string): string {
   return [
     "Let's connect your Jumia store.",
     "",
-    "1. Open Jumia Vendor Center and sign in: https://vendorcenter.jumia.com",
+    `1. Open Jumia Vendor Center and sign in (tap below, or go to ${VENDOR_CENTER_URL}).`,
     "2. Go to Settings → Applications → Create Application → Web Application (OAuth).",
     `3. Set the Redirect URI to: ${redirectUri}`,
     "4. Copy the Client ID and Client Secret, then paste them here — together, or one at a time.",
@@ -80,5 +82,10 @@ export async function promptJumiaConnection(
 
   // needs_credentials — never connected at all
   await updateSession(phoneNumber, { state: "awaiting_jumia_credentials", ...CLEAR_BATCH });
-  await sendTextIfConfigured(phoneNumber, `${prefix}${buildConnectInstructions(jumiaRedirectUri())}`);
+  await sendCtaUrlIfConfigured(
+    phoneNumber,
+    `${prefix}${buildConnectInstructions(jumiaRedirectUri())}`,
+    "Open Vendor Center",
+    VENDOR_CENTER_URL,
+  );
 }

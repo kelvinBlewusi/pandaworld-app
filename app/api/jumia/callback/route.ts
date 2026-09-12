@@ -150,15 +150,17 @@ export async function GET(req: NextRequest) {
   // picker is already populated. Per-category attribute schemas still
   // load on demand via /api/jumia/categories/[code]/attributes.
 
-  // If this seller was specifically waiting on THIS OAuth step from the
-  // WhatsApp connect-from-chat flow (lib/whatsapp/intake.ts's
-  // awaiting_jumia_oauth state — reached by tapping the one-time link the
-  // bot sent after they pasted their app credentials), unblock the
-  // listing flow and tell them here, not just on whatever browser
-  // happened to complete this redirect. Gated on that exact state so an
-  // unrelated re-authorise (e.g. a needs_reconnect fix from the web
-  // Settings page) never resets a seller's in-progress batch. Best-effort
-  // — never let a WhatsApp hiccup break the OAuth flow itself.
+  // If this seller was waiting on Jumia to connect from the WhatsApp
+  // connect-from-chat flow (lib/whatsapp/intake.ts's awaiting_jumia_oauth
+  // state — tapped the one-time link after pasting app credentials — or
+  // awaiting_jumia_credentials, meaning they never came back to chat at
+  // all and instead finished connecting entirely on the website), unblock
+  // the listing flow and tell them here, not just on whatever browser
+  // happened to complete this redirect. Gated on those two exact states
+  // so an unrelated re-authorise (e.g. a needs_reconnect fix from the web
+  // Settings page while mid-batch) never resets a seller's in-progress
+  // batch. Best-effort — never let a WhatsApp hiccup break the OAuth flow
+  // itself.
   try {
     const wa = await getWhatsAppConnection(userId);
     if (wa.connected && wa.phoneNumber) {
@@ -167,8 +169,10 @@ export async function GET(req: NextRequest) {
         .select("state")
         .eq("phone_number", wa.phoneNumber)
         .maybeSingle();
-      if (session?.state === "awaiting_jumia_oauth") {
-        await updateSession(wa.phoneNumber, { state: "awaiting_count", listingId: null });
+      if (session?.state === "awaiting_jumia_oauth" || session?.state === "awaiting_jumia_credentials") {
+        await updateSession(wa.phoneNumber, {
+          state: "awaiting_count", listingId: null, batchId: null, batchSize: null, batchSeq: null, pendingAppId: null,
+        });
         await sendTextIfConfigured(
           wa.phoneNumber,
           `🎉 Jumia connected${resolvedStoreName ? ` — ${resolvedStoreName}` : ""}! How many products are you listing today? Reply with a number to get started.`,
