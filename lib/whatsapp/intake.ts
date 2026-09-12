@@ -41,6 +41,20 @@ import type { ListingRow } from "@/lib/supabase/types";
 
 const MAX_LISTING_IMAGES = 8;
 
+// This route's maxDuration (app/api/whatsapp/webhook/route.ts) is a hard
+// 60s ceiling that Vercel enforces by killing the whole function — no
+// catch block runs, nothing gets a chance to reply or reset session
+// state. Confirmed live 2026-09-12: a 2-product batch's concurrent AI
+// analysis occasionally ran long enough (Gemini latency + the 4s/6s
+// retrieval fallbacks in lib/actions/auto-analyze.ts stacking up) to hit
+// it, leaving the seller wedged in "analyzing" forever — every message
+// after that just got "Still drafting" with no way out except *restart*.
+// ANALYSIS_DEADLINE_MS races the real analysis against a timer well
+// inside that ceiling so a reply + state reset always goes out before
+// Vercel can silently kill us, even if it means reporting "still
+// finishing" for a listing whose analysis hadn't wrapped up yet.
+const ANALYSIS_DEADLINE_MS = 45_000;
+
 function replyText(to: string, text: string): Promise<void> {
   return sendTextIfConfigured(to, text);
 }
@@ -548,7 +562,7 @@ async function startBatchAnalysis(
       (limited.success ? withQuota : overQuota).push(listing);
     }
 
-    await Promise.all(
+    const analysisWork = Promise.all(
       withQuota.map(async (listing) => {
         const seq = listing.whatsapp_seq;
         try {
@@ -593,6 +607,30 @@ async function startBatchAnalysis(
         }
       }),
     );
+
+    // Race against ANALYSIS_DEADLINE_MS (see its doc comment) rather than
+    // just awaiting analysisWork directly — a slow batch must never be
+    // allowed to run past Vercel's hard 60s kill with no reply sent.
+    // Whatever's still in flight when the deadline wins keeps running
+    // (Node doesn't cancel it), but this function stops waiting on it and
+    // frees the seller immediately instead of gambling on the platform
+    // not killing the function first.
+    const deadline = new Promise<"deadline">((resolve) => {
+      setTimeout(() => resolve("deadline"), ANALYSIS_DEADLINE_MS);
+    });
+    const raceResult = await Promise.race([analysisWork.then(() => "done" as const), deadline]);
+
+    if (raceResult === "deadline") {
+      console.warn(`[whatsapp intake] batch ${batchId} hit the ${ANALYSIS_DEADLINE_MS}ms soft deadline — releasing session early`);
+      await updateSession(phoneNumber, { state: "awaiting_confirmation" });
+      await replyCta(
+        phoneNumber,
+        `⏳ Drafting is taking longer than usual. Check what's ready below — anything still finishing will show up shortly, and *submit all* still works once you see it there.`,
+        "Review listings",
+        whatsappListingsUrl(batchId),
+      );
+      return;
+    }
 
     for (const listing of overQuota) {
       await replyCta(
