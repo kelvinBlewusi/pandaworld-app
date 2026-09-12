@@ -16,9 +16,10 @@ export type ChatIntent =
   | { type: "submit_all" }
   | { type: "submit_specific"; seqs: number[] }
   | { type: "edit"; seq: number; instruction: string }
+  | { type: "restart" }
   | { type: "unclear" };
 
-const ACTION_WORDS = /\b(submit|push|send|post|go|change|edit|update|fix|set|make|price|stock|qty|quantity|all|everything)\b/i;
+const ACTION_WORDS = /\b(submit|push|send|post|go|change|edit|update|fix|set|make|price|stock|qty|quantity|all|everything|restart|cancel|stop|reset)\b/i;
 
 /**
  * Cheap pre-filter so classifyBatchIntent only ever runs for text that
@@ -53,6 +54,7 @@ export async function classifyBatchIntent(
     '{"type":"submit_all"} - push every product to Jumia',
     '{"type":"submit_specific","seqs":[<product numbers>]} - push only these product numbers',
     '{"type":"edit","seq":<product number>,"instruction":"<what to change, in their own words>"} - change one product before submitting',
+    '{"type":"restart"} - abandon this whole batch and start a brand-new one from scratch',
     '{"type":"unclear"} - anything else: small talk, a question, or too ambiguous to act on',
     "",
     "Reply with ONLY the JSON object, nothing else — no markdown fencing, no explanation.",
@@ -66,6 +68,7 @@ export async function classifyBatchIntent(
     const parsed = JSON.parse(match[0]) as Record<string, unknown>;
 
     if (parsed.type === "submit_all") return { type: "submit_all" };
+    if (parsed.type === "restart") return { type: "restart" };
 
     if (parsed.type === "submit_specific" && Array.isArray(parsed.seqs)) {
       const seqs = parsed.seqs.filter((n): n is number => typeof n === "number" && Number.isFinite(n));

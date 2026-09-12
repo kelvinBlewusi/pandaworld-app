@@ -6,8 +6,9 @@ import { createListingForUser } from "@/lib/listings/create";
 import { runAutoAnalyze } from "@/lib/actions/auto-analyze";
 import { pushListingToJumia } from "@/lib/jumia/push-listing";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
-import { getJumiaConnectionKind, testJumiaCredentials, saveJumiaCredentialsForUser } from "@/lib/jumia/credentials";
+import { getJumiaConnectionKind, testJumiaCredentials, saveJumiaCredentialsForUser, disconnectJumiaForUser } from "@/lib/jumia/credentials";
 import { createConnectToken } from "@/lib/jumia/connect-token";
+import { parseGlobalCommand, type GlobalCommand } from "@/lib/whatsapp/commands";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { endsWithDoneSignal, stripDoneSignal } from "@/lib/whatsapp/draft";
 import {
@@ -45,11 +46,21 @@ function replyText(to: string, text: string): Promise<void> {
 
 async function getBatchListings(batchId: string): Promise<ListingRow[]> {
   const db = createServerClient();
-  const { data } = await db
+  const { data, error } = await db
     .from("listings")
     .select("*")
     .eq("whatsapp_batch_id", batchId)
     .order("whatsapp_seq", { ascending: true });
+  // A query error used to be silently swallowed into an empty array here —
+  // every caller then reported a confusing "I don't see that product in
+  // this batch" even right after that same batch was successfully
+  // drafted, because there was no way to tell "batch genuinely has
+  // nothing" apart from "the query itself failed". Logging it at least
+  // makes a real recurrence diagnosable; callers below also now treat an
+  // empty batch as suspect rather than as ordinary "not found".
+  if (error) {
+    console.error(`[whatsapp intake] getBatchListings failed for batch ${batchId}: ${error.message}`);
+  }
   return (data ?? []) as ListingRow[];
 }
 
@@ -89,32 +100,125 @@ export async function handleLinkedMessage(
     return;
   }
 
-  switch (session.state) {
-    case "awaiting_jumia_credentials":
-      await handleAwaitingJumiaCredentials(userId, phoneNumber, session, content);
-      break;
-    case "awaiting_jumia_oauth":
-      await handleAwaitingJumiaOauth(userId, phoneNumber, content);
-      break;
-    case "awaiting_count":
-      await handleAwaitingCount(userId, phoneNumber, content);
-      break;
-    case "awaiting_photos":
-      await handleAwaitingPhotos(userId, phoneNumber, session, content);
-      break;
-    case "analyzing":
-      await replyText(phoneNumber, "⏳ Still drafting your products — one sec.");
-      break;
-    case "awaiting_confirmation":
-      await handleAwaitingBatchConfirmation(userId, phoneNumber, session, content);
-      break;
-    case "error":
-      await resetSession(phoneNumber);
-      await replyText(phoneNumber, "Let's start fresh — how many products are you listing today? Reply with a number.");
-      break;
+  // Global commands (restart/cancel, disconnect, status, help) work in ANY
+  // state — checked before the per-state dispatch, not folded into it, so
+  // they always take effect immediately. This is also the seller's manual
+  // escape hatch out of "analyzing" if startBatchAnalysis's own try/catch
+  // below somehow doesn't cover a failure — see lib/whatsapp/commands.ts.
+  const globalCmd = content.text ? parseGlobalCommand(content.text) : null;
+
+  if (globalCmd) {
+    await handleGlobalCommand(globalCmd, userId, phoneNumber, session);
+  } else {
+    switch (session.state) {
+      case "awaiting_jumia_credentials":
+        await handleAwaitingJumiaCredentials(userId, phoneNumber, session, content);
+        break;
+      case "awaiting_jumia_oauth":
+        await handleAwaitingJumiaOauth(userId, phoneNumber, content);
+        break;
+      case "awaiting_count":
+        await handleAwaitingCount(userId, phoneNumber, content);
+        break;
+      case "awaiting_photos":
+        await handleAwaitingPhotos(userId, phoneNumber, session, content);
+        break;
+      case "analyzing":
+        await replyText(phoneNumber, "⏳ Still drafting your products — one sec.");
+        break;
+      case "awaiting_confirmation":
+        await handleAwaitingBatchConfirmation(userId, phoneNumber, session, content);
+        break;
+      case "error":
+        await resetSession(phoneNumber);
+        await replyText(phoneNumber, "Let's start fresh — how many products are you listing today? Reply with a number.");
+        break;
+    }
   }
 
   if (messageId) await updateSession(phoneNumber, { lastMessageId: messageId });
+}
+
+async function handleGlobalCommand(
+  cmd: GlobalCommand,
+  userId: string,
+  phoneNumber: string,
+  session: WhatsAppSession,
+): Promise<void> {
+  switch (cmd.type) {
+    case "restart":
+      await handleGlobalRestart(userId, phoneNumber);
+      return;
+    case "status":
+      await replyText(phoneNumber, describeStatus(session));
+      return;
+    case "help":
+      await replyText(phoneNumber, HELP_TEXT);
+      return;
+    case "disconnect":
+      await replyText(
+        phoneNumber,
+        "This disconnects your Jumia store from PandaWorld — you'll need to reconnect (new credentials or reauthorize) before listing again. Any drafts you've already made stay saved. Reply *confirm disconnect* to proceed, or anything else to cancel.",
+      );
+      return;
+    case "confirm_disconnect":
+      await handleGlobalConfirmDisconnect(userId, phoneNumber);
+      return;
+  }
+}
+
+/**
+ * "restart"/"cancel"/"start over" etc — the seller's universal way to
+ * abandon whatever's in progress and begin a new batch. Re-checks the
+ * Jumia connection exactly like handleAwaitingCount does, so a seller
+ * who disconnected (or never finished connecting) mid-batch is routed
+ * back into the connect flow instead of being asked "how many
+ * products?" only to hit the same gate again on the very next message.
+ */
+async function handleGlobalRestart(userId: string, phoneNumber: string): Promise<void> {
+  await resetSession(phoneNumber);
+  const kind = await getJumiaConnectionKind(userId);
+  if (kind !== "connected") {
+    await promptJumiaConnection(userId, phoneNumber, kind, "No problem — let's start fresh.\n\n");
+    return;
+  }
+  await replyText(phoneNumber, "No problem — let's start fresh. How many products are you listing today? Reply with a number (1–20).");
+}
+
+async function handleGlobalConfirmDisconnect(userId: string, phoneNumber: string): Promise<void> {
+  const result = await disconnectJumiaForUser(userId);
+  if (!result.ok) {
+    await replyText(phoneNumber, `⚠️ Couldn't disconnect: ${result.error}. Try again in a moment.`);
+    return;
+  }
+  await promptJumiaConnection(userId, phoneNumber, "needs_credentials", "✅ Jumia disconnected.\n\n");
+}
+
+const HELP_TEXT = [
+  "Here's what I understand at any point in the conversation:",
+  "• *restart* (or *cancel*) — stop what you're doing and start a new batch",
+  "• *status* — see where things stand right now",
+  "• *disconnect* — unlink your Jumia store from PandaWorld",
+  "• *help* — this message",
+].join("\n");
+
+function describeStatus(session: WhatsAppSession): string {
+  switch (session.state) {
+    case "awaiting_jumia_credentials":
+      return "Waiting for your Jumia Client ID + Client Secret — paste them here, or reply *restart* to back out.";
+    case "awaiting_jumia_oauth":
+      return "Waiting for you to finish connecting Jumia via the link I sent — reply *resend* for a new one, or *restart* to back out.";
+    case "awaiting_count":
+      return "Ready when you are — reply with how many products you're listing today.";
+    case "awaiting_photos":
+      return `Collecting product ${session.batchSeq ?? 1} of ${session.batchSize ?? 1} — send its photos, then reply *done*.`;
+    case "analyzing":
+      return "Drafting your products right now — this can take up to a minute.";
+    case "awaiting_confirmation":
+      return `Your batch is drafted and ready to review: ${whatsappListingsUrl(session.batchId ?? undefined)}\n\nReply *submit all* when you're ready.`;
+    case "error":
+      return "Something went sideways — reply anything to start fresh.";
+  }
 }
 
 async function handleAwaitingCount(
@@ -375,51 +479,82 @@ async function startBatchAnalysis(
     `🔎 Got everything for all ${batchSize} product${batchSize === 1 ? "" : "s"} — drafting them now. I'll update you as each one finishes…`,
   );
 
-  const listings = await getBatchListings(batchId);
+  // Everything below is wrapped in try/catch: this function already
+  // flipped the session to "analyzing" above, and until it reaches a
+  // terminal state (awaiting_confirmation, below) that state's own
+  // handler just replies "still drafting" to every message — including
+  // "restart" or "help", since the global-command check happens before
+  // that per-state fallback. An uncaught throw anywhere in here used to
+  // leave the seller wedged in "analyzing" forever with no way out and
+  // no explanation — confirmed live: runAutoAnalyze (and the DB/rate-
+  // limit calls around it) can throw rather than always resolving to
+  // {ok:false,...}, and Promise.all rejects the instant any one of its
+  // entries does, so one bad product could sink the whole batch.
+  try {
+    const listings = await getBatchListings(batchId);
 
-  // Reserve rate-limit slots for the whole batch up front — cheap,
-  // synchronous checks — so a seller without quota for all N finds out
-  // before any (expensive) AI calls fire, rather than partway through a
-  // concurrent batch. Same per-user limit the web app's Analyze button
-  // and the old single-product flow both used.
-  const withQuota: ListingRow[] = [];
-  const overQuota: ListingRow[] = [];
-  for (const listing of listings) {
-    const limited = rateLimit(`auto-analyze:${userId}`, RATE_LIMITS.autoAnalyze.max, RATE_LIMITS.autoAnalyze.windowMs);
-    (limited.success ? withQuota : overQuota).push(listing);
-  }
+    // Reserve rate-limit slots for the whole batch up front — cheap,
+    // synchronous checks — so a seller without quota for all N finds out
+    // before any (expensive) AI calls fire, rather than partway through a
+    // concurrent batch. Same per-user limit the web app's Analyze button
+    // and the old single-product flow both used.
+    const withQuota: ListingRow[] = [];
+    const overQuota: ListingRow[] = [];
+    for (const listing of listings) {
+      const limited = rateLimit(`auto-analyze:${userId}`, RATE_LIMITS.autoAnalyze.max, RATE_LIMITS.autoAnalyze.windowMs);
+      (limited.success ? withQuota : overQuota).push(listing);
+    }
 
-  await Promise.all(
-    withQuota.map(async (listing) => {
-      const seq = listing.whatsapp_seq;
-      const result = await runAutoAnalyze(userId, listing.id, null);
-      if (result.ok) {
-        await replyText(phoneNumber, `✅ Product ${seq} drafted: ${result.title ?? "(untitled)"}.`);
-      } else {
-        await replyText(
-          phoneNumber,
-          `⚠️ Product ${seq} couldn't be drafted: ${result.message} Fix it at ${whatsappListingsUrl(batchId)}.`,
-        );
-      }
-    }),
-  );
+    await Promise.all(
+      withQuota.map(async (listing) => {
+        const seq = listing.whatsapp_seq;
+        try {
+          const result = await runAutoAnalyze(userId, listing.id, null);
+          if (result.ok) {
+            await replyText(phoneNumber, `✅ Product ${seq} drafted: ${result.title ?? "(untitled)"}.`);
+          } else {
+            await replyText(
+              phoneNumber,
+              `⚠️ Product ${seq} couldn't be drafted: ${result.message} Fix it at ${whatsappListingsUrl(batchId)}.`,
+            );
+          }
+        } catch (e) {
+          // One product's analyze throwing must never sink the rest of
+          // the batch — every other entry in this Promise.all still
+          // needs to resolve, or the whole session stays wedged.
+          console.error(`[whatsapp intake] product ${seq} analysis threw: ${(e as Error).message}`);
+          await replyText(
+            phoneNumber,
+            `⚠️ Product ${seq} couldn't be drafted (unexpected error) — finish it at ${whatsappListingsUrl(batchId)}.`,
+          );
+        }
+      }),
+    );
 
-  for (const listing of overQuota) {
+    for (const listing of overQuota) {
+      await replyText(
+        phoneNumber,
+        `⚠️ Product ${listing.whatsapp_seq}: hourly analyze limit reached — finish it at ${whatsappListingsUrl(batchId)} once it resets.`,
+      );
+    }
+
+    await updateSession(phoneNumber, { state: "awaiting_confirmation" });
     await replyText(
       phoneNumber,
-      `⚠️ Product ${listing.whatsapp_seq}: hourly analyze limit reached — finish it at ${whatsappListingsUrl(batchId)} once it resets.`,
+      [
+        `🎉 Done drafting! Review everything here: ${whatsappListingsUrl(batchId)}`,
+        "",
+        `Reply *submit all* to push your drafted listings to Jumia after your review, or tell me the product number you want to submit (e.g. *submit 2*). You can also say "2: change the price to 150" to fix one first.`,
+      ].join("\n"),
+    );
+  } catch (e) {
+    console.error(`[whatsapp intake] startBatchAnalysis failed for batch ${batchId}: ${(e as Error).message}`);
+    await updateSession(phoneNumber, { state: "awaiting_confirmation" });
+    await replyText(
+      phoneNumber,
+      `⚠️ Something went wrong while drafting your products. Check what's there and finish up here: ${whatsappListingsUrl(batchId)}\n\nReply *submit all* once you're ready, or *restart* to start over.`,
     );
   }
-
-  await updateSession(phoneNumber, { state: "awaiting_confirmation" });
-  await replyText(
-    phoneNumber,
-    [
-      `🎉 Done drafting! Review everything here: ${whatsappListingsUrl(batchId)}`,
-      "",
-      `Reply *submit all* to push your drafted listings to Jumia after your review, or tell me the product number you want to submit (e.g. *submit 2*). You can also say "2: change the price to 150" to fix one first.`,
-    ].join("\n"),
-  );
 }
 
 async function handleAwaitingBatchConfirmation(
@@ -478,6 +613,10 @@ async function handleAwaitingBatchConfirmation(
       await handleEdit(userId, phoneNumber, batchId, intent.seq, intent.instruction);
       return;
     }
+    if (intent.type === "restart") {
+      await handleGlobalRestart(userId, phoneNumber);
+      return;
+    }
   }
 
   await replyText(
@@ -493,6 +632,17 @@ async function handleSubmit(
   cmd: { all: true } | { all: false; seqs: number[] },
 ): Promise<void> {
   const listings = await getBatchListings(batchId);
+  if (listings.length === 0) {
+    // A batch that reached submission always has at least one listing —
+    // an empty result here means the lookup itself failed (see
+    // getBatchListings), not that the seller asked for the wrong number.
+    await replyText(
+      phoneNumber,
+      `⚠️ I couldn't load this batch right now — try again in a moment, or reply *restart* to start a new one.`,
+    );
+    return;
+  }
+
   const targets = cmd.all
     ? listings
     : listings.filter((l) => l.whatsapp_seq != null && cmd.seqs.includes(l.whatsapp_seq));
@@ -556,6 +706,14 @@ async function handleEdit(
   editText: string,
 ): Promise<void> {
   const listings = await getBatchListings(batchId);
+  if (listings.length === 0) {
+    await replyText(
+      phoneNumber,
+      `⚠️ I couldn't load this batch right now — try again in a moment, or reply *restart* to start a new one.`,
+    );
+    return;
+  }
+
   const listing = listings.find((l) => l.whatsapp_seq === seq);
   if (!listing) {
     await replyText(phoneNumber, `I don't see product ${seq} in this batch — check the review page: ${whatsappListingsUrl(batchId)}`);
