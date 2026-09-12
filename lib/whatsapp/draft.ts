@@ -15,9 +15,31 @@ export function reviewUrl(listingId: string): string {
   return `${appUrl()}/listings/${listingId}/review`;
 }
 
-/** Matches "done", "Done.", "DONE!" — tolerant of case and trailing punctuation. */
-export function isDoneMessage(text: string): boolean {
-  return /^done[.!]?$/i.test(text.trim());
+/**
+ * True when the seller's message or photo caption ends with a standalone
+ * "done" — a bare "done"/"Done."/"DONE!" reply, but also "Price 40\nDone"
+ * or "sizes M L XL, done" (a caption/note that finishes with the word).
+ * Deliberately checks only the LAST token, not "does this text contain
+ * done anywhere" — "done with the photos, one more coming" or "not done
+ * yet" must NOT match, since "done" there isn't the seller signalling
+ * they're finished.
+ */
+export function endsWithDoneSignal(text: string): boolean {
+  const tokens = text.trim().split(/\s+/);
+  const last = (tokens[tokens.length - 1] ?? "").replace(/[.,!]+$/, "");
+  return /^done$/i.test(last);
+}
+
+/**
+ * Removes a trailing standalone "done" (only call when
+ * endsWithDoneSignal(text) is already true) so the rest of a caption/note
+ * still gets saved — "Price 40\nDone" -> "Price 40". Returns "" when the
+ * whole text was just the done-signal itself.
+ */
+export function stripDoneSignal(text: string): string {
+  const tokens = text.trim().split(/\s+/);
+  tokens.pop();
+  return tokens.join(" ").trim();
 }
 
 export function formatDraftSummary(
