@@ -177,9 +177,6 @@ export function WhatsAppCard() {
             </div>
           )}
 
-          <p className="text-sm text-zinc-600">
-            Send a product photo to this number on WhatsApp to start a new listing.
-          </p>
           {confirmingDisconnect ? (
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-red-100 bg-red-50 p-3">
               <p className="text-xs text-red-700">
@@ -215,10 +212,6 @@ export function WhatsAppCard() {
         </div>
       ) : (
         <div className="space-y-4">
-          <p className="text-sm text-zinc-600 leading-relaxed">
-            Send a photo on WhatsApp, get an AI-drafted listing back, confirm or fix it in chat, and push it
-            straight to Jumia — no need to open PandaWorld at all.
-          </p>
           {link ? (
             <div className="rounded-xl bg-blue-50 border border-blue-100 p-4 space-y-3 text-sm">
               {link.waLink ? (

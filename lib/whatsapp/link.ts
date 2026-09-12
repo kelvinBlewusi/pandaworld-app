@@ -154,7 +154,7 @@ export async function disconnectWhatsApp(userId: string): Promise<void> {
       phoneNumber,
       "🔌 This number has been disconnected from PandaWorld from the website. Reconnect any time.",
       "Reconnect WhatsApp",
-      `${appUrl()}/extension/whatsapp-listings`,
+      `${appUrl()}/extension/settings`,
     ).catch((e) => console.warn(`[whatsapp] disconnect notice failed for ${phoneNumber}: ${(e as Error).message}`));
   }
 }
