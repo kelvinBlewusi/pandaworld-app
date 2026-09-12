@@ -5,6 +5,7 @@ import {
   extractPrice,
   extractStock,
   whatsappListingsUrl,
+  focusedEditorUrl,
 } from "@/lib/whatsapp/batch";
 
 describe("parseProductCount", () => {
@@ -123,5 +124,12 @@ describe("whatsappListingsUrl", () => {
 
   it("includes the batch id as a query param when given", () => {
     expect(whatsappListingsUrl("batch-123")).toContain("batch=batch-123");
+  });
+});
+
+describe("focusedEditorUrl", () => {
+  it("links to the focused editor for a specific listing", () => {
+    const url = focusedEditorUrl("listing-abc");
+    expect(url).toContain("/extension/whatsapp-listings/listing-abc");
   });
 });

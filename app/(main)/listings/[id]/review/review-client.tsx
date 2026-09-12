@@ -53,7 +53,7 @@ import { GenerateImageModal } from "@/components/imagen/GenerateImageModal";
 import { getQuotaSummaryForCurrentUser } from "@/lib/actions/subscription";
 import { MultiSelectDropdown } from "@/components/ui/multi-select";
 import { SchemaForm } from "@/components/jumia/SchemaForm";
-import type { JumiaAttributeDef } from "@/components/jumia/SchemaField";
+import { STATIC_FIELDS, universalInfoFields } from "@/lib/jumia/universal-fields";
 import {
   columnFor,
   fieldChangeToUpdate,
@@ -1439,13 +1439,6 @@ const PRODUCT_INFO_FIELDS = [
 ];
 
 /**
- * Names of fields rendered as static (non-schema-driven) UI at the top of the
- * page — primarily `name` / `title`. We exclude these from BOTH SchemaForm
- * sections so the dedicated Product Name input isn't duplicated.
- */
-const STATIC_FIELDS = ["name", "title", "product_name"];
-
-/**
  * Schema-attribute names that the Variants tab handles instead. We hide
  * these from both Product Information and Product Specification grids
  * so the seller doesn't see a duplicate "Variation" input that competes
@@ -1456,28 +1449,6 @@ const STATIC_FIELDS = ["name", "title", "product_name"];
  * PER_VARIANT_ATTRIBUTE_NAMES + mapListingToJumiaProducts).
  */
 const VARIANT_ATTRIBUTE_FIELDS = ["variation"];
-
-/**
- * Universal Product Information fields — guaranteed fallback injections
- * for fields Jumia *requires* even when its per-category schema omits
- * them (some legacy categories return minimal schemas). Brand is the
- * canonical example: Jumia rejects pushes without it but doesn't always
- * list it in /catalog/attribute-sets.
- *
- * EVERYTHING ELSE comes from Jumia's live schema. If Jumia doesn't ask
- * for it in this category, we don't show it — matches Vendor Center
- * exactly.
- *
- * When Jumia DOES return one of these names for the chosen category, the
- * live attribute wins via the canonicalKey dedup in SchemaForm.
- */
-function universalInfoFields(): JumiaAttributeDef[] {
-  return [
-    { name: "brand",       label: "Brand",                type: "string",   allowed_values: [], required: true,  is_variant: false, min_length: null, max_length: null },
-    { name: "description", label: "Product description",  type: "textarea", allowed_values: [], required: true,  is_variant: false, min_length: 50,   max_length: 9000 },
-    { name: "highlights",  label: "Highlights",           type: "textarea", allowed_values: [], required: false, is_variant: false, min_length: null, max_length: null },
-  ];
-}
 
 export function ReviewClient({
   listing,

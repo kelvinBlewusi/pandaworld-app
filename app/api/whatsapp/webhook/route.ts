@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { redeemLinkCode, getUserIdForPhoneNumber } from "@/lib/whatsapp/link";
 import { sendTextIfConfigured, markReadWithTypingIfConfigured } from "@/lib/whatsapp/client";
 import { verifyWhatsAppSignature, extractLinkCode } from "@/lib/whatsapp/webhook-verify";
+import { contentOf, type IncomingMessage } from "@/lib/whatsapp/message-content";
 import { handleLinkedMessage } from "@/lib/whatsapp/intake";
 import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
 import { getOrCreateSession, updateSession } from "@/lib/whatsapp/session";
@@ -38,16 +39,6 @@ export async function GET(req: NextRequest) {
     return new NextResponse(challenge ?? "", { status: 200 });
   }
   return new NextResponse("Forbidden", { status: 403 });
-}
-
-interface IncomingMessage {
-  id:   string; // Meta's wamid — used to de-dupe retried webhook deliveries
-  from: string;
-  type: string;
-  text?: { body: string };
-  image?: { id: string; mime_type?: string; caption?: string };
-  button?: { text: string; payload: string };
-  interactive?: { button_reply?: { id: string; title: string } };
 }
 
 /** Best-effort extraction — Meta's payload nests several layers deep and
@@ -161,21 +152,4 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
   }
 
   await handleLinkedMessage(userId, msg.from, msg.id, contentOf(msg));
-}
-
-/**
- * Reduce Meta's message shape to the bit lib/whatsapp/intake.ts cares
- * about. A WhatsApp image can carry a caption in the SAME message (e.g. a
- * seller attaching "Price 40, done" to a photo) — surfaced as `text`
- * alongside `imageMediaId` so intake.ts sees both instead of silently
- * dropping the caption (which used to mean "done" or a price typed as a
- * caption was never detected — the seller had to send it again as a
- * separate message).
- */
-function contentOf(msg: IncomingMessage): { text?: string; imageMediaId?: string } {
-  if (msg.type === "image" && msg.image?.id) {
-    return { imageMediaId: msg.image.id, text: msg.image.caption };
-  }
-  if (msg.text?.body) return { text: msg.text.body };
-  return {};
 }

@@ -34,4 +34,13 @@ describe("parseGlobalCommand", () => {
     expect(parseGlobalCommand("thanks")).toBeNull();
     expect(parseGlobalCommand("")).toBeNull();
   });
+
+  it("matches 'keep jumia connected' as its own command, never as restart/disconnect", () => {
+    expect(parseGlobalCommand("keep jumia connected")).toEqual({ type: "keep_connected" });
+    expect(parseGlobalCommand("Keep Jumia Connected!")).toEqual({ type: "keep_connected" });
+    // The whole point of this command existing: declining the disconnect
+    // prompt must never be misread as "cancel" (== restart the batch).
+    expect(parseGlobalCommand("keep jumia connected")).not.toEqual({ type: "restart" });
+    expect(parseGlobalCommand("keep jumia connected")).not.toEqual({ type: "disconnect" });
+  });
 });

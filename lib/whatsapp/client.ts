@@ -109,6 +109,60 @@ export async function sendTextIfConfigured(to: string, text: string): Promise<vo
   await sendText(to, text);
 }
 
+/** Config-guarded wrapper around sendButtons — matches sendTextIfConfigured's
+ *  "warn and skip" behavior instead of throwing when WhatsApp isn't set up. */
+export async function sendButtonsIfConfigured(
+  to: string,
+  bodyText: string,
+  buttons: { id: string; title: string }[],
+): Promise<void> {
+  if (!isWhatsAppConfigured()) {
+    console.warn(`[whatsapp] not configured — would have sent buttons to ${to}: ${bodyText}`);
+    return;
+  }
+  await sendButtons(to, bodyText, buttons);
+}
+
+/**
+ * A single tappable button that opens a URL directly (Meta's interactive
+ * "cta_url" message) — no reply event comes back, unlike sendButtons, so
+ * sending one needs no webhook-side changes. Used anywhere the whole point
+ * of the message is "here's a link, tap it" (a Jumia connect link, a
+ * focused-editor link for one product, ...) instead of a plain-text URL.
+ */
+export async function sendCtaUrl(
+  to: string,
+  bodyText: string,
+  buttonText: string,
+  url: string,
+): Promise<void> {
+  await callGraphApi({
+    to,
+    type: "interactive",
+    interactive: {
+      type: "cta_url",
+      body: { text: bodyText },
+      action: {
+        name: "cta_url",
+        parameters: { display_text: buttonText.slice(0, 20), url },
+      },
+    },
+  });
+}
+
+export async function sendCtaUrlIfConfigured(
+  to: string,
+  bodyText: string,
+  buttonText: string,
+  url: string,
+): Promise<void> {
+  if (!isWhatsAppConfigured()) {
+    console.warn(`[whatsapp] not configured — would have sent a link to ${to}: ${url}`);
+    return;
+  }
+  await sendCtaUrl(to, bodyText, buttonText, url);
+}
+
 /**
  * Marks an incoming message as read (blue ticks) and shows the animated
  * "typing…" indicator in the chat for up to 25 seconds or until the next
