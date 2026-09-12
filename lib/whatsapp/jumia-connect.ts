@@ -40,7 +40,7 @@ export function buildConnectInstructions(redirectUri: string): string {
   return [
     "Let's connect your Jumia store.",
     "",
-    "1. Open Jumia Vendor Center (vendorcenter.jumia.com) and sign in.",
+    "1. Open Jumia Vendor Center and sign in: https://vendorcenter.jumia.com",
     "2. Go to Settings → Applications → Create Application → Web Application (OAuth).",
     `3. Set the Redirect URI to: ${redirectUri}`,
     "4. Copy the Client ID and Client Secret, then paste them here — together, or one at a time.",
