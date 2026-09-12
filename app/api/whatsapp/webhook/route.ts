@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { redeemLinkCode, getUserIdForPhoneNumber } from "@/lib/whatsapp/link";
-import { sendTextIfConfigured, markReadWithTypingIfConfigured } from "@/lib/whatsapp/client";
+import { sendTextIfConfigured, sendCtaUrlIfConfigured, markReadWithTypingIfConfigured } from "@/lib/whatsapp/client";
 import { verifyWhatsAppSignature, extractLinkCode } from "@/lib/whatsapp/webhook-verify";
 import { contentOf, type IncomingMessage } from "@/lib/whatsapp/message-content";
 import { handleLinkedMessage } from "@/lib/whatsapp/intake";
@@ -106,12 +106,16 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
   if (linkCode) {
     const result = await redeemLinkCode(linkCode, msg.from, contactName);
     if ("error" in result) {
-      const connectPage = `${appUrl()}/extension/whatsapp-listings`;
       const reason =
-        result.error === "expired" ? `That code has expired — get a new one here: ${connectPage}`
-        : result.error === "used"    ? `That code was already used — get a new one here if you need to link another number: ${connectPage}`
-        :                               `That code isn't valid — get the right one here: ${connectPage}`;
-      await sendTextIfConfigured(msg.from, `⚠️ ${reason}`);
+        result.error === "expired" ? "That code has expired — get a new one."
+        : result.error === "used"    ? "That code was already used — get a new one if you need to link account."
+        :                               "That code isn't valid — get the right one.";
+      await sendCtaUrlIfConfigured(
+        msg.from,
+        `⚠️ ${reason}`,
+        "Get a new code",
+        `${appUrl()}/extension/whatsapp-listings`,
+      );
       return;
     }
 
@@ -144,9 +148,11 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
 
   const userId = await getUserIdForPhoneNumber(msg.from);
   if (!userId) {
-    await sendTextIfConfigured(
+    await sendCtaUrlIfConfigured(
       msg.from,
-      `👋 This number isn't linked to a PandaWorld account yet. Tap here to connect WhatsApp and get a linking code: ${appUrl()}/extension/whatsapp-listings`,
+      "👋 This number isn't linked to a PandaWorld account yet.",
+      "Connect WhatsApp",
+      `${appUrl()}/extension/whatsapp-listings`,
     );
     return;
   }

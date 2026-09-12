@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { disconnectJumiaForUser } from "@/lib/jumia/credentials";
 import { getWhatsAppConnection } from "@/lib/whatsapp/link";
-import { sendTextIfConfigured } from "@/lib/whatsapp/client";
+import { sendCtaUrlIfConfigured } from "@/lib/whatsapp/client";
 import { appUrl } from "@/lib/whatsapp/app-url";
 
 // ─── POST /api/jumia/disconnect ───────────────────────────────────────────────
@@ -29,9 +29,11 @@ export async function POST() {
   try {
     const wa = await getWhatsAppConnection(userId);
     if (wa.connected && wa.phoneNumber) {
-      await sendTextIfConfigured(
+      await sendCtaUrlIfConfigured(
         wa.phoneNumber,
-        `🔌 Your Jumia store was disconnected from PandaWorld from the website. Message me here whenever you're ready to reconnect, or visit ${appUrl()}/extension/settings.`,
+        "🔌 Your Jumia store was disconnected from PandaWorld from the website. Message me here whenever you're ready to reconnect, or use the button below.",
+        "Extension settings",
+        `${appUrl()}/extension/settings`,
       );
     }
   } catch (e) {
