@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createServerClient } from "@/lib/supabase/server";
-import { sendTextIfConfigured } from "@/lib/whatsapp/client";
+import { sendCtaUrlIfConfigured } from "@/lib/whatsapp/client";
 import { appUrl } from "@/lib/whatsapp/app-url";
 
 /**
@@ -150,9 +150,11 @@ export async function disconnectWhatsApp(userId: string): Promise<void> {
 
   const phoneNumber = data?.phone_number as string | undefined;
   if (phoneNumber) {
-    await sendTextIfConfigured(
+    await sendCtaUrlIfConfigured(
       phoneNumber,
-      `🔌 This number has been disconnected from PandaWorld from the website. Reconnect any time from ${appUrl()}/extension/whatsapp-listings.`,
+      "🔌 This number has been disconnected from PandaWorld from the website. Reconnect any time.",
+      "Reconnect WhatsApp",
+      `${appUrl()}/extension/whatsapp-listings`,
     ).catch((e) => console.warn(`[whatsapp] disconnect notice failed for ${phoneNumber}: ${(e as Error).message}`));
   }
 }

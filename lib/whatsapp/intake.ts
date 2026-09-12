@@ -162,9 +162,15 @@ async function handleGlobalCommand(
     case "restart":
       await handleGlobalRestart(userId, phoneNumber);
       return;
-    case "status":
-      await replyText(phoneNumber, describeStatus(session));
+    case "status": {
+      const status = describeStatus(session);
+      if (status.cta) {
+        await replyCta(phoneNumber, status.text, status.cta.label, status.cta.url);
+      } else {
+        await replyText(phoneNumber, status.text);
+      }
       return;
+    }
     case "help":
       await replyText(phoneNumber, HELP_TEXT);
       return;
@@ -222,22 +228,27 @@ const HELP_TEXT = [
   "• *help* — this message",
 ].join("\n");
 
-function describeStatus(session: WhatsAppSession): string {
+/** A status reply, plus an optional link button when there's somewhere
+ *  useful to send the seller alongside the text. */
+function describeStatus(session: WhatsAppSession): { text: string; cta?: { label: string; url: string } } {
   switch (session.state) {
     case "awaiting_jumia_credentials":
-      return "Waiting for your Jumia Client ID + Client Secret — paste them here, or reply *restart* to back out.";
+      return { text: "Waiting for your Jumia Client ID + Client Secret — paste them here, or reply *restart* to back out." };
     case "awaiting_jumia_oauth":
-      return "Waiting for you to finish connecting Jumia via the link I sent — reply *resend* for a new one, or *restart* to back out.";
+      return { text: "Waiting for you to finish connecting Jumia via the link I sent — reply *resend* for a new one, or *restart* to back out." };
     case "awaiting_count":
-      return "Ready when you are — reply with how many products you're listing today.";
+      return { text: "Ready when you are — reply with how many products you're listing today." };
     case "awaiting_photos":
-      return `Collecting product ${session.batchSeq ?? 1} of ${session.batchSize ?? 1} — send its photos, then reply *done*.`;
+      return { text: `Collecting product ${session.batchSeq ?? 1} of ${session.batchSize ?? 1} — send its photos, then reply *done*.` };
     case "analyzing":
-      return "Drafting your products right now — this can take up to a minute.";
+      return { text: "Drafting your products right now — this can take up to a minute." };
     case "awaiting_confirmation":
-      return `Your batch is drafted and ready to review: ${whatsappListingsUrl(session.batchId ?? undefined)}\n\nReply *submit all* when you're ready.`;
+      return {
+        text: "Your batch is drafted and ready to review.\n\nReply *submit all* when you're ready.",
+        cta: { label: "Review listings", url: whatsappListingsUrl(session.batchId ?? undefined) },
+      };
     case "error":
-      return "Something went sideways — reply anything to start fresh.";
+      return { text: "Something went sideways — reply anything to start fresh." };
   }
 }
 
@@ -584,9 +595,11 @@ async function startBatchAnalysis(
     );
 
     for (const listing of overQuota) {
-      await replyText(
+      await replyCta(
         phoneNumber,
-        `⚠️ Product ${listing.whatsapp_seq}: hourly analyze limit reached — finish it at ${whatsappListingsUrl(batchId)} once it resets.`,
+        `⚠️ Product ${listing.whatsapp_seq}: hourly analyze limit reached — finish it once it resets.`,
+        "Review listings",
+        whatsappListingsUrl(batchId),
       );
     }
 
@@ -629,9 +642,11 @@ async function startBatchAnalysis(
   } catch (e) {
     console.error(`[whatsapp intake] startBatchAnalysis failed for batch ${batchId}: ${(e as Error).message}`);
     await updateSession(phoneNumber, { state: "awaiting_confirmation" });
-    await replyText(
+    await replyCta(
       phoneNumber,
-      `⚠️ Something went wrong while drafting your products. Check what's there and finish up here: ${whatsappListingsUrl(batchId)}\n\nReply *submit all* once you're ready, or *restart* to start over.`,
+      `⚠️ Something went wrong while drafting your products.\n\nCheck what's there below, reply *submit all* once you're ready, or *restart* to start over.`,
+      "Review listings",
+      whatsappListingsUrl(batchId),
     );
   }
 }
@@ -647,9 +662,11 @@ async function handleAwaitingBatchConfirmation(
   const text = content.text?.trim();
 
   if (!batchId || !text) {
-    await replyText(
+    await replyCta(
       phoneNumber,
-      `Reply *submit all* to push your drafted listings to Jumia, or tell me the product number you want to submit. Review them here: ${whatsappListingsUrl(batchId ?? undefined)}`,
+      "Reply *submit all* to push your drafted listings to Jumia, or tell me the product number you want to submit.",
+      "Review listings",
+      whatsappListingsUrl(batchId ?? undefined),
     );
     return;
   }
@@ -690,7 +707,12 @@ async function handleAwaitingBatchConfirmation(
   // on looksActionable so plain chit-chat falls through to the generic
   // help message (or the AI classifier below) instead of misfiring.
   if (editCmd?.needsSeq && looksActionable(text)) {
-    await replyText(phoneNumber, `Which product number is this for? e.g. "2: change the price to 150" (review at ${whatsappListingsUrl(batchId)}).`);
+    await replyCta(
+      phoneNumber,
+      `Which product number is this for? e.g. "2: change the price to 150"`,
+      "Review listings",
+      whatsappListingsUrl(batchId),
+    );
     return;
   }
   if (editCmd && !editCmd.needsSeq && (editCmd.explicit || looksActionable(text))) {
@@ -727,9 +749,11 @@ async function handleAwaitingBatchConfirmation(
     }
   }
 
-  await replyText(
+  await replyCta(
     phoneNumber,
-    `Reply *submit all* to push your drafted listings to Jumia, or tell me the product number you want to submit. You can also say "2: change the price to 150" to edit one. Review them here: ${whatsappListingsUrl(batchId)}`,
+    `Reply *submit all* to push your drafted listings to Jumia, or tell me the product number you want to submit. You can also say "2: change the price to 150" to edit one.`,
+    "Review listings",
+    whatsappListingsUrl(batchId),
   );
 }
 
@@ -756,7 +780,7 @@ async function handleSubmit(
     : listings.filter((l) => l.whatsapp_seq != null && cmd.seqs.includes(l.whatsapp_seq));
 
   if (targets.length === 0) {
-    await replyText(phoneNumber, `I couldn't find those product numbers in this batch — check the review page and try again: ${whatsappListingsUrl(batchId)}`);
+    await replyCta(phoneNumber, "I couldn't find those product numbers in this batch — check the review page and try again.", "Review listings", whatsappListingsUrl(batchId));
     return;
   }
 
@@ -836,7 +860,7 @@ async function handleEdit(
 
   const listing = listings.find((l) => l.whatsapp_seq === seq);
   if (!listing) {
-    await replyText(phoneNumber, `I don't see product ${seq} in this batch — check the review page: ${whatsappListingsUrl(batchId)}`);
+    await replyCta(phoneNumber, `I don't see product ${seq} in this batch — check the review page.`, "Review listings", whatsappListingsUrl(batchId));
     return;
   }
 
@@ -858,8 +882,10 @@ async function handleEdit(
   }
 
   const ack = applied.length > 0 ? `✅ Updated product ${seq}'s ${applied.join(" and ")}. ` : "";
-  await replyText(
+  await replyCta(
     phoneNumber,
-    `${ack}For anything else, edit product ${seq} here: ${focusedEditorUrl(listing.id)}`,
+    `${ack}For anything else, edit product ${seq} here:`,
+    "Edit product",
+    focusedEditorUrl(listing.id),
   );
 }

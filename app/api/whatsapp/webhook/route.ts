@@ -108,7 +108,7 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
     if ("error" in result) {
       const reason =
         result.error === "expired" ? "That code has expired — get a new one."
-        : result.error === "used"    ? "That code was already used — get a new one if you need to link another number."
+        : result.error === "used"    ? "That code was already used — get a new one if you need to link account."
         :                               "That code isn't valid — get the right one.";
       await sendCtaUrlIfConfigured(
         msg.from,
