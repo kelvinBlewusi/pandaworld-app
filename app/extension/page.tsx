@@ -7,6 +7,7 @@ import {
   ListOrdered,
   Camera,
   CheckCircle2,
+  Sparkles,
 } from "lucide-react";
 import { auth } from "@clerk/nextjs/server";
 import { MarketingFooter } from "@/components/marketing/footer";
@@ -180,11 +181,31 @@ export async function ExtensionPage() {
   // Signed-in visitors skip straight to the real key-generation screen;
   // logged-out visitors sign up first (the dashboard requires an account).
   const ctaHref  = userId ? DASHBOARD_REDIRECT : `/sign-up?redirect_url=${DASHBOARD_REDIRECT}`;
-  const ctaLabel = userId ? "Open your extension dashboard" : "Get Started";
+  const ctaLabel = userId ? "Open dashboard" : "Get Started";
   const signInHref = `/sign-in?redirect_url=${DASHBOARD_REDIRECT}`;
 
   return (
     <div className="min-h-screen bg-white text-zinc-900">
+      {/* "Use for free" announcement bar — a growth-phase callout (see
+          lib/billing/free-for-all.ts) sitting above the hero so it's the
+          very first thing a visitor sees. The diagonal highlight sweeping
+          across it (Tailwind's `animate-shimmer`, added for this) is pure
+          CSS — no client JS needed, so this stays a plain server-rendered
+          element even though the hero right below it is a client
+          component. Remove this whole block (and the `shimmer` keyframe/
+          animation in tailwind.config.ts, if nothing else uses them by
+          then) once free-for-all mode ends. */}
+      <div
+        className="relative flex items-center justify-center gap-2 overflow-hidden bg-orange-600 px-4 py-2.5 text-center text-sm font-semibold text-white animate-shimmer"
+        style={{
+          backgroundImage: "linear-gradient(115deg, transparent 30%, rgba(255,255,255,0.35) 50%, transparent 70%)",
+          backgroundSize: "200% 100%",
+        }}
+      >
+        <Sparkles className="h-4 w-4 shrink-0" />
+        <span>Use PandaWorld for free right now, on WhatsApp and the Chrome extension. No card needed.</span>
+      </div>
+
       {/* Hero — dark, canvas-animated backdrop (components/marketing/extension-hero-backdrop.tsx).
           Carries its own nav (logo, Pricing, Sign in, Get Started) since
           it's visually a different world from the "How it works" section and
