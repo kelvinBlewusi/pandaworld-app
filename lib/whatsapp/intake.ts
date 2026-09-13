@@ -5,6 +5,7 @@ import { getOrCreateSession, updateSession, resetSession, type WhatsAppSession }
 import { createListingForUser } from "@/lib/listings/create";
 import { runAutoAnalyze } from "@/lib/actions/auto-analyze";
 import { pushListingToJumia, missingFieldLabels } from "@/lib/jumia/push-listing";
+import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { getJumiaConnectionKind, testJumiaCredentials, saveJumiaCredentialsForUser, disconnectJumiaForUser } from "@/lib/jumia/credentials";
 import { createConnectToken } from "@/lib/jumia/connect-token";
@@ -17,6 +18,7 @@ import {
   parseEditCommand,
   extractPrice,
   extractStock,
+  extractSalePrice,
   whatsappListingsUrl,
   focusedEditorUrl,
 } from "@/lib/whatsapp/batch";
@@ -130,6 +132,17 @@ async function applyNotes(listingId: string, text: string): Promise<void> {
   const stock = extractStock(text);
   if (price != null) updates.selling_price = price;
   if (stock != null) updates.quantity = stock;
+  // Listing-level, not variant-level — see migration
+  // 2026-09-13_listing-sale-price.sql. mapListingToJumiaProducts falls
+  // back to this for every variant that doesn't have its own sale price,
+  // so stating it once here applies no matter the variant, exactly like
+  // selling_price already does for global_price.
+  const sale = extractSalePrice(text);
+  if (sale != null) {
+    updates.sale_price = sale.salePrice;
+    if (sale.startDate) updates.sale_start_date = sale.startDate;
+    if (sale.endDate) updates.sale_end_date = sale.endDate;
+  }
   await db.from("listings").update(updates).eq("id", listingId);
 }
 
@@ -662,6 +675,23 @@ async function startBatchAnalysis(
                 [{ id: `submit ${seq}`, title: `Submit product ${seq}` }],
               );
             }
+            // Low-confidence category pick — surfaced right here in chat
+            // (for every batch size, not just >1) instead of only on a web
+            // confidence banner most WhatsApp sellers never open. Its own
+            // message: a dedicated reply-buttons send gets the full 3-button
+            // budget for alternates, which the missing-fields message above
+            // (already carrying "Submit product N") doesn't have room for.
+            if (result.needsUserConfirmation && result.alternates.length > 0) {
+              const pct = Math.round(result.category.confidence * 100);
+              await replyButtons(
+                phoneNumber,
+                `🤔 Not fully sure about product ${seq}'s category — picked "${result.category.path}" (${pct}% confident). Tap the right one below if this isn't it:`,
+                result.alternates.slice(0, 3).map((alt) => ({
+                  id:    `category:${listing.id}:${alt.code}`,
+                  title: alt.name.slice(0, 20),
+                })),
+              );
+            }
           } else {
             await replyCta(
               phoneNumber,
@@ -818,6 +848,17 @@ async function handleAwaitingBatchConfirmation(
   const editButtonMatch = text.match(/^edit:(.+)$/);
   if (editButtonMatch) {
     await replyCta(phoneNumber, "Here's the form for this product:", "Open editor", focusedEditorUrl(editButtonMatch[1]));
+    return;
+  }
+
+  // Alternate-category button tap from startBatchAnalysis's low-confidence
+  // prompt — id is `category:<listingId>:<code>`. Runs the same refill
+  // pipeline the web editor's category drawer uses
+  // (lib/jumia/refill-attributes.ts) so the correction and re-fill happen
+  // in one action, right here in chat.
+  const categoryMatch = text.match(/^category:([^:]+):(\d+)$/);
+  if (categoryMatch) {
+    await handleCategoryCorrection(userId, phoneNumber, categoryMatch[1], parseInt(categoryMatch[2], 10));
     return;
   }
 
@@ -1028,15 +1069,24 @@ async function handleEdit(
   const db = createServerClient();
   const price = extractPrice(editText);
   const stock = extractStock(editText);
+  const sale  = extractSalePrice(editText);
   const applied: string[] = [];
   if (price != null) { applied.push(`price to GH₵${price}`); }
   if (stock != null) { applied.push(`stock to ${stock}`); }
+  if (sale != null) { applied.push(`sale price to GH₵${sale.salePrice}${sale.startDate || sale.endDate ? " with dates" : ""}`); }
   if (applied.length > 0) {
     await db
       .from("listings")
       .update({
         ...(price != null ? { selling_price: price } : {}),
         ...(stock != null ? { quantity: stock } : {}),
+        // Listing-level fallback every variant resolves to when it has no
+        // sale price of its own — see applyNotes's identical comment.
+        ...(sale != null ? {
+          sale_price: sale.salePrice,
+          ...(sale.startDate ? { sale_start_date: sale.startDate } : {}),
+          ...(sale.endDate ? { sale_end_date: sale.endDate } : {}),
+        } : {}),
         updated_at: new Date().toISOString(),
       })
       .eq("id", listing.id);
@@ -1048,5 +1098,56 @@ async function handleEdit(
     `${ack}For anything else, edit product ${seq} here:`,
     "Edit product",
     focusedEditorUrl(listing.id),
+  );
+}
+
+/**
+ * Reached from tapping an alternate-category button on the low-confidence
+ * prompt startBatchAnalysis sends (id `category:<listingId>:<code>`).
+ * Runs refillAttributesForCategory — the exact pipeline the web editor's
+ * category drawer uses (validate the category, ensure its attribute
+ * schema is cached, run Gemini to fill it, persist) — so switching to the
+ * right category and getting a filled-in listing back happens in one tap,
+ * without needing the focused editor for the common case.
+ */
+async function handleCategoryCorrection(
+  userId: string,
+  phoneNumber: string,
+  listingId: string,
+  categoryCode: number,
+): Promise<void> {
+  const db = createServerClient();
+  const { data: row } = await db
+    .from("listings")
+    .select("whatsapp_seq, user_prompt")
+    .eq("id", listingId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (!row) {
+    await replyText(phoneNumber, "⚠️ I couldn't find that product to recategorize — it may have been removed.");
+    return;
+  }
+  const seq = row.whatsapp_seq ?? "?";
+
+  const result = await refillAttributesForCategory(userId, listingId, categoryCode, {
+    userContext: (row.user_prompt as string | null) ?? null,
+  });
+
+  if (!result.ok) {
+    await replyCta(
+      phoneNumber,
+      `⚠️ Couldn't switch product ${seq}'s category: ${result.message}`,
+      `Fix product ${seq}`,
+      focusedEditorUrl(listingId),
+    );
+    return;
+  }
+
+  const missing = await describeMissingFields(listingId);
+  await replyButtons(
+    phoneNumber,
+    `✅ Product ${seq} switched to "${result.category.path}" and refilled (${result.aiFilled}/${result.attributesSchema} fields). ${missing || "Ready to submit."}`,
+    [{ id: `submit ${seq}`, title: `Submit product ${seq}` }],
   );
 }

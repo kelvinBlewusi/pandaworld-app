@@ -316,7 +316,7 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
                 className="h-[5px] w-[5px] rounded-full"
                 style={{ background: ACCENT, boxShadow: `0 0 10px 2px ${ACCENT}99` }}
               />
-              Chrome Extension · Beta
+              Chrome Extension &amp; WhatsApp
             </div>
             {/* Bold sans headline (Space Grotesk 700) instead of the design's
                 serif italic — reads cleaner/punchier for a product headline,
@@ -341,11 +341,12 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
               className="mt-6 max-w-[520px] text-[17px] font-light leading-relaxed"
               style={{ color: "rgba(239,236,230,0.88)" }}
             >
-              Do your listing on{" "}
-              <span style={{ color: JUMIA_COLOR, fontWeight: 500 }}>Vendor Center</span> like
-              always but this time automatically. Upload a photo, pick a category, and
-              PandaWorld&apos;s AI fills the whole form for you. SEO-optimised. You review
-              and submit.
+              Upload a product photo and PandaWorld&apos;s AI writes the listing for you:
+              title, description, and every attribute{" "}
+              <span style={{ color: JUMIA_COLOR, fontWeight: 500 }}>Jumia</span> asks for. Use
+              the Chrome extension right inside Vendor Center, or just send photos on
+              WhatsApp if you&apos;d rather skip the browser. Either way, you check it over
+              before it goes live.
             </p>
             {/* Stacked full-width on phones, inline row from sm up: three
                 pills wrapping at phone width left a ragged 2-then-1 layout
@@ -378,7 +379,7 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
                 className="inline-flex items-center justify-center gap-2 rounded-full border px-6 py-3.5 text-sm transition-colors hover:!border-white/45 hover:!text-white"
                 style={{ borderColor: "rgba(255,255,255,0.18)", color: "rgba(239,236,230,0.85)" }}
               >
-                Add to Chrome — it&apos;s free
+                Add to Chrome, it&apos;s free
               </a>
             </div>
           </div>

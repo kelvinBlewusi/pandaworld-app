@@ -4,6 +4,7 @@ import { isAdmin } from "@/lib/auth/is-admin";
 import { createServerClient } from "@/lib/supabase/server";
 import { selectAllPaginated } from "@/lib/supabase/paginate";
 import { getCategoriesLastSyncedAt } from "@/lib/jumia/categories";
+import { getCategorySyncHealth } from "@/lib/jumia/category-sync-health";
 import { AdminCategoriesClient } from "./client";
 
 // ─── Admin Categories Page ───────────────────────────────────────────────────
@@ -30,6 +31,7 @@ export default async function AdminCategoriesPage() {
     .select("*", { count: "exact", head: true })
     .not("attribute_set_sid", "is", null);
   const lastSyncedAt = await getCategoriesLastSyncedAt();
+  const syncHealth   = await getCategorySyncHealth();
 
   // Diagnostic: distribution of top-level paths. Helps confirm whether
   // the synced data is genuinely diverse or accidentally one-rooted
@@ -57,6 +59,7 @@ export default async function AdminCategoriesPage() {
       initialTotal={total ?? 0}
       initialListable={listable ?? 0}
       initialLastSyncedAt={lastSyncedAt}
+      syncHealth={syncHealth}
       topLevelDistribution={topLevelDistribution}
     />
   );

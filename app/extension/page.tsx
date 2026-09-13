@@ -3,38 +3,49 @@ import {
   KeyRound,
   UploadCloud,
   Wand2,
+  MessageCircle,
+  ListOrdered,
+  Camera,
+  CheckCircle2,
 } from "lucide-react";
 import { auth } from "@clerk/nextjs/server";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { ExtensionHeroBackdrop } from "@/components/marketing/extension-hero-backdrop";
 import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 
-// ─── /extension — public page for the Chrome extension flow ──────────────────
+// ─── /extension — public page for the Chrome extension + WhatsApp flows ──────
 //
-// Lives outside the (main) layout so logged-out visitors can read about the
-// browser extension without bouncing through Clerk. Mirrors the structure of
+// Lives outside the (main) layout so logged-out visitors can read about
+// either way to list without bouncing through Clerk. Mirrors the structure of
 // app/pricing/page.tsx (local MarketingNav + shared MarketingFooter) so the
 // marketing surface stays consistent.
 //
-// The extension autofills the Jumia Vendor Center "Add Products" form from a
-// product photo using PandaWorld's AI. Auth is a PandaWorld-issued API key the
-// seller generates in the dashboard (see docs/chrome-extension-plan.md §9).
+// Two products live under this one page: the Chrome extension autofills the
+// Jumia Vendor Center "Add Products" form from a product photo (auth is a
+// PandaWorld-issued API key generated in the dashboard, see
+// docs/chrome-extension-plan.md §9), and the WhatsApp bot drafts + submits
+// listings from photos sent in chat (see lib/whatsapp/intake.ts). Both need
+// a PandaWorld account first, so the WhatsApp steps below point back at the
+// same sign-up CTA rather than a public wa.me link — there's no way to talk
+// to the bot before the seller has an account to link.
 
 export const metadata: import("next").Metadata = {
-  title:       "Chrome Extension — Autofill Jumia Listings",
+  title:       "AI Jumia Listings for Chrome and WhatsApp",
   description:
-    "The PandaWorld Chrome extension fills the Jumia Vendor Center product form for you. Upload a photo, pick a category, and AI writes the title, description, highlights, and attributes — SEO-optimised and QC-compliant. You review and submit. Works on any category.",
+    "PandaWorld writes your Jumia listings for you. Upload a photo in the Chrome extension or send it on WhatsApp, and AI fills in the title, description, highlights, and every attribute Jumia asks for. You check it over, then submit.",
   keywords: [
     "Jumia autofill",
     "Jumia Vendor Center extension",
     "Jumia listing chrome extension",
     "AI product listing Jumia",
     "Jumia seller tool Ghana",
+    "list on Jumia from WhatsApp",
+    "Jumia WhatsApp bot",
   ],
   openGraph: {
-    title:       "PandaWorld Chrome Extension for Jumia Vendor Center",
+    title:       "PandaWorld: AI Jumia Listings for Chrome and WhatsApp",
     description:
-      "Autofill the Jumia listing form from a product photo — SEO-optimised, QC-compliant. You review and submit.",
+      "Upload a photo in the Chrome extension or send it on WhatsApp. AI writes the listing, you review and submit.",
     type: "website",
   },
   // Points at root, not "/extension" itself — app/page.tsx renders this exact
@@ -49,7 +60,7 @@ const STEPS = [
   {
     Icon: Chrome,
     title: "Install the extension",
-    body: "Add PandaWorld to Chrome and pin it. It opens as a side panel next to Jumia Vendor Center",
+    body: "Add PandaWorld to Chrome and pin it. It opens as a side panel next to Jumia Vendor Center.",
     href: CHROME_WEB_STORE_URL,
   },
   {
@@ -59,15 +70,97 @@ const STEPS = [
   },
   {
     Icon: UploadCloud,
-    title: "Add a photo & pick a category",
-    body: "Do your listing on Jumia as usual — upload the product image and choose a category to open the form.",
+    title: "Add a photo and pick a category",
+    body: "Do your listing on Jumia like normal. Upload the product image and choose a category to open the form.",
   },
   {
     Icon: Wand2,
     title: "Click Autofill, review, submit",
-    body: "AI fills the title, description, highlights, and attributes. You check it, tweak anything, and submit",
+    body: "AI fills the title, description, highlights, and attributes. Check it, tweak anything that needs it, and submit.",
   },
 ];
+
+const WHATSAPP_STEPS = [
+  {
+    Icon: MessageCircle,
+    title: "Link your WhatsApp",
+    body: "Grab a connect code from your PandaWorld dashboard and send it to our number. Takes a few seconds.",
+  },
+  {
+    Icon: ListOrdered,
+    title: "Say how many products",
+    body: "Reply with a number, like 3, and we'll take you through them one by one.",
+  },
+  {
+    Icon: Camera,
+    title: "Send photos and a note",
+    body: "Snap the product and send the photos. Mention anything that matters, like the price, the colour, or what's in the box.",
+  },
+  {
+    Icon: CheckCircle2,
+    title: "Review and submit",
+    body: "We draft the listing and message it back to you. Check it over, reply submit, and it goes live on Jumia.",
+  },
+];
+
+interface Step {
+  Icon: typeof Chrome;
+  title: string;
+  body: string;
+  href?: string;
+}
+
+/** One "How it works" column — a small icon + label heading over a
+ *  vertical list of numbered steps. Used twice on this page (Chrome
+ *  extension, WhatsApp) so both sit side by side instead of the single
+ *  4-up card grid this section used to be, which only had room for one
+ *  flow at a time. */
+function HowItWorksTrack({ icon: TrackIcon, label, steps }: { icon: typeof Chrome; label: string; steps: Step[] }) {
+  return (
+    <div>
+      <div className="flex items-center gap-2.5">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500 text-white">
+          <TrackIcon className="h-4 w-4" />
+        </div>
+        <h3 className="text-lg font-bold text-zinc-900">{label}</h3>
+      </div>
+      <ol className="mt-6 space-y-6 border-l border-zinc-200 pl-6">
+        {steps.map((step, i) => {
+          const content = (
+            <>
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-orange-50 text-xs font-bold text-orange-600">
+                  {i + 1}
+                </span>
+                <h4 className="text-sm font-semibold text-zinc-900">{step.title}</h4>
+                {step.href && (
+                  <span className="text-xs font-medium text-orange-500">Open Chrome Web Store →</span>
+                )}
+              </div>
+              <p className="mt-1.5 pl-8 text-sm leading-relaxed text-zinc-600">{step.body}</p>
+            </>
+          );
+          return (
+            <li key={step.title} className="-ml-[1px] pl-[1px]">
+              {step.href ? (
+                <a
+                  href={step.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="-m-2 block rounded-lg p-2 transition-colors hover:bg-white"
+                >
+                  {content}
+                </a>
+              ) : (
+                content
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
 
 // Every auth link on this page carries this so a NEW sign-up lands directly on
 // the extension dashboard — never the old Jumia-OAuth onboarding gate
@@ -106,7 +199,10 @@ export async function ExtensionPage() {
         signedIn={Boolean(userId)}
       />
 
-      {/* How it works */}
+      {/* How it works — two tracks side by side (Chrome extension, WhatsApp),
+          each its own vertical step list rather than the old single 4-up
+          card grid, since that layout doesn't leave room for a second set
+          of steps next to it. Stacks to one column on phones. */}
       <section id="how-it-works" className="bg-zinc-50">
         <div className="mx-auto max-w-6xl px-6 py-16">
           <div className="text-center">
@@ -114,38 +210,26 @@ export async function ExtensionPage() {
               How it works
             </p>
             <h2 className="mt-3 text-2xl font-bold sm:text-3xl">
-              Follow these steps to reduce the time spent on listing products
+              Two ways to get your products listed
             </h2>
+            <p className="mx-auto mt-3 max-w-xl text-sm text-zinc-500">
+              Use the extension when you&apos;re at your laptop, or send photos on WhatsApp when
+              you&apos;re not. Either way our AI writes the listing, and you have the final say
+              before it goes live.
+            </p>
           </div>
-          <div className="mt-12 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-            {STEPS.map((step, i) => {
-              const cardClass =
-                "group relative rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-orange-200 hover:shadow-xl hover:shadow-orange-500/10";
-              const cardContent = (
-                <>
-                  <span className="absolute right-4 top-4 text-sm font-bold text-zinc-200 transition-colors duration-300 group-hover:text-orange-200">
-                    {String(i + 1).padStart(2, "0")}
-                  </span>
-                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-orange-50 text-orange-600 transition-colors duration-300 group-hover:bg-orange-500 group-hover:text-white">
-                    <step.Icon className="h-5 w-5" />
-                  </div>
-                  <h3 className="mt-4 text-base font-semibold">
-                    {step.title}
-                    {step.href && <span className="ml-2 text-xs font-medium text-orange-500">Open Chrome Web Store →</span>}
-                  </h3>
-                  <p className="mt-2 text-sm leading-relaxed text-zinc-600">{step.body}</p>
-                </>
-              );
-              return step.href ? (
-                <a key={step.title} href={step.href} target="_blank" rel="noopener noreferrer" className={cardClass}>
-                  {cardContent}
-                </a>
-              ) : (
-                <div key={step.title} className={cardClass}>
-                  {cardContent}
-                </div>
-              );
-            })}
+
+          <div className="mt-12 grid grid-cols-1 gap-12 lg:grid-cols-2 lg:gap-16">
+            <HowItWorksTrack
+              icon={Chrome}
+              label="From your browser"
+              steps={STEPS}
+            />
+            <HowItWorksTrack
+              icon={MessageCircle}
+              label="From WhatsApp"
+              steps={WHATSAPP_STEPS}
+            />
           </div>
         </div>
       </section>
