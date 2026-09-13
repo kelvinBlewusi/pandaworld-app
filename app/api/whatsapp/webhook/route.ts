@@ -114,7 +114,7 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
         msg.from,
         `⚠️ ${reason}`,
         "Get a new code",
-        `${appUrl()}/extension/whatsapp-listings`,
+        `${appUrl()}/extension/settings`,
       );
       return;
     }
@@ -148,11 +148,16 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
 
   const userId = await getUserIdForPhoneNumber(msg.from);
   if (!userId) {
+    // The actual "Connect WhatsApp" action (generates the LINK-<code>
+    // the seller pastes back here) lives in WhatsAppCard, which the
+    // extension settings page renders — send them straight there rather
+    // than to the batch review page, which is about listings from a
+    // number that's already linked.
     await sendCtaUrlIfConfigured(
       msg.from,
       "👋 This number isn't linked to a PandaWorld account yet.",
       "Connect WhatsApp",
-      `${appUrl()}/extension/whatsapp-listings`,
+      `${appUrl()}/extension/settings`,
     );
     return;
   }
