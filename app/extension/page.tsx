@@ -7,7 +7,7 @@ import {
   ListOrdered,
   Camera,
   CheckCircle2,
-  Sparkles,
+  Megaphone,
 } from "lucide-react";
 import { auth } from "@clerk/nextjs/server";
 import { MarketingFooter } from "@/components/marketing/footer";
@@ -202,8 +202,8 @@ export async function ExtensionPage() {
           backgroundSize: "200% 100%",
         }}
       >
-        <Sparkles className="h-4 w-4 shrink-0" />
-        <span>Use PandaWorld for free right now, on WhatsApp and the Chrome extension. No card needed.</span>
+        <Megaphone className="h-4 w-4 shrink-0" />
+        <span>Use PandaWorld for free, on WhatsApp and the Chrome extension. No card needed.</span>
       </div>
 
       {/* Hero — dark, canvas-animated backdrop (components/marketing/extension-hero-backdrop.tsx).

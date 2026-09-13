@@ -89,7 +89,6 @@ export function DonateModal({
         <div className="flex items-start justify-between">
           <div>
             <h2 className="text-lg font-bold text-zinc-900">Support PandaWorld</h2>
-            <p className="text-xs text-zinc-500">Everything's free while we're building — donate if you'd like to help out</p>
           </div>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600" aria-label="Close">
             <X className="h-5 w-5" />
