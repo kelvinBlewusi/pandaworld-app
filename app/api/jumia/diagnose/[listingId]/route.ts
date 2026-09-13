@@ -6,6 +6,7 @@ import {
   getFeedStatus,
   getFeedProductDetails,
 } from "@/lib/jumia/api";
+import { refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
 
 // ─── GET /api/jumia/diagnose/[listingId] ──────────────────────────────────────
 //
@@ -72,35 +73,21 @@ export async function GET(
     getFeedProductDetails(creds.accessToken, listing.jumia_ref),
   ]);
 
-  // If the feed has a definitive verdict, update our DB so /listings reflects it
+  // If the feed has a definitive verdict, update our DB so /listings
+  // reflects it. Shared with the cron, the poll route and the WhatsApp
+  // flow — see refreshPendingFeedStatus. This route used to carry its own
+  // copy, which (like the others) counted any failed product as a total
+  // failure and never notified the seller, so diagnosing a pending listing
+  // silently ate the notification the cron would otherwise have sent.
+  // allowNonPending: diagnose is explicitly a re-check, and may run against
+  // a listing that already resolved; the shared function only messages the
+  // seller on a genuine pending → resolved transition.
   if (feedStatus) {
-    let newStatus: string | null = null;
-    let errorMsg: string | null = null;
-    const s = feedStatus.status.toUpperCase();
-    if (s === "DONE" || s === "COMPLETED") {
-      newStatus = feedStatus.failed > 0 ? "failed" : "live";
-      if (feedStatus.failed > 0 && feedStatus.errors.length > 0) {
-        errorMsg = String(feedStatus.errors[0]).slice(0, 500);
-      }
-    } else if (s === "ERROR" || s === "FAILED") {
-      newStatus = "failed";
-      errorMsg = feedStatus.errors.length
-        ? String(feedStatus.errors[0]).slice(0, 500)
-        : "Jumia rejected the feed";
-    }
-    if (newStatus && newStatus !== listing.status) {
-      const updates: Record<string, unknown> = {
-        status:      newStatus,
-        jumia_error: errorMsg,
-        updated_at:  new Date().toISOString(),
-      };
-      if (productDetails && productDetails.length > 0) {
-        const info = productDetails[0];
-        if (info.productSid) updates.jumia_product_sid = info.productSid;
-        if (info.qcStatus)   updates.jumia_qc_status   = info.qcStatus;
-      }
-      await db.from("listings").update(updates).eq("id", params.listingId);
-    }
+    await refreshPendingFeedStatus(
+      creds.accessToken,
+      { id: params.listingId, status: listing.status as string, jumia_ref: listing.jumia_ref as string },
+      { allowNonPending: true },
+    );
   }
 
   // Build a human-readable diagnosis
