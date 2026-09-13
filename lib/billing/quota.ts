@@ -32,6 +32,7 @@ import { createServerClient } from "@/lib/supabase/server";
 import type { Plan, SubStatus } from "@/lib/billing/plans";
 import { getListingQuota, getPolishQuota } from "@/lib/billing/plans";
 import { isAdmin } from "@/lib/billing/admin";
+import { FREE_FOR_ALL_MODE } from "@/lib/billing/free-for-all";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -50,7 +51,12 @@ export interface QuotaCheckResult {
   limit: number;
   /** ISO timestamp when the period rolls over (and counters reset). */
   period_resets_at: string;
-  /** True for admin users (env-var allow-list) — not metered. */
+  /**
+   * True for admin users (env-var allow-list) — not metered. Also true
+   * for every user while FREE_FOR_ALL_MODE (lib/billing/free-for-all.ts)
+   * is on, so the existing "Unlimited usage" UI banner this flag drives
+   * shows for everyone during that growth phase, not just staff.
+   */
   is_admin: boolean;
 }
 
@@ -239,7 +245,7 @@ export async function checkQuota(
   userId: string,
   action: QuotaAction,
 ): Promise<QuotaCheckResult> {
-  if (isAdmin(userId)) {
+  if (FREE_FOR_ALL_MODE || isAdmin(userId)) {
     return {
       allowed:          true,
       plan:             "business",        // surface as the highest tier in UI
@@ -288,7 +294,7 @@ export async function incrementUsage(
   userId: string,
   action: QuotaAction,
 ): Promise<void> {
-  if (isAdmin(userId)) return; // admins bypass metering
+  if (FREE_FOR_ALL_MODE || isAdmin(userId)) return; // unmetered
 
   const db = createServerClient();
 
@@ -347,7 +353,7 @@ export async function decrementUsage(
   userId: string,
   action: QuotaAction,
 ): Promise<void> {
-  if (isAdmin(userId)) return; // admins bypass metering
+  if (FREE_FOR_ALL_MODE || isAdmin(userId)) return; // unmetered
 
   const db = createServerClient();
 
@@ -403,7 +409,7 @@ export async function decrementUsage(
  * "unlimited" pill instead of a usage bar.
  */
 export async function getQuotaSummary(userId: string): Promise<QuotaSummary> {
-  if (isAdmin(userId)) {
+  if (FREE_FOR_ALL_MODE || isAdmin(userId)) {
     return {
       plan:             "business",
       listings: { used: 0, limit: Number.POSITIVE_INFINITY },

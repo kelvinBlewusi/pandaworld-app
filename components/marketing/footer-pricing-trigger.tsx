@@ -1,16 +1,18 @@
 "use client";
 
 /**
- * Footer "Pricing" trigger for extension-flavored pages (/, /extension) —
- * opens the same credit-pack pricing card (BuyCreditsModal) as the hero
- * nav's own "Pricing" button, instead of MarketingFooter's default plain
- * link to /pricing (the classic web app's unrelated monthly-plan pricing).
- * See extension-hero-backdrop.tsx's own "Pricing" button for why these two
- * pricing models must never be conflated on this page.
+ * Footer "Donate" trigger for extension-flavored pages (/, /extension) —
+ * opens the same support-donation card (DonateModal) as the hero nav's
+ * own "Donate" button, instead of MarketingFooter's default plain link
+ * to /pricing (the classic web app's unrelated monthly-plan pricing).
+ * See extension-hero-backdrop.tsx's own "Donate" button for why these
+ * must never be conflated on this page. Stands in for the old "Pricing"
+ * trigger (BuyCreditsModal) while WhatsApp + the extension are free —
+ * see lib/billing/free-for-all.ts.
  */
 
 import { useState } from "react";
-import { BuyCreditsModal } from "@/components/extension/buy-credits-modal";
+import { DonateModal } from "@/components/extension/donate-modal";
 
 export function FooterPricingTrigger({
   signedIn,
@@ -23,9 +25,9 @@ export function FooterPricingTrigger({
   return (
     <>
       <button type="button" onClick={() => setOpen(true)} className="hover:text-zinc-900">
-        Pricing
+        Donate
       </button>
-      <BuyCreditsModal open={open} onClose={() => setOpen(false)} signedIn={signedIn} signInHref={signInHref} />
+      <DonateModal open={open} onClose={() => setOpen(false)} signedIn={signedIn} signInHref={signInHref} />
     </>
   );
 }

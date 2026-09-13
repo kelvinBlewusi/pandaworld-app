@@ -28,7 +28,7 @@ import Link from "next/link";
 import { Space_Grotesk } from "next/font/google";
 import { ArrowRight } from "lucide-react";
 import { Wordmark } from "@/components/marketing/wordmark";
-import { BuyCreditsModal } from "@/components/extension/buy-credits-modal";
+import { DonateModal } from "@/components/extension/donate-modal";
 import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 
 // Bold sans headline (700) unifies the type system with the nav/body, which
@@ -52,18 +52,20 @@ interface ExtensionHeroBackdropProps {
   signUpHref: string;
   ctaHref: string;
   ctaLabel: string;
-  // Whether the visitor already has a session — decides what the Pricing
-  // popup's Buy button does (checkout vs. redirect to sign in).
+  // Whether the visitor already has a session — decides what the Donate
+  // popup's button does (checkout vs. redirect to sign in).
   signedIn: boolean;
 }
 
 export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabel, signedIn }: ExtensionHeroBackdropProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  // "Pricing" here opens the extension's own credit-pack pricing (the same
-  // popup the dashboard uses) rather than navigating to /pricing, which is
-  // the classic web app's monthly-plan pricing — a completely different
-  // product from this visitor's point of view.
-  const [pricingOpen, setPricingOpen] = useState(false);
+  // "Donate" here opens the same support-donation popup the dashboard
+  // uses (components/extension/donate-modal.tsx) rather than navigating
+  // to /pricing, which is the classic web app's monthly-plan pricing — a
+  // completely different, currently-deprioritized product from this
+  // visitor's point of view. Stands in for the old "Pricing" trigger
+  // while WhatsApp + the extension are free (lib/billing/free-for-all.ts).
+  const [donateOpen, setDonateOpen] = useState(false);
 
   useEffect(() => {
     const cvs = canvasRef.current;
@@ -273,11 +275,11 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
           <nav className="flex items-center gap-2 text-[12px] uppercase tracking-[0.08em] sm:gap-3 sm:text-[13px]">
             <button
               type="button"
-              onClick={() => setPricingOpen(true)}
+              onClick={() => setDonateOpen(true)}
               className="px-1.5 transition-colors hover:!text-white sm:px-2"
               style={{ color: "rgba(239,236,230,0.78)" }}
             >
-              Pricing
+              Donate
             </button>
             {/* "Card" treatment — shaded pill background, distinguishing it
                 as a button rather than a plain nav link. */}
@@ -386,9 +388,9 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
         </div>
       </div>
     </section>
-    <BuyCreditsModal
-      open={pricingOpen}
-      onClose={() => setPricingOpen(false)}
+    <DonateModal
+      open={donateOpen}
+      onClose={() => setDonateOpen(false)}
       signedIn={signedIn}
       signInHref={signInHref}
     />

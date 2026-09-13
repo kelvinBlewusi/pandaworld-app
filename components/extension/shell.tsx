@@ -2,7 +2,7 @@
 
 /**
  * App shell for app/extension/(app) — sidebar + a persistent utility bar
- * (Buy Credits / Plan / Credits / notifications / Install Extension),
+ * (Donate / Plan / Credits / notifications / Install Extension),
  * modeled on components/layout/MainShell.tsx's desktop-sidebar +
  * mobile-drawer pattern so the extension flow feels like the same app.
  *
@@ -15,10 +15,10 @@ import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useUser } from "@clerk/nextjs";
-import { Menu, Plus, Bell, X } from "lucide-react";
+import { Menu, Heart, Bell, X } from "lucide-react";
 import { ExtensionSidebar } from "./sidebar";
 import { Wordmark } from "@/components/marketing/wordmark";
-import { BuyCreditsModal } from "./buy-credits-modal";
+import { DonateModal } from "./donate-modal";
 import { GoogleIcon } from "./google-icon";
 import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 import type { CreditTransaction } from "@/lib/billing/extension-credits";
@@ -78,7 +78,7 @@ export function ExtensionShell({
   notificationsSeenAt: string | null;
 }) {
   const [open, setOpen] = useState(false);
-  const [buyOpen, setBuyOpen] = useState(false);
+  const [donateOpen, setDonateOpen] = useState(false);
   const [items, setItems] = useState(notifications);
   // seenAt drives the bell's own alert dot — it clears the instant the
   // dropdown opens. displaySeenAt drives each item's "new" highlight and
@@ -177,10 +177,10 @@ export function ExtensionShell({
 
           <div className="flex flex-wrap items-center gap-2.5">
             <button
-              onClick={() => setBuyOpen(true)}
+              onClick={() => setDonateOpen(true)}
               className="flex items-center gap-1.5 rounded-full bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
             >
-              <Plus className="h-4 w-4" /> Buy Credits
+              <Heart className="h-4 w-4" /> Donate
             </button>
             <span className="rounded-full border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-600">
               Plan: {planLabel}
@@ -260,7 +260,7 @@ export function ExtensionShell({
         </main>
       </div>
 
-      <BuyCreditsModal open={buyOpen} onClose={() => setBuyOpen(false)} />
+      <DonateModal open={donateOpen} onClose={() => setDonateOpen(false)} />
     </div>
   );
 }
