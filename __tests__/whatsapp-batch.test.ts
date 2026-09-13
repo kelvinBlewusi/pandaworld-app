@@ -231,6 +231,23 @@ describe("extractSalePrice", () => {
       endDate:   "2026-10-01",
     });
   });
+
+  it("drops both dates when the range is inverted (start after end) — confirmed live failure", () => {
+    // A seller typed "30th September 2026 to 31 December 2025" — both
+    // sides carry an explicit year, so neither rolls forward, and the
+    // pairing is nonsensical (start is over a year after end). There's no
+    // reliable way to guess which side is the typo, so both are dropped —
+    // the sale price itself must still register.
+    expect(
+      extractSalePrice("sale price 150 from 30 September 2026 to 31 December 2025", now),
+    ).toEqual({ salePrice: 150 });
+  });
+
+  it("keeps a valid range when start is genuinely before end", () => {
+    expect(
+      extractSalePrice("sale price 150 from 30 September 2025 to 31 December 2026", now),
+    ).toEqual({ salePrice: 150, startDate: "2025-09-30", endDate: "2026-12-31" });
+  });
 });
 
 describe("whatsappListingsUrl", () => {
