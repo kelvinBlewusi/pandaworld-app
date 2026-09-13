@@ -41,7 +41,7 @@ refactors. Hates Lorem-ipsum-style placeholder code.
 - **AI**: Google AI Studio API key (`GOOGLE_API_KEY`) for:
   - Gemini 3.1 Flash Lite (vision + text) — listing analyze, gap-fill, description-expand
   - Gemini 2.5 Flash Image — text-to-image + image polish/rebuild
-  - text-embedding (gemini-embedding-001 with `outputDimensionality: 768`) — category retrieval
+  - text-embedding (gemini-embedding-001 with `outputDimensionality: 768`) — not currently called by the analyze pipeline (see Operational gotchas); still available via lib/ai/embeddings.ts
   - Custom Search API (added 2026-05-28, CSE ID `05213a7d53c7a498e`) — web search ground truth for gap-fill
 - **External integrations**: Jumia Vendor Center (OAuth), PhotoRoom (background removal, legacy), Resend (transactional email, optional)
 - **Observability**: Vercel logs, Sentry (`app/error.tsx`)
@@ -78,7 +78,10 @@ refactors. Hates Lorem-ipsum-style placeholder code.
 
 ## The AI listing pipeline (the heart of the product)
 
-Located in `app/api/listings/[id]/auto-analyze/route.ts`.
+Orchestrated by `lib/actions/auto-analyze.ts` → `runAutoAnalyze()` (extracted
+from the route so the WhatsApp webhook can run the exact same pipeline
+without a Clerk session). `app/api/listings/[id]/auto-analyze/route.ts` is
+now a thin wrapper: authenticate, rate-limit, call it, map the result to JSON.
 
 ```
 1. Pass A (vision): images + optional seller hint → ProductDescription JSON
@@ -88,14 +91,35 @@ Located in `app/api/listings/[id]/auto-analyze/route.ts`.
            warranty defaults, production country, use case, environment,
            variations, keywords
 
-2. Retrieval (parallel, capped timeouts):
-   - Fuzzy lexical search (Fuse.js, local) → 6 candidates
-   - Semantic embedding (pgvector cosine) → 6 candidates [4s timeout]
-   - Jumia catalog API title search → 3 candidates [6s timeout]
-   Merged by mergeCandidates() → top 8 unique
-   File: lib/jumia/category-search.ts
-   IMPORTANT: embedding has a process-level circuit breaker — 2
-   consecutive timeouts disable it for the rest of the Vercel process.
+2. Category resolution — department-first, then narrow within it
+   (redesigned 2026-09-13; see below for why the old approach was replaced):
+   a) aiPassB0_pickDepartment() — small, cheap Gemini call: pick the best
+      top-level department (~20-40 broad options, e.g. "Fashion", "Home
+      Improvement") for this product. No retrieval involved.
+      File: lib/actions/ai.ts
+   b) Fuzzy lexical search (Fuse.js, local, no network) scoped to ONLY
+      that department's subtree (getSubtreeCategories()) → up to 8
+      candidates. If that comes up empty, retry with the department
+      pick's next-best alternate before giving up.
+      File: lib/jumia/category-search.ts → searchCategoriesByText(),
+      getTopLevelDepartments(), getSubtreeCategories()
+   c) Absolute last resort: fuzzy search the FULL ~27k-row catalog (only
+      reached if department picking itself threw). If even that finds
+      nothing, the analyze returns ok:false/no_category_picked rather
+      than guessing — the listing keeps no category and the seller picks
+      one manually via the category drawer / focused editor.
+   Replaced the old 3-source retrieval (fuzzy + pgvector embedding +
+   Jumia catalog API search, merged, with a "grab the first 200
+   categories alphabetically" fallback when all three came up empty).
+   That fallback is how a safety helmet and a canvas easel both got
+   filed under "Laptops" in production — a blind alphabetical slice of
+   the whole catalog has nothing to do with the actual product. The two
+   external retrieval sources (Google's embedding endpoint, Jumia's
+   catalog search) were also the confirmed source of 4s/6s timeouts
+   stacking up toward Vercel's 60s ceiling; department-scoped fuzzy
+   search needs neither, so both are gone from this path entirely.
+   searchCategoriesByEmbedding() and searchJumiaProductsByTitle() still
+   exist (unused by this pipeline now) in case something else needs them.
 
 3. Combined Pass B+C (vision): one Gemini call that picks the category
    AND fills its attributes. Replaces what used to be two serial calls.
@@ -191,7 +215,7 @@ Located in `app/api/listings/[id]/auto-analyze/route.ts`.
 - `lib/billing/quota.ts` — checkQuota / incrementUsage / getEffectivePlan
 - `lib/billing/ai-models.ts` — tier → Gemini model mapping (pickModelForPlan)
 - `lib/jumia/categories.ts` — category schema fetch + cache
-- `lib/jumia/category-search.ts` — fuzzy + embedding + Jumia retrieval merger
+- `lib/jumia/category-search.ts` — fuzzy search + department-tree helpers (getTopLevelDepartments/getSubtreeCategories); embedding/Jumia-catalog search functions still live here but are unused by the analyze pipeline as of 2026-09-13
 - `lib/jumia/api.ts` — Jumia Vendor Center API client + OAuth token refresh
 - `lib/actions/listings.ts` — createListing / updateListing server actions (quota-gated)
 - `lib/actions/upload.ts` — image upload with magic-byte MIME validation (JPEG/PNG only)
@@ -240,9 +264,12 @@ Run in order. All applied through Supabase Dashboard → SQL Editor (NOT auto-ap
 
 ## Operational gotchas (things that have bitten us)
 
-1. **Embedding cold start**: `gemini-embedding-001` regularly takes 30–40s on a
-   cold call. Circuit breaker disables it after 2 consecutive timeouts per
-   process. See `app/api/listings/[id]/auto-analyze/route.ts` → `_embeddingCircuitOpen`.
+1. **Embedding cold start** (historical): `gemini-embedding-001` regularly took
+   30–40s on a cold call when the analyze pipeline used it for category
+   retrieval. As of 2026-09-13 the pipeline no longer calls it at all — see
+   the category-resolution rewrite above — so this class of timeout is gone
+   from `runAutoAnalyze`. `lib/ai/embeddings.ts` and
+   `searchCategoriesByEmbedding()` still exist for any other caller.
 
 2. **Supabase image transforms require Pro plan**: the user's project is on Free
    tier, so `/storage/v1/render/image/` returns 403. Code falls back to

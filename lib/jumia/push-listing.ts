@@ -25,6 +25,56 @@ export interface PushListingVariantInput {
   saleEndDate?:   string | null;
 }
 
+/**
+ * The exact set of checks pushListingToJumia runs before ever calling
+ * Jumia's API — extracted so callers can ask "is this ready?" ahead of
+ * time (e.g. the WhatsApp batch-completion summary) using the same rules
+ * a real push would enforce, rather than duplicating or drifting from
+ * them. Returns a human-readable error per missing/invalid field; an
+ * empty array means the listing is ready to push.
+ */
+export function validateListingForPush(row: ListingRow): string[] {
+  const errors: string[] = [];
+  if (!row.title) errors.push("title is required");
+  else if (row.title.length < 15) errors.push(`title must be at least 15 characters (you have ${row.title.length})`);
+
+  if (!row.description) errors.push("description is required");
+  else if (row.description.length < 50) errors.push(`description must be at least 50 characters (you have ${row.description.length}) — Jumia hard limit`);
+  else if (row.description.length > 9000) errors.push(`description must be 9,000 characters or fewer (you have ${row.description.length})`);
+
+  if (!row.selling_price) errors.push("price is required");
+
+  const catCode = row.category_code ? parseInt(row.category_code, 10) : 0;
+  if (!catCode || isNaN(catCode) || catCode <= 0) {
+    errors.push(
+      "category is required — open the listing, click the Category field, and pick a leaf from the drawer (legacy listings need a re-pick)",
+    );
+  }
+
+  if (!row.brand) errors.push("brand is required");
+  if ((row.images ?? []).length === 0) errors.push("at least one image is required");
+
+  return errors;
+}
+
+/**
+ * Short field labels ("price", "category", ...) for whichever checks in
+ * validateListingForPush are currently failing — the concise form used in
+ * a chat summary, where the full sentence-length error text would be too
+ * noisy. Order matches validateListingForPush's own check order.
+ */
+export function missingFieldLabels(row: ListingRow): string[] {
+  const missing: string[] = [];
+  if (!row.title || row.title.length < 15) missing.push("title");
+  if (!row.description || row.description.length < 50 || row.description.length > 9000) missing.push("description");
+  if (!row.selling_price) missing.push("price");
+  const catCode = row.category_code ? parseInt(row.category_code, 10) : 0;
+  if (!catCode || isNaN(catCode) || catCode <= 0) missing.push("category");
+  if (!row.brand) missing.push("brand");
+  if ((row.images ?? []).length === 0) missing.push("images");
+  return missing;
+}
+
 export type PushListingResult =
   | { ok: true; jumiaRef: string | null; sku: string; skuChanged: boolean }
   | {
@@ -76,26 +126,7 @@ export async function pushListingToJumia(
   const row = listing as ListingRow;
 
   // ── Validate required fields (mirrors Jumia API constraints exactly) ──────
-  const errors: string[] = [];
-  if (!row.title) errors.push("title is required");
-  else if (row.title.length < 15) errors.push(`title must be at least 15 characters (you have ${row.title.length})`);
-
-  if (!row.description) errors.push("description is required");
-  else if (row.description.length < 50) errors.push(`description must be at least 50 characters (you have ${row.description.length}) — Jumia hard limit`);
-  else if (row.description.length > 9000) errors.push(`description must be 9,000 characters or fewer (you have ${row.description.length})`);
-
-  if (!row.selling_price) errors.push("price is required");
-
-  const catCode = row.category_code ? parseInt(row.category_code, 10) : 0;
-  if (!catCode || isNaN(catCode) || catCode <= 0) {
-    errors.push(
-      "category is required — open the listing, click the Category field, and pick a leaf from the drawer (legacy listings need a re-pick)",
-    );
-  }
-
-  if (!row.brand) errors.push("brand is required");
-  if ((row.images ?? []).length === 0) errors.push("at least one image is required");
-
+  const errors = validateListingForPush(row);
   if (errors.length > 0) {
     return { ok: false, code: "validation", message: errors.join(". ") + "." };
   }

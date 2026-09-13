@@ -20,6 +20,7 @@
 import { createServerClient } from "@/lib/supabase/server";
 import {
   aiPassA_describeProduct,
+  aiPassB0_pickDepartment,
   aiPassB_rankCategory,
   extractAttributesForCategory,
   aiPassBC_pickAndFill,
@@ -29,46 +30,20 @@ import {
 } from "@/lib/actions/ai";
 import {
   getListableCategories,
+  getAllCategoriesForTree,
   getCategoryAttributes,
   fetchAttributesFromJumia,
   upsertAttributes,
 } from "@/lib/jumia/categories";
 import {
   searchCategoriesByText,
-  searchCategoriesByEmbedding,
-  mergeCandidates,
+  getTopLevelDepartments,
+  getSubtreeCategories,
   type CategoryCandidate,
 } from "@/lib/jumia/category-search";
-import { searchJumiaProductsByTitle } from "@/lib/jumia/catalog-search";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { AI_DYNAMIC_ATTR_DEFAULTS, resolvePatternDefault } from "@/lib/ai/policy";
 import { webSearch, formatSearchSnippetsForPrompt, isWebSearchEnabled } from "@/lib/ai/web-search";
-
-// ─── Process-level embedding circuit breaker ────────────────────────────────
-//
-// `gemini-embedding-001` has shown 30–40s cold-start latencies in
-// production. The retrieval timeout caps each single call at 4s, but
-// if the same Vercel serverless instance hits TWO consecutive timeouts,
-// the underlying service is clearly stuck — every subsequent analyze
-// in this process would pay the same 4s wait for the same fallback.
-//
-// Open the breaker on the second timeout and short-circuit straight
-// to the fallback for the rest of the process lifetime. The breaker
-// resets when Vercel rotates the instance (next cold start gets a
-// fresh chance).
-let _embeddingTimeoutCount = 0;
-let _embeddingCircuitOpen = false;
-
-function _onEmbeddingTimeout(label: string): void {
-  if (label !== "embedding-retrieval") return;
-  _embeddingTimeoutCount++;
-  if (!_embeddingCircuitOpen && _embeddingTimeoutCount >= 2) {
-    _embeddingCircuitOpen = true;
-    console.warn(
-      "[auto-analyze] embedding circuit breaker OPEN — skipping embedding retrieval for the rest of this process",
-    );
-  }
-}
 
 export type AutoAnalyzeResult =
   | {
@@ -171,15 +146,40 @@ export async function runAutoAnalyze(
       : null,
   ].filter(Boolean).join(" ");
 
-  // ── 2. RETRIEVAL: fuzzy local + Jumia catalog lookup ──────────────────────
+  // ── 2. CATEGORY RESOLUTION: department-first, then narrow within it ──────
   //
-  // Pool = every category Jumia marked as listable (matches what the
-  // picker shows the seller). Intermediate-but-listable parents like
-  // "Watches" are now candidates the AI can suggest, not just leaves.
+  // Previously: fuzzy + embedding + Jumia-catalog search against the FULL
+  // ~27k-row catalog, merged, with a "grab the first 200 categories
+  // alphabetically" fallback whenever all three came up empty. Confirmed
+  // live 2026-09-12: that fallback is how a safety helmet and a canvas
+  // easel both got filed under "Laptops" — a blind alphabetical slice of
+  // a huge catalog has nothing to do with the actual product, and the
+  // rank pass below can only ever be as good as the candidates it's
+  // given. The two external retrieval sources (Google's embedding
+  // endpoint, Jumia's own catalog search) were also the confirmed source
+  // of the 4s/6s timeouts stacking up toward this route's hard ceiling.
+  //
+  // New approach: ask the AI which top-level DEPARTMENT (e.g. "Home &
+  // Office", "Fashion") the product belongs in first — a small, cheap,
+  // fast decision among ~20-40 broad options, no retrieval involved at
+  // all. Then fuzzy-search ONLY within that department's own subtree (a
+  // few hundred to low thousands of rows, not the full ~27k) for the
+  // actual candidate pool below. Even a middling text match within the
+  // RIGHT department beats a strong text match in the wrong one — and a
+  // department-scoped fuzzy search never needs Google's embedding
+  // endpoint or Jumia's catalog API, so both are dropped from this path
+  // entirely, removing their timeout risk along with their inaccuracy.
+  // If a department pick is wrong, its next-best alternate gets a second
+  // try before giving up — and giving up now means "no category yet,
+  // pick one manually" (routes to the category picker), never a
+  // confidently-wrong guess.
   const tRet = Date.now();
-  const listableCategories = await getListableCategories();
+  const [listableCategories, allCategories] = await Promise.all([
+    getListableCategories(),
+    getAllCategoriesForTree(),
+  ]);
 
-  if (listableCategories.length === 0) {
+  if (listableCategories.length === 0 || allCategories.length === 0) {
     return {
       ok: false,
       code: "no_categories_synced",
@@ -187,116 +187,54 @@ export async function runAutoAnalyze(
     };
   }
 
-  // Three-source retrieval (May 2026 + embeddings):
-  //   1. Fuzzy lexical search (Fuse.js, local, free)
-  //   2. Semantic embedding search (pgvector, ~$0.0001 per call)
-  //   3. Jumia catalog lookup (their search API)
-  //
-  // Embedding search catches non-English product names (e.g. "Kente
-  // cloth"), brand-specific terms ("AirPods Pro"), and vague descriptions
-  // where lexical overlap with the category tree is poor. It's a QUALITY
-  // BOOSTER — fuzzy + Jumia are already strong on their own — so it
-  // gets a hard per-source timeout: if Google's embedding endpoint is
-  // having a slow day, we proceed without it rather than letting the
-  // whole analyze blow past Vercel's 60s function limit.
-  //
-  // withTimeout(promise, ms, fallback) — race a promise against a
-  // timeout, returning the fallback on timeout. Used to keep each
-  // retrieval source from holding up the whole pipeline.
-  function withTimeout<T>(p: Promise<T>, ms: number, fallback: T, label: string): Promise<T> {
-    return Promise.race([
-      p,
-      new Promise<T>((resolve) =>
-        setTimeout(() => {
-          console.warn(`[auto-analyze] ${label} timed out after ${ms}ms — using fallback`);
-          _onEmbeddingTimeout(label);
-          resolve(fallback);
-        }, ms),
-      ),
-    ]);
+  const departments = getTopLevelDepartments(allCategories);
+  let candidates: CategoryCandidate[] = [];
+
+  try {
+    const deptPick = await aiPassB0_pickDepartment(
+      images,
+      departments,
+      userContext,
+      description.intended_use_case,
+      description.environment,
+      { forceBestModel: true },
+    );
+
+    const tried = new Set<string>();
+    for (const dept of [deptPick.primary, ...deptPick.alternates]) {
+      if (!dept || candidates.length > 0 || tried.has(dept.path)) continue;
+      tried.add(dept.path);
+      const subtree = getSubtreeCategories(listableCategories, dept.path);
+      if (subtree.length === 0) continue;
+      const hits = searchCategoriesByText(retrievalQuery, subtree, 8);
+      if (hits.length > 0) candidates = hits;
+    }
+  } catch (e) {
+    console.warn(`[auto-analyze] department pick failed, falling back to full-catalog fuzzy search: ${(e as Error).message}`);
   }
 
-  const fuzzyPromise: Promise<CategoryCandidate[]> = Promise.resolve(
-    searchCategoriesByText(retrievalQuery, listableCategories, 6),
-  );
-  // 4s ceiling on the embedding call. The Google `gemini-embedding-001`
-  // model has shown 30–40s cold-start latency in production — way past
-  // anything useful for an interactive analyze flow. Healthy warm calls
-  // complete in <1s, so 4s is generous. Past that, fuzzy + Jumia are
-  // strong enough on their own.
-  //
-  // We also short-circuit BEFORE issuing the call if the process-level
-  // breaker has been tripped (two consecutive timeouts) so we don't even
-  // pay the 4s wait when we already know embedding is dead today.
-  const embeddingPromise: Promise<CategoryCandidate[]> =
-    _embeddingCircuitOpen
-      ? Promise.resolve([])
-      : withTimeout(
-          searchCategoriesByEmbedding(retrievalQuery, 6),
-          4_000,
-          [],
-          "embedding-retrieval",
-        );
-  // 6s ceiling on the Jumia catalog API — they sometimes go slow during
-  // their own incidents. We have fuzzy + embedding to fall back on.
-  const jumiaPromise: Promise<CategoryCandidate[]> = withTimeout(
-    (async () => {
-      try {
-        const { accessToken } = await getValidJumiaCredentials(userId);
-        return await searchJumiaProductsByTitle(accessToken, description.title, 3);
-      } catch {
-        return [];
-      }
-    })(),
-    6_000,
-    [],
-    "jumia-retrieval",
-  );
-
-  const [fuzzyHits, embeddingHits, jumiaHits] = await Promise.all([
-    fuzzyPromise,
-    embeddingPromise,
-    jumiaPromise,
-  ]);
-
-  // Merge all three — categories that appear in multiple sources
-  // float to the top (mergeCandidates handles the score boost).
-  let candidates = mergeCandidates(mergeCandidates(fuzzyHits, embeddingHits, 8), jumiaHits, 8);
+  // Last resort: full-catalog fuzzy search (still real retrieval, never a
+  // blind slice) — only reached if department picking itself threw, or
+  // every department subtree it tried came up empty.
+  if (candidates.length === 0) {
+    candidates = searchCategoriesByText(retrievalQuery, listableCategories, 8);
+  }
 
   console.info(
-    `[auto-analyze] retrieval: fuzzy=${fuzzyHits.length} embedding=${embeddingHits.length} jumia=${jumiaHits.length} → merged=${candidates.length}`,
+    `[auto-analyze] category resolution for query="${retrievalQuery.slice(0, 100)}" → ${candidates.length} candidate(s)`,
   );
-
-  // Fallback: if the fuzzy + Jumia retrieval both came up empty, hand
-  // the rank-pass the full listable set (capped) instead of failing the
-  // analyze. Better an over-broad pool than blocking the seller. Gemini
-  // can absolutely scan ~200 candidates and pick the right one — the
-  // narrow retrieval is only an optimisation.
-  if (candidates.length === 0) {
-    console.warn(
-      `[auto-analyze] No fuzzy/Jumia retrieval hits for query="${retrievalQuery.slice(0, 100)}". ` +
-      `Falling back to the first ${Math.min(listableCategories.length, 200)} listable categories.`,
-    );
-    candidates = listableCategories.slice(0, 200).map((c) => ({
-      code:               c.code,
-      name:               c.name,
-      path:               c.path,
-      attribute_set_sid:  c.attribute_set_sid,
-      retrievalScore:     0,
-      source:             "fuzzy" as const,
-    }));
-  }
 
   timings.retrieval_ms = Date.now() - tRet;
 
   if (candidates.length === 0) {
-    // Reachable only if listableCategories itself is empty — i.e. the
-    // admin has never run a category sync. The seller can't fix that
-    // themselves; the error directs them to the right place.
+    // Genuinely nothing matched anywhere. Hand back to the seller rather
+    // than guess — the listing keeps whatever category it had (usually
+    // none), and the focused/full editor's category picker is the way
+    // forward from here.
     return {
       ok: false,
-      code: "catalog_not_synced",
-      message: "The Jumia category catalog hasn't been synced yet. Please contact support — an admin needs to run the catalog sync at /admin/categories.",
+      code: "no_category_picked",
+      message: "Couldn't find a confident category match — pick one manually.",
       description,
     };
   }
