@@ -115,6 +115,37 @@ async function getVertexAccessToken(): Promise<string> {
   return tokenResp.token;
 }
 
+/**
+ * Pay the Vertex embed path's one-off per-process cost up front, off the
+ * critical path.
+ *
+ * The first embed call in a fresh serverless process does three things
+ * before it can talk to the model: dynamic-import google-auth-library,
+ * sign a JWT, and fetch an OAuth token. All of that lands INSIDE
+ * searchCategoriesByEmbedding's 4s race, and confirmed live on
+ * 2026-09-13 it blew straight through it — "embedding search TIMED OUT
+ * after 4000ms" on a cold process with Vertex correctly configured and
+ * the pgvector RPC verified healthy. The semantic layer was being
+ * discarded on exactly the requests that were already slowest.
+ *
+ * The token is cached for ~50 minutes (see getVertexAccessToken), so a
+ * warm process never pays this again. Callers should start this early and
+ * NOT await it — the point is to overlap it with work that was going to
+ * happen anyway (Pass A's vision call runs ~5s), so retrieval finds the
+ * token already cached and only the <1s predict call races the budget.
+ *
+ * Never throws: a failed warm-up just means the next real call pays the
+ * cost as before.
+ */
+export async function warmEmbeddingBackend(): Promise<void> {
+  if (!isVertexEmbeddingsEnabled()) return;
+  try {
+    await getVertexAccessToken();
+  } catch (e) {
+    console.warn(`[embeddings] backend warm-up failed (non-fatal): ${(e as Error).message}`);
+  }
+}
+
 // ─── Per-backend embed implementations ──────────────────────────────────────
 
 /**
