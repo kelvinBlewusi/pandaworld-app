@@ -4,6 +4,7 @@ import {
   parseEditCommand,
   extractPrice,
   extractStock,
+  extractSalePrice,
   whatsappListingsUrl,
   focusedEditorUrl,
 } from "@/lib/whatsapp/batch";
@@ -134,6 +135,83 @@ describe("extractStock", () => {
   it("parses a full-sentence 'is'/'was' phrasing", () => {
     expect(extractStock("the stock is 10")).toBe(10);
     expect(extractStock("quantity was 20")).toBe(20);
+  });
+});
+
+describe("extractSalePrice", () => {
+  // Fixed "now" so year-inference in date parsing is deterministic.
+  const now = new Date("2026-09-13T00:00:00Z");
+
+  it("returns null when no sale price is stated", () => {
+    expect(extractSalePrice("price 150", now)).toBeNull();
+    expect(extractSalePrice("comes in 3 sizes", now)).toBeNull();
+  });
+
+  it("parses a bare sale price with no dates", () => {
+    expect(extractSalePrice("sale price 120", now)).toEqual({ salePrice: 120 });
+    expect(extractSalePrice("discount to 80", now)).toEqual({ salePrice: 80 });
+  });
+
+  it("does not treat the regular price as the sale price, or vice versa", () => {
+    expect(extractPrice("price 150, sale price 100")).toBe(150);
+    expect(extractSalePrice("price 150, sale price 100", now)).toEqual({ salePrice: 100 });
+    // A message with ONLY a sale price must not leak into extractPrice.
+    expect(extractPrice("sale price 100")).toBeNull();
+  });
+
+  it("does not misread a percentage discount as a flat sale price", () => {
+    expect(extractSalePrice("discount 20% off", now)).toBeNull();
+    expect(extractSalePrice("20% discount", now)).toBeNull();
+  });
+
+  it("parses an ISO date range", () => {
+    expect(extractSalePrice("sale price 100 from 2026-09-20 to 2026-09-30", now)).toEqual({
+      salePrice: 100,
+      startDate: "2026-09-20",
+      endDate:   "2026-09-30",
+    });
+  });
+
+  it("parses 'day month' and 'month day' ranges, inferring the current year", () => {
+    expect(extractSalePrice("sale price 100 from 20 September to 30 September", now)).toEqual({
+      salePrice: 100,
+      startDate: "2026-09-20",
+      endDate:   "2026-09-30",
+    });
+    expect(extractSalePrice("sale price 100 from September 20 to September 30", now)).toEqual({
+      salePrice: 100,
+      startDate: "2026-09-20",
+      endDate:   "2026-09-30",
+    });
+  });
+
+  it("rolls a yearless date into next year when it's already in the past", () => {
+    // "now" is 2026-09-13; "1 January" with no year would be in the past
+    // this year, so it must mean next January, not a retroactive sale.
+    expect(extractSalePrice("sale price 50 until 1 January", now)).toEqual({
+      salePrice: 50,
+      endDate:   "2027-01-01",
+    });
+  });
+
+  it("honours an explicit year", () => {
+    expect(extractSalePrice("sale price 100 until December 25, 2026", now)).toEqual({
+      salePrice: 100,
+      endDate:   "2026-12-25",
+    });
+  });
+
+  it("keeps the sale price even when the date phrase doesn't parse", () => {
+    expect(extractSalePrice("sale price 100 from next week to sometime later", now)).toEqual({
+      salePrice: 100,
+    });
+  });
+
+  it("supports 'until'/'till' with only an end date", () => {
+    expect(extractSalePrice("sale price 90 until 2026-10-01", now)).toEqual({
+      salePrice: 90,
+      endDate:   "2026-10-01",
+    });
   });
 });
 

@@ -1187,17 +1187,19 @@ Rules:
 - production_country: Pick based on general knowledge — country of likely manufacture for this product/brand (e.g. "China" for unbranded electronics, "Vietnam" for many sneakers, "Ghana" for hand-made local goods, "USA" for many Apple products, "Germany" for many automotive accessories). Use the country name in English. Override the default with whatever country the seller's text specifies if any.
 - intended_use_case: Short phrase identifying what the product is FOR — e.g. "agricultural pesticide spraying", "household carpet cleaning", "office stationery", "outdoor camping". Null only if completely unclear.
 - environment: Exactly one of {home, farm, garden, office, workshop, industrial, outdoor, personal, unknown}. "home" = lived-in indoor spaces. "farm" = agriculture / ranch / crops. "garden" = backyard / lawn / small-scale outdoor plant care. "workshop" = handyman / DIY / hobby builds. "industrial" = factory / commercial scale. "outdoor" = recreation outside the home (camping, sports). "personal" = items worn or carried on the body (clothing, accessories). Use "unknown" instead of guessing.
-- variations: Distinct product variants visible in the images. Be CONSERVATIVE — only populate when the images clearly show multiple choices the buyer can pick between.
-    Examples of when to populate:
+- variations: Distinct product variants. Two ways to populate this, and the seller's text WINS whenever it says anything about variants:
+    1. The seller's text explicitly states the variant options (e.g. "comes in red, blue and green", "sizes S/M/L available", "this one is the red version") — use EXACTLY what they said, verbatim as the label, even if the images only show one of them. Do not second-guess or expand on it; the seller knows their own stock better than the photo does. If the seller states only ONE variant (e.g. "the variation is red" — a single-SKU listing that just needs its option named), treat that single stated value as the whole variations list, not multiple variants that don't exist.
+    2. No seller text about variants — fall back to what the images show, and be CONSERVATIVE: only populate when the images clearly show multiple choices the buyer can pick between.
+    Examples of when to populate from images alone:
       * Garden tool set with separate pieces shown: ["3 Set (Trowel, Fork & Cultivator)", "Hoe only", "Trowel only", "Fork only"]
       * Spice multipack: ["Pack of 3", "Pack of 6", "Pack of 12"]
       * Phone case in multiple colours laid out: ["Black", "Navy Blue", "Rose Gold"]
       * Apparel in sizes: ["Small", "Medium", "Large"]
-    Leave EMPTY ([]) when:
-      * One product shown from multiple angles
-      * Product has one colour / one size / one configuration
+    Leave EMPTY ([]) when neither of the above applies:
+      * One product shown from multiple angles, no seller text about variants
+      * Product has one colour / one size / one configuration, no seller text about variants
       * Unsure
-    Each variation needs: label (what the buyer sees, e.g. "Pack of 6") and sku_suffix (short uppercase alphanumeric, e.g. "P6", "HOE", "3SET" — used as a unique tag appended to the parent SKU).
+    Each variation needs: label (what the buyer sees, e.g. "Pack of 6", or the seller's own wording verbatim) and sku_suffix (short uppercase alphanumeric, e.g. "P6", "HOE", "3SET", "RED" — used as a unique tag appended to the parent SKU).
 
 IMPORTANT — All defaults above are OVERRIDDEN by the seller's "What do you want in the listing" text below. If they mention a warranty, country, or any other field-specific override, use their version instead.
 
@@ -1618,6 +1620,7 @@ RULES:
 3. Skip / set null for fields you can't determine from the images. NEVER guess price, model, brand (unless logo clearly visible), or warranty terms.
 4. Return only attributes you could fill — omit ones you're not sure about.
 5. Any attribute value you produce MUST follow the JUMIA CONTENT POLICY above — strip restricted words, never write banned terms ("original", "imported", "brand new", etc.), never invent specs the images don't show.
+6. If an attribute below is about package/box contents (named something like "what's in the box", "package contents", "box contents") and the seller's context states what's included, use EXACTLY what they said — formatted as a multi-line list, one item per line, each starting with a count like "1x", "2x" (e.g. "1x Drone\\n1x Remote Controller\\n2x Batteries"). The seller's own answer always wins over guessing from the images.
 ${ctxSection}
 Return ONLY valid JSON, no markdown:
 {
@@ -1829,7 +1832,7 @@ OUTPUT RULES:
 6. Confidence is 0..1. Be honest. Set needsConfirmation=true if your top pick is below 0.75 OR within 0.15 of your second choice.
 7. ALWAYS include these dynamic_attributes keys, even if the chosen category's schema doesn't list them (Jumia silently drops unknown keys; the cost of including is zero, the cost of omitting is a missed buyer-trust signal):
    - product_note: A short, friendly note thanking the buyer and asking for a review once they receive the item. The default is fine: "Dear Customer, once you receive your item, please take a moment to share your feedback and leave a review. Thank you for shopping with us!"
-   - what_is_in_the_box: A real, product-specific MULTI-LINE LIST in Jumia's preferred format. EACH item is on its OWN LINE, starting with a count like "1x", "2x", etc. NEVER a single line / paragraph. NEVER just a number like "1". Read the images for clues (charger? case? cable? manual?).
+   - what_is_in_the_box: A real, product-specific MULTI-LINE LIST in Jumia's preferred format. EACH item is on its OWN LINE, starting with a count like "1x", "2x", etc. NEVER a single line / paragraph. NEVER just a number like "1". If the seller's context states what's included, use EXACTLY that (reformatted into this list style) — it always wins over guessing from images. Otherwise read the images for clues (charger? case? cable? manual?).
        CORRECT format examples (newline-separated, one item per line):
          "1x Smartphone\\n1x USB-C Charger\\n1x USB Cable\\n1x User Manual"
          "1x Drone\\n1x Remote Controller\\n2x Batteries\\n1x Charger\\n4x Spare Propellers\\n1x Carrying Case"

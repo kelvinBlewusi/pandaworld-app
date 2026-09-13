@@ -95,7 +95,11 @@ export function parseEditCommand(text: string, batchSize: number): EditCommand |
  *  the gap between "price" and the separator only allowed whitespace —
  *  the seller got told "still needs: price" despite having stated it. */
 export function extractPrice(text: string): number | null {
-  const labeled = text.match(/price\s*(?:is|was)?\s*[:=]?\s*(?:GH[SC]?|GH₵|₵)?\s*(\d+(?:\.\d+)?)/i);
+  // Negative lookbehind excludes "sale price 100" — that's
+  // extractSalePrice's territory (below); without this guard, a message
+  // that states ONLY a sale price (no regular price at all) would have
+  // its sale price misread as the regular selling price.
+  const labeled = text.match(/(?<!sale\s)price\s*(?:is|was)?\s*[:=]?\s*(?:GH[SC]?|GH₵|₵)?\s*(\d+(?:\.\d+)?)/i);
   if (labeled) return parseFloat(labeled[1]);
   const currency = text.match(/(?:GH[SC]?|GH₵|₵)\s*(\d+(?:\.\d+)?)/i) ?? text.match(/(\d+(?:\.\d+)?)\s*ced[ei]s/i);
   if (currency) return parseFloat(currency[1]);
@@ -113,6 +117,111 @@ export function extractStock(text: string): number | null {
   if (!match) return null;
   const n = parseInt(match[1], 10);
   return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+// ─── Deterministic sale-price + date-range extraction ──────────────────────
+//
+// Same "seller-owned, never AI-guessed" principle as price/stock above — a
+// sale price and its start/end dates are things the seller states
+// explicitly, not something to infer from images. Dates are only ever set
+// when confidently parsed; anything else is left unset rather than
+// guessed, matching extractPrice's "null beats wrong" rule. Not yet wired
+// into persistence anywhere — see the caller for what listing/variant
+// field this should land in.
+
+export interface SalePriceExtraction {
+  salePrice: number;
+  /** ISO "YYYY-MM-DD", only set when confidently parsed. */
+  startDate?: string;
+  /** ISO "YYYY-MM-DD", only set when confidently parsed. */
+  endDate?: string;
+}
+
+const MONTH_NAMES: Record<string, number> = {
+  jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2,
+  apr: 3, april: 3, may: 4, jun: 5, june: 5, jul: 6, july: 6,
+  aug: 7, august: 7, sep: 8, sept: 8, september: 8,
+  oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11,
+};
+
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : String(n);
+}
+
+/** Parses one date phrase — "20 September", "September 20, 2026", or
+ *  "2026-09-20" — into an ISO "YYYY-MM-DD" string, or null if it doesn't
+ *  match a supported shape (deliberately narrow: a wrong sale window on a
+ *  live marketplace is worse than not setting one). When no year is
+ *  given, assumes the current year, rolling to next year if that date
+ *  has already passed — sale windows are always near-future. */
+function parseDatePhrase(raw: string, now: Date): string | null {
+  const phrase = raw.trim().replace(/[.,]+$/, "");
+
+  const iso = phrase.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (iso) {
+    const month = parseInt(iso[2], 10);
+    const day = parseInt(iso[3], 10);
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    return `${iso[1]}-${pad2(month)}-${pad2(day)}`;
+  }
+
+  const dayMonth = phrase.match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\.?\s*(\d{4})?$/);
+  const monthDay = !dayMonth ? phrase.match(/^([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(\d{4})?$/) : null;
+  const m = dayMonth
+    ? { day: parseInt(dayMonth[1], 10), monthName: dayMonth[2], year: dayMonth[3] }
+    : monthDay
+    ? { day: parseInt(monthDay[2], 10), monthName: monthDay[1], year: monthDay[3] }
+    : null;
+  if (!m) return null;
+
+  const month = MONTH_NAMES[m.monthName.toLowerCase()];
+  if (month == null || m.day < 1 || m.day > 31) return null;
+
+  let year = m.year ? parseInt(m.year, 10) : now.getFullYear();
+  if (!m.year) {
+    const candidate = new Date(Date.UTC(year, month, m.day));
+    const oneDayMs = 24 * 3600 * 1000;
+    if (candidate.getTime() < now.getTime() - oneDayMs) year += 1;
+  }
+  return `${year}-${pad2(month + 1)}-${pad2(m.day)}`;
+}
+
+/** "sale price 120", "discount to 100 from 20 September to 30 September",
+ *  "sale price is 80 until 2026-10-01" → { salePrice, startDate?, endDate? }.
+ *  Null if no sale price is stated at all. A stated price with a date
+ *  range that doesn't parse still returns the price — dates are additive,
+ *  not required for the sale price itself to register. The `(?!\s*%)`
+ *  guard stops "20% off"/"discount 20%" from being misread as a GH₵20
+ *  sale price — "discount" alone (unlike "sale price") is genuinely
+ *  ambiguous between a percentage and a flat amount. */
+export function extractSalePrice(text: string, now: Date = new Date()): SalePriceExtraction | null {
+  // (?!\d) before the %-guard matters: without it, a greedy \d+ that fails
+  // the %-guard backtracks to a SHORTER digit run that dodges it (e.g.
+  // "20%" backtracking from "20" to "2" — "2" isn't immediately followed
+  // by "%", so the guard alone would let "discount 20% off" through as
+  // salePrice=2). (?!\d) rejects any match that isn't the full digit run,
+  // closing that backtrack path.
+  const priceMatch = text.match(
+    /(?:sale\s*price|discount(?:ed)?\s*(?:price)?)\s*(?:is|was|to|of)?\s*[:=]?\s*(?:GH[SC]?|GH₵|₵)?\s*(\d+(?:\.\d+)?)(?!\d)(?!\s*%)/i,
+  );
+  if (!priceMatch) return null;
+  const result: SalePriceExtraction = { salePrice: parseFloat(priceMatch[1]) };
+
+  const range = text.match(/from\s+([^.,\n]+?)\s+(?:to|until|till)\s+([^.,\n]+?)(?=[.,\n]|$)/i);
+  if (range) {
+    const start = parseDatePhrase(range[1], now);
+    const end = parseDatePhrase(range[2], now);
+    if (start) result.startDate = start;
+    if (end) result.endDate = end;
+  } else {
+    const untilOnly = text.match(/(?:until|till|ending)\s+([^.,\n]+?)(?=[.,\n]|$)/i);
+    if (untilOnly) {
+      const end = parseDatePhrase(untilOnly[1], now);
+      if (end) result.endDate = end;
+    }
+  }
+
+  return result;
 }
 
 export function whatsappListingsUrl(batchId?: string): string {
