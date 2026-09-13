@@ -21,6 +21,16 @@ export function parseProductCount(text: string): number | null {
   return n;
 }
 
+/** Quick-pick buttons for the "how many products?" prompt — the single
+ *  most common counts, so a seller can tap instead of typing; free-text
+ *  numbers up to MAX_BATCH_SIZE still work exactly the same (the button
+ *  id IS the digit, so it round-trips straight through parseProductCount). */
+export const COUNT_QUICK_PICKS: { id: string; title: string }[] = [
+  { id: "1", title: "1 product" },
+  { id: "2", title: "2 products" },
+  { id: "3", title: "3 products" },
+];
+
 export type SubmitCommand = { all: true } | { all: false; seqs: number[] };
 
 /** "submit" / "submit all" → all products. "submit 1 and 4" / "submit 2, 3"
@@ -211,8 +221,21 @@ export function extractSalePrice(text: string, now: Date = new Date()): SalePric
   if (range) {
     const start = parseDatePhrase(range[1], now);
     const end = parseDatePhrase(range[2], now);
-    if (start) result.startDate = start;
-    if (end) result.endDate = end;
+    // Confirmed live: "30th September 2026 to 31 December 2025" (an
+    // explicit year on each side, so parseDatePhrase's own "roll to next
+    // year" logic never kicks in to fix it) parsed to a start AFTER the
+    // end — an inverted sale window that would confuse Jumia at best. Both
+    // dates individually parsed fine; only the pairing is wrong, and there's
+    // no reliable way to guess which side the seller actually meant, so
+    // drop both rather than publish a window nobody could have intended —
+    // same "null beats wrong" rule as everywhere else in this file. The
+    // sale PRICE itself still applies; only the date window is dropped.
+    if (start && end && start > end) {
+      console.warn(`[whatsapp batch] dropped inverted sale date range: "${start}" to "${end}"`);
+    } else {
+      if (start) result.startDate = start;
+      if (end) result.endDate = end;
+    }
   } else {
     const untilOnly = text.match(/(?:until|till|ending)\s+([^.,\n]+?)(?=[.,\n]|$)/i);
     if (untilOnly) {

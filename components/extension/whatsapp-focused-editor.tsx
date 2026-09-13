@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, ExternalLink, Loader2, Send, Plus, Check, ChevronRight, AlertCircle } from "lucide-react";
+import { ArrowLeft, Loader2, Send, Plus, Check, ChevronRight, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,7 +15,6 @@ import { SchemaForm } from "@/components/jumia/SchemaForm";
 import { VariantCard, buildAxisCombos } from "@/components/jumia/VariantCard";
 import { columnFor, fieldChangeToUpdate } from "@/lib/jumia/attribute-mapping";
 import { STATIC_FIELDS, universalInfoFields } from "@/lib/jumia/universal-fields";
-import { reviewUrl } from "@/lib/whatsapp/draft";
 import type { ListingRow, ListingStatus, VariantRow as VariantRowDB } from "@/lib/supabase/types";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import type { VariantRow, AxisDef } from "@/lib/jumia/variant-types";
@@ -345,7 +344,7 @@ export function WhatsAppFocusedEditor({
   }
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="mx-auto max-w-2xl space-y-6 rounded-3xl bg-zinc-100/70 p-4 sm:p-6">
       <Link
         href="/extension/whatsapp-listings"
         className="inline-flex items-center gap-1.5 text-sm font-medium text-zinc-500 hover:text-zinc-800"
@@ -550,12 +549,6 @@ export function WhatsAppFocusedEditor({
             Submit to Jumia
           </Button>
         )}
-        <Link
-          href={reviewUrl(listing.id)}
-          className="ml-auto inline-flex items-center gap-1 text-sm font-medium text-zinc-400 hover:text-zinc-700"
-        >
-          Full editor <ExternalLink className="h-3.5 w-3.5" />
-        </Link>
       </div>
 
       <CategoryDrawer

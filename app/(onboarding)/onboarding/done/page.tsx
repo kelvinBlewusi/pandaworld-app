@@ -92,23 +92,13 @@ export default function OnboardingDonePage() {
             {returnTo ? "Continue" : "Go to dashboard"}
             <ArrowRight className="h-4 w-4" />
           </Button>
-          {returnTo?.startsWith("/extension") ? (
-            <Button
-              variant="ghost"
-              className="text-zinc-400 text-sm"
-              onClick={() => router.push("/extension/whatsapp-listings")}
-            >
-              Start listing from WhatsApp →
-            </Button>
-          ) : (
-            <Button
-              variant="ghost"
-              className="text-zinc-400 text-sm"
-              onClick={() => router.push("/listings/new/batch?count=1&mode=own")}
-            >
-              Create my first listing →
-            </Button>
-          )}
+          <Button
+            variant="ghost"
+            className="text-zinc-400 text-sm"
+            onClick={() => router.push("/extension/whatsapp-listings")}
+          >
+            Start listing from WhatsApp →
+          </Button>
         </motion.div>
       </motion.div>
     </div>

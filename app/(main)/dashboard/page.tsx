@@ -74,7 +74,7 @@ export default async function DashboardPage() {
           </p>
         </div>
         <Button asChild className="gap-2">
-          <Link href="/listings/new/batch?count=1&mode=own">
+          <Link href="/extension/whatsapp-listings">
             <Plus className="h-4 w-4" />
             New listing
           </Link>
@@ -190,7 +190,7 @@ export default async function DashboardPage() {
               Create your first listing to get started
             </p>
             <Button asChild className="mt-4 gap-2" size="sm">
-              <Link href="/listings/new/batch?count=1&mode=own">
+              <Link href="/extension/whatsapp-listings">
                 <Plus className="h-3.5 w-3.5" />
                 New listing
               </Link>

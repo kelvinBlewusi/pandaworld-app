@@ -11,7 +11,7 @@
  */
 
 import { createServerClient } from "@/lib/supabase/server";
-import { getValidJumiaCredentials, pushProductsToJumia, markNeedsReconnect } from "@/lib/jumia/api";
+import { getValidJumiaCredentials, pushProductsToJumia, markNeedsReconnect, getFeedStatus } from "@/lib/jumia/api";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
 
 export interface PushListingVariantInput {
@@ -268,4 +268,62 @@ export async function pushListingToJumia(
     .eq("id", listingId);
 
   return { ok: false, code: "push_failed", message: result.error ?? "Jumia rejected the submission", raw: result.raw };
+}
+
+/**
+ * Best-effort live check of ONE listing's create-feed status against
+ * Jumia, updating the DB row in place if it has resolved (DONE/ERROR)
+ * since it was last checked. Returns the listing's CURRENT status
+ * afterward — unchanged if Jumia is still processing it, or if the check
+ * itself fails (never throws; a stale-but-correct status beats blocking
+ * on a flaky Jumia call).
+ *
+ * Same logic as app/api/jumia/feeds/poll/route.ts's create-feed branch,
+ * extracted so the WhatsApp flow can call it too — a seller checking
+ * *status* or trying to resubmit an already-pending product gets Jumia's
+ * real current answer right then, instead of waiting for
+ * app/api/cron/jumia-feeds (Vercel's Hobby plan caps cron frequency to
+ * once a day, so that alone could leave a WhatsApp-only seller — who has
+ * no reason to ever open the web app — waiting up to 24h to hear their
+ * listing went live, even though Jumia often finishes in minutes).
+ */
+export async function refreshPendingFeedStatus(
+  accessToken: string,
+  listing: { id: string; status: string; jumia_ref: string | null },
+): Promise<{ status: string; error?: string | null }> {
+  if (listing.status !== "pending_approval" || !listing.jumia_ref) {
+    return { status: listing.status };
+  }
+  try {
+    const feedStatus = await getFeedStatus(accessToken, listing.jumia_ref);
+    if (!feedStatus) return { status: listing.status };
+
+    let newStatus: string | null = null;
+    let errorMsg: string | null = null;
+    if (feedStatus.status === "DONE") {
+      if (feedStatus.failed > 0) {
+        newStatus = "failed";
+        const firstError = feedStatus.errors[0];
+        errorMsg = firstError ? JSON.stringify(firstError).slice(0, 500) : "Jumia rejected one or more products in the feed";
+      } else {
+        newStatus = "live";
+      }
+    } else if (feedStatus.status === "ERROR") {
+      newStatus = "failed";
+      errorMsg = feedStatus.errors.length ? JSON.stringify(feedStatus.errors[0]).slice(0, 500) : "Jumia feed processing error";
+    }
+
+    if (!newStatus) return { status: listing.status };
+
+    const db = createServerClient();
+    await db.from("listings").update({
+      status:      newStatus,
+      jumia_error: errorMsg,
+      updated_at:  new Date().toISOString(),
+    }).eq("id", listing.id);
+    return { status: newStatus, error: errorMsg };
+  } catch (e) {
+    console.warn(`[push-listing] refreshPendingFeedStatus failed for ${listing.id}: ${(e as Error).message}`);
+    return { status: listing.status };
+  }
 }

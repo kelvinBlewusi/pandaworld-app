@@ -8,6 +8,7 @@ import {
   whatsappListingsUrl,
   focusedEditorUrl,
   buyCreditsUrl,
+  COUNT_QUICK_PICKS,
 } from "@/lib/whatsapp/batch";
 
 describe("parseProductCount", () => {
@@ -29,6 +30,22 @@ describe("parseProductCount", () => {
   it("returns null for non-numeric text", () => {
     expect(parseProductCount("a few")).toBeNull();
     expect(parseProductCount("")).toBeNull();
+  });
+});
+
+describe("COUNT_QUICK_PICKS", () => {
+  it("stays within WhatsApp's 3-button, 20-char-title limits", () => {
+    expect(COUNT_QUICK_PICKS.length).toBeLessThanOrEqual(3);
+    for (const button of COUNT_QUICK_PICKS) expect(button.title.length).toBeLessThanOrEqual(20);
+  });
+
+  it("every button id round-trips through parseProductCount to its own number", () => {
+    // A button tap surfaces as plain text equal to its id (see
+    // lib/whatsapp/message-content.ts's contentOf) — these ids must parse
+    // back to the count the button claims to offer.
+    COUNT_QUICK_PICKS.forEach((button, i) => {
+      expect(parseProductCount(button.id)).toBe(i + 1);
+    });
   });
 });
 
@@ -213,6 +230,23 @@ describe("extractSalePrice", () => {
       salePrice: 90,
       endDate:   "2026-10-01",
     });
+  });
+
+  it("drops both dates when the range is inverted (start after end) — confirmed live failure", () => {
+    // A seller typed "30th September 2026 to 31 December 2025" — both
+    // sides carry an explicit year, so neither rolls forward, and the
+    // pairing is nonsensical (start is over a year after end). There's no
+    // reliable way to guess which side is the typo, so both are dropped —
+    // the sale price itself must still register.
+    expect(
+      extractSalePrice("sale price 150 from 30 September 2026 to 31 December 2025", now),
+    ).toEqual({ salePrice: 150 });
+  });
+
+  it("keeps a valid range when start is genuinely before end", () => {
+    expect(
+      extractSalePrice("sale price 150 from 30 September 2025 to 31 December 2026", now),
+    ).toEqual({ salePrice: 150, startDate: "2025-09-30", endDate: "2026-12-31" });
   });
 });
 

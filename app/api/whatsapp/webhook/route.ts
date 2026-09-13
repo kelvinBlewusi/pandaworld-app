@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { redeemLinkCode, getUserIdForPhoneNumber } from "@/lib/whatsapp/link";
-import { sendTextIfConfigured, sendCtaUrlIfConfigured, markReadWithTypingIfConfigured } from "@/lib/whatsapp/client";
+import { sendButtonsIfConfigured, sendCtaUrlIfConfigured, markReadWithTypingIfConfigured } from "@/lib/whatsapp/client";
 import { verifyWhatsAppSignature, extractLinkCode } from "@/lib/whatsapp/webhook-verify";
 import { contentOf, type IncomingMessage } from "@/lib/whatsapp/message-content";
 import { handleLinkedMessage } from "@/lib/whatsapp/intake";
+import { COUNT_QUICK_PICKS } from "@/lib/whatsapp/batch";
 import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
 import { getOrCreateSession, updateSession } from "@/lib/whatsapp/session";
 import { promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
@@ -135,9 +136,10 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
       await updateSession(msg.from, {
         state: "awaiting_count", listingId: null, batchId: null, batchSize: null, batchSeq: null, pendingAppId: null,
       });
-      await sendTextIfConfigured(
+      await sendButtonsIfConfigured(
         msg.from,
-        "✅ Your WhatsApp is now linked to PandaWorld! How many products are you listing today? Reply with a number to get started.",
+        "✅ Your WhatsApp is now linked to PandaWorld! How many products are you listing today?",
+        COUNT_QUICK_PICKS,
       );
       return;
     }
