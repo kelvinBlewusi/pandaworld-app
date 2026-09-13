@@ -8,6 +8,7 @@ import {
   whatsappListingsUrl,
   focusedEditorUrl,
   buyCreditsUrl,
+  COUNT_QUICK_PICKS,
 } from "@/lib/whatsapp/batch";
 
 describe("parseProductCount", () => {
@@ -29,6 +30,22 @@ describe("parseProductCount", () => {
   it("returns null for non-numeric text", () => {
     expect(parseProductCount("a few")).toBeNull();
     expect(parseProductCount("")).toBeNull();
+  });
+});
+
+describe("COUNT_QUICK_PICKS", () => {
+  it("stays within WhatsApp's 3-button, 20-char-title limits", () => {
+    expect(COUNT_QUICK_PICKS.length).toBeLessThanOrEqual(3);
+    for (const button of COUNT_QUICK_PICKS) expect(button.title.length).toBeLessThanOrEqual(20);
+  });
+
+  it("every button id round-trips through parseProductCount to its own number", () => {
+    // A button tap surfaces as plain text equal to its id (see
+    // lib/whatsapp/message-content.ts's contentOf) — these ids must parse
+    // back to the count the button claims to offer.
+    COUNT_QUICK_PICKS.forEach((button, i) => {
+      expect(parseProductCount(button.id)).toBe(i + 1);
+    });
   });
 });
 

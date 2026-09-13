@@ -24,9 +24,11 @@ import {
   whatsappListingsUrl,
   focusedEditorUrl,
   buyCreditsUrl,
+  COUNT_QUICK_PICKS,
 } from "@/lib/whatsapp/batch";
 import { splitCredentialTokens, identifyCredentials, looksLikeCredential, isResendCommand, jumiaConnectLink, promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
 import { classifyBatchIntent, looksActionable } from "@/lib/whatsapp/intent";
+import { pickStory } from "@/lib/whatsapp/waiting-stories";
 import type { ListingRow } from "@/lib/supabase/types";
 
 /**
@@ -194,7 +196,7 @@ export async function handleLinkedMessage(
         await handleAwaitingPhotos(userId, phoneNumber, session, content);
         break;
       case "analyzing":
-        await replyText(phoneNumber, "⏳ Still drafting your products — one sec.");
+        await handleAnalyzingMessage(phoneNumber, session, content);
         break;
       case "awaiting_confirmation":
         await handleAwaitingBatchConfirmation(userId, phoneNumber, session, content);
@@ -219,17 +221,15 @@ async function handleGlobalCommand(
     case "restart":
       await handleGlobalRestart(userId, phoneNumber);
       return;
-    case "status": {
-      const status = await describeStatus(session);
-      if (status.cta) {
-        await replyCta(phoneNumber, status.text, status.cta.label, status.cta.url);
-      } else {
-        await replyText(phoneNumber, status.text);
-      }
+    case "status":
+      await sendStatusReply(phoneNumber, await describeStatus(session));
       return;
-    }
     case "help":
-      await replyText(phoneNumber, HELP_TEXT);
+      await replyButtons(phoneNumber, HELP_TEXT, [
+        { id: "status", title: "Status" },
+        { id: "restart", title: "Restart 🔄" },
+        { id: "disconnect", title: "Disconnect" },
+      ]);
       return;
     case "disconnect":
       await replyButtons(
@@ -245,7 +245,14 @@ async function handleGlobalCommand(
       await handleGlobalConfirmDisconnect(userId, phoneNumber);
       return;
     case "keep_connected":
+      // Declining the disconnect must not leave the seller hanging on a
+      // bare acknowledgment — confirmed live: nothing re-prompted them
+      // with where they'd actually left off (mid-batch, waiting on
+      // credentials, ...), so the chat just went quiet. Re-render
+      // whatever describeStatus says about their CURRENT state right
+      // after, the same reminder "status" itself would give.
       await replyText(phoneNumber, "👍 No changes made — Jumia stays connected.");
+      await sendStatusReply(phoneNumber, await describeStatus(session));
       return;
     case "reconnect_jumia": {
       const kind = await getJumiaConnectionKind(userId);
@@ -274,16 +281,75 @@ async function handleGlobalRestart(userId: string, phoneNumber: string): Promise
     await promptJumiaConnection(userId, phoneNumber, kind, "No problem — let's start fresh.\n\n");
     return;
   }
-  await replyText(phoneNumber, "No problem — let's start fresh. How many products are you listing today? Reply with a number (1–20).");
+  await replyButtons(
+    phoneNumber,
+    "No problem — let's start fresh. How many products are you listing today?",
+    COUNT_QUICK_PICKS,
+  );
 }
 
 async function handleGlobalConfirmDisconnect(userId: string, phoneNumber: string): Promise<void> {
   const result = await disconnectJumiaForUser(userId);
   if (!result.ok) {
-    await replyText(phoneNumber, `⚠️ Couldn't disconnect: ${result.error}. Try again in a moment.`);
+    await replyButtons(
+      phoneNumber,
+      `⚠️ Couldn't disconnect: ${result.error}. Try again in a moment.`,
+      [{ id: "disconnect", title: "Try again" }],
+    );
     return;
   }
   await promptJumiaConnection(userId, phoneNumber, "needs_credentials", "✅ Jumia disconnected.\n\n");
+}
+
+/** Renders a describeStatus() result — a cta and/or buttons, both, or
+ *  neither. cta_url and reply-buttons can't share one WhatsApp message, so
+ *  when a state carries both this sends two messages back to back, same
+ *  as every other dual cta+buttons moment in this file (e.g. the
+ *  1-product "drafted" flow in startBatchAnalysis). Shared by the
+ *  "status" command and anywhere else that needs to remind a seller where
+ *  they left off (see "keep_connected" above). */
+async function sendStatusReply(
+  phoneNumber: string,
+  status: { text: string; cta?: { label: string; url: string }; buttons?: { id: string; title: string }[] },
+): Promise<void> {
+  if (status.cta) {
+    await replyCta(phoneNumber, status.text, status.cta.label, status.cta.url);
+    if (status.buttons) await replyButtons(phoneNumber, "Quick actions:", status.buttons);
+  } else if (status.buttons) {
+    await replyButtons(phoneNumber, status.text, status.buttons);
+  } else {
+    await replyText(phoneNumber, status.text);
+  }
+}
+
+/**
+ * Fallback while startBatchAnalysis's Promise.all is still running — the
+ * seller can't submit/edit anything yet (nothing's drafted), but a big
+ * batch (10+, see startBatchAnalysis) can take a while, so "tell_story"
+ * (tapped from the button startBatchAnalysis sends for a batch that size,
+ * or typed as a close variant of the phrase) gives them something to do
+ * besides repeatedly checking status. Re-offers the same button afterward
+ * so asking for another doesn't need retyping anything.
+ */
+async function handleAnalyzingMessage(
+  phoneNumber: string,
+  session: WhatsAppSession,
+  content: { text?: string },
+): Promise<void> {
+  const text = content.text?.trim().toLowerCase() ?? "";
+  if (text === "tell_story" || /\btell me a( nice)? story\b/.test(text)) {
+    await replyButtons(phoneNumber, pickStory(), [{ id: "tell_story", title: "📖 Another one" }]);
+    return;
+  }
+  if ((session.batchSize ?? 1) >= 10) {
+    await replyButtons(
+      phoneNumber,
+      "⏳ Still drafting your products — hang tight.",
+      [{ id: "tell_story", title: "📖 Tell me a story" }],
+    );
+    return;
+  }
+  await replyText(phoneNumber, "⏳ Still drafting your products — one sec.");
 }
 
 const HELP_TEXT = [
@@ -305,29 +371,60 @@ const STATUS_LABELS: Record<ListingRow["status"], string> = {
   failed:            "Failed",
 };
 
-/** A status reply, plus an optional link button when there's somewhere
- *  useful to send the seller alongside the text. Async because
- *  awaiting_confirmation now looks up each product's real Jumia
- *  submission status rather than a single generic "ready to review". */
-async function describeStatus(session: WhatsAppSession): Promise<{ text: string; cta?: { label: string; url: string } }> {
+/**
+ * A status reply, plus an optional link button and/or reply-buttons for
+ * whatever the text's own "reply *X*" mentions describe — a seller
+ * shouldn't have to remember or retype those phrases when a tap does the
+ * same thing (see sendStatusReply, which renders whichever combination a
+ * given state returns). Buttons are always additive, never a replacement
+ * for the phrase spelled out in the text. Async because
+ * awaiting_confirmation now looks up each product's real Jumia
+ * submission status rather than a single generic "ready to review".
+ */
+async function describeStatus(
+  session: WhatsAppSession,
+): Promise<{ text: string; cta?: { label: string; url: string }; buttons?: { id: string; title: string }[] }> {
   switch (session.state) {
     case "awaiting_jumia_credentials":
-      return { text: "Waiting for your Jumia Client ID + Client Secret — paste them here, or reply *restart* to back out." };
+      return {
+        text: "Waiting for your Jumia Client ID + Client Secret — paste them here, or reply *restart* to back out.",
+        buttons: [{ id: "restart", title: "Restart 🔄" }],
+      };
     case "awaiting_jumia_oauth":
-      return { text: "Waiting for you to finish connecting Jumia via the link I sent — reply *resend* for a new one, or *restart* to back out." };
+      return {
+        text: "Waiting for you to finish connecting Jumia via the link I sent — reply *resend* for a new one, or *restart* to back out.",
+        buttons: [
+          { id: "resend", title: "Resend link" },
+          { id: "restart", title: "Restart 🔄" },
+        ],
+      };
     case "awaiting_count":
-      return { text: "Ready when you are — reply with how many products you're listing today." };
+      return { text: "Ready when you are — reply with how many products you're listing today.", buttons: COUNT_QUICK_PICKS };
     case "awaiting_photos":
-      return { text: `Collecting product ${session.batchSeq ?? 1} of ${session.batchSize ?? 1} — send its photos, then reply *done*.` };
+      return {
+        text: `Collecting product ${session.batchSeq ?? 1} of ${session.batchSize ?? 1} — send its photos, then reply *done*.`,
+        // "done" isn't a real option until a photo's actually landed for
+        // this product — session.listingId is only ever set once the
+        // first one has (see handleAwaitingPhotos).
+        buttons: session.listingId ? [{ id: "done", title: "Done ✅" }] : undefined,
+      };
     case "analyzing":
-      return { text: "Drafting your products right now — this can take up to a minute." };
+      return {
+        text: "Drafting your products right now — this can take up to a minute.",
+        buttons: (session.batchSize ?? 1) >= 10 ? [{ id: "tell_story", title: "📖 Tell me a story" }] : undefined,
+      };
     case "awaiting_confirmation": {
       const batchId = session.batchId;
       const listings = batchId ? await getBatchListings(batchId) : [];
+      const submitButtons = [
+        { id: "submit all", title: "Submit all ✅" },
+        { id: "restart", title: "Restart 🔄" },
+      ];
       if (listings.length === 0) {
         return {
           text: "Your batch is drafted and ready to review.\n\nReply *submit all* when you're ready.",
           cta: { label: "Review listings", url: whatsappListingsUrl(batchId ?? undefined) },
+          buttons: submitButtons,
         };
       }
       const lines = listings.map(
@@ -341,10 +438,14 @@ async function describeStatus(session: WhatsAppSession): Promise<{ text: string;
           "Reply *submit all* to push whatever's still a draft, or *restart* to start over.",
         ].join("\n"),
         cta: { label: "Review listings", url: whatsappListingsUrl(batchId ?? undefined) },
+        buttons: submitButtons,
       };
     }
     case "error":
-      return { text: "Something went sideways — reply anything to start fresh." };
+      return {
+        text: "Something went sideways — reply anything to start fresh.",
+        buttons: [{ id: "restart", title: "Start over 🔄" }],
+      };
   }
 }
 
@@ -368,7 +469,11 @@ async function handleAwaitingCount(
   const count = content.text ? parseProductCount(content.text) : null;
 
   if (!count) {
-    await replyText(phoneNumber, "⚠️ I need a number to get started — reply with how many products you're listing today (1–20), e.g. *3*.");
+    await replyButtons(
+      phoneNumber,
+      "⚠️ I need a number to get started — reply with how many products you're listing today (1–20), e.g. *3*.",
+      COUNT_QUICK_PICKS,
+    );
     return;
   }
 
@@ -428,9 +533,10 @@ async function handleAwaitingJumiaCredentials(
   // version of this guard.
   const implausible = tokens.some((t) => !looksLikeCredential(t));
   if (tokens.length > 0 && implausible) {
-    await replyText(
+    await replyButtons(
       phoneNumber,
       "That doesn't look like a Jumia Client ID or Client Secret — they're both long strings from Vendor Center → Settings → Applications. Paste your Client ID and Client Secret again.",
+      [{ id: "restart", title: "Restart 🔄" }],
     );
     return;
   }
@@ -456,14 +562,22 @@ async function handleAwaitingJumiaCredentials(
   const testResult = await testJumiaCredentials(appId, secretKey);
   if (!testResult.ok) {
     await updateSession(phoneNumber, { pendingAppId: null });
-    await replyText(phoneNumber, `⚠️ ${testResult.error}\n\nPaste your Client ID and Client Secret again.`);
+    await replyButtons(
+      phoneNumber,
+      `⚠️ ${testResult.error}\n\nPaste your Client ID and Client Secret again.`,
+      [{ id: "restart", title: "Restart 🔄" }],
+    );
     return;
   }
 
   const saveResult = await saveJumiaCredentialsForUser(userId, appId, secretKey);
   if (!saveResult.ok) {
     await updateSession(phoneNumber, { pendingAppId: null });
-    await replyText(phoneNumber, `⚠️ ${saveResult.error}\n\nPaste your Client ID and Client Secret again.`);
+    await replyButtons(
+      phoneNumber,
+      `⚠️ ${saveResult.error}\n\nPaste your Client ID and Client Secret again.`,
+      [{ id: "restart", title: "Restart 🔄" }],
+    );
     return;
   }
 
@@ -516,7 +630,11 @@ async function handleAwaitingPhotos(
         await updateSession(phoneNumber, { listingId });
       } catch (e) {
         const message = (e as Error).message.replace(/^QUOTA_EXCEEDED:\s*/, "");
-        await replyText(phoneNumber, `⚠️ Couldn't start product ${seq}: ${message}`);
+        await replyButtons(
+          phoneNumber,
+          `⚠️ Couldn't start product ${seq}: ${message}`,
+          [{ id: "restart", title: "Restart 🔄" }],
+        );
         return;
       }
     }
@@ -632,6 +750,17 @@ async function startBatchAnalysis(
     phoneNumber,
     `🔎 Got everything for all ${batchSize} product${batchSize === 1 ? "" : "s"} — drafting them now. I'll update you as each one finishes…`,
   );
+  // A big batch can take a while (each product analyzes concurrently, but
+  // Gemini latency still adds up) — offer something to do instead of
+  // silence between updates. handleAnalyzingMessage handles the tap (and
+  // re-offers the button so a seller can ask for more than one).
+  if (batchSize >= 10) {
+    await replyButtons(
+      phoneNumber,
+      "This is a bigger batch, so drafting may take a little while. Want something to pass the time?",
+      [{ id: "tell_story", title: "📖 Tell me a story" }],
+    );
+  }
 
   // Everything below is wrapped in try/catch: this function already
   // flipped the session to "analyzing" above, and until it reaches a
@@ -672,6 +801,16 @@ async function startBatchAnalysis(
       : withQuota.length;
     const overCredit = withQuota.splice(affordableCount);
 
+    // Collected as each product finishes, rendered as grouped "Submit
+    // product N" buttons only AFTER every "Edit product N" live update has
+    // gone out (below, once the whole batch settles) — confirmed live:
+    // sending each product's submit button right when it finished meant
+    // edit and submit links alternated per product (Edit 1, Submit 1, Edit
+    // 2, Submit 2, ...), which read as jumbled once a seller scrolled back.
+    // Grouping every edit first, then every submit, reads as two clean
+    // passes instead.
+    const readyToSubmitSeqs: number[] = [];
+
     const analysisWork = Promise.all(
       withQuota.map(async (listing) => {
         const seq = listing.whatsapp_seq;
@@ -696,16 +835,13 @@ async function startBatchAnalysis(
               );
               // Pre-submit validation summary, right when this product is
               // ready to look at — not just discovered as a rejection
-              // after the seller already typed "submit all". Submit stays
-              // tappable either way (a real attempt reports the same
-              // "still needs" text if something's missing) — no
-              // conditional button logic to keep this simple.
+              // after the seller already typed "submit all". Plain text
+              // here, not a button (see readyToSubmitSeqs above) — the
+              // tappable "Submit product N" comes later, grouped with
+              // every other ready product's.
               const missing = await describeMissingFields(listing.id);
-              await replyButtons(
-                phoneNumber,
-                missing || "Ready to submit.",
-                [{ id: `submit ${seq}`, title: `Submit product ${seq}` }],
-              );
+              await replyText(phoneNumber, missing || "Ready to submit.");
+              if (seq != null) readyToSubmitSeqs.push(seq);
             }
             // Low-confidence category pick — surfaced right here in chat
             // (for every batch size, not just >1) instead of only on a web
@@ -830,9 +966,24 @@ async function startBatchAnalysis(
       return;
     }
 
-    // Per-product detail (drafted/failed, missing fields, that product's
-    // own Submit button) already went out above as each one finished —
-    // this closing message is just the batch-wide summary + actions.
+    // Every "Edit product N" link already went out live, above, as each
+    // product finished — now that the whole batch has settled, send every
+    // ready product's "Submit product N" button as its own grouped pass
+    // (chunked to 3 per message, WhatsApp's per-message button cap) so
+    // edits and submits read as two separate blocks, not alternating pairs.
+    readyToSubmitSeqs.sort((a, b) => a - b);
+    for (let i = 0; i < readyToSubmitSeqs.length; i += 3) {
+      const chunk = readyToSubmitSeqs.slice(i, i + 3);
+      await replyButtons(
+        phoneNumber,
+        "Submit a specific product:",
+        chunk.map((seq) => ({ id: `submit ${seq}`, title: `Submit product ${seq}` })),
+      );
+    }
+
+    // Per-product detail (drafted/failed, missing fields) already went out
+    // above as each one finished — this closing message is just the
+    // batch-wide summary + actions.
     await replyButtons(
       phoneNumber,
       `🎉 Done drafting your ${batchSize} products! Check the messages above for each one, then reply *submit all* when ready — or tell me a product number (e.g. *submit 2*) to submit just one.`,
@@ -981,9 +1132,10 @@ async function handleSubmit(
     // A batch that reached submission always has at least one listing —
     // an empty result here means the lookup itself failed (see
     // getBatchListings), not that the seller asked for the wrong number.
-    await replyText(
+    await replyButtons(
       phoneNumber,
       `⚠️ I couldn't load this batch right now — try again in a moment, or reply *restart* to start a new one.`,
+      [{ id: "restart", title: "Restart 🔄" }],
     );
     return;
   }
@@ -1103,9 +1255,10 @@ async function handleEdit(
 ): Promise<void> {
   const listings = await getBatchListings(batchId);
   if (listings.length === 0) {
-    await replyText(
+    await replyButtons(
       phoneNumber,
       `⚠️ I couldn't load this batch right now — try again in a moment, or reply *restart* to start a new one.`,
+      [{ id: "restart", title: "Restart 🔄" }],
     );
     return;
   }

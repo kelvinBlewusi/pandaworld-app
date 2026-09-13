@@ -21,6 +21,16 @@ export function parseProductCount(text: string): number | null {
   return n;
 }
 
+/** Quick-pick buttons for the "how many products?" prompt — the single
+ *  most common counts, so a seller can tap instead of typing; free-text
+ *  numbers up to MAX_BATCH_SIZE still work exactly the same (the button
+ *  id IS the digit, so it round-trips straight through parseProductCount). */
+export const COUNT_QUICK_PICKS: { id: string; title: string }[] = [
+  { id: "1", title: "1 product" },
+  { id: "2", title: "2 products" },
+  { id: "3", title: "3 products" },
+];
+
 export type SubmitCommand = { all: true } | { all: false; seqs: number[] };
 
 /** "submit" / "submit all" → all products. "submit 1 and 4" / "submit 2, 3"
