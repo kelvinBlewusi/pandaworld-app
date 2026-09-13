@@ -339,16 +339,22 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
             >
               Automate your <span style={{ color: JUMIA_COLOR }}>Jumia</span> Listings with AI
             </h1>
+            {/* Shortened from the original 48-word/3-sentence version and given
+                text-balance (Tailwind 3.4+, degrades gracefully to normal wrap
+                on older browsers) — centered body text at this width otherwise
+                wraps to ragged, uneven lines (a lone "Jumia asks for." orphan
+                line, a trailing "before it goes live."), which read as messy
+                on both phone and desktop. Balancing keeps line lengths even
+                at any viewport width. */}
             <p
-              className="mt-6 max-w-[520px] text-[17px] font-light leading-relaxed"
+              className="mt-6 max-w-[500px] text-balance text-[17px] font-light leading-relaxed"
               style={{ color: "rgba(239,236,230,0.88)" }}
             >
-              Upload a product photo and PandaWorld&apos;s AI writes the listing for you:
-              title, description, and every attribute{" "}
-              <span style={{ color: JUMIA_COLOR, fontWeight: 500 }}>Jumia</span> asks for. Use
-              the Chrome extension right inside Vendor Center, or just send photos on
-              WhatsApp if you&apos;d rather skip the browser. Either way, you check it over
-              before it goes live.
+              PandaWorld&apos;s AI writes your Jumia listing from one photo: title,
+              description, every attribute{" "}
+              <span style={{ color: JUMIA_COLOR, fontWeight: 500 }}>Jumia</span> asks for.
+              Use the Chrome extension in Vendor Center, or just send photos on WhatsApp.
+              Either way, you check it before it goes live.
             </p>
             {/* Stacked full-width on phones, inline row from sm up: three
                 pills wrapping at phone width left a ragged 2-then-1 layout
