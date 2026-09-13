@@ -403,33 +403,62 @@ export function getSubtreeCategories(all: JumiaCategoryRow[], departmentName: st
   return all.filter((c) => c.path === departmentName || c.path.startsWith(prefix));
 }
 
+/** Reciprocal-rank-fusion constant. 60 is the value from the original RRF
+ *  paper and the usual default; it flattens the gap between the top few
+ *  ranks so a single source can't run away with the result. */
+const RRF_K = 60;
+
 /**
- * Merge two candidate lists (typically: fuzzy local + Jumia catalog lookup),
- * deduplicating by code and combining their relevance scores so candidates
- * that appear in BOTH float to the top.
+ * Merge two candidate lists by RANK, not by raw score.
+ *
+ * This is not a stylistic choice — merging on raw score was actively
+ * breaking category detection. The two sources score on incomparable
+ * scales: embedding cosine similarity lands around 0.9 for almost
+ * anything in the same department, while fuzzy relevance tops out near
+ * 0.3. Sorting the union by score therefore let EVERY embedding hit
+ * outrank EVERY fuzzy hit, whatever their actual quality, so the fuzzy
+ * side was effectively discarded whenever embeddings returned at all.
+ *
+ * Confirmed live 2026-09-13: a safety helmet was filed under "Power
+ * Transmission Products > Bearings > Ball Transfers". Fuzzy alone ranked
+ * the correct "Hard Hats" third — inside the top 3 that reach the vision
+ * model — and never surfaced Ball Transfers at all. The bad candidate came
+ * from the embedding side and won purely on scale. The same product
+ * drafted half an hour earlier, while the embedding search was still
+ * timing out, landed on fuzzy's own top hit instead.
+ *
+ * Reciprocal rank fusion fixes this at the root: each source contributes
+ * 1/(k + rank), so only POSITION matters, and a candidate both sources
+ * like beats one that only a single source ranked first.
  */
 export function mergeCandidates(
   a: CategoryCandidate[],
   b: CategoryCandidate[],
   limit: number = 8
 ): CategoryCandidate[] {
-  const byCode = new Map<number, CategoryCandidate>();
+  const fused = new Map<number, { candidate: CategoryCandidate; score: number; sources: number }>();
 
-  for (const c of [...a, ...b]) {
-    const existing = byCode.get(c.code);
-    if (!existing) {
-      byCode.set(c.code, { ...c });
-    } else {
-      // Hit by both sources — average the scores, mark as merged
-      byCode.set(c.code, {
-        ...existing,
-        retrievalScore: Math.max(existing.retrievalScore, c.retrievalScore) * 1.1,
-        source:         "merged",
-      });
-    }
+  for (const list of [a, b]) {
+    list.forEach((candidate, index) => {
+      const contribution = 1 / (RRF_K + index + 1);
+      const existing = fused.get(candidate.code);
+      if (existing) {
+        existing.score   += contribution;
+        existing.sources += 1;
+      } else {
+        fused.set(candidate.code, { candidate, score: contribution, sources: 1 });
+      }
+    });
   }
 
-  return Array.from(byCode.values())
-    .sort((x, y) => y.retrievalScore - x.retrievalScore)
-    .slice(0, limit);
+  return Array.from(fused.values())
+    .sort((x, y) => y.score - x.score)
+    .slice(0, limit)
+    .map(({ candidate, score, sources }) => ({
+      ...candidate,
+      // Renormalised onto the 0–1 scale callers expect. The best possible
+      // score is both sources ranking it first.
+      retrievalScore: score / (2 / (RRF_K + 1)),
+      source:         sources > 1 ? ("merged" as const) : candidate.source,
+    }));
 }

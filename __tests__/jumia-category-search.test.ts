@@ -1,4 +1,10 @@
-import { getTopLevelDepartments, getSubtreeCategories, searchCategoriesByText } from "@/lib/jumia/category-search";
+import {
+  getTopLevelDepartments,
+  getSubtreeCategories,
+  searchCategoriesByText,
+  mergeCandidates,
+  type CategoryCandidate,
+} from "@/lib/jumia/category-search";
 import type { JumiaCategoryRow } from "@/lib/jumia/categories";
 
 function row(overrides: Partial<JumiaCategoryRow> & { code: number; name: string; path: string }): JumiaCategoryRow {
@@ -132,5 +138,63 @@ describe("long queries — the 32-char bitap cliff", () => {
 
   it("returns nothing for a query that is all filler", () => {
     expect(searchCategoriesByText("the and for with this", ART, 5)).toEqual([]);
+  });
+});
+
+// Regression guards for the confirmed live failure: a safety helmet was
+// filed under "Power Transmission Products > Bearings > Ball Transfers".
+// Fuzzy alone ranked the correct "Hard Hats" third; the bad candidate came
+// from the embedding side and won purely because the two sources score on
+// incomparable scales (embedding cosine ~0.9 for anything in the same
+// department, fuzzy relevance ~0.3). Sorting the union by raw score threw
+// the fuzzy side away entirely whenever embeddings returned.
+describe("mergeCandidates — rank fusion, not raw score", () => {
+  const c = (code: number, name: string, score: number, source: CategoryCandidate["source"]): CategoryCandidate =>
+    ({ code, name, path: name, attribute_set_sid: "sid", retrievalScore: score, source });
+
+  // Measured shapes: fuzzy tops out around 0.3, embeddings cluster at ~0.9.
+  const fuzzy = [
+    c(1022834, "Fall Protection Hardware", 0.390, "fuzzy"),
+    c(1023049, "Head Protection",          0.356, "fuzzy"),
+    c(1023067, "Hard Hats",                0.344, "fuzzy"),
+  ];
+  const embedding = [
+    c(1023390, "Ball Transfers", 0.921, "embedding"),
+    c(1023368, "Ball Bearings",  0.918, "embedding"),
+    c(1023067, "Hard Hats",      0.912, "embedding"),
+  ];
+
+  it("a candidate both sources found beats one only a single source ranked first", () => {
+    const merged = mergeCandidates(fuzzy, embedding, 8);
+    expect(merged[0].code).toBe(1023067);   // Hard Hats — in both lists
+    expect(merged[0].source).toBe("merged");
+  });
+
+  it("does not let the higher-scoring source displace the other wholesale", () => {
+    // The live bug: every embedding hit outranked every fuzzy hit, so the
+    // top 3 handed to the vision model contained no fuzzy candidate at all.
+    const top3 = mergeCandidates(fuzzy, embedding, 3).map((h) => h.code);
+    expect(top3).toContain(1023067);
+    expect(top3.some((code) => fuzzy.some((f) => f.code === code))).toBe(true);
+  });
+
+  it("ranks by position, so raw score magnitude cannot dominate", () => {
+    // Same two lists, but with the embedding scores pushed absurdly high.
+    // Rank fusion must produce the identical ordering.
+    const inflated = embedding.map((e) => ({ ...e, retrievalScore: e.retrievalScore * 100 }));
+    const a = mergeCandidates(fuzzy, embedding, 8).map((h) => h.code);
+    const b = mergeCandidates(fuzzy, inflated,  8).map((h) => h.code);
+    expect(b).toEqual(a);
+  });
+
+  it("keeps every candidate from both sources, deduplicated", () => {
+    const merged = mergeCandidates(fuzzy, embedding, 20);
+    expect(merged).toHaveLength(5);   // 6 entries, Hard Hats in both
+    expect(new Set(merged.map((h) => h.code)).size).toBe(5);
+  });
+
+  it("handles an empty source without dropping the other", () => {
+    expect(mergeCandidates(fuzzy, [], 8).map((h) => h.code)).toEqual([1022834, 1023049, 1023067]);
+    expect(mergeCandidates([], embedding, 8)).toHaveLength(3);
   });
 });
