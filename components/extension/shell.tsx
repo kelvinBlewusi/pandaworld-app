@@ -70,12 +70,14 @@ export function ExtensionShell({
   creditsLabel,
   notifications,
   notificationsSeenAt,
+  isAdmin = false,
 }: {
   children: React.ReactNode;
   planLabel: string;
   creditsLabel: string;
   notifications: CreditTransaction[];
   notificationsSeenAt: string | null;
+  isAdmin?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [donateOpen, setDonateOpen] = useState(false);
@@ -131,7 +133,7 @@ export function ExtensionShell({
     <div className="flex h-screen overflow-hidden bg-zinc-50">
       {/* Desktop sidebar */}
       <div className="hidden lg:flex">
-        <ExtensionSidebar />
+        <ExtensionSidebar isAdmin={isAdmin} />
       </div>
 
       {/* Mobile drawer */}
@@ -149,7 +151,7 @@ export function ExtensionShell({
           open ? "translate-x-0" : "-translate-x-full",
         ].join(" ")}
       >
-        <ExtensionSidebar onClose={() => setOpen(false)} />
+        <ExtensionSidebar onClose={() => setOpen(false)} isAdmin={isAdmin} />
       </div>
 
       {/* Main content area */}

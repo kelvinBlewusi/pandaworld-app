@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
+import { isAdmin } from "@/lib/auth/is-admin";
 import { getQuotaSummary } from "@/lib/billing/quota";
 import { isPaidPlan } from "@/lib/billing/plans";
 import {
@@ -53,6 +54,7 @@ export default async function ExtensionAppLayout({
       creditsLabel={creditsLabel}
       notifications={notifications}
       notificationsSeenAt={notificationsSeenAt}
+      isAdmin={isAdmin(userId)}
     >
       {children}
     </ExtensionShell>
