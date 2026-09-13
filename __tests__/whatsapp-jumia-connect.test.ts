@@ -1,4 +1,4 @@
-import { splitCredentialTokens, identifyCredentials, isResendCommand, buildConnectInstructions, jumiaConnectLink } from "@/lib/whatsapp/jumia-connect";
+import { splitCredentialTokens, identifyCredentials, looksLikeCredential, isResendCommand, buildConnectInstructions, jumiaConnectLink } from "@/lib/whatsapp/jumia-connect";
 
 describe("splitCredentialTokens", () => {
   it("splits on whitespace", () => {
@@ -55,6 +55,29 @@ describe("identifyCredentials", () => {
   });
 });
 
+describe("looksLikeCredential", () => {
+  it("rejects short conversational replies — confirmed live failure", () => {
+    // A seller replied "Okay" then "Ok" to the connect instructions; both
+    // got silently accepted as credentials before this check existed,
+    // wasting a real Jumia API call before failing with "Invalid App ID
+    // or Secret Key".
+    expect(looksLikeCredential("Okay")).toBe(false);
+    expect(looksLikeCredential("Ok")).toBe(false);
+    expect(looksLikeCredential("Hi")).toBe(false);
+    expect(looksLikeCredential("Thanks")).toBe(false);
+  });
+
+  it("accepts a real Client ID (UUID) and Client Secret", () => {
+    expect(looksLikeCredential("b827fe1b-72c7-4851-83b8-a1c8508dd967")).toBe(true);
+    expect(looksLikeCredential("YmLqm5GVeMCQWhwK4pxm0i-Q7vNSGXN2SVV5IqRKxGQ=")).toBe(true);
+  });
+
+  it("ignores surrounding whitespace when measuring length", () => {
+    expect(looksLikeCredential("   short   ")).toBe(false);
+    expect(looksLikeCredential("  b827fe1b-72c7-4851-83b8-a1c8508dd967  ")).toBe(true);
+  });
+});
+
 describe("isResendCommand", () => {
   it("matches 'resend' case-insensitively with optional punctuation", () => {
     expect(isResendCommand("resend")).toBe(true);
@@ -80,5 +103,13 @@ describe("jumiaConnectLink", () => {
   it("builds a wa_token-bearing link to the connect route", () => {
     const link = jumiaConnectLink("abc-123");
     expect(link).toContain("/api/jumia/connect?wa_token=abc-123");
+  });
+
+  it("carries return_to so OAuth completion lands back on the WhatsApp listing page", () => {
+    // Without this, a seller who starts connecting from WhatsApp gets
+    // dropped onto the old web dashboard (/dashboard) once OAuth finishes,
+    // instead of back into the WhatsApp listing flow they came from.
+    const link = jumiaConnectLink("abc-123");
+    expect(link).toContain(`return_to=${encodeURIComponent("/extension/whatsapp-listings")}`);
   });
 });

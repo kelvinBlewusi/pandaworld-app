@@ -24,8 +24,19 @@ export function verifyWhatsAppSignature(
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
-/** Matches "LINK-A1B2C3D4" (and minor variations: no dash, lowercase, extra space). */
-export const LINK_CODE_RE = /^LINK[-\s]?([A-Z0-9]{8})$/i;
+/**
+ * Matches "LINK-A1B2C3D4" (and minor variations: no dash, lowercase, extra
+ * space) anywhere in a message, not just as the whole message — the wa.me
+ * deep link (lib/whatsapp/link.ts's createLinkCode) pre-fills a friendly
+ * greeting ahead of the code ("Hi! I want to link... here is my connection
+ * code: LINK-A1B2C3D4"), and a seller typing the code by hand may add their
+ * own words around it too. Was anchored to the full trimmed message
+ * (^...$) before, which would have silently failed to link anyone sending
+ * that greeting. \b word boundaries (instead of ^/$) still require exactly
+ * 8 alphanumeric characters — "LINK-A1B2C3D4E5" (9+ chars run) still
+ * correctly matches nothing, same as before.
+ */
+export const LINK_CODE_RE = /\bLINK[-\s]?([A-Z0-9]{8})\b/i;
 
 /** Extracts the 8-char code from a link message, or null if it doesn't match. */
 export function extractLinkCode(text: string | undefined | null): string | null {

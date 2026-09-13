@@ -38,7 +38,7 @@ export function WhatsAppCard() {
   const [generating, setGenerating] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
-  const [link, setLink] = useState<{ code: string; waLink: string } | null>(null);
+  const [link, setLink] = useState<{ code: string; waLink: string; message: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
   // Flags the Jumia connection right alongside the WhatsApp one — a seller
@@ -98,7 +98,7 @@ export function WhatsAppCard() {
 
   function copyCode() {
     if (!link) return;
-    navigator.clipboard.writeText(`LINK-${link.code}`).then(() => {
+    navigator.clipboard.writeText(link.message).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
@@ -229,7 +229,7 @@ export function WhatsAppCard() {
                 </>
               ) : (
                 <p className="text-blue-700">
-                  Send this code as a WhatsApp message to the PandaWorld bot number:
+                  Send this message to the PandaWorld bot number:
                 </p>
               )}
               <div className="flex items-center gap-2">
@@ -242,7 +242,7 @@ export function WhatsAppCard() {
                   className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800"
                 >
                   <Copy className="h-3 w-3" />
-                  {copied ? "Copied!" : "Copy"}
+                  {copied ? "Copied!" : "Copy message"}
                 </button>
               </div>
               <p className="text-xs text-blue-500">This code expires in 15 minutes.</p>

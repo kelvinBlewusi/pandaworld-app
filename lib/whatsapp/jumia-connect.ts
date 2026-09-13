@@ -18,8 +18,15 @@ import type { JumiaConnectionKind } from "@/lib/jumia/credentials";
  * given kind maps to.
  */
 
+// return_to (see lib/jumia/return-to.ts) rides through /api/jumia/connect's
+// OAuth `state` param to /api/jumia/callback, which passes it on to
+// /onboarding/done — without it, that page's default CTA drops a seller
+// who started from WhatsApp onto the old web dashboard (/dashboard)
+// instead of back into the WhatsApp listing flow they came from.
+const WHATSAPP_RETURN_TO = "/extension/whatsapp-listings";
+
 export function jumiaConnectLink(token: string): string {
-  return `${appUrl()}/api/jumia/connect?wa_token=${token}`;
+  return `${appUrl()}/api/jumia/connect?wa_token=${token}&return_to=${encodeURIComponent(WHATSAPP_RETURN_TO)}`;
 }
 
 export function jumiaRedirectUri(): string {
@@ -62,6 +69,24 @@ export function identifyCredentials(a: string, b: string): { appId: string; secr
   const bIsUuid = UUID_RE.test(b.trim());
   if (bIsUuid && !aIsUuid) return { appId: b, secretKey: a };
   return { appId: a, secretKey: b };
+}
+
+/**
+ * Loose plausibility check for one pasted credential token — a real Client
+ * ID is always a 36-char UUID and a real Client Secret is always a long
+ * random string, so anything shorter than this is never a real credential.
+ * Confirmed live: a seller's stray "Okay" got silently accepted as the
+ * Client ID (no check existed before this), then "Ok" as the Client
+ * Secret, wasting a real Jumia API call on two words that obviously
+ * weren't credentials before finally surfacing "Invalid App ID or Secret
+ * Key" — no clearer to the seller than if it had been caught immediately.
+ * Deliberately loose (length only, no format check) since a seller may
+ * legitimately paste the Secret before the ID (identifyCredentials sorts
+ * that out by shape after both halves arrive) — this only needs to rule
+ * out conversational replies, not validate the actual credential shape.
+ */
+export function looksLikeCredential(token: string): boolean {
+  return token.trim().length >= 16;
 }
 
 export function isResendCommand(text: string): boolean {
