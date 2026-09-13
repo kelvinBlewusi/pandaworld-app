@@ -4,7 +4,7 @@ import { ingestWhatsAppImage } from "@/lib/whatsapp/media";
 import { getOrCreateSession, updateSession, resetSession, type WhatsAppSession } from "@/lib/whatsapp/session";
 import { createListingForUser } from "@/lib/listings/create";
 import { runAutoAnalyze } from "@/lib/actions/auto-analyze";
-import { pushListingToJumia } from "@/lib/jumia/push-listing";
+import { pushListingToJumia, missingFieldLabels } from "@/lib/jumia/push-listing";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { getJumiaConnectionKind, testJumiaCredentials, saveJumiaCredentialsForUser, disconnectJumiaForUser } from "@/lib/jumia/credentials";
 import { createConnectToken } from "@/lib/jumia/connect-token";
@@ -101,6 +101,23 @@ async function getBatchListings(batchId: string): Promise<ListingRow[]> {
   return (data ?? []) as ListingRow[];
 }
 
+/** Short "still needs: price, category" summary for a listing, or "" when
+ *  it's ready to push — uses the exact same checks pushListingToJumia
+ *  itself enforces (lib/jumia/push-listing.ts's missingFieldLabels), so
+ *  what the seller sees here can never drift from what a real push
+ *  would actually reject. */
+async function describeMissingFields(listingId: string): Promise<string> {
+  const db = createServerClient();
+  const { data } = await db
+    .from("listings")
+    .select("title, description, selling_price, category_code, brand, images")
+    .eq("id", listingId)
+    .maybeSingle();
+  if (!data) return "";
+  const missing = missingFieldLabels(data as ListingRow);
+  return missing.length > 0 ? `Still needs: ${missing.join(", ")}.` : "";
+}
+
 /** Saves a seller's free-text note against a product, plus a deterministic
  *  (non-AI) pass for an explicit price/stock — see batch.ts for why this
  *  is regex, not an AI guess: those two fields are seller-owned everywhere
@@ -187,7 +204,7 @@ async function handleGlobalCommand(
       await handleGlobalRestart(userId, phoneNumber);
       return;
     case "status": {
-      const status = describeStatus(session);
+      const status = await describeStatus(session);
       if (status.cta) {
         await replyCta(phoneNumber, status.text, status.cta.label, status.cta.url);
       } else {
@@ -252,9 +269,22 @@ const HELP_TEXT = [
   "• *help* — this message",
 ].join("\n");
 
+// Matches components/ui/status-pill.tsx's exact label wording, so a
+// seller sees the same words in chat as they would on the web dashboard.
+const STATUS_LABELS: Record<ListingRow["status"], string> = {
+  draft:             "Draft",
+  awaiting_review:   "Awaiting review",
+  processing:        "Processing",
+  pending_approval:  "Pending",
+  live:              "Live",
+  failed:            "Failed",
+};
+
 /** A status reply, plus an optional link button when there's somewhere
- *  useful to send the seller alongside the text. */
-function describeStatus(session: WhatsAppSession): { text: string; cta?: { label: string; url: string } } {
+ *  useful to send the seller alongside the text. Async because
+ *  awaiting_confirmation now looks up each product's real Jumia
+ *  submission status rather than a single generic "ready to review". */
+async function describeStatus(session: WhatsAppSession): Promise<{ text: string; cta?: { label: string; url: string } }> {
   switch (session.state) {
     case "awaiting_jumia_credentials":
       return { text: "Waiting for your Jumia Client ID + Client Secret — paste them here, or reply *restart* to back out." };
@@ -266,11 +296,28 @@ function describeStatus(session: WhatsAppSession): { text: string; cta?: { label
       return { text: `Collecting product ${session.batchSeq ?? 1} of ${session.batchSize ?? 1} — send its photos, then reply *done*.` };
     case "analyzing":
       return { text: "Drafting your products right now — this can take up to a minute." };
-    case "awaiting_confirmation":
+    case "awaiting_confirmation": {
+      const batchId = session.batchId;
+      const listings = batchId ? await getBatchListings(batchId) : [];
+      if (listings.length === 0) {
+        return {
+          text: "Your batch is drafted and ready to review.\n\nReply *submit all* when you're ready.",
+          cta: { label: "Review listings", url: whatsappListingsUrl(batchId ?? undefined) },
+        };
+      }
+      const lines = listings.map(
+        (l) => `${l.whatsapp_seq ?? "?"}. ${l.title ?? "(untitled)"} — ${STATUS_LABELS[l.status] ?? l.status}`,
+      );
       return {
-        text: "Your batch is drafted and ready to review.\n\nReply *submit all* when you're ready.",
-        cta: { label: "Review listings", url: whatsappListingsUrl(session.batchId ?? undefined) },
+        text: [
+          `Batch status (${listings.length} product${listings.length === 1 ? "" : "s"}):`,
+          ...lines,
+          "",
+          "Reply *submit all* to push whatever's still a draft, or *restart* to start over.",
+        ].join("\n"),
+        cta: { label: "Review listings", url: whatsappListingsUrl(batchId ?? undefined) },
       };
+    }
     case "error":
       return { text: "Something went sideways — reply anything to start fresh." };
   }
@@ -593,6 +640,18 @@ async function startBatchAnalysis(
                 `Edit product ${seq}`,
                 focusedEditorUrl(listing.id),
               );
+              // Pre-submit validation summary, right when this product is
+              // ready to look at — not just discovered as a rejection
+              // after the seller already typed "submit all". Submit stays
+              // tappable either way (a real attempt reports the same
+              // "still needs" text if something's missing) — no
+              // conditional button logic to keep this simple.
+              const missing = await describeMissingFields(listing.id);
+              await replyButtons(
+                phoneNumber,
+                missing || "Ready to submit.",
+                [{ id: `submit ${seq}`, title: `Submit product ${seq}` }],
+              );
             }
           } else {
             await replyCta(
@@ -652,23 +711,29 @@ async function startBatchAnalysis(
 
     await updateSession(phoneNumber, { state: "awaiting_confirmation" });
 
-    // "Edit"/"Review" are cta_url buttons — they leave the chat and open a
-    // browser, which Meta's API only allows as a standalone button, never
-    // sharing a message with a reply-button. Tried folding all three into
-    // one reply-buttons message (so "Edit"/"Review" round-tripped through
-    // the bot instead of opening directly); confirmed live that leaving
-    // the chat as a real link matters more than one fewer message, so
-    // this stays three sends: cta_url, cta_url, then the reply-button.
+    // No standalone "Review listing(s)" send anymore — it duplicated the
+    // per-product "Edit product N" links above (and, for batchSize===1,
+    // the single Edit link right below) without adding anything a seller
+    // needed that those didn't already cover. "Edit"/"Submit" stay
+    // separate sends (cta_url and reply-buttons can't share one message).
     if (batchSize === 1) {
       const refreshed = await getBatchListings(batchId);
       const only = refreshed[0];
       if (only?.title) {
-        await replyCta(phoneNumber, `✅ Product drafted: ${only.title}.`, "Edit product", focusedEditorUrl(only.id));
-        await replyCta(phoneNumber, "🎉 Ready to submit? Review it below first if you like.", "Review listing", whatsappListingsUrl(batchId));
+        const missing = await describeMissingFields(only.id);
+        await replyCta(
+          phoneNumber,
+          missing ? `✅ Product drafted: ${only.title}.\n⚠️ ${missing}` : `✅ Product drafted: ${only.title}. Ready to submit!`,
+          "Edit product",
+          focusedEditorUrl(only.id),
+        );
         await replyButtons(
           phoneNumber,
-          `Reply *submit all*, or say something like "change the price to 150" to edit it first.`,
-          [{ id: "submit all", title: "Submit all ✅" }],
+          `Reply *submit*, or say something like "change the price to 150" to edit it first.`,
+          [
+            { id: "submit all", title: "Submit ✅" },
+            { id: "restart",    title: "Restart 🔄" },
+          ],
         );
       }
       // else: the one product's own failure message (sent above, inside
@@ -676,16 +741,16 @@ async function startBatchAnalysis(
       return;
     }
 
-    await replyCta(
-      phoneNumber,
-      `🎉 Done drafting your ${batchSize} products! Review each one below.`,
-      "Review listings",
-      whatsappListingsUrl(batchId),
-    );
+    // Per-product detail (drafted/failed, missing fields, that product's
+    // own Submit button) already went out above as each one finished —
+    // this closing message is just the batch-wide summary + actions.
     await replyButtons(
       phoneNumber,
-      `Reply *submit all*, or tell me a product number (e.g. *submit 2*) — or say "2: change the price to 150" to edit one first.`,
-      [{ id: "submit all", title: "Submit all ✅" }],
+      `🎉 Done drafting your ${batchSize} products! Check the messages above for each one, then reply *submit all* when ready — or tell me a product number (e.g. *submit 2*) to submit just one.`,
+      [
+        { id: "submit all", title: "Submit all ✅" },
+        { id: "restart",    title: "Restart 🔄" },
+      ],
     );
   } catch (e) {
     console.error(`[whatsapp intake] startBatchAnalysis failed for batch ${batchId}: ${(e as Error).message}`);
