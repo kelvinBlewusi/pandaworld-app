@@ -104,4 +104,12 @@ describe("jumiaConnectLink", () => {
     const link = jumiaConnectLink("abc-123");
     expect(link).toContain("/api/jumia/connect?wa_token=abc-123");
   });
+
+  it("carries return_to so OAuth completion lands back on the WhatsApp listing page", () => {
+    // Without this, a seller who starts connecting from WhatsApp gets
+    // dropped onto the old web dashboard (/dashboard) once OAuth finishes,
+    // instead of back into the WhatsApp listing flow they came from.
+    const link = jumiaConnectLink("abc-123");
+    expect(link).toContain(`return_to=${encodeURIComponent("/extension/whatsapp-listings")}`);
+  });
 });

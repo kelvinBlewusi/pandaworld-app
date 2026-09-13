@@ -18,8 +18,15 @@ import type { JumiaConnectionKind } from "@/lib/jumia/credentials";
  * given kind maps to.
  */
 
+// return_to (see lib/jumia/return-to.ts) rides through /api/jumia/connect's
+// OAuth `state` param to /api/jumia/callback, which passes it on to
+// /onboarding/done — without it, that page's default CTA drops a seller
+// who started from WhatsApp onto the old web dashboard (/dashboard)
+// instead of back into the WhatsApp listing flow they came from.
+const WHATSAPP_RETURN_TO = "/extension/whatsapp-listings";
+
 export function jumiaConnectLink(token: string): string {
-  return `${appUrl()}/api/jumia/connect?wa_token=${token}`;
+  return `${appUrl()}/api/jumia/connect?wa_token=${token}&return_to=${encodeURIComponent(WHATSAPP_RETURN_TO)}`;
 }
 
 export function jumiaRedirectUri(): string {
