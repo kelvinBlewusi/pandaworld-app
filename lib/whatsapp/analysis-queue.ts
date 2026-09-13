@@ -52,10 +52,37 @@ export async function enqueueAnalysisJobs(
   if (params.listings.length === 0) return 0;
 
   const db = createServerClient();
+
+  // Skip anything that already has a job in flight, then plain-insert the
+  // rest.
+  //
+  // NOT an upsert: the duplicate guard in the migration is a PARTIAL unique
+  // index (only over queued/running rows, so a listing that finished can be
+  // queued again later). Postgres will not use a partial index for ON
+  // CONFLICT unless the statement repeats the index predicate, which
+  // PostgREST's upsert cannot express — it failed in production with "there
+  // is no unique or exclusion constraint matching the ON CONFLICT
+  // specification", taking the whole batch down with it.
+  const ids = params.listings.map((l) => l.listingId);
+  const { data: existing, error: lookupError } = await db
+    .from("analysis_jobs")
+    .select("listing_id")
+    .in("listing_id", ids)
+    .in("status", ["queued", "running"]);
+
+  if (lookupError) {
+    console.error(`[analysis-queue] in-flight lookup failed for batch ${params.batchId}: ${lookupError.message}`);
+    throw new Error(`Could not queue analysis: ${lookupError.message}`);
+  }
+
+  const inFlight = new Set((existing ?? []).map((r) => r.listing_id as string));
+  const toInsert = params.listings.filter((l) => !inFlight.has(l.listingId));
+  if (toInsert.length === 0) return 0;
+
   const { data, error } = await db
     .from("analysis_jobs")
-    .upsert(
-      params.listings.map((l) => ({
+    .insert(
+      toInsert.map((l) => ({
         listing_id:   l.listingId,
         batch_id:     params.batchId,
         user_id:      params.userId,
@@ -63,15 +90,17 @@ export async function enqueueAnalysisJobs(
         seq:          l.seq,
         batch_size:   params.batchSize,
       })),
-      // The unique index only covers in-flight rows, so a listing that was
-      // analysed before (status done/failed) can legitimately be queued
-      // again — ignoreDuplicates makes the in-flight collision a no-op
-      // rather than failing the whole insert for the rest of the batch.
-      { onConflict: "listing_id", ignoreDuplicates: true },
     )
     .select("id");
 
   if (error) {
+    // The partial index is still the real guard against a concurrent
+    // double-enqueue; losing that race means the job is already queued,
+    // which is the outcome we wanted anyway.
+    if (error.code === "23505") {
+      console.warn(`[analysis-queue] batch ${params.batchId} raced another enqueue — jobs already queued`);
+      return 0;
+    }
     console.error(`[analysis-queue] enqueue failed for batch ${params.batchId}: ${error.message}`);
     throw new Error(`Could not queue analysis: ${error.message}`);
   }
