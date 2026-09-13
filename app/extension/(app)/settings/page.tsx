@@ -7,7 +7,7 @@ import { RegenerateKeyButton } from "@/components/extension/regenerate-key-butto
 import { WhatsAppCard } from "@/components/whatsapp/whatsapp-card";
 
 export const metadata: import("next").Metadata = {
-  title: "Settings — Extension",
+  title: "Settings",
   robots: { index: false },
 };
 
