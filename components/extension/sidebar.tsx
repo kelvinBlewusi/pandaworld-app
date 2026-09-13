@@ -21,13 +21,13 @@ import {
   MessageCircle,
   HelpCircle,
   BookOpen,
-  LifeBuoy,
   Settings,
   ArrowRight,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Wordmark } from "@/components/marketing/wordmark";
+import { COMMUNITY_WHATSAPP_URL } from "@/lib/constants/support";
 
 const primaryNav = [
   { href: "/extension/dashboard",  label: "Extension Dashboard", icon: LayoutDashboard },
@@ -39,9 +39,8 @@ const primaryNav = [
 // Content for these doesn't exist yet — shown so the shell reads complete,
 // but deliberately inert (no href, no click) rather than a broken link.
 const comingSoonNav = [
-  { label: "FAQ",     icon: HelpCircle },
-  { label: "How to",  icon: BookOpen },
-  { label: "Support", icon: LifeBuoy },
+  { label: "FAQ",    icon: HelpCircle },
+  { label: "How to", icon: BookOpen },
 ];
 
 const settingsItem = { href: "/extension/settings", label: "Settings", icon: Settings };
@@ -63,6 +62,25 @@ function NavItem({ href, label, icon: Icon }: { href: string; label: string; ico
       <Icon className="h-4 w-4 shrink-0" />
       <span className="flex-1">{label}</span>
     </Link>
+  );
+}
+
+/** Support — opens the community WhatsApp group in a new tab. Styled with
+ *  the WhatsApp brand green so it reads as "this leaves to WhatsApp",
+ *  same visual language as the floating WhatsAppButton used elsewhere. */
+function SupportNavItem() {
+  return (
+    <a
+      href={COMMUNITY_WHATSAPP_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-zinc-500 transition-all duration-150 hover:bg-emerald-50 hover:text-emerald-700"
+    >
+      <svg viewBox="0 0 32 32" className="h-4 w-4 shrink-0 fill-current" xmlns="http://www.w3.org/2000/svg">
+        <path d="M16.003 2C8.28 2 2 8.28 2 16.003c0 2.47.65 4.87 1.88 6.99L2 30l7.22-1.85A13.94 13.94 0 0 0 16.003 30C23.72 30 30 23.72 30 16.003 30 8.28 23.72 2 16.003 2zm0 25.47a11.52 11.52 0 0 1-5.88-1.61l-.42-.25-4.28 1.1 1.13-4.14-.27-.43A11.47 11.47 0 0 1 4.53 16c0-6.33 5.15-11.47 11.47-11.47S27.47 9.67 27.47 16 22.33 27.47 16.003 27.47zm6.3-8.6c-.35-.17-2.05-1.01-2.37-1.13-.31-.11-.54-.17-.77.17-.23.35-.88 1.13-1.08 1.36-.2.23-.4.25-.75.08-.35-.17-1.48-.55-2.82-1.74-1.04-.93-1.74-2.08-1.95-2.43-.2-.35-.02-.54.15-.71.16-.16.35-.4.52-.6.17-.2.23-.35.35-.58.11-.23.06-.44-.03-.61-.08-.17-.77-1.86-1.06-2.54-.28-.67-.56-.58-.77-.59h-.66c-.23 0-.6.08-.91.4-.31.31-1.19 1.16-1.19 2.83s1.22 3.28 1.39 3.51c.17.23 2.4 3.67 5.82 5.14.81.35 1.44.56 1.94.72.81.26 1.55.22 2.13.13.65-.1 2.01-.82 2.29-1.61.28-.8.28-1.48.2-1.62-.08-.14-.3-.22-.66-.39z"/>
+      </svg>
+      <span className="flex-1">Support</span>
+    </a>
   );
 }
 
@@ -114,6 +132,7 @@ export function ExtensionSidebar({ onClose }: { onClose?: () => void }) {
         {comingSoonNav.map((item) => (
           <ComingSoonItem key={item.label} {...item} />
         ))}
+        <SupportNavItem />
 
         <div className="pb-1 pt-3">
           <div className="mb-3 h-px bg-zinc-100" />
