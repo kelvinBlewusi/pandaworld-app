@@ -203,7 +203,7 @@ export async function ExtensionPage() {
         }}
       >
         <Megaphone className="h-4 w-4 shrink-0" />
-        <span>Use PandaWorld for free — auto-push listings from a WhatsApp chat to Jumia, or from the Chrome extension.</span>
+        <span>Try PandaWorld for free — auto-push listings from WhatsApp chat to Jumia, or from the Chrome extension.</span>
       </div>
 
       {/* Hero — dark, canvas-animated backdrop (components/marketing/extension-hero-backdrop.tsx).
