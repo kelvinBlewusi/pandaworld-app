@@ -23,6 +23,7 @@ import {
   upsertAttributes,
 } from "@/lib/jumia/categories";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
+import { logCategoryCorrection } from "@/lib/jumia/category-corrections";
 
 type FieldConfidence = { confidence: number; source: string; reasoning?: string };
 
@@ -56,7 +57,7 @@ export async function refillAttributesForCategory(
 
   const { data: listing } = await db
     .from("listings")
-    .select("id, user_id, images, dynamic_attributes, field_sources, field_confidence, category_code, category_path")
+    .select("id, user_id, images, dynamic_attributes, field_sources, field_confidence, category_code, category_path, category_alternates")
     .eq("id", listingId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -106,6 +107,23 @@ export async function refillAttributesForCategory(
 
   const category = { code: cat.code, name: cat.name, path: cat.path };
   const categoryPath = opts.categoryPath ?? cat.path;
+
+  // Log an actual override (previous category existed and differs from the
+  // new pick) — not the listing's first-ever category assignment, which
+  // isn't a "correction" of anything. See lib/jumia/category-corrections.ts.
+  const previousCategoryCode = listing.category_code ? Number(listing.category_code) : null;
+  if (previousCategoryCode !== null && previousCategoryCode !== categoryCode) {
+    const alternates = (listing.category_alternates ?? []) as Array<{ code: number; confidence: number }>;
+    const previousAlternate = alternates.find((a) => a.code === previousCategoryCode);
+    await logCategoryCorrection({
+      listingId,
+      previousCategoryCode,
+      previousCategoryPath: listing.category_path,
+      previousConfidence: previousAlternate?.confidence ?? null,
+      newCategoryCode: categoryCode,
+      newCategoryPath: categoryPath,
+    });
+  }
 
   if (opts.schemaOnly) {
     const carriedDyn: Record<string, string> = {};
