@@ -474,6 +474,13 @@ function t(value: string) {
   return { value, translations: [] as never[] };
 }
 
+/**
+ * Fallback for a variant row that's missing its own typed `variation` —
+ * fixed on purpose, see mapListingToJumiaProducts's doc comment on why
+ * this must never be a detected colour.
+ */
+const MISSING_VARIANT_VARIATION = "Default";
+
 export type JumiaProduct = ReturnType<typeof buildBaseProduct>;
 
 function buildBaseProduct(listing: ListingRow, brand: { code: number; name: string }, currency: string) {
@@ -506,18 +513,23 @@ function buildBaseProduct(listing: ListingRow, brand: { code: number; name: stri
   // variants. Their error: "The variation 'variation' value has to be
   // filled in order to create a Product."
   //
-  // We DELIBERATELY do NOT fall back to listing.color here. That fallback
-  // used to mask seller mistakes (variation field saved as null → Jumia
-  // received the colour instead of what was typed) and could swap several
-  // variants to the SAME string when colour was a combined value like
-  // "black and green", which Jumia then dedup-rejected.
+  // This is the base product's OWN variation — used as-is only when the
+  // listing has zero variant rows (a genuinely simple, single-SKU
+  // product). There's no dedup risk in that case since exactly one
+  // product ships, so a detected colour is strictly more useful to the
+  // seller/buyer than the meaningless literal "Default" placeholder.
+  // Falls back to "Default" only when there's no colour either.
   //
-  // The push route now validates upstream: empty variation → 422 with a
-  // clear error. The seller is told to type a label. This "Default"
-  // string only ever ships for genuinely simple products that arrive
-  // here with zero variants AND no caller-supplied placeholder — and
-  // even then it's a literal "Default", never the colour.
-  const defaultVariation = "Default";
+  // This must NOT be reused as the fallback for a VARIANT that's missing
+  // its own typed variation (see mapListingToJumiaProducts below) — that
+  // path keeps a hardcoded "Default" literal on purpose: sharing this
+  // colour string across multiple variants of the same parent used to
+  // silently mask seller mistakes and made several variants collide on
+  // the same value when colour was combined (e.g. "black and green"),
+  // which Jumia dedup-rejected. The push route validates upstream (empty
+  // variation → 422) so the seller is told to type a label instead.
+  const colorVariation   = (listing.color ?? listing.color_family ?? "").trim();
+  const defaultVariation = colorVariation || "Default";
 
   // Match Jumia Postman spec exactly:
   //   POST /feeds/products/create
@@ -597,11 +609,17 @@ export function mapListingToJumiaProducts(
   // inject the per-variant value here, so each product's attributes
   // array carries its own unique label.
   const products = variants.map((v) => {
-    const variation = v.variation?.trim() || base.variation;
+    // Deliberately NOT base.variation here — base.variation may now be a
+    // detected colour (see buildBaseProduct), and sharing that across
+    // multiple variants missing their own typed value would silently
+    // collide/dedup-reject exactly the way this fallback used to. Keep a
+    // fixed literal instead; a real missing-variation case should surface
+    // as this warning, not a plausible-looking colour string.
+    const variation = v.variation?.trim() || MISSING_VARIANT_VARIATION;
     if (!v.variation?.trim()) {
       console.warn(
         `[Jumia mapping] Variant ${v.id} has no variation — falling back to ` +
-        `base.variation=${JSON.stringify(base.variation)}. ` +
+        `${JSON.stringify(MISSING_VARIANT_VARIATION)}. ` +
         `This shouldn't happen if the seller typed a value — investigate the save path.`,
       );
     }
