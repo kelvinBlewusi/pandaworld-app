@@ -16,6 +16,16 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 //   /api/webhooks/clerk    — incoming Clerk webhook
 //   /api/jumia/callback    — Jumia OAuth post-redirect
 //   /api/cron/(.*)         — Vercel cron, bearer-token authorised
+//   /api/worker/(.*)       — the background job worker, called by pg_cron via
+//                            pg_net (and by the WhatsApp webhook's own nudge),
+//                            neither of which carries a Clerk session. Same
+//                            bearer-CRON_SECRET contract as /api/cron above,
+//                            checked inside the route, which refuses to run at
+//                            all when the secret isn't configured. Omitting
+//                            this is not a soft failure: Clerk answers an
+//                            unauthenticated API route with a 404, so the
+//                            worker silently looked like it didn't exist and
+//                            queued batches never drained.
 //   /extension              — Chrome extension marketing/onboarding page
 //   /api/extension/fill     — the extension's autofill call. The extension has
 //                            no Clerk browser session (it runs from Jumia's
@@ -57,6 +67,7 @@ const isPublicRoute = createRouteMatcher([
   '/api/webhooks/clerk',
   '/api/jumia/callback',
   '/api/cron/(.*)',
+  '/api/worker/(.*)',
   '/extension',
   '/api/extension/fill',
   '/api/extension/account',
