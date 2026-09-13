@@ -1,7 +1,8 @@
 import { Suspense } from "react";
+import Link from "next/link";
 import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
-import { Gauge, Wand2, Clock, Chrome, KeyRound, UploadCloud, ScanSearch } from "lucide-react";
+import { Gauge, Wand2, Clock, Chrome, KeyRound, UploadCloud, ScanSearch, MessageCircle, ArrowRight } from "lucide-react";
 import { getOrCreateExtensionApiKey, countRecentFills } from "@/lib/security/extension-keys";
 import { getOrCreateCreditBalance } from "@/lib/billing/extension-credits";
 import { StatCard } from "@/components/ui/stat-card";
@@ -48,6 +49,27 @@ export default async function ExtensionDashboardPage() {
       <Suspense fallback={null}>
         <CreditsPurchaseHandler />
       </Suspense>
+
+      {/* Cross-promotes the other listing channel — this dashboard is
+          entirely Chrome-extension-focused otherwise, and a seller who
+          only ever installed the extension has no reason to discover
+          WhatsApp exists unless something here points at it. Links to
+          Settings, where WhatsAppCard actually handles connecting. */}
+      <Link
+        href="/extension/settings"
+        className="mb-6 flex items-center gap-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 p-5 text-white shadow-sm transition-transform hover:scale-[1.01]"
+      >
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/20">
+          <MessageCircle className="h-5 w-5" />
+        </div>
+        <div className="flex-1">
+          <p className="font-semibold">Push listings from WhatsApp</p>
+          <p className="mt-0.5 text-sm text-white/85">
+            Away from your laptop? Send product photos on WhatsApp and we&apos;ll draft + push the listing for you.
+          </p>
+        </div>
+        <ArrowRight className="h-5 w-5 shrink-0" />
+      </Link>
 
       {/* Stat cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
