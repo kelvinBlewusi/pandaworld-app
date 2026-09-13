@@ -31,7 +31,7 @@ import { splitCredentialTokens, identifyCredentials, looksLikeCredential, isRese
 import { classifyBatchIntent, looksActionable } from "@/lib/whatsapp/intent";
 import { pickStory } from "@/lib/whatsapp/waiting-stories";
 import type { ListingRow } from "@/lib/supabase/types";
-import { enqueueAnalysisJobs, nudgeWorker, type AnalysisJob } from "@/lib/whatsapp/analysis-queue";
+import { enqueueAnalysisJobs, nudgeWorker, isBatchSettled, type AnalysisJob } from "@/lib/whatsapp/analysis-queue";
 
 /**
  * WhatsApp chatbot, Stage 4: multi-product batches, entirely in chat.
@@ -93,6 +93,45 @@ function replyButtons(to: string, bodyText: string, buttons: { id: string; title
 
 function replyCta(to: string, bodyText: string, buttonText: string, url: string): Promise<void> {
   return sendCtaUrlIfConfigured(to, bodyText, buttonText, url);
+}
+
+/**
+ * The single way this file reports a failure to a seller.
+ *
+ * Every error message carries the same two buttons, because after
+ * something goes wrong those are the only two things anyone ever wants:
+ *
+ *   Retry   — run the failed step again on the SAME batch, reusing photos
+ *             that are already uploaded. Nothing is re-sent, nothing is
+ *             re-typed. Optionally scoped to one product via retryId.
+ *   Restart — abandon this batch and start a new one from scratch.
+ *
+ * Before this, an error was a dead end: the text named a phrase to type
+ * (and sometimes not even that), so the only recovery a seller could
+ * reliably find was re-sending every photo. Routing errors through one
+ * helper is what makes "all error messages have both" true by
+ * construction rather than by remembering to add them each time.
+ *
+ * cta_url and reply-buttons can't share one WhatsApp message, so a link
+ * that's genuinely useful alongside the error (the review page, the
+ * focused editor) goes out first and the buttons follow — the same
+ * two-message shape sendStatusReply already uses.
+ */
+async function replyError(
+  to:   string,
+  text: string,
+  opts: { retryId?: string; retryTitle?: string; cta?: { label: string; url: string } } = {},
+): Promise<void> {
+  const buttons = [
+    { id: opts.retryId ?? "retry", title: (opts.retryTitle ?? "Retry 🔁").slice(0, 20) },
+    { id: "restart", title: "Restart 🔄" },
+  ];
+  if (opts.cta) {
+    await replyCta(to, text, opts.cta.label, opts.cta.url);
+    await replyButtons(to, "Or pick one of these:", buttons);
+    return;
+  }
+  await replyButtons(to, text, buttons);
 }
 
 async function getBatchListings(batchId: string): Promise<ListingRow[]> {
@@ -228,6 +267,9 @@ async function handleGlobalCommand(
     case "restart":
       await handleGlobalRestart(userId, phoneNumber);
       return;
+    case "retry":
+      await handleGlobalRetry(userId, phoneNumber, session, cmd.seq);
+      return;
     case "status":
       await sendStatusReply(phoneNumber, await describeStatus(session));
       return;
@@ -312,13 +354,215 @@ async function handleGlobalRestart(userId: string, phoneNumber: string): Promise
   );
 }
 
+/**
+ * "retry" — the counterpart to restart, and the whole point of the button
+ * every error message now carries.
+ *
+ * Restart throws the batch away; retry keeps it and runs the failed step
+ * again against the photos the seller already sent. Which step that is
+ * depends on where they are, so this reads the session rather than making
+ * the seller know: mid-connect it re-sends the connect link, mid-batch it
+ * re-queues the products that never got drafted, and so on. That means a
+ * single "retry" phrase (and a single button id) is correct from anywhere,
+ * which is what lets replyError attach it unconditionally.
+ *
+ * An optional seq scopes it to one product — what the per-product failure
+ * messages send, so tapping "Retry" under "Product 3 couldn't be drafted"
+ * re-queues product 3 and nothing else.
+ */
+async function handleGlobalRetry(
+  userId:      string,
+  phoneNumber: string,
+  session:     WhatsAppSession,
+  seq:         number | null,
+): Promise<void> {
+  switch (session.state) {
+    case "awaiting_jumia_credentials":
+      await replyText(phoneNumber, "No problem — let's try those credentials again.");
+      await promptJumiaConnection(userId, phoneNumber, "needs_credentials");
+      return;
+
+    case "awaiting_jumia_oauth":
+      await sendJumiaConnectLink(userId, phoneNumber);
+      return;
+
+    case "awaiting_count":
+      await replyButtons(
+        phoneNumber,
+        "Let's pick up where we left off — how many products are you listing today?",
+        COUNT_QUICK_PICKS,
+      );
+      return;
+
+    case "awaiting_photos":
+      // Nothing has been drafted yet, so there is no failed step to run
+      // again — the photos already sent are safely attached to this
+      // product and stay that way.
+      await replyText(
+        phoneNumber,
+        session.listingId
+          ? `Your photos for product ${session.batchSeq ?? 1} are saved — send any more you want, then reply *done*.`
+          : `Nothing to retry yet — send the photos for product ${session.batchSeq ?? 1} and I'll take it from there.`,
+      );
+      return;
+
+    case "analyzing": {
+      // Normally "retry" here would be a lie AND a double-billing risk:
+      // the jobs are queued, the worker just hasn't reported back yet.
+      //
+      // But "analyzing" is also the state a batch gets WEDGED in — the
+      // session only leaves it when a worker wins claimBatchFinalization,
+      // so anything that kills the last worker mid-flight (a deploy, a
+      // Vercel timeout) strands the seller here with every message
+      // answered "still drafting". A settled queue with the session still
+      // in "analyzing" is exactly that shape, and it's the one case where
+      // re-queueing is both safe and the only thing that helps.
+      if (session.batchId && await isBatchSettled(session.batchId)) {
+        console.warn(`[whatsapp intake] batch ${session.batchId} was wedged in "analyzing" with an empty queue — retrying`);
+        await retryBatchDrafts(userId, phoneNumber, session, seq);
+        return;
+      }
+      await replyText(phoneNumber, "⏳ Already working on it — I'll message you the moment each product is drafted.");
+      return;
+    }
+
+    case "awaiting_confirmation":
+    case "error":
+      await retryBatchDrafts(userId, phoneNumber, session, seq);
+      return;
+  }
+}
+
+/**
+ * Re-queue the products in this batch that never came back with a draft,
+ * reusing the images already uploaded for them — no photo is ever re-sent.
+ *
+ * Deliberately skips products that DID draft: re-analysing one costs a
+ * Gemini call and a credit, and "retry" after a partial failure means
+ * "finish the ones that failed", not "do everything again". A seller who
+ * wants a drafted product changed has the editor link for that.
+ */
+async function retryBatchDrafts(
+  userId:      string,
+  phoneNumber: string,
+  session:     WhatsAppSession,
+  seq:         number | null,
+): Promise<void> {
+  const batchId = session.batchId;
+  if (!batchId) {
+    await replyButtons(
+      phoneNumber,
+      "There's no batch in progress to retry — want to start a new one?",
+      [{ id: "restart", title: "Start listing 🆕" }],
+    );
+    return;
+  }
+
+  const listings = await getBatchListings(batchId);
+  if (listings.length === 0) {
+    await replyError(phoneNumber, "⚠️ I still can't load this batch — give it a moment and try again.");
+    return;
+  }
+
+  const scoped = seq == null ? listings : listings.filter((l) => l.whatsapp_seq === seq);
+  if (scoped.length === 0) {
+    await replyError(
+      phoneNumber,
+      `I don't see product ${seq} in this batch.`,
+      { cta: { label: "Review listings", url: whatsappListingsUrl(batchId) } },
+    );
+    return;
+  }
+
+  // A draft that produced a title is a draft that worked. Anything with no
+  // images can't be analysed at all, so re-queueing it would just fail the
+  // same way — those need photos, not a retry.
+  const undrafted = scoped.filter((l) => !l.title && (l.images?.length ?? 0) > 0);
+  const noImages  = scoped.filter((l) => !l.title && (l.images?.length ?? 0) === 0);
+
+  if (undrafted.length === 0) {
+    if (noImages.length > 0) {
+      await replyButtons(
+        phoneNumber,
+        `⚠️ Product${noImages.length === 1 ? "" : "s"} ${noImages.map((l) => l.whatsapp_seq ?? "?").join(", ")} ${noImages.length === 1 ? "has" : "have"} no photos saved, so there's nothing to draft from. Starting over is the way to re-send them.`,
+        [{ id: "restart", title: "Restart 🔄" }],
+      );
+      return;
+    }
+    // Reached from the wedged-"analyzing" path above when every product
+    // actually drafted but finalizeBatch never ran, so move the session on
+    // — otherwise the seller is told there is nothing to retry and still
+    // can't submit, which is the worst of both.
+    if (session.state === "analyzing") {
+      await updateSession(phoneNumber, { state: "awaiting_confirmation" });
+    }
+    await replyButtons(
+      phoneNumber,
+      seq == null
+        ? "Everything in this batch is already drafted — nothing to retry. Ready to submit."
+        : `Product ${seq} is already drafted — nothing to retry.`,
+      [
+        { id: seq == null ? "submit all" : `submit ${seq}`, title: seq == null ? "Submit all ✅" : `Submit product ${seq}` },
+        { id: "restart", title: "Restart 🔄" },
+      ],
+    );
+    return;
+  }
+
+  // Exactly the gate the first attempt went through. Skipping it would
+  // make Retry a way around both the hourly analyze limit and the credit
+  // balance, since credits are only debited after a draft succeeds.
+  const affordable = await reserveDraftCapacity(userId, phoneNumber, batchId, undrafted);
+  if (affordable.length === 0) {
+    // reserveDraftCapacity has already told them which products couldn't
+    // be reserved and why, each with its own Retry button.
+    return;
+  }
+
+  try {
+    const queued = await enqueueAnalysisJobs({
+      batchId,
+      userId,
+      phoneNumber,
+      batchSize: session.batchSize ?? listings.length,
+      listings:  affordable.map((l) => ({ listingId: l.id, seq: l.whatsapp_seq ?? null })),
+    });
+
+    if (queued === 0) {
+      // Every one of them already has a job in flight — the first attempt
+      // is still running, it just hasn't reported back yet.
+      await replyText(phoneNumber, "⏳ Those are already queued — hang tight, I'll message you as each one finishes.");
+      return;
+    }
+
+    // Back into "analyzing" so the worker's finalizeBatch can close the
+    // batch out exactly once (claimBatchFinalization only fires on a
+    // session sitting in this state).
+    await updateSession(phoneNumber, { state: "analyzing" });
+    await replyText(
+      phoneNumber,
+      `🔁 Retrying ${queued} product${queued === 1 ? "" : "s"} with the photos you already sent — no need to send anything again.`,
+    );
+    nudgeWorker();
+  } catch (e) {
+    console.error(`[whatsapp intake] retry enqueue failed for batch ${batchId}: ${(e as Error).message}`);
+    await replyError(
+      phoneNumber,
+      "⚠️ That didn't take either. Your photos are still saved — try once more in a moment, or open your listings and draft from there.",
+      { cta: { label: "Review listings", url: whatsappListingsUrl(batchId) } },
+    );
+  }
+}
+
 async function handleGlobalConfirmDisconnect(userId: string, phoneNumber: string): Promise<void> {
   const result = await disconnectJumiaForUser(userId);
   if (!result.ok) {
-    await replyButtons(
+    // retryId is scoped to the action that actually failed — a bare
+    // "retry" would be read against the seller's batch state instead.
+    await replyError(
       phoneNumber,
       `⚠️ Couldn't disconnect: ${result.error}. Try again in a moment.`,
-      [{ id: "disconnect", title: "Try again" }],
+      { retryId: "disconnect", retryTitle: "Try again 🔁" },
     );
     return;
   }
@@ -378,6 +622,7 @@ async function handleAnalyzingMessage(
 
 const HELP_TEXT = [
   "Here's what I understand at any point in the conversation:",
+  "• *retry* — run the last thing that failed again, using the photos you already sent (*retry 2* for just product 2)",
   "• *restart* (or *cancel*) — stop what you're doing and start a new batch",
   "• *status* — see where things stand right now",
   "• *disconnect* — unlink your Jumia store from PandaWorld",
@@ -467,8 +712,11 @@ async function describeStatus(
     }
     case "error":
       return {
-        text: "Something went sideways — reply anything to start fresh.",
-        buttons: [{ id: "restart", title: "Start over 🔄" }],
+        text: "Something went sideways — tap Retry to pick up where you left off, or start fresh.",
+        buttons: [
+          { id: "retry",   title: "Retry 🔁" },
+          { id: "restart", title: "Restart 🔄" },
+        ],
       };
   }
 }
@@ -654,11 +902,7 @@ async function handleAwaitingPhotos(
         await updateSession(phoneNumber, { listingId });
       } catch (e) {
         const message = (e as Error).message.replace(/^QUOTA_EXCEEDED:\s*/, "");
-        await replyButtons(
-          phoneNumber,
-          `⚠️ Couldn't start product ${seq}: ${message}`,
-          [{ id: "restart", title: "Restart 🔄" }],
-        );
+        await replyError(phoneNumber, `⚠️ Couldn't start product ${seq}: ${message}`);
         return;
       }
     }
@@ -678,7 +922,7 @@ async function handleAwaitingPhotos(
 
     const url = await ingestWhatsAppImage(content.imageMediaId, userId);
     if (!url) {
-      await replyText(phoneNumber, "⚠️ That photo didn't come through cleanly (unsupported format or too large) — try another one.");
+      await replyError(phoneNumber, "⚠️ That photo didn't come through cleanly (unsupported format or too large) — try another one.");
       return;
     }
 
@@ -752,6 +996,75 @@ async function handleAwaitingPhotos(
 }
 
 /**
+ * Reserve the hourly analyze quota and the credits for a set of products,
+ * telling the seller about anything that didn't fit, and return only the
+ * ones that may actually be drafted.
+ *
+ * Extracted so RETRY goes through the identical gate: without this, a
+ * seller who ran out of credits or hit the hourly limit could simply tap
+ * Retry to queue the drafts anyway, since the ledger is only debited
+ * after a draft succeeds (runQueuedAnalysis) and the limiter is only
+ * consulted here. Two copies of this would have drifted; one copy makes
+ * "retry costs exactly what the first attempt would have" true by
+ * construction.
+ */
+async function reserveDraftCapacity(
+  userId:      string,
+  phoneNumber: string,
+  batchId:     string,
+  listings:    ListingRow[],
+): Promise<ListingRow[]> {
+  const withQuota: ListingRow[] = [];
+  const overQuota: ListingRow[] = [];
+  for (const listing of listings) {
+    const limited = rateLimit(`auto-analyze:${userId}`, RATE_LIMITS.autoAnalyze.max, RATE_LIMITS.autoAnalyze.windowMs);
+    (limited.success ? withQuota : overQuota).push(listing);
+  }
+
+  // Same up-front reservation against the shared extension-credit ledger
+  // (lib/billing/extension-credits.ts) — a WhatsApp draft costs
+  // WHATSAPP_DRAFT_CREDIT_COST from the exact same balance the Chrome
+  // extension spends from. Checked before anything is queued so a seller
+  // who's run out finds out immediately rather than after being billed
+  // for some prefix of the batch.
+  const creditBalance = await getOrCreateCreditBalance(userId);
+  const affordableCount = Number.isFinite(creditBalance)
+    ? Math.max(0, Math.floor(creditBalance / WHATSAPP_DRAFT_CREDIT_COST))
+    : withQuota.length;
+  const overCredit = withQuota.splice(affordableCount);
+
+  // Sent now rather than held until the batch settles: "you're out of
+  // credits for product 4" is a fact the moment it's known, and making a
+  // seller wait several minutes to hear it would be worse, not better.
+  for (const listing of overQuota) {
+    // Retry is genuinely the right affordance here: once the hour rolls
+    // over, tapping it re-queues exactly this product from the photos
+    // already uploaded, with nothing to re-send.
+    await replyError(
+      phoneNumber,
+      `⚠️ Product ${listing.whatsapp_seq}: hourly analyze limit reached — finish it once it resets.`,
+      {
+        retryId: `retry product ${listing.whatsapp_seq}`,
+        cta:     { label: "Review listings", url: whatsappListingsUrl(batchId) },
+      },
+    );
+  }
+  for (const listing of overCredit) {
+    // Same shape: top up, then tap Retry — no photo is re-sent.
+    await replyError(
+      phoneNumber,
+      `⚠️ Product ${listing.whatsapp_seq}: not enough credits left to draft it (${WHATSAPP_DRAFT_CREDIT_COST} needed). Top up, then tap Retry.`,
+      {
+        retryId: `retry product ${listing.whatsapp_seq}`,
+        cta:     { label: "Buy credits", url: buyCreditsUrl() },
+      },
+    );
+  }
+
+  return withQuota;
+}
+
+/**
  * Fires once the LAST product's "done" arrives. Reserves quota and credits
  * for the whole batch, tells the seller what it can't draft and why, then
  * QUEUES the analyses and returns — see lib/whatsapp/analysis-queue.ts.
@@ -801,44 +1114,7 @@ async function startBatchAnalysis(
     // synchronous checks — so a seller without quota for all N finds out
     // before any (expensive) AI calls fire. Same per-user limit the web
     // app's Analyze button and the old single-product flow both used.
-    const withQuota: ListingRow[] = [];
-    const overQuota: ListingRow[] = [];
-    for (const listing of listings) {
-      const limited = rateLimit(`auto-analyze:${userId}`, RATE_LIMITS.autoAnalyze.max, RATE_LIMITS.autoAnalyze.windowMs);
-      (limited.success ? withQuota : overQuota).push(listing);
-    }
-
-    // Same up-front reservation against the shared extension-credit ledger
-    // (lib/billing/extension-credits.ts) — a WhatsApp draft costs
-    // WHATSAPP_DRAFT_CREDIT_COST from the exact same balance the Chrome
-    // extension spends from. Checked before anything is queued so a seller
-    // who's run out finds out immediately rather than after being billed
-    // for some prefix of the batch.
-    const creditBalance = await getOrCreateCreditBalance(userId);
-    const affordableCount = Number.isFinite(creditBalance)
-      ? Math.max(0, Math.floor(creditBalance / WHATSAPP_DRAFT_CREDIT_COST))
-      : withQuota.length;
-    const overCredit = withQuota.splice(affordableCount);
-
-    // Sent now rather than held until the batch settles: "you're out of
-    // credits for product 4" is a fact the moment it's known, and making a
-    // seller wait several minutes to hear it would be worse, not better.
-    for (const listing of overQuota) {
-      await replyCta(
-        phoneNumber,
-        `⚠️ Product ${listing.whatsapp_seq}: hourly analyze limit reached — finish it once it resets.`,
-        "Review listings",
-        whatsappListingsUrl(batchId),
-      );
-    }
-    for (const listing of overCredit) {
-      await replyCta(
-        phoneNumber,
-        `⚠️ Product ${listing.whatsapp_seq}: not enough credits left to draft it (${WHATSAPP_DRAFT_CREDIT_COST} needed). Top up, then message me again to draft it.`,
-        "Buy credits",
-        buyCreditsUrl(),
-      );
-    }
+    const withQuota = await reserveDraftCapacity(userId, phoneNumber, batchId, listings);
 
     if (withQuota.length === 0) {
       // Nothing draftable — don't leave the seller in "analyzing" waiting
@@ -869,11 +1145,10 @@ async function startBatchAnalysis(
   } catch (e) {
     console.error(`[whatsapp intake] batch ${batchId} could not be queued: ${(e as Error).message}`);
     await updateSession(phoneNumber, { state: "awaiting_confirmation" });
-    await replyCta(
+    await replyError(
       phoneNumber,
-      "⚠️ Something went wrong starting the drafts. Your photos are saved — open your listings and try again from there.",
-      "Review listings",
-      whatsappListingsUrl(batchId),
+      "⚠️ Something went wrong starting the drafts. Your photos are saved — tap Retry and I'll draft them from the ones you already sent.",
+      { cta: { label: "Review listings", url: whatsappListingsUrl(batchId) } },
     );
   }
 }
@@ -905,11 +1180,13 @@ export async function runQueuedAnalysis(job: AnalysisJob): Promise<void> {
   const result = await runAutoAnalyze(userId, job.listing_id, null);
 
   if (!result.ok) {
-    await replyCta(
+    await replyError(
       phoneNumber,
       `⚠️ Product ${seq} couldn't be drafted: ${result.message}`,
-      `Fix product ${seq}`,
-      focusedEditorUrl(job.listing_id),
+      {
+        retryId: `retry product ${seq}`,
+        cta:     { label: `Fix product ${seq}`, url: focusedEditorUrl(job.listing_id) },
+      },
     );
     return;
   }
@@ -1155,10 +1432,9 @@ async function handleSubmit(
     // A batch that reached submission always has at least one listing —
     // an empty result here means the lookup itself failed (see
     // getBatchListings), not that the seller asked for the wrong number.
-    await replyButtons(
+    await replyError(
       phoneNumber,
-      `⚠️ I couldn't load this batch right now — try again in a moment, or reply *restart* to start a new one.`,
-      [{ id: "restart", title: "Restart 🔄" }],
+      `⚠️ I couldn't load this batch right now — tap Retry in a moment, or start a new one.`,
     );
     return;
   }
@@ -1168,7 +1444,11 @@ async function handleSubmit(
     : listings.filter((l) => l.whatsapp_seq != null && cmd.seqs.includes(l.whatsapp_seq));
 
   if (requested.length === 0) {
-    await replyCta(phoneNumber, "I couldn't find those product numbers in this batch — check the review page and try again.", "Review listings", whatsappListingsUrl(batchId));
+    await replyError(
+      phoneNumber,
+      "I couldn't find those product numbers in this batch — check the review page and try again.",
+      { retryId: "submit all", retryTitle: "Submit all ✅", cta: { label: "Review listings", url: whatsappListingsUrl(batchId) } },
+    );
     return;
   }
 
@@ -1353,11 +1633,13 @@ async function handleSubmit(
     }
   } catch (e) {
     console.error(`[whatsapp intake] handleSubmit failed for batch ${batchId}: ${(e as Error).message}`);
-    await replyCta(
+    // The failed step was the PUSH, not the drafting — so Retry here has
+    // to mean "submit again", not "re-draft". Everything is already
+    // drafted at this point; re-analysing would cost credits for nothing.
+    await replyError(
       phoneNumber,
-      `⚠️ Something went wrong while submitting. Check what's there below and reply *submit all* to try again.`,
-      "Review listings",
-      whatsappListingsUrl(batchId),
+      `⚠️ Something went wrong while submitting. Check what's there below, then try again.`,
+      { retryId: "submit all", retryTitle: "Submit all ✅", cta: { label: "Review listings", url: whatsappListingsUrl(batchId) } },
     );
   }
 }
@@ -1383,17 +1665,20 @@ async function handleEdit(
 ): Promise<void> {
   const listings = await getBatchListings(batchId);
   if (listings.length === 0) {
-    await replyButtons(
+    await replyError(
       phoneNumber,
-      `⚠️ I couldn't load this batch right now — try again in a moment, or reply *restart* to start a new one.`,
-      [{ id: "restart", title: "Restart 🔄" }],
+      `⚠️ I couldn't load this batch right now — tap Retry in a moment, or start a new one.`,
     );
     return;
   }
 
   const listing = listings.find((l) => l.whatsapp_seq === seq);
   if (!listing) {
-    await replyCta(phoneNumber, `I don't see product ${seq} in this batch — check the review page.`, "Review listings", whatsappListingsUrl(batchId));
+    await replyError(
+      phoneNumber,
+      `I don't see product ${seq} in this batch — check the review page.`,
+      { cta: { label: "Review listings", url: whatsappListingsUrl(batchId) } },
+    );
     return;
   }
 
@@ -1456,7 +1741,7 @@ async function handleCategoryCorrection(
     .maybeSingle();
 
   if (!row) {
-    await replyText(phoneNumber, "⚠️ I couldn't find that product to recategorize — it may have been removed.");
+    await replyError(phoneNumber, "⚠️ I couldn't find that product to recategorize — it may have been removed.");
     return;
   }
   const seq = row.whatsapp_seq ?? "?";
@@ -1466,11 +1751,17 @@ async function handleCategoryCorrection(
   });
 
   if (!result.ok) {
-    await replyCta(
+    // Retry re-runs the category switch itself — the same id the
+    // alternates buttons send, so a tap here is identical to tapping that
+    // category again.
+    await replyError(
       phoneNumber,
       `⚠️ Couldn't switch product ${seq}'s category: ${result.message}`,
-      `Fix product ${seq}`,
-      focusedEditorUrl(listingId),
+      {
+        retryId:    `category:${listingId}:${categoryCode}`,
+        retryTitle: "Try again 🔁",
+        cta:        { label: `Fix product ${seq}`, url: focusedEditorUrl(listingId) },
+      },
     );
     return;
   }
