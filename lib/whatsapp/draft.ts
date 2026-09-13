@@ -1,4 +1,3 @@
-import type { AutoAnalyzeResult } from "@/lib/actions/auto-analyze";
 import { appUrl } from "@/lib/whatsapp/app-url";
 
 /**
@@ -40,21 +39,4 @@ export function stripDoneSignal(text: string): string {
   const tokens = text.trim().split(/\s+/);
   tokens.pop();
   return tokens.join(" ").trim();
-}
-
-export function formatDraftSummary(
-  result: Extract<AutoAnalyzeResult, { ok: true }>,
-  listingId: string,
-): string {
-  const title = result.title ?? "(untitled)";
-  return [
-    "📦 *Draft ready!*",
-    title,
-    `Category: ${result.category.path}`,
-    `${result.attributes_filled} attribute(s) filled in automatically.`,
-    "",
-    "I can't guess your price or stock — you'll set those next.",
-    "",
-    `Finish and push it here: ${reviewUrl(listingId)}`,
-  ].join("\n");
 }

@@ -11,9 +11,9 @@ export interface CreditPack {
 }
 
 export const CREDIT_PACKS: CreditPack[] = [
-  { id: "starter", credits: 100, amountGhs: 20 },
-  { id: "small",   credits: 280, amountGhs: 50 },
-  { id: "medium",  credits: 600, amountGhs: 100 },
+  { id: "starter", credits: 150, amountGhs: 20 },
+  { id: "small",   credits: 330, amountGhs: 50 },
+  { id: "medium",  credits: 650, amountGhs: 100 },
 ];
 
 /** Pack id shown with the "Popular" badge in the Buy Credits modal. */
@@ -31,8 +31,19 @@ export function getCreditPack(id: string): CreditPack | undefined {
  * sellers who never subscribed to a classic-app plan tier (lib/billing/
  * extension-credits.ts's getMostRecentCreditPack()).
  */
+/**
+ * Credit amounts from before the 2026-09-13 price increase (100/280/600 ->
+ * 150/330/650, same GHS price each) — kept so a purchase transaction
+ * recorded before that change still resolves to its pack instead of
+ * showing no "Plan" pill at all.
+ */
+const LEGACY_CREDIT_AMOUNTS: Record<number, string> = { 100: "starter", 280: "small", 600: "medium" };
+
 export function getCreditPackByCredits(credits: number): CreditPack | undefined {
-  return CREDIT_PACKS.find((p) => p.credits === credits);
+  return (
+    CREDIT_PACKS.find((p) => p.credits === credits) ??
+    CREDIT_PACKS.find((p) => p.id === LEGACY_CREDIT_AMOUNTS[credits])
+  );
 }
 
 /** Every sign-up starts with this many free credits (lib/billing/extension-credits.ts). */
@@ -40,6 +51,18 @@ export const FREE_SIGNUP_CREDITS = 10;
 
 /** One extension autofill costs this many credits. */
 export const LISTING_CREDIT_COST = 2.5;
+
+/**
+ * One WhatsApp product draft (a single runAutoAnalyze pass) costs this
+ * many credits — priced higher than an extension autofill (2.5) because
+ * it runs the full listing pipeline (describe + category pick + attribute
+ * fill, up to 3-6 Gemini calls) rather than one single vision call.
+ * Deducted only after a successful draft, same rule LISTING_CREDIT_COST
+ * follows — see deductCredits()'s call site in
+ * app/api/extension/fill/route.ts and its WhatsApp counterpart in
+ * lib/whatsapp/intake.ts's startBatchAnalysis().
+ */
+export const WHATSAPP_DRAFT_CREDIT_COST = 3;
 
 /**
  * Prepares a balance for a JSON API response (app/api/extension/account,

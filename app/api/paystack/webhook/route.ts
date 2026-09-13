@@ -12,6 +12,7 @@ import {
 } from "@/lib/billing/plans";
 import { parsePaystackReference } from "@/lib/billing/paystack-reference";
 import { creditPurchase } from "@/lib/billing/extension-credits";
+import { recordDonation } from "@/lib/billing/donations";
 
 // Valid tier names the webhook is allowed to upsert into the plan
 // column. We refuse anything else so a malformed metadata field can't
@@ -51,7 +52,32 @@ export async function POST(request: Request) {
     case "charge.success": {
       const tx = event.data;
 
-      // ── Extension credit-pack purchases branch off first ────────────────
+      // ── Donations branch off first ──────────────────────────────────────
+      // See app/api/donations/checkout/route.ts. Grants nothing back — just
+      // a record for our own accounting/thank-you purposes.
+      if (tx.metadata?.type === "donation") {
+        const donorUserId = tx.metadata?.user_id as string | undefined;
+        const amountGhs = Number(tx.metadata?.amount_ghs) || tx.amount / 100;
+        if (!donorUserId || amountGhs <= 0) {
+          console.error(
+            "[Paystack webhook] donation charge.success missing user_id/amount",
+            { reference: tx.reference, metadata: tx.metadata },
+          );
+          break;
+        }
+        const result = await recordDonation({ userId: donorUserId, amountGhs, reference: tx.reference });
+        if (!result.ok) {
+          console.error("[Paystack webhook] donation record failed:", result.error);
+        } else {
+          console.info(
+            `[Paystack webhook] recorded GHS ${amountGhs} donation from ${donorUserId} ` +
+              `(reference ${tx.reference})${result.alreadyProcessed ? " — already processed" : ""}`,
+          );
+        }
+        break;
+      }
+
+      // ── Extension credit-pack purchases branch off next ─────────────────
       // Separate flow from the plan-subscription logic below — see
       // app/api/extension/credits/checkout/route.ts. Metadata is reliable
       // here (API-driven transaction/initialize, not a Payment Page), so

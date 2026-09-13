@@ -234,3 +234,10 @@ export function whatsappListingsUrl(batchId?: string): string {
 export function focusedEditorUrl(listingId: string): string {
   return `${appUrl()}/extension/whatsapp-listings/${listingId}`;
 }
+
+/** The extension dashboard's Buy Credits modal — same credit ledger a
+ *  WhatsApp draft now spends from (see WHATSAPP_DRAFT_CREDIT_COST in
+ *  lib/billing/credit-packs.ts). */
+export function buyCreditsUrl(): string {
+  return `${appUrl()}/extension/dashboard`;
+}

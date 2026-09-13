@@ -98,11 +98,14 @@ now a thin wrapper: authenticate, rate-limit, call it, map the result to JSON.
       Improvement") for this product. No retrieval involved.
       File: lib/actions/ai.ts
    b) Fuzzy lexical search (Fuse.js, local, no network) scoped to ONLY
-      that department's subtree (getSubtreeCategories()) → up to 8
-      candidates. If that comes up empty, retry with the department
+      that department's subtree (getSubtreeCategories()), MERGED with a
+      timeout-bounded pgvector embedding search scoped to the same
+      subtree (as of 2026-09-13 — see "Retrieval upgrade" below) → up to
+      8 candidates. If that comes up empty, retry with the department
       pick's next-best alternate before giving up.
       File: lib/jumia/category-search.ts → searchCategoriesByText(),
-      getTopLevelDepartments(), getSubtreeCategories()
+      searchCategoriesByEmbedding(), getTopLevelDepartments(),
+      getSubtreeCategories(), mergeCandidates()
    c) Absolute last resort: fuzzy search the FULL ~27k-row catalog (only
       reached if department picking itself threw). If even that finds
       nothing, the analyze returns ok:false/no_category_picked rather
@@ -113,13 +116,13 @@ now a thin wrapper: authenticate, rate-limit, call it, map the result to JSON.
    categories alphabetically" fallback when all three came up empty).
    That fallback is how a safety helmet and a canvas easel both got
    filed under "Laptops" in production — a blind alphabetical slice of
-   the whole catalog has nothing to do with the actual product. The two
-   external retrieval sources (Google's embedding endpoint, Jumia's
-   catalog search) were also the confirmed source of 4s/6s timeouts
-   stacking up toward Vercel's 60s ceiling; department-scoped fuzzy
-   search needs neither, so both are gone from this path entirely.
-   searchCategoriesByEmbedding() and searchJumiaProductsByTitle() still
-   exist (unused by this pipeline now) in case something else needs them.
+   the whole catalog has nothing to do with the actual product. Jumia's
+   own catalog search API is still gone from this path entirely
+   (searchJumiaProductsByTitle() is unused, kept in case something else
+   needs it) — it was one of the two confirmed sources of 4s/6s timeouts
+   stacking toward Vercel's 60s ceiling. The embedding endpoint, the
+   other confirmed source, is back (see below) but now bounded so it
+   can't reintroduce that risk.
 
 3. Combined Pass B+C (vision): one Gemini call that picks the category
    AND fills its attributes. Replaces what used to be two serial calls.
@@ -186,6 +189,42 @@ pipeline above:
   price stated once applies no matter the variant, and even a
   zero-variant listing (the common WhatsApp case, before any variant row
   exists) can carry one via `buildBaseProduct`.
+- **Retrieval upgrade**: `searchCategoriesByEmbedding()` is back in the
+  live pipeline (merged with fuzzy hits via `mergeCandidates()`) to catch
+  vocabulary mismatches fuzzy search misses (e.g. "wireless earbuds" vs.
+  a category literally named "In-Ear Headphones"). Two guards keep this
+  from reopening the exact problem that got it dropped in the first
+  place (see the "Embedding cold start" gotcha below): (a) it's scoped
+  to the SAME department subtree the fuzzy search already narrowed to,
+  via a new `dept_path` parameter on the `search_categories_by_embedding`
+  RPC (`supabase/migrations/2026-09-13_category-embedding-department-
+  scope.sql`) — a semantic hit can add to the trusted pool but never
+  smuggle in a wrong-department candidate; (b) it races against a 4s
+  internal timeout (`EMBEDDING_SEARCH_TIMEOUT_MS` in
+  `lib/jumia/category-search.ts`) and degrades to `[]` on a miss, same
+  as any other retrieval failure here. Embeddings are only ever useful
+  for categories that HAVE one, so backfilling stopped being purely
+  admin-manual too: `/api/cron/embed-categories` (daily, 00:20 UTC, 5
+  min after the freshness check) runs the same idempotent batch
+  `/api/admin/embed-categories` always did — extracted to
+  `lib/jumia/embed-categories.ts` so both share it — looping batches
+  within one invocation until either done or a 50s soft deadline.
+- **WhatsApp credits**: a WhatsApp product draft (one `runAutoAnalyze`
+  pass) now spends `WHATSAPP_DRAFT_CREDIT_COST` (3) credits from the
+  SAME ledger the Chrome extension's autofill spends
+  `LISTING_CREDIT_COST` (2.5) from — see `lib/billing/extension-
+  credits.ts`. `startBatchAnalysis` (`lib/whatsapp/intake.ts`) reserves
+  affordability for the whole batch up front (same pattern as its
+  existing rate-limit reservation), splitting listings the seller can't
+  afford into their own "top up" message with a link to
+  `/extension/dashboard`, and deducts per-listing only after that
+  listing's draft actually succeeds. Pack sizes increased 2026-09-13
+  (100/280/600 → 150/330/650 credits, same GHS 20/50/100 prices) —
+  `getCreditPackByCredits()` keeps a small legacy-amount alias so a
+  purchase transaction recorded before the change still resolves to its
+  pack for the dashboard's "Plan" pill. WhatsApp's pre-existing
+  plan-quota gate (`checkQuota`/`incrementUsage`) is untouched — both
+  systems currently run side by side.
 
 **Total cost**: ~$0.003 (happy path) to ~$0.007 (with web search + expand).
 **Total wall clock**: ~10-20s warm cache, ~25-35s cold start.
@@ -253,7 +292,8 @@ pipeline above:
 - `lib/billing/quota.ts` — checkQuota / incrementUsage / getEffectivePlan
 - `lib/billing/ai-models.ts` — tier → Gemini model mapping (pickModelForPlan)
 - `lib/jumia/categories.ts` — category schema fetch + cache
-- `lib/jumia/category-search.ts` — fuzzy search + department-tree helpers (getTopLevelDepartments/getSubtreeCategories); embedding/Jumia-catalog search functions still live here but are unused by the analyze pipeline as of 2026-09-13
+- `lib/jumia/category-search.ts` — fuzzy + timeout-bounded embedding search, merged, department-scoped (getTopLevelDepartments/getSubtreeCategories/mergeCandidates); Jumia-catalog search function still lives here but is unused by the analyze pipeline as of 2026-09-13
+- `lib/jumia/embed-categories.ts` — idempotent embedding-backfill batch, shared by the admin route and the daily cron
 - `lib/jumia/api.ts` — Jumia Vendor Center API client + OAuth token refresh
 - `lib/actions/listings.ts` — createListing / updateListing server actions (quota-gated)
 - `lib/actions/upload.ts` — image upload with magic-byte MIME validation (JPEG/PNG only)
@@ -273,6 +313,49 @@ Run in order. All applied through Supabase Dashboard → SQL Editor (NOT auto-ap
 - `2026-05-26_listing-user-prompt.sql` — listings.user_prompt column (persists "what do you want in the listing" hint)
 - `2026-09-13_category-sync-health.sql` — single-row `jumia_category_sync_health` table for the nightly catalog freshness check
 - `2026-09-13_listing-sale-price.sql` — `listings.sale_price`/`sale_start_date`/`sale_end_date`, the fallback every variant's own sale price resolves to when unset (see below)
+- `2026-09-13_category-embedding-department-scope.sql` — adds a `dept_path` parameter to `search_categories_by_embedding()` so semantic search can be scoped to one department subtree (see "Retrieval upgrade" below)
+- `2026-09-13_donations.sql` — `donations` table (userId, amountGhs, reference, created_at) for the temporary "Donate" flow (see below)
+
+---
+
+## Free-for-all growth phase (2026-09-13)
+
+WhatsApp and the extension are temporarily **free for every user** — a
+marketing decision to get sellers using the two new flows while
+credit-based billing is finished and tested, not a removal of either
+billing system underneath. Single switch: `FREE_FOR_ALL_MODE` in
+`lib/billing/free-for-all.ts`. While `true`:
+- `getOrCreateCreditBalance()`/`deductCredits()` (`lib/billing/
+  extension-credits.ts`) return `Infinity`/no-op for every user, same as
+  the existing `isAdmin()` bypass — the extension popup and dashboard
+  already render `Infinity` as "∞ credits" for admins, so this needed no
+  UI changes, just the one flag.
+- `checkQuota()`/`incrementUsage()`/`decrementUsage()`/`getQuotaSummary()`
+  (`lib/billing/quota.ts`) get the same treatment, so WhatsApp's
+  `createListingForUser` → `checkQuota` gate (the OTHER, older limiter —
+  Free tier = 5 listings/month) can't quietly block a seller while
+  credits say "unlimited". `is_admin: true` is returned for everyone
+  too, which is what drives the "Unlimited usage" banner — deliberate,
+  see the field's doc comment.
+- Neither the credit ledger nor quota counters are written to while this
+  is on (both short-circuit before touching the DB) — every user's real
+  balance/usage is exactly where it was when this flag flips back to
+  `false`. **To resume real billing: set `FREE_FOR_ALL_MODE = false` and
+  redeploy. Nothing else needs to change.**
+- The extension dashboard's "Buy Credits" button (paid credit packs) is
+  swapped for "Donate" (`components/extension/donate-modal.tsx`) in all
+  three places `BuyCreditsModal` used to render: `components/extension/
+  shell.tsx` (dashboard), `components/marketing/extension-hero-backdrop.tsx`
+  and `components/marketing/footer-pricing-trigger.tsx` (marketing page,
+  logged-out visitors). A donation is a free-form GHS amount via a NEW,
+  separate Paystack flow (`app/api/donations/checkout`, a `donation`
+  branch in `app/api/paystack/webhook`, `lib/billing/donations.ts` →
+  `recordDonation()`) that grants nothing back — no credits, no plan
+  change, just recorded in the new `donations` table for accounting.
+  `BuyCreditsModal`, its checkout/verify routes, and `CREDIT_PACKS` are
+  all left fully intact and wired — switching back to selling credits is
+  just re-swapping which modal these three callers render, alongside
+  flipping `FREE_FOR_ALL_MODE`.
 
 ---
 
@@ -304,12 +387,17 @@ Run in order. All applied through Supabase Dashboard → SQL Editor (NOT auto-ap
 
 ## Operational gotchas (things that have bitten us)
 
-1. **Embedding cold start** (historical): `gemini-embedding-001` regularly took
-   30–40s on a cold call when the analyze pipeline used it for category
-   retrieval. As of 2026-09-13 the pipeline no longer calls it at all — see
-   the category-resolution rewrite above — so this class of timeout is gone
-   from `runAutoAnalyze`. `lib/ai/embeddings.ts` and
-   `searchCategoriesByEmbedding()` still exist for any other caller.
+1. **Embedding cold start**: `gemini-embedding-001` regularly took 30–40s on a
+   cold call when the analyze pipeline used it for category retrieval —
+   this is why it was dropped from `runAutoAnalyze` entirely in the
+   2026-09-13 department-first rewrite (see above). It's back as of the
+   same day's "Retrieval upgrade" work, but bounded: `searchCategoriesByEmbedding()`
+   (`lib/jumia/category-search.ts`) races its own call against a 4s
+   internal timeout and returns `[]` on a miss, so a cold AI Studio start
+   degrades silently instead of stacking toward `runAutoAnalyze`'s own
+   deadline. Configuring Vertex AI (`GCP_PROJECT_ID` +
+   `GOOGLE_APPLICATION_CREDENTIALS_JSON`) avoids the cold start
+   altogether — `text-embedding-005` is provisioned-warm, <1s.
 
 2. **Supabase image transforms require Pro plan**: the user's project is on Free
    tier, so `/storage/v1/render/image/` returns 403. Code falls back to

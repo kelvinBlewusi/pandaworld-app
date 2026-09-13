@@ -11,6 +11,7 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { FREE_SIGNUP_CREDITS, getCreditPackByCredits, type CreditPack } from "@/lib/billing/credit-packs";
 import { isAdmin } from "@/lib/auth/is-admin";
+import { FREE_FOR_ALL_MODE } from "@/lib/billing/free-for-all";
 
 export interface CreditTransaction {
   id: string;
@@ -135,7 +136,7 @@ export async function getMostRecentCreditPack(userId: string): Promise<CreditPac
  * turns Infinity into null.
  */
 export async function getOrCreateCreditBalance(userId: string): Promise<number> {
-  if (isAdmin(userId)) return Infinity;
+  if (FREE_FOR_ALL_MODE || isAdmin(userId)) return Infinity;
 
   const db = createServerClient();
   const { data: existing } = await db
@@ -188,7 +189,7 @@ export async function deductCredits(
   amount: number,
   description: string,
 ): Promise<{ ok: true; balance: number } | { ok: false; error: string; balance: number }> {
-  if (isAdmin(userId)) return { ok: true, balance: Infinity };
+  if (FREE_FOR_ALL_MODE || isAdmin(userId)) return { ok: true, balance: Infinity };
 
   const db = createServerClient();
 

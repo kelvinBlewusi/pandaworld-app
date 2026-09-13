@@ -4,6 +4,8 @@ import { ingestWhatsAppImage } from "@/lib/whatsapp/media";
 import { getOrCreateSession, updateSession, resetSession, type WhatsAppSession } from "@/lib/whatsapp/session";
 import { createListingForUser } from "@/lib/listings/create";
 import { runAutoAnalyze } from "@/lib/actions/auto-analyze";
+import { getOrCreateCreditBalance, deductCredits } from "@/lib/billing/extension-credits";
+import { WHATSAPP_DRAFT_CREDIT_COST } from "@/lib/billing/credit-packs";
 import { pushListingToJumia, missingFieldLabels } from "@/lib/jumia/push-listing";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
@@ -21,6 +23,7 @@ import {
   extractSalePrice,
   whatsappListingsUrl,
   focusedEditorUrl,
+  buyCreditsUrl,
 } from "@/lib/whatsapp/batch";
 import { splitCredentialTokens, identifyCredentials, isResendCommand, jumiaConnectLink, promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
 import { classifyBatchIntent, looksActionable } from "@/lib/whatsapp/intent";
@@ -640,6 +643,19 @@ async function startBatchAnalysis(
       (limited.success ? withQuota : overQuota).push(listing);
     }
 
+    // Same up-front reservation, but against the shared extension-credit
+    // ledger (lib/billing/extension-credits.ts) rather than the in-memory
+    // rate limiter — a WhatsApp draft costs WHATSAPP_DRAFT_CREDIT_COST from
+    // the exact same balance the Chrome extension spends from. Checked
+    // before any Gemini call fires so a seller who's run out finds out
+    // immediately rather than after drafting (and being billed for) some
+    // prefix of the batch.
+    const creditBalance = await getOrCreateCreditBalance(userId);
+    const affordableCount = Number.isFinite(creditBalance)
+      ? Math.max(0, Math.floor(creditBalance / WHATSAPP_DRAFT_CREDIT_COST))
+      : withQuota.length;
+    const overCredit = withQuota.splice(affordableCount);
+
     const analysisWork = Promise.all(
       withQuota.map(async (listing) => {
         const seq = listing.whatsapp_seq;
@@ -692,6 +708,15 @@ async function startBatchAnalysis(
                 })),
               );
             }
+            // Deducted only now, after a successful draft — same rule
+            // app/api/extension/fill/route.ts's deductCredits() call
+            // follows for the extension. Fire-and-forget on failure (a
+            // lost CAS race, say): the draft already happened and the
+            // seller already has it, so a ledger hiccup here shouldn't
+            // block their reply.
+            deductCredits(userId, WHATSAPP_DRAFT_CREDIT_COST, "WhatsApp product draft").catch((e) =>
+              console.error(`[whatsapp intake] credit deduction failed for product ${seq}: ${(e as Error).message}`),
+            );
           } else {
             await replyCta(
               phoneNumber,
@@ -745,6 +770,15 @@ async function startBatchAnalysis(
         `⚠️ Product ${listing.whatsapp_seq}: hourly analyze limit reached — finish it once it resets.`,
         "Review listings",
         whatsappListingsUrl(batchId),
+      );
+    }
+
+    for (const listing of overCredit) {
+      await replyCta(
+        phoneNumber,
+        `⚠️ Product ${listing.whatsapp_seq}: not enough credits left to draft it (${WHATSAPP_DRAFT_CREDIT_COST} needed). Top up, then message me again to draft it.`,
+        "Buy credits",
+        buyCreditsUrl(),
       );
     }
 
