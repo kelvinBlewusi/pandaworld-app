@@ -72,6 +72,9 @@ const sampleListing: ListingRow = {
   ],
   status:          "draft",
   selling_price:   2199,
+  sale_price:      null,
+  sale_start_date: null,
+  sale_end_date:   null,
   commission_rate: 0.07,
   jumia_ref:       null,
   jumia_error:     null,
@@ -227,6 +230,20 @@ describe("Jumia /feeds/products/create payload conformance", () => {
       // Sample listing has color "Navy Blue"
       expect(products[0].variation).toBe("Navy Blue");
     });
+
+    it("includes a listing-level sale price when set — the only place one can live with zero variant rows", () => {
+      const onSale: ListingRow = { ...sampleListing, sale_price: 1799, sale_start_date: "2026-09-20", sale_end_date: "2026-09-30" };
+      const ps = mapListingToJumiaProducts(onSale, [], brand, currency);
+      const sp = ps[0].price.salePrice;
+      expect(sp).toBeDefined();
+      expect(sp!.value).toBe(1799);
+      expect(sp!.startAt).toBe("2026-09-20");
+      expect(sp!.endAt).toBe("2026-09-30");
+    });
+
+    it("omits salePrice when no listing-level sale price is set", () => {
+      expect(products[0].price.salePrice).toBeUndefined();
+    });
   });
 
   describe("with variants", () => {
@@ -271,6 +288,24 @@ describe("Jumia /feeds/products/create payload conformance", () => {
       expect(sp!.value).toBe(1899);
       expect(sp!.startAt).toBe("2025-02-01");
       expect(sp!.endAt).toBe("2025-02-15");
+    });
+
+    it("falls back to the listing-level sale price when a variant has none of its own — applies no matter the variant", () => {
+      const listingOnSale: ListingRow = { ...sampleListing, sale_price: 1799, sale_start_date: "2026-09-20", sale_end_date: "2026-09-30" };
+      const variantWithoutSale: VariantRow = { ...sampleVariants[0], sale_price: null, sale_start_date: null, sale_end_date: null };
+      const ps = mapListingToJumiaProducts(listingOnSale, [variantWithoutSale], brand, currency);
+      const sp = ps[0].price.salePrice;
+      expect(sp).toBeDefined();
+      expect(sp!.value).toBe(1799);
+      expect(sp!.startAt).toBe("2026-09-20");
+      expect(sp!.endAt).toBe("2026-09-30");
+    });
+
+    it("a variant's own sale price overrides the listing-level fallback", () => {
+      const listingOnSale: ListingRow = { ...sampleListing, sale_price: 1799, sale_start_date: "2026-09-20", sale_end_date: "2026-09-30" };
+      const ps = mapListingToJumiaProducts(listingOnSale, sampleVariants, brand, currency);
+      // sampleVariants[0] already carries its own sale_price: 1899 (see fixture above)
+      expect(ps[0].price.salePrice!.value).toBe(1899);
     });
   });
 

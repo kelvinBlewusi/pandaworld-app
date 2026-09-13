@@ -135,7 +135,14 @@ export function WhatsAppFocusedEditor({
       id: "v1", axes: {}, variation: "Default", sellerSku: initialListing.sku,
       gtin: "", quantity: String(initialListing.quantity ?? 1),
       globalPrice: initialListing.selling_price ? String(initialListing.selling_price) : "",
-      salePrice: "", saleStartDate: "", saleEndDate: "",
+      // Same fallback as globalPrice above, for the same reason — a
+      // sale price stated in chat before any variant row exists lands
+      // on the listing itself (see migration
+      // 2026-09-13_listing-sale-price.sql), so show it here rather than
+      // a blank field that looks like it never registered.
+      salePrice:     initialListing.sale_price != null ? String(initialListing.sale_price) : "",
+      saleStartDate: initialListing.sale_start_date ?? "",
+      saleEndDate:   initialListing.sale_end_date   ?? "",
     }];
   });
   const [axesDef, setAxesDef]           = useState<AxisDef[]>([]);

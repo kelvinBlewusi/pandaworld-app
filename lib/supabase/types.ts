@@ -46,6 +46,16 @@ export interface ListingRow {
   image_variants: Record<string, { polish?: string; rebuild?: string }> | null;
   status: ListingStatus;
   selling_price: number | null;
+  // Listing-level sale price + window — the fallback every variant's own
+  // sale_price/sale_start_date/sale_end_date resolves to when unset (see
+  // mapListingToJumiaProducts in lib/jumia/api.ts), the same pattern
+  // global_price already has via selling_price. Lets a sale price set
+  // once (e.g. from a WhatsApp chat message, before any variant row
+  // exists) apply to every variant. See migration
+  // 2026-09-13_listing-sale-price.sql.
+  sale_price: number | null;
+  sale_start_date: string | null;
+  sale_end_date: string | null;
   commission_rate: number | null;
   jumia_ref: string | null;
   jumia_error: string | null;

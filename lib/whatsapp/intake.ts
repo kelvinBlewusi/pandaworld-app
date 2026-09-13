@@ -18,6 +18,7 @@ import {
   parseEditCommand,
   extractPrice,
   extractStock,
+  extractSalePrice,
   whatsappListingsUrl,
   focusedEditorUrl,
 } from "@/lib/whatsapp/batch";
@@ -131,6 +132,17 @@ async function applyNotes(listingId: string, text: string): Promise<void> {
   const stock = extractStock(text);
   if (price != null) updates.selling_price = price;
   if (stock != null) updates.quantity = stock;
+  // Listing-level, not variant-level — see migration
+  // 2026-09-13_listing-sale-price.sql. mapListingToJumiaProducts falls
+  // back to this for every variant that doesn't have its own sale price,
+  // so stating it once here applies no matter the variant, exactly like
+  // selling_price already does for global_price.
+  const sale = extractSalePrice(text);
+  if (sale != null) {
+    updates.sale_price = sale.salePrice;
+    if (sale.startDate) updates.sale_start_date = sale.startDate;
+    if (sale.endDate) updates.sale_end_date = sale.endDate;
+  }
   await db.from("listings").update(updates).eq("id", listingId);
 }
 
@@ -1057,15 +1069,24 @@ async function handleEdit(
   const db = createServerClient();
   const price = extractPrice(editText);
   const stock = extractStock(editText);
+  const sale  = extractSalePrice(editText);
   const applied: string[] = [];
   if (price != null) { applied.push(`price to GH₵${price}`); }
   if (stock != null) { applied.push(`stock to ${stock}`); }
+  if (sale != null) { applied.push(`sale price to GH₵${sale.salePrice}${sale.startDate || sale.endDate ? " with dates" : ""}`); }
   if (applied.length > 0) {
     await db
       .from("listings")
       .update({
         ...(price != null ? { selling_price: price } : {}),
         ...(stock != null ? { quantity: stock } : {}),
+        // Listing-level fallback every variant resolves to when it has no
+        // sale price of its own — see applyNotes's identical comment.
+        ...(sale != null ? {
+          sale_price: sale.salePrice,
+          ...(sale.startDate ? { sale_start_date: sale.startDate } : {}),
+          ...(sale.endDate ? { sale_end_date: sale.endDate } : {}),
+        } : {}),
         updated_at: new Date().toISOString(),
       })
       .eq("id", listing.id);

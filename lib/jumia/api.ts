@@ -556,6 +556,20 @@ function buildBaseProduct(listing: ListingRow, brand: { code: number; name: stri
     price: {
       value:    listing.selling_price ?? 0,
       currency,
+      // A listing-level sale price (see migration
+      // 2026-09-13_listing-sale-price.sql) — the only sale price a
+      // genuinely simple, zero-variant product can carry, since there's
+      // no variant row for one to live on. mapListingToJumiaProducts's
+      // per-variant path below falls back to this same listing-level
+      // value too, so a sale price set once applies no matter the
+      // variant.
+      ...(listing.sale_price != null ? {
+        salePrice: {
+          value:   listing.sale_price,
+          startAt: listing.sale_start_date ?? undefined,
+          endAt:   listing.sale_end_date   ?? undefined,
+        },
+      } : {}),
     },
     stock:       listing.quantity ?? 1,
     attributes:  buildAttributes(listing),
@@ -632,11 +646,16 @@ export function mapListingToJumiaProducts(
       price: {
         value:     v.global_price ?? listing.selling_price ?? 0,
         currency,
-        ...(v.sale_price != null ? {
+        // Falls back to the listing-level sale price/dates when this
+        // variant has none of its own — same "set once, applies no
+        // matter the variant" fallback global_price already gets from
+        // selling_price above. A variant that WAS given its own sale
+        // price (e.g. via the web editor) still overrides it.
+        ...((v.sale_price ?? listing.sale_price) != null ? {
           salePrice: {
-            value:   v.sale_price,
-            startAt: v.sale_start_date ?? undefined,
-            endAt:   v.sale_end_date   ?? undefined,
+            value:   v.sale_price       ?? listing.sale_price!,
+            startAt: v.sale_start_date  ?? listing.sale_start_date ?? undefined,
+            endAt:   v.sale_end_date    ?? listing.sale_end_date   ?? undefined,
           },
         } : {}),
       },

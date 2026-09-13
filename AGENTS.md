@@ -171,6 +171,21 @@ pipeline above:
   (id `category:<listingId>:<code>`) right in chat — previously this only
   showed on the web review page's `AIConfidenceBanner`, which a
   WhatsApp-only seller would never see.
+- **Seller-notes fidelity**: the describe-pass prompt now treats an
+  explicit seller-stated variant list ("comes in red, blue and green")
+  as authoritative, using it verbatim instead of requiring the images to
+  visually confirm every option. `extractAttributesForCategory`'s prompt
+  gained the same "what's in the box" guidance the combined pass already
+  had. `extractSalePrice()` (`lib/whatsapp/batch.ts`) deterministically
+  parses "sale price 120 from 20 September to 30 September" style text
+  in chat (same never-AI-guessed rule as price/stock), wired into
+  `applyNotes()`/`handleEdit()` in `lib/whatsapp/intake.ts`, and persisted
+  to `listings.sale_price`/`sale_start_date`/`sale_end_date` — the
+  listing-level fallback every variant's own sale price resolves to when
+  unset (`mapListingToJumiaProducts` in `lib/jumia/api.ts`), so a sale
+  price stated once applies no matter the variant, and even a
+  zero-variant listing (the common WhatsApp case, before any variant row
+  exists) can carry one via `buildBaseProduct`.
 
 **Total cost**: ~$0.003 (happy path) to ~$0.007 (with web search + expand).
 **Total wall clock**: ~10-20s warm cache, ~25-35s cold start.
@@ -257,6 +272,7 @@ Run in order. All applied through Supabase Dashboard → SQL Editor (NOT auto-ap
 - `2026-05-26_category-embeddings.sql` — pgvector(768) column + ivfflat index + search RPC
 - `2026-05-26_listing-user-prompt.sql` — listings.user_prompt column (persists "what do you want in the listing" hint)
 - `2026-09-13_category-sync-health.sql` — single-row `jumia_category_sync_health` table for the nightly catalog freshness check
+- `2026-09-13_listing-sale-price.sql` — `listings.sale_price`/`sale_start_date`/`sale_end_date`, the fallback every variant's own sale price resolves to when unset (see below)
 
 ---
 

@@ -79,6 +79,9 @@ export async function createListingForUser(userId: string, input: {
     certifications: [],
     youtube_id: null,
     selling_price: null,
+    sale_price: null,
+    sale_start_date: null,
+    sale_end_date: null,
   };
 
   const { data, error } = await db
