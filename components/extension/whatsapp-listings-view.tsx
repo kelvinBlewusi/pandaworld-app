@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { StatusPill } from "@/components/ui/status-pill";
 import { cn } from "@/lib/utils";
 import { updateListing } from "@/lib/actions/listings";
+import { focusedEditorUrl } from "@/lib/whatsapp/batch";
 import type { ListingRow, ListingStatus } from "@/lib/supabase/types";
 
 export interface WhatsAppBatch {
@@ -75,9 +76,7 @@ function WhatsAppListingRow({ listing }: { listing: ListingRow }) {
   const needsPrice = !listing.selling_price && !price;
   const canPush = status === "draft" || status === "failed";
 
-  async function handleSave() {
-    setSaving(true);
-    setMessage(null);
+  async function persist(): Promise<boolean> {
     try {
       const priceNum = parseFloat(price);
       const stockNum = parseInt(stock, 10);
@@ -85,17 +84,33 @@ function WhatsAppListingRow({ listing }: { listing: ListingRow }) {
         ...(Number.isFinite(priceNum) && priceNum > 0 ? { selling_price: priceNum } : {}),
         ...(Number.isFinite(stockNum) && stockNum > 0 ? { quantity: stockNum } : {}),
       });
-      setMessage({ type: "ok", text: "Saved." });
+      return true;
     } catch (e) {
       setMessage({ type: "error", text: (e as Error).message });
-    } finally {
-      setSaving(false);
+      return false;
     }
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    setMessage(null);
+    const ok = await persist();
+    if (ok) setMessage({ type: "ok", text: "Saved." });
+    setSaving(false);
   }
 
   async function handlePush() {
     setPushing(true);
     setMessage(null);
+    // Submit always saves first — a seller who typed a price and hit
+    // "Push to Jumia" without clicking Save first used to push whatever
+    // was already in the DB (often nothing), failing with "price is
+    // required" even though a price was visibly typed in the field.
+    const saved = await persist();
+    if (!saved) {
+      setPushing(false);
+      return;
+    }
     try {
       const res = await fetch("/api/jumia/push", {
         method: "POST",
@@ -134,7 +149,12 @@ function WhatsAppListingRow({ listing }: { listing: ListingRow }) {
               #{listing.whatsapp_seq}
             </span>
           )}
-          <p className="truncate text-sm font-semibold text-zinc-900">{listing.title ?? "(untitled)"}</p>
+          <Link
+            href={focusedEditorUrl(listing.id)}
+            className="truncate text-sm font-semibold text-zinc-900 hover:text-orange-600 hover:underline"
+          >
+            {listing.title ?? "(untitled)"}
+          </Link>
           <StatusPill status={status} />
         </div>
         {listing.category_path && <p className="text-xs text-zinc-400">{listing.category_path}</p>}
@@ -171,10 +191,10 @@ function WhatsAppListingRow({ listing }: { listing: ListingRow }) {
             </Button>
           )}
           <Link
-            href={`/listings/${listing.id}/review`}
+            href={focusedEditorUrl(listing.id)}
             className="inline-flex items-center gap-1 text-xs font-medium text-zinc-400 hover:text-zinc-700"
           >
-            Full editor <ExternalLink className="h-3 w-3" />
+            Edit product <ExternalLink className="h-3 w-3" />
           </Link>
         </div>
 

@@ -102,6 +102,11 @@ describe("extractPrice", () => {
     expect(extractPrice("comes in 3 sizes")).toBeNull();
     expect(extractPrice("this is a pack of 6")).toBeNull();
   });
+
+  it("treats a bare number with nothing else as the price — confirmed live failure", () => {
+    expect(extractPrice("200")).toBe(200);
+    expect(extractPrice("  99.50  ")).toBe(99.5);
+  });
 });
 
 describe("extractStock", () => {

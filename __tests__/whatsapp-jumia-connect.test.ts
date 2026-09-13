@@ -19,6 +19,15 @@ describe("splitCredentialTokens", () => {
   it("returns an empty array for blank text", () => {
     expect(splitCredentialTokens("   ")).toEqual([]);
   });
+
+  it("strips invisible unicode characters a mobile keyboard or copy source can inject", () => {
+    const dirtyId = "b827fe1b-72c7-4851-83b8-a1c8508dd967" + "\u200B";
+    const dirtySecret = "\uFEFF" + "YmLqm5GVeMCQWhwK4pxm0i-Q7vNSGXN2SVV5IqRKxGQ=";
+    expect(splitCredentialTokens(`${dirtyId} ${dirtySecret}`)).toEqual([
+      "b827fe1b-72c7-4851-83b8-a1c8508dd967",
+      "YmLqm5GVeMCQWhwK4pxm0i-Q7vNSGXN2SVV5IqRKxGQ=",
+    ]);
+  });
 });
 
 describe("identifyCredentials", () => {
