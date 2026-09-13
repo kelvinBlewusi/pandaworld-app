@@ -445,6 +445,23 @@ billing system underneath. Single switch: `FREE_FOR_ALL_MODE` in
 
 ## Operational gotchas (things that have bitten us)
 
+0. **The embedding search was timing out on Vertex too (fixed 2026-09-13)**:
+   measured live on a real WhatsApp draft — `[category-search] embedding
+   search TIMED OUT after 4000ms`, with Vertex correctly configured, the
+   dept-scoped RPC verified healthy, and every category embedded. The cause
+   isn't the model: `embedViaVertex` has its OWN auth path, separate from
+   `gemini-client.ts`, and the first call in a fresh process pays for a
+   dynamic `import("google-auth-library")` + a JWT sign + an OAuth token
+   fetch — all inside `searchCategoriesByEmbedding`'s 4s race. The same
+   request logged `[gemini] backend=vertex` (which prints once per process),
+   confirming a cold start, and `retrieval=11560ms` of a `total=22701ms`
+   analyze, 4s of it waiting on a result that never came.
+   Fix: `warmEmbeddingBackend()` (`lib/ai/embeddings.ts`), started
+   un-awaited at the top of `runAutoAnalyze` so the one-off cost overlaps
+   Pass A's ~5s vision call. The token caches for ~50 min, so a warm
+   process never pays it again. Watch the `[category-search] embedding
+   search ok in NNNms` line to confirm it stays well under the budget —
+   that log exists precisely because this failure was previously silent.
 1. **Embedding cold start**: `gemini-embedding-001` regularly took 30–40s on a
    cold call when the analyze pipeline used it for category retrieval —
    this is why it was dropped from `runAutoAnalyze` entirely in the

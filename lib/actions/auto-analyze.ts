@@ -27,6 +27,7 @@ import {
   type CandidateWithSchema,
   type RankedCategory,
 } from "@/lib/actions/ai";
+import { warmEmbeddingBackend } from "@/lib/ai/embeddings";
 import {
   getListableCategories,
   getAllCategoriesForTree,
@@ -118,6 +119,17 @@ export async function runAutoAnalyze(
   // Capture wall-clock so we can return per-step timing for the UI
   const t0 = Date.now();
   const timings: Record<string, number> = {};
+
+  // Deliberately NOT awaited. The Vertex embed path pays a one-off cost per
+  // process (module import + JWT sign + OAuth token fetch) that otherwise
+  // lands inside searchCategoriesByEmbedding's 4s race further down and
+  // blows it — measured live, a cold process logged "embedding search TIMED
+  // OUT after 4000ms" with Vertex correctly configured and the RPC healthy,
+  // so retrieval silently fell back to fuzzy-only on the very requests that
+  // were already slowest. Starting it here overlaps that cost with Pass A's
+  // ~5s vision call, so by the time retrieval runs the token is cached and
+  // only the sub-second predict call has to fit the budget.
+  void warmEmbeddingBackend();
 
   // ── 1. Pass A: describe the product ───────────────────────────────────────
   //
