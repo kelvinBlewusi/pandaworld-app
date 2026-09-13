@@ -81,13 +81,20 @@ export function parseEditCommand(text: string, batchSize: number): EditCommand |
 // an inference — if it doesn't match a clear, explicit number, it returns
 // null and the seller sets it on the review page instead.
 
-/** "price 150", "price: GHS 150", "₵150", "150 cedis" → 150. Null if no
- *  explicit price-shaped number is found. */
+/** "price 150", "price: GHS 150", "₵150", "150 cedis" → 150. A message
+ *  that's JUST a bare number ("200") also counts — confirmed live: a
+ *  seller told "tell me the price" (the photo-prompt's own wording, no
+ *  keyword required) reasonably just types "200", and requiring a
+ *  "price"/currency prefix silently dropped it, leaving the listing with
+ *  no price and "price is required" errors at submit time. Null if
+ *  neither shape matches. */
 export function extractPrice(text: string): number | null {
   const labeled = text.match(/price\s*[:=]?\s*(?:GH[SC]?|GH₵|₵)?\s*(\d+(?:\.\d+)?)/i);
   if (labeled) return parseFloat(labeled[1]);
   const currency = text.match(/(?:GH[SC]?|GH₵|₵)\s*(\d+(?:\.\d+)?)/i) ?? text.match(/(\d+(?:\.\d+)?)\s*ced[ei]s/i);
   if (currency) return parseFloat(currency[1]);
+  const bare = text.trim().match(/^(\d+(?:\.\d+)?)$/);
+  if (bare) return parseFloat(bare[1]);
   return null;
 }
 
