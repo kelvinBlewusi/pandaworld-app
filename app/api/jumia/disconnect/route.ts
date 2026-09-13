@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { disconnectJumiaForUser } from "@/lib/jumia/credentials";
 import { getWhatsAppConnection } from "@/lib/whatsapp/link";
-import { sendCtaUrlIfConfigured } from "@/lib/whatsapp/client";
-import { appUrl } from "@/lib/whatsapp/app-url";
+import { sendButtonsIfConfigured } from "@/lib/whatsapp/client";
 
 // ─── POST /api/jumia/disconnect ───────────────────────────────────────────────
 // Revokes the Jumia access token, then DELETES the connection row so that:
@@ -29,15 +28,18 @@ export async function POST() {
   try {
     const wa = await getWhatsAppConnection(userId);
     if (wa.connected && wa.phoneNumber) {
-      // disconnectJumiaForUser deletes the connection row entirely (no
-      // saved app_id/secret left to shortcut with), so this always needs
-      // the full connect form — the same page (main)/layout.tsx's own
-      // gate redirects a disconnected seller to.
-      await sendCtaUrlIfConfigured(
+      // A reply button (not a link) — tapping it sends "reconnect jumia"
+      // back through the webhook like any other button tap (see
+      // lib/whatsapp/message-content.ts's contentOf()), which
+      // lib/whatsapp/commands.ts's global command handling picks up and
+      // routes into the same in-chat connect-instructions flow
+      // (promptJumiaConnection) a seller gets right after linking — no
+      // separate web form needed, matching this whole flow's
+      // connect-entirely-from-chat design.
+      await sendButtonsIfConfigured(
         wa.phoneNumber,
         "🔌 Your Jumia store was disconnected from PandaWorld from the website. Message me here whenever you're ready to reconnect, or use the button below.",
-        "Reconnect Jumia",
-        `${appUrl()}/onboarding/connect`,
+        [{ id: "reconnect jumia", title: "Reconnect Jumia" }],
       );
     }
   } catch (e) {

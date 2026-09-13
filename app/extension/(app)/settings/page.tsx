@@ -5,6 +5,7 @@ import { Settings as SettingsIcon, KeyRound, CreditCard } from "lucide-react";
 import { listExtensionApiKeys } from "@/lib/security/extension-keys";
 import { RegenerateKeyButton } from "@/components/extension/regenerate-key-button";
 import { WhatsAppCard } from "@/components/whatsapp/whatsapp-card";
+import { JumiaConnectionCard } from "@/components/jumia/jumia-connection-card";
 
 export const metadata: import("next").Metadata = {
   title: "Settings",
@@ -50,6 +51,10 @@ export default async function ExtensionSettingsPage() {
         >
           <CreditCard className="h-3.5 w-3.5" /> Manage plan & billing
         </Link>
+      </div>
+
+      <div className="mt-6">
+        <JumiaConnectionCard returnTo="/extension/settings" />
       </div>
 
       <div className="mt-6">

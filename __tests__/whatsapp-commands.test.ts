@@ -43,4 +43,10 @@ describe("parseGlobalCommand", () => {
     expect(parseGlobalCommand("keep jumia connected")).not.toEqual({ type: "restart" });
     expect(parseGlobalCommand("keep jumia connected")).not.toEqual({ type: "disconnect" });
   });
+
+  it("matches 'reconnect jumia' — the web-disconnect notice's reply button", () => {
+    expect(parseGlobalCommand("reconnect jumia")).toEqual({ type: "reconnect_jumia" });
+    expect(parseGlobalCommand("Reconnect Jumia!")).toEqual({ type: "reconnect_jumia" });
+    expect(parseGlobalCommand("reconnect jumia")).not.toEqual({ type: "disconnect" });
+  });
 });

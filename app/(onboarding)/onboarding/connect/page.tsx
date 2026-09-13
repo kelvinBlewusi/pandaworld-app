@@ -64,8 +64,19 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+/** Appends ?return_to=<returnTo> to a same-origin path when returnTo is
+ *  set — see lib/jumia/return-to.ts. Client-side mirror of that file's
+ *  sanitizeReturnTo (kept inline rather than imported to avoid pulling a
+ *  server-oriented module into this "use client" page for one check). */
+function withReturnTo(path: string, returnTo: string | null): string {
+  if (!returnTo || !returnTo.startsWith("/") || returnTo.startsWith("//")) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}return_to=${encodeURIComponent(returnTo)}`;
+}
+
 function ConnectPageInner() {
   const searchParams = useSearchParams();
+  const returnTo = searchParams.get("return_to");
 
   // Reached from (main)/layout.tsx's gate when a connection row exists but
   // needs re-authorization (refresh token stopped working — see
@@ -102,7 +113,7 @@ function ConnectPageInner() {
           <Button
             className="w-full h-11 gap-2 bg-gradient-to-r from-orange-400 to-orange-500 hover:from-orange-500 hover:to-orange-600 text-white"
             disabled={reconnecting}
-            onClick={() => { setReconnecting(true); window.location.href = "/api/jumia/connect"; }}
+            onClick={() => { setReconnecting(true); window.location.href = withReturnTo("/api/jumia/connect", returnTo); }}
           >
             {reconnecting ? (
               <><Loader2 className="h-4 w-4 animate-spin" />Redirecting to Jumia…</>
@@ -122,10 +133,10 @@ function ConnectPageInner() {
     );
   }
 
-  return <ConnectForm />;
+  return <ConnectForm returnTo={returnTo} />;
 }
 
-function ConnectForm() {
+function ConnectForm({ returnTo }: { returnTo: string | null }) {
   const [redirectUri, setRedirectUri] = useState("");
   const [appId, setAppId]             = useState("");
   const [secretKey, setSecretKey]     = useState("");
@@ -180,7 +191,7 @@ function ConnectForm() {
         // /api/jumia/connect reads the saved app_id and redirects to Jumia's
         // authorize page; after the seller approves, the callback stores a real
         // access_token and sends them to /onboarding/done.
-        window.location.href = "/api/jumia/connect";
+        window.location.href = withReturnTo("/api/jumia/connect", returnTo);
       } else {
         setTestStatus("error");
         setTestMessage(data.error ?? "Failed to save credentials — please try again.");

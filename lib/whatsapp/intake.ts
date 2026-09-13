@@ -231,6 +231,15 @@ async function handleGlobalCommand(
     case "keep_connected":
       await replyText(phoneNumber, "👍 No changes made — Jumia stays connected.");
       return;
+    case "reconnect_jumia": {
+      const kind = await getJumiaConnectionKind(userId);
+      if (kind === "connected") {
+        await replyText(phoneNumber, "✅ Jumia's already connected — you're good to go!");
+        return;
+      }
+      await promptJumiaConnection(userId, phoneNumber, kind);
+      return;
+    }
   }
 }
 

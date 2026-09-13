@@ -12,12 +12,19 @@ const progressSteps = ["Connect", "Done"];
 export default function OnboardingDonePage() {
   const router = useRouter();
   const [storeName, setStoreName] = useState<string | null>(null);
+  // Set only when the connect round trip started from somewhere other than
+  // this onboarding flow (e.g. /extension/settings) — see
+  // lib/jumia/return-to.ts. Sends the seller back there instead of always
+  // funnelling them into the old web dashboard.
+  const [returnTo, setReturnTo] = useState<string | null>(null);
 
   useEffect(() => {
-    // Pick up store name from URL param set by the connect flow
+    // Pick up store name + returnTo from URL params set by the connect flow
     const params = new URLSearchParams(window.location.search);
     const name = params.get("store");
     if (name) setStoreName(decodeURIComponent(name));
+    const rt = params.get("return_to");
+    if (rt && rt.startsWith("/") && !rt.startsWith("//")) setReturnTo(rt);
   }, []);
 
   return (
@@ -80,18 +87,28 @@ export default function OnboardingDonePage() {
         >
           <Button
             className="gap-2 h-11 w-full bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700"
-            onClick={() => router.push("/dashboard")}
+            onClick={() => router.push(returnTo ?? "/dashboard")}
           >
-            Go to dashboard
+            {returnTo ? "Continue" : "Go to dashboard"}
             <ArrowRight className="h-4 w-4" />
           </Button>
-          <Button
-            variant="ghost"
-            className="text-zinc-400 text-sm"
-            onClick={() => router.push("/listings/new/batch?count=1&mode=own")}
-          >
-            Create my first listing →
-          </Button>
+          {returnTo?.startsWith("/extension") ? (
+            <Button
+              variant="ghost"
+              className="text-zinc-400 text-sm"
+              onClick={() => router.push("/extension/whatsapp-listings")}
+            >
+              Start listing from WhatsApp →
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              className="text-zinc-400 text-sm"
+              onClick={() => router.push("/listings/new/batch?count=1&mode=own")}
+            >
+              Create my first listing →
+            </Button>
+          )}
         </motion.div>
       </motion.div>
     </div>

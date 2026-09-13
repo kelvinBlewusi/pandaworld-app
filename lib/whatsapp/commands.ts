@@ -23,6 +23,7 @@ export type GlobalCommand =
   | { type: "disconnect" }
   | { type: "confirm_disconnect" }
   | { type: "keep_connected" }
+  | { type: "reconnect_jumia" }
   | { type: "status" }
   | { type: "help" };
 
@@ -34,6 +35,11 @@ const CONFIRM_DISCONNECT_RE = /^confirm disconnect[.!]?$/i;
 // button be misread as restarting a batch instead of just declining.
 const KEEP_CONNECTED_RE = /^keep jumia connected[.!]?$/i;
 const DISCONNECT_RE = /^disconnect( jumia)?[.!]?$/i;
+// The "Reconnect Jumia" button on the web-disconnect notice
+// (app/api/jumia/disconnect/route.ts) — a global command (not tied to any
+// one session state) since a seller could tap it from a stale/leftover
+// state left over from before they disconnected.
+const RECONNECT_JUMIA_RE = /^reconnect jumia[.!]?$/i;
 const STATUS_RE = /^(status|where am i)[.!?]?$/i;
 const HELP_RE = /^(help|\?|commands)[.!]?$/i;
 
@@ -45,6 +51,7 @@ export function parseGlobalCommand(text: string): GlobalCommand | null {
   if (CONFIRM_DISCONNECT_RE.test(t)) return { type: "confirm_disconnect" };
   if (KEEP_CONNECTED_RE.test(t)) return { type: "keep_connected" };
   if (DISCONNECT_RE.test(t)) return { type: "disconnect" };
+  if (RECONNECT_JUMIA_RE.test(t)) return { type: "reconnect_jumia" };
   if (RESTART_RE.test(t)) return { type: "restart" };
   if (STATUS_RE.test(t)) return { type: "status" };
   if (HELP_RE.test(t)) return { type: "help" };

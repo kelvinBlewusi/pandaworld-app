@@ -6,6 +6,7 @@ import { clearJumiaHealthCache } from "@/lib/jumia/api";
 import { getWhatsAppConnection } from "@/lib/whatsapp/link";
 import { sendTextIfConfigured } from "@/lib/whatsapp/client";
 import { updateSession } from "@/lib/whatsapp/session";
+import { sanitizeReturnTo } from "@/lib/jumia/return-to";
 
 // ─── GET /api/jumia/callback ──────────────────────────────────────────────────
 // Jumia redirects here after the user authorises PandaWorld.
@@ -26,7 +27,13 @@ export async function GET(req: NextRequest) {
   const error    = searchParams.get("error");
 
   const origin  = req.nextUrl.origin;
-  const failUrl = `${origin}/settings/integrations?jumia_error=`;
+  // Reassigned below once state decodes successfully with a returnTo (see
+  // lib/jumia/return-to.ts) — a connect started from /extension/settings
+  // should send failures back there too, not always to the old dashboard's
+  // Settings → Integrations. The two checks above state decoding can't know
+  // returnTo yet (there's nothing to decode it from), so they keep the
+  // default.
+  let failUrl = `${origin}/settings/integrations?jumia_error=`;
 
   // ── User denied access ─────────────────────────────────────────────────────
   if (error) {
@@ -43,12 +50,15 @@ export async function GET(req: NextRequest) {
   // ── Decode state → recover userId ─────────────────────────────────────────
   let userId: string;
   let storeName: string = "";
+  let returnTo: string | undefined;
   try {
     const decoded = JSON.parse(
       Buffer.from(stateRaw, "base64url").toString("utf-8")
     );
     userId = decoded.userId;
     storeName = decoded.storeName ?? "";
+    returnTo = sanitizeReturnTo(decoded.returnTo);
+    if (returnTo) failUrl = `${origin}${returnTo}?jumia_error=`;
     if (!userId) throw new Error("No userId in state");
   } catch (e) {
     console.error("[Jumia OAuth] Invalid state param:", e);
@@ -183,7 +193,12 @@ export async function GET(req: NextRequest) {
     console.warn(`[Jumia OAuth] WhatsApp notify failed for user=${userId}: ${(e as Error).message}`);
   }
 
-  // Redirect to done page (onboarding flow) with store name
-  const successUrl = `${origin}/onboarding/done?store=${encodeURIComponent(resolvedStoreName)}`;
+  // Redirect to done page (onboarding flow) with store name — carrying
+  // returnTo along so the page's own "Continue" button knows to send an
+  // /extension/settings-originated connect back there instead of the old
+  // web dashboard.
+  const successUrl =
+    `${origin}/onboarding/done?store=${encodeURIComponent(resolvedStoreName)}` +
+    (returnTo ? `&return_to=${encodeURIComponent(returnTo)}` : "");
   return NextResponse.redirect(successUrl);
 }
