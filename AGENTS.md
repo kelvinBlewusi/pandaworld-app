@@ -228,6 +228,30 @@ pipeline above:
   pack for the dashboard's "Plan" pill. WhatsApp's pre-existing
   plan-quota gate (`checkQuota`/`incrementUsage`) is untouched — both
   systems currently run side by side.
+- **Batch cap is a capacity decision (2026-09-13)**: `MAX_BATCH_SIZE`
+  (`lib/whatsapp/batch.ts`) dropped 20 → 5. `startBatchAnalysis` runs every
+  product's analysis concurrently inside the WhatsApp webhook, which Vercel
+  kills at 60s; a single product measured 22.7s in production, already half
+  `ANALYSIS_DEADLINE_MS`. At 20 that meant 60-80 concurrent Gemini vision
+  calls and up to 160 images in the shared in-process cache from one
+  instance. The `>= 10` "big batch" thresholds became `BIG_BATCH_SIZE` (3)
+  since a literal 10 was unreachable under the new cap. Raising the cap
+  again needs the analysis moved off the request path onto a background
+  worker — changing the number alone just moves the failure.
+- **Pending listings looked stuck forever (fixed 2026-09-13)**: the only
+  thing that flipped `pending_approval` → `live`/`failed` was
+  `/api/cron/jumia-feeds`, scheduled `0 0 * * *` because Hobby caps cron at
+  once a day, while Jumia usually finishes in minutes. The route's own
+  comment still says "runs every 5 minutes" — it doesn't. Sellers saw
+  "Pending" for up to 24h. `refreshPendingFeedStatus` now runs on the
+  `/extension/whatsapp-listings` page load too (5s bounded, best-effort —
+  stale statuses render rather than blocking the page).
+  **The subtlety worth keeping**: whichever path observes the transition
+  CONSUMES it, because the row stops being `pending_approval` and the cron
+  never looks again. So `refreshPendingFeedStatus` notifies over WhatsApp
+  itself (`notifyListingResolved`) in the same words the cron uses. Any new
+  caller that resolves a pending listing must go through it, or it silently
+  swallows the seller's "it's live" message.
 - **Fuzzy retrieval was silently broken (fixed 2026-09-13)**: Fuse's bitap
   matcher caps a search pattern at 32 characters (`MAX_BITS` in
   `fuse.cjs`) and splits anything longer into arbitrary mid-word 32-char

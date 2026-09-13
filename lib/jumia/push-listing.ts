@@ -286,7 +286,55 @@ export async function pushListingToJumia(
  * once a day, so that alone could leave a WhatsApp-only seller — who has
  * no reason to ever open the web app — waiting up to 24h to hear their
  * listing went live, even though Jumia often finishes in minutes).
+ *
+ * Notifies over WhatsApp on an actual transition, exactly as the cron
+ * does. That is not a bonus — it's required for correctness: whichever
+ * path observes the transition CONSUMES it, because the row stops being
+ * pending_approval and the cron will never look at it again. Before this,
+ * any non-cron refresh silently swallowed the seller's "it's live"
+ * message.
  */
+/**
+ * Tell a WhatsApp seller their listing resolved, in the same words the
+ * cron uses (app/api/cron/jumia-feeds). Only fires for listings that came
+ * from the chat flow — a web-app listing's seller watches the app instead.
+ *
+ * Best-effort throughout: a failed lookup or send must never turn a
+ * successful status refresh into an error for the caller.
+ */
+async function notifyListingResolved(
+  listingId: string,
+  newStatus: string,
+  errorMsg: string | null,
+): Promise<void> {
+  try {
+    const db = createServerClient();
+    const { data: row } = await db
+      .from("listings")
+      .select("user_id, title, whatsapp_batch_id")
+      .eq("id", listingId)
+      .maybeSingle();
+
+    if (!row?.whatsapp_batch_id) return;
+
+    const { getWhatsAppConnection } = await import("@/lib/whatsapp/link");
+    const { sendTextIfConfigured } = await import("@/lib/whatsapp/client");
+
+    const wa = await getWhatsAppConnection(row.user_id as string);
+    if (!wa.connected || !wa.phoneNumber) return;
+
+    const name = (row.title as string | null) ?? "Your product";
+    await sendTextIfConfigured(
+      wa.phoneNumber,
+      newStatus === "live"
+        ? `🎉 "${name}" is now live on Jumia!`
+        : `⚠️ "${name}" was rejected by Jumia: ${errorMsg ?? "see the app for details"}`,
+    );
+  } catch (e) {
+    console.warn(`[push-listing] resolve notification failed for ${listingId}: ${(e as Error).message}`);
+  }
+}
+
 export async function refreshPendingFeedStatus(
   accessToken: string,
   listing: { id: string; status: string; jumia_ref: string | null },
@@ -321,6 +369,7 @@ export async function refreshPendingFeedStatus(
       jumia_error: errorMsg,
       updated_at:  new Date().toISOString(),
     }).eq("id", listing.id);
+    await notifyListingResolved(listing.id, newStatus, errorMsg);
     return { status: newStatus, error: errorMsg };
   } catch (e) {
     console.warn(`[push-listing] refreshPendingFeedStatus failed for ${listing.id}: ${(e as Error).message}`);

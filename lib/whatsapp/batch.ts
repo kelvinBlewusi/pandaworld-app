@@ -7,7 +7,28 @@ import { appUrl } from "@/lib/whatsapp/app-url";
  * Supabase/AI-pipeline transitive deps.
  */
 
-const MAX_BATCH_SIZE = 20;
+/**
+ * How many products one chat batch may hold.
+ *
+ * Lowered from 20 to 5 on 2026-09-13, on measurement rather than taste.
+ * startBatchAnalysis runs every product's analysis CONCURRENTLY inside the
+ * WhatsApp webhook, which Vercel kills at 60s (ANALYSIS_DEADLINE_MS in
+ * lib/whatsapp/intake.ts races it at 45s so a reply always gets out). A
+ * single product measured 22.7s end to end in production — already half
+ * that deadline on its own — and each one makes 3-4 Gemini vision calls
+ * and holds up to MAX_LISTING_IMAGES images in the shared in-process
+ * cache. At 20 that is 60-80 concurrent Gemini calls and up to 160 cached
+ * images from one instance: rate-limit territory, and every product that
+ * misses the deadline reports "still finishing" to the seller having
+ * consumed nothing but time.
+ *
+ * 5 keeps the burst near 20 calls with roughly 2x headroom over the
+ * measured single-product time. Raising it meaningfully isn't a matter of
+ * changing this number — it needs the analysis moved off the request path
+ * onto a background worker, at which point the 60s ceiling stops being
+ * the binding constraint at all.
+ */
+export const MAX_BATCH_SIZE = 5;
 
 /** "3", "3.", "three products" (digits only — no word-number parsing, kept
  *  deliberately simple) → 3. Rejects 0, negatives, and anything above the cap. */

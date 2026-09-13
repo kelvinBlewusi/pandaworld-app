@@ -9,6 +9,7 @@ import {
   focusedEditorUrl,
   buyCreditsUrl,
   COUNT_QUICK_PICKS,
+  MAX_BATCH_SIZE,
 } from "@/lib/whatsapp/batch";
 
 describe("parseProductCount", () => {
@@ -25,6 +26,21 @@ describe("parseProductCount", () => {
     expect(parseProductCount("0")).toBeNull();
     expect(parseProductCount("-1")).toBeNull();
     expect(parseProductCount("21")).toBeNull();
+  });
+
+  it("accepts exactly the cap and rejects one past it", () => {
+    // Pinned to the constant rather than a literal: the cap is a capacity
+    // decision (see MAX_BATCH_SIZE's comment — concurrent analyses inside a
+    // 60s webhook), so if it moves again this test should move with it
+    // instead of quietly testing a boundary that no longer exists.
+    expect(parseProductCount(String(MAX_BATCH_SIZE))).toBe(MAX_BATCH_SIZE);
+    expect(parseProductCount(String(MAX_BATCH_SIZE + 1))).toBeNull();
+  });
+
+  it("every quick-pick button is a count the parser accepts", () => {
+    for (const pick of COUNT_QUICK_PICKS) {
+      expect(parseProductCount(pick.id)).toBe(Number(pick.id));
+    }
   });
 
   it("returns null for non-numeric text", () => {

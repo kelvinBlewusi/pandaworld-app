@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 import { MessageCircle } from "lucide-react";
 import { createServerClient } from "@/lib/supabase/server";
 import { getWhatsAppConnection } from "@/lib/whatsapp/link";
+import { refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
+import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { WhatsAppListingsView, type WhatsAppBatch } from "@/components/extension/whatsapp-listings-view";
 import { BeginWhatsAppBanner } from "@/components/whatsapp/begin-whatsapp-banner";
 import type { ListingRow } from "@/lib/supabase/types";
@@ -29,6 +31,44 @@ export const metadata: import("next").Metadata = {
   title: "List from WhatsApp",
   robots: { index: false },
 };
+
+/** How long the page will wait on Jumia before giving up and rendering
+ *  stored statuses. Well under any sane page-load budget — this is a
+ *  freshness bonus, never a dependency. */
+const STATUS_REFRESH_TIMEOUT_MS = 5_000;
+
+/**
+ * Live-refresh every pending listing's status, returning rows with the
+ * refreshed values patched in. Never throws and never rejects: on timeout
+ * or any failure the caller gets the original rows back unchanged.
+ */
+async function refreshPendingStatuses(userId: string, rows: ListingRow[]): Promise<ListingRow[]> {
+  const pending = rows.filter((l) => l.status === "pending_approval" && l.jumia_ref);
+  if (pending.length === 0) return rows;
+
+  const work = (async (): Promise<Map<string, ListingRow["status"]>> => {
+    const resolved = new Map<string, ListingRow["status"]>();
+    const { accessToken } = await getValidJumiaCredentials(userId);
+    await Promise.all(
+      pending.map(async (l) => {
+        const { status } = await refreshPendingFeedStatus(accessToken, {
+          id: l.id, status: l.status, jumia_ref: l.jumia_ref,
+        });
+        if (status !== l.status) resolved.set(l.id, status as ListingRow["status"]);
+      }),
+    );
+    return resolved;
+  })();
+
+  const timeout = new Promise<Map<string, ListingRow["status"]>>((resolve) => {
+    setTimeout(() => resolve(new Map()), STATUS_REFRESH_TIMEOUT_MS);
+  });
+
+  const resolved = await Promise.race([work, timeout]).catch(() => new Map<string, ListingRow["status"]>());
+  if (resolved.size === 0) return rows;
+
+  return rows.map((l) => (resolved.has(l.id) ? { ...l, status: resolved.get(l.id)! } : l));
+}
 
 function groupIntoBatches(listings: ListingRow[]): WhatsAppBatch[] {
   const byBatch = new Map<string, ListingRow[]>();
@@ -63,7 +103,16 @@ export default async function WhatsAppListingsPage() {
     getWhatsAppConnection(userId),
   ]);
 
-  const batches = groupIntoBatches((data ?? []) as ListingRow[]);
+  // Ask Jumia for the real status of anything still pending before
+  // rendering. Without this the page shows whatever the last cron run
+  // wrote, and that cron fires once a day (Vercel's Hobby plan caps the
+  // frequency) while Jumia usually finishes in minutes — so a seller who
+  // submitted and came straight here saw "Pending" that never moved, for
+  // up to 24 hours. Bounded and best-effort: a slow or failing Jumia call
+  // must never block the page, it just renders the stored status instead.
+  const rows = await refreshPendingStatuses(userId, (data ?? []) as ListingRow[]);
+
+  const batches = groupIntoBatches(rows);
 
   return (
     <div className="mx-auto max-w-5xl">
