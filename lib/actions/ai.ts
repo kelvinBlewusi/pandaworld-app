@@ -1728,6 +1728,14 @@ export interface PickAndFillResult {
   field_confidence:       AIProductAnalysis["field_confidence"];
   /** True when the Gemini call returned a valid response we could use. */
   ok:                     boolean;
+  /**
+   * The model looked at the candidates and said none of them actually fit
+   * this product. Distinct from ok:false (the call failed): retrying with
+   * the separate Pass B would just force the same bad pick, since it has
+   * the same candidates and no way to decline either. The caller should
+   * hand the category choice back to the seller instead.
+   */
+  noCandidateFits?:       boolean;
 }
 
 export async function aiPassBC_pickAndFill(
@@ -1838,12 +1846,12 @@ STEP 2 — For YOUR CHOSEN category from Step 1, fill the attribute values you c
 ${policyBlock}
 
 OUTPUT RULES:
-1. chosen_code MUST be one of the candidate codes above. Do not invent.
+1. chosen_code MUST be one of the candidate codes above, or null. Do not invent a code that isn't listed. These candidates came from a text search that can miss badly — if NONE of them is a genuine home for this product (e.g. the product is a wall-art print and the candidates are all kitchen utensils), set chosen_code to null and say why in reasoning. Do NOT settle for the least-wrong one: a listing the seller categorises themselves is far better than a confidently wrong category, which Jumia rejects outright. Only pick a candidate you'd actually defend as the right shelf for this product.
 2. dynamic_attributes keys MUST be attribute names from your chosen category's list (the names shown after "- " on each schema line). NEVER include attributes from a different candidate.
 3. For attributes with an allowed list, pick exactly one value from that list. Otherwise omit.
 4. Skip any attribute you can't determine — null/omit is better than guessing. EXCEPT for required-by-Jumia fields where general online knowledge can give you a sensible answer (e.g. typical material for a known product line) — fill those with moderate confidence.
 5. Disambiguate visually-similar candidates by PRIMARY USE CASE + ENVIRONMENT — a farm sprayer goes under Agriculture, not Home Cleaning.
-6. Confidence is 0..1. Be honest. Set needsConfirmation=true if your top pick is below 0.75 OR within 0.15 of your second choice.
+6. Confidence is 0..1, and it means "how well does this category actually fit this product" — NOT "how sure am I this is the best of the three offered". If the best candidate is only a loose fit, that's a LOW confidence even when it's clearly better than the other two. Be honest. Set needsConfirmation=true if your top pick is below 0.75 OR within 0.15 of your second choice.
 7. ALWAYS include these dynamic_attributes keys, even if the chosen category's schema doesn't list them (Jumia silently drops unknown keys; the cost of including is zero, the cost of omitting is a missed buyer-trust signal):
    - product_note: A short, friendly note thanking the buyer and asking for a review once they receive the item. The default is fine: "Dear Customer, once you receive your item, please take a moment to share your feedback and leave a review. Thank you for shopping with us!"
    - what_is_in_the_box: A real, product-specific MULTI-LINE LIST in Jumia's preferred format. EACH item is on its OWN LINE, starting with a count like "1x", "2x", etc. NEVER a single line / paragraph. NEVER just a number like "1". If the seller's context states what's included, use EXACTLY that (reformatted into this list style) — it always wins over guessing from images. Otherwise read the images for clues (charger? case? cable? manual?).
@@ -1861,7 +1869,7 @@ OUTPUT RULES:
 ${ctxSection}
 Return ONLY valid JSON, no markdown:
 {
-  "chosen_code":       <number from the list>,
+  "chosen_code":       <number from the list, or null if none genuinely fit>,
   "chosen_confidence": 0.0,
   "alternates": [
     { "code": <number>, "confidence": 0.0 }
@@ -1884,6 +1892,17 @@ Return ONLY valid JSON, no markdown:
 
   // ── Validate the response ───────────────────────────────────────────────
   const codeToCandidate = new Map(candidates.map((c) => [c.code, c]));
+
+  // An explicit "none of these fit" (see OUTPUT RULE 1) — not a failure, and
+  // deliberately NOT routed to the separate-passes fallback, which would
+  // just force a pick from the same bad candidates.
+  if (parsed.chosen_code === null || parsed.chosen_code === undefined) {
+    console.info(
+      `[AI] aiPassBC_pickAndFill: model declined all ${candidates.length} candidate(s) — ${String(parsed.reasoning ?? "no reason given")}`,
+    );
+    return { ...empty(true), noCandidateFits: true };
+  }
+
   const chosenCode      = Number(parsed.chosen_code);
   const chosen          = codeToCandidate.get(chosenCode);
 

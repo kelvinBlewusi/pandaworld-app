@@ -147,6 +147,50 @@ export async function runAutoAnalyze(
       : null,
   ].filter(Boolean).join(" ");
 
+  // Every "no category" exit below hands the category choice back to the
+  // seller. Pass A's work is done by then — and on WhatsApp it has already
+  // been charged for — so persist it on the way out rather than returning a
+  // listing that still holds nothing but its images: the category becomes
+  // the one thing left to pick, not a blank draft to rewrite from scratch.
+  // Deliberately narrow (the three narrative fields Pass A is authoritative
+  // for) and it honours the same rule the main updates payload does further
+  // down: never clobber a field the seller edited themselves.
+  const bailToManualCategory = async (): Promise<AutoAnalyzeResult> => {
+    const sources = (listing.field_sources ?? {}) as Record<string, "ai" | "user">;
+    const patch: Record<string, unknown> = {};
+
+    const keep = (col: "title" | "description" | "highlights", value: string | null) => {
+      if (!value) return;
+      if (sources[col] === "user") return;
+      const existing = listing[col] as string | null;
+      // Non-empty and not AI-written = legacy or seller data; leave it be.
+      if (existing && existing.trim() !== "" && sources[col] !== "ai") return;
+      patch[col] = value;
+    };
+
+    keep("title",       description.title);
+    keep("description", description.description);
+    keep("highlights",  description.highlights);
+
+    if (Object.keys(patch).length > 0) {
+      const mergedSources = { ...sources };
+      for (const col of Object.keys(patch)) mergedSources[col] = "ai";
+      await db.from("listings").update({
+        ...patch,
+        field_sources: mergedSources,
+        ...(userContext ? { user_prompt: userContext } : {}),
+        updated_at: new Date().toISOString(),
+      }).eq("id", listingId);
+    }
+
+    return {
+      ok: false,
+      code: "no_category_picked",
+      message: "Couldn't find a confident category match — pick one manually.",
+      description,
+    };
+  };
+
   // ── 2. CATEGORY RESOLUTION: department-first, then narrow within it ──────
   //
   // Previously: fuzzy + embedding + Jumia-catalog search against the FULL
@@ -244,12 +288,7 @@ export async function runAutoAnalyze(
     // than guess — the listing keeps whatever category it had (usually
     // none), and the focused/full editor's category picker is the way
     // forward from here.
-    return {
-      ok: false,
-      code: "no_category_picked",
-      message: "Couldn't find a confident category match — pick one manually.",
-      description,
-    };
+    return bailToManualCategory();
   }
 
   // ── 3 + 4 + 5 combined: pick category AND fill its attributes in ONE call.
@@ -314,6 +353,18 @@ export async function runAutoAnalyze(
     description.environment,
     { forceBestModel: true },
   );
+
+  // The model looked at every candidate and said none of them is where this
+  // product belongs. Falling through to the separate passes below would just
+  // force a pick from the same bad candidates — exactly how a canvas wall-art
+  // print got filed under "Icing & Decorating Spatulas" at 0.95 confidence
+  // and rejected by Jumia. Hand the choice to the seller instead.
+  if (combined.noCandidateFits) {
+    console.info(
+      `[auto-analyze] no candidate category fit — routing to manual pick for query="${retrievalQuery.slice(0, 100)}"`,
+    );
+    return bailToManualCategory();
+  }
 
   let ranked: Awaited<ReturnType<typeof aiPassB_rankCategory>>;
   let filled: Awaited<ReturnType<typeof extractAttributesForCategory>>;
