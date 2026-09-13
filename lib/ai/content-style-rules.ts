@@ -61,6 +61,36 @@ export function buildStyleGuideBlock(fields: HarvestedField[]): string {
   return `\n\nCONTENT STYLE:\n${lines}\n- ${CLOSING_RULE}\n`;
 }
 
+/** Shared by the two exports below — same shape as buildStyleGuideBlock's
+ *  own filter, but against a fixed label list instead of harvested fields. */
+function buildBlockForLabels(labels: string[]): string {
+  const applicable = CONTENT_STYLE_RULES.filter((r) => labels.some((l) => r.appliesTo(l)));
+  if (!applicable.length) return "";
+  const lines = applicable.map((r) => `- ${r.rule}`).join("\n");
+  return `\n\nCONTENT STYLE:\n${lines}\n- ${CLOSING_RULE}\n`;
+}
+
+/**
+ * Same Description + Highlights rules as buildStyleGuideBlock above, for
+ * callers that don't harvest fields off a live Jumia form — the main
+ * analyze pipeline (lib/actions/ai.ts) always generates both together, so
+ * there's no field list to filter against. Excludes the Name rule: a title
+ * is a plain string, not a "rich text and tables" narrative field, and the
+ * analyze pipeline already enforces its own title length/format rules.
+ */
+export function buildDescriptionAndHighlightsStyleBlock(): string {
+  return buildBlockForLabels(["description", "highlights"]);
+}
+
+/**
+ * Description-only variant of the above, for a rewrite pass that only
+ * touches the description field (e.g. aiExpandDescription) — including the
+ * Highlights rule there would reference a field the call never writes.
+ */
+export function buildDescriptionStyleBlock(): string {
+  return buildBlockForLabels(["description"]);
+}
+
 /**
  * Always-on search-grounding instruction — covers structured attributes
  * (Model, Main material, Country of origin, Certifications, and similar

@@ -36,6 +36,10 @@ import {
   isRestrictedBrand,
   stripBrandFromTitle,
 } from "@/lib/ai/jumia-content-policy";
+import {
+  buildDescriptionAndHighlightsStyleBlock,
+  buildDescriptionStyleBlock,
+} from "@/lib/ai/content-style-rules";
 import { pickModelForPlan, pickModelForOwnImagesFlow, type ModelKind } from "@/lib/billing/ai-models";
 import { getQuotaSummary } from "@/lib/billing/quota";
 import type { Plan } from "@/lib/billing/plans";
@@ -1154,10 +1158,19 @@ export async function aiPassA_describeProduct(
     ? `\n\nSELLER CONTEXT (treat this as authoritative for anything the images don't show):\n"${userContext.trim()}"\n`
     : "";
 
+  // Same Description/Highlights writing-style rules the Chrome extension's
+  // fill prompt uses (lib/ai/content-style-rules.ts) — rich HTML, tables
+  // where they genuinely fit, minimum-length floors, "Perfect for:" closer,
+  // and the rest — so a listing reads the same whether it was drafted via
+  // the extension, the web upload flow, or WhatsApp. The mechanical rules
+  // further down (bullet-per-line, HTML tags allowed, Jumia's 50-char
+  // floor) still apply on top of this; this block sets the quality bar.
+  const contentStyleBlock = buildDescriptionAndHighlightsStyleBlock();
+
   const prompt = `You are a product-listing assistant for Jumia. Look at the product images and return a JSON object that fills every visible product attribute.
 
 ${policyBlock}
-
+${contentStyleBlock}
 CRITICAL — ENVIRONMENT & USE CASE:
 Pay special attention to ENVIRONMENT and PRIMARY USE CASE. A pump-and-tank
 that looks visually similar to a carpet cleaner is a *sprayer* if it's intended
@@ -2100,10 +2113,12 @@ Output ONLY this JSON shape, no markdown, no prose:
 // ─── Phase 2: description auto-expand ──────────────────────────────────────
 //
 // Jumia rejects descriptions under 50 characters. Pass A's prompt asks
-// for 80+ chars but the model sometimes returns a 20-30 char summary
-// when it can't find much to say about a product. This is a focused
-// rewrite call that takes a too-short description and produces a
-// 150-400 word marketing-quality expansion, using the title / brand /
+// for a real, richly-formatted description (see buildDescriptionAndHighlights
+// StyleBlock, wired into aiPassA_describeProduct) but the model sometimes
+// returns a 20-30 char summary when it can't find much to say about a
+// product. This is a focused rewrite call that takes a too-short
+// description and expands it to the same content-style bar Pass A and the
+// Chrome extension's fill prompt both hold to, using the title / brand /
 // keywords / highlights as context.
 
 export async function aiExpandDescription(
@@ -2122,8 +2137,9 @@ export async function aiExpandDescription(
   if (current.trim().length >= 150) return current;
 
   const policyBlock = buildContentPolicyInstructions({ includeImageRules: false });
+  const styleBlock = buildDescriptionStyleBlock();
 
-  const prompt = `Rewrite the following Jumia product description so that it is 150-400 words. Keep it factual + sales-friendly. May use plain prose, HTML, bullet lists or tables — whatever fits the product best.
+  const prompt = `Rewrite the following Jumia product description. Keep it factual + sales-friendly. May use plain prose, HTML, bullet lists or tables — whatever fits the product best.
 
 ORIGINAL DESCRIPTION (may be empty or too short):
 "${current}"
@@ -2135,9 +2151,8 @@ PRODUCT CONTEXT:
 - Highlights: ${context.highlights.slice(0, 400)}
 
 ${policyBlock}
-
+${styleBlock}
 Rules:
-- 150-400 words. 50 char minimum is non-negotiable (Jumia rejects shorter).
 - Lead with what the product IS and its headline feature.
 - May use bold / italics / bullets / tables / HTML. Inline <img> is allowed.
 - No banned words, no condition descriptors ("brand new", "original" etc.), no URLs or social handles, no prices.

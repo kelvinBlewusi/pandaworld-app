@@ -1,4 +1,9 @@
-import { buildStyleGuideBlock, buildSearchGroundingInstruction } from "@/lib/ai/content-style-rules";
+import {
+  buildStyleGuideBlock,
+  buildSearchGroundingInstruction,
+  buildDescriptionAndHighlightsStyleBlock,
+  buildDescriptionStyleBlock,
+} from "@/lib/ai/content-style-rules";
 import type { HarvestedField } from "@/lib/extension/fill";
 
 describe("buildStyleGuideBlock", () => {
@@ -90,6 +95,38 @@ describe("buildStyleGuideBlock", () => {
       { label: "Highlights", type: "richtext" },
     ]);
     expect(withNarrative).not.toContain("You have web search available");
+  });
+});
+
+describe("buildDescriptionAndHighlightsStyleBlock", () => {
+  it("matches what buildStyleGuideBlock returns when both fields are present, for the main analyze pipeline (no HarvestedField list to filter against)", () => {
+    const viaFields = buildStyleGuideBlock([
+      { label: "Product description", type: "richtext" },
+      { label: "Highlights", type: "richtext" },
+    ]);
+    expect(buildDescriptionAndHighlightsStyleBlock()).toBe(viaFields);
+  });
+
+  it("excludes the Name/title rule — a title isn't a rich-text/table field", () => {
+    const block = buildDescriptionAndHighlightsStyleBlock();
+    expect(block).not.toContain("Name/title:");
+    expect(block).toContain("Description:");
+    expect(block).toContain("Highlights:");
+  });
+});
+
+describe("buildDescriptionStyleBlock", () => {
+  it("includes only the Description rule, not Highlights", () => {
+    const block = buildDescriptionStyleBlock();
+    expect(block).toContain("Description:");
+    expect(block).not.toContain("Highlights:");
+    expect(block).not.toContain("Name/title:");
+  });
+
+  it("still carries the 1500-character floor and the closing rule", () => {
+    const block = buildDescriptionStyleBlock();
+    expect(block).toMatch(/at least 1500 characters/);
+    expect(block).toContain("Never end description or highlights with a request for reviews");
   });
 });
 

@@ -225,6 +225,20 @@ pipeline above:
   pack for the dashboard's "Plan" pill. WhatsApp's pre-existing
   plan-quota gate (`checkQuota`/`incrementUsage`) is untouched — both
   systems currently run side by side.
+- **One content style everywhere**: `aiPassA_describeProduct()` and
+  `aiExpandDescription()` (both in `lib/actions/ai.ts` — the shared entry
+  points for every WhatsApp-drafted and web-uploaded listing) now pull
+  their Description/Highlights writing-style rules from the same
+  `lib/ai/content-style-rules.ts` the Chrome extension's fill prompt has
+  always used, via two new exports (`buildDescriptionAndHighlightsStyleBlock`,
+  `buildDescriptionStyleBlock` — the latter excludes Highlights for
+  `aiExpandDescription`, which only ever rewrites Description). Previously
+  these two entry points carried their own, much thinner inline rules (no
+  length floor beyond Jumia's bare 50-char minimum, no structural
+  guidance) — a listing drafted via WhatsApp or the web upload flow read
+  noticeably plainer than one autofilled by the extension. Still edit
+  `content-style-rules.ts` when tuning the actual rules, not either call
+  site — see that file's own doc comment.
 
 **Total cost**: ~$0.003 (happy path) to ~$0.007 (with web search + expand).
 **Total wall clock**: ~10-20s warm cache, ~25-35s cold start.
