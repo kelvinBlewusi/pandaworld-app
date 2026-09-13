@@ -18,6 +18,7 @@ import { mockCategories } from "@/lib/mock/categories";
 import { findBrandExact } from "@/lib/jumia/brands";
 import { stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
 import { encrypt, decrypt } from "@/lib/security/token-crypto";
+import { getCategoryAttributes, type JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
 
 // ─── Country → ISO 4217 currency code ────────────────────────────────────────
@@ -410,7 +411,7 @@ interface JumiaAttribute {
 // mapListingToJumiaProducts, so each product carries its own unique value.
 const PER_VARIANT_ATTRIBUTE_NAMES = new Set<string>(["variation"]);
 
-function buildAttributes(listing: ListingRow): JumiaAttribute[] {
+function buildAttributes(listing: ListingRow, schema: JumiaCategoryAttribute[]): JumiaAttribute[] {
   const attrs: JumiaAttribute[] = [];
 
   const add = (name: string, value: string | null | undefined) => {
@@ -464,7 +465,59 @@ function buildAttributes(listing: ListingRow): JumiaAttribute[] {
     }
   }
 
-  return attrs;
+  return sanitizeEnumAttributes(attrs, schema);
+}
+
+/**
+ * Drops (or trims) any attribute value that isn't actually one of the
+ * resolved category's own allowed_values for that field — confirmed live:
+ * material_family sent "Fabric" (a value the AI's own prompt suggests as
+ * an example) but no Jumia category schema anywhere accepts the literal
+ * string "Fabric" for this enum field, only "Textile"/"Tissu"/specific
+ * fabric names — Jumia rejected the ENTIRE product feed over that one
+ * mismatched enum value. Only fields with a non-empty allowed_values list
+ * are enum/select types in Jumia's schema (see JumiaCategoryAttribute's
+ * own doc comment); free-text fields (empty allowed_values, or no schema
+ * entry at all — e.g. a universal attribute the category doesn't even
+ * define) pass through untouched. A "multi" field's value may be several
+ * comma-separated picks — each is checked independently, keeping only the
+ * ones that match; the whole attribute is dropped only if none do, same
+ * "null beats wrong" rule this codebase uses everywhere else rather than
+ * risk sending a value the category's schema will never accept.
+ */
+function sanitizeEnumAttributes(attrs: JumiaAttribute[], schema: JumiaCategoryAttribute[]): JumiaAttribute[] {
+  if (schema.length === 0) return attrs;
+  const enumsByName = new Map<string, Set<string>>();
+  for (const field of schema) {
+    if (field.allowed_values.length > 0) {
+      enumsByName.set(field.name.toLowerCase(), new Set(field.allowed_values.map((v) => v.toLowerCase())));
+    }
+  }
+  if (enumsByName.size === 0) return attrs;
+
+  const out: JumiaAttribute[] = [];
+  for (const attr of attrs) {
+    const allowed = enumsByName.get(attr.name.toLowerCase());
+    if (!allowed) {
+      out.push(attr);
+      continue;
+    }
+    const picks = attr.value.split(",").map((v) => v.trim()).filter(Boolean);
+    const valid = picks.filter((v) => allowed.has(v.toLowerCase()));
+    if (valid.length === 0) {
+      console.warn(
+        `[Jumia mapping] dropping attribute '${attr.name}': value "${attr.value}" isn't one of this category's allowed values`,
+      );
+      continue;
+    }
+    if (valid.length !== picks.length) {
+      console.warn(
+        `[Jumia mapping] trimming attribute '${attr.name}': "${attr.value}" → "${valid.join(", ")}" (dropped values not in this category's allowed list)`,
+      );
+    }
+    out.push({ ...attr, value: valid.join(", ") });
+  }
+  return out;
 }
 
 // ─── Payload mapping ──────────────────────────────────────────────────────────
@@ -483,7 +536,12 @@ const MISSING_VARIANT_VARIATION = "Default";
 
 export type JumiaProduct = ReturnType<typeof buildBaseProduct>;
 
-function buildBaseProduct(listing: ListingRow, brand: { code: number; name: string }, currency: string) {
+function buildBaseProduct(
+  listing: ListingRow,
+  brand: { code: number; name: string },
+  currency: string,
+  schema: JumiaCategoryAttribute[] = [],
+) {
   const category   = resolveCategoryCode(listing);
   const images     = (listing.images ?? [])
     .filter(Boolean)
@@ -572,7 +630,7 @@ function buildBaseProduct(listing: ListingRow, brand: { code: number; name: stri
       } : {}),
     },
     stock:       listing.quantity ?? 1,
-    attributes:  buildAttributes(listing),
+    attributes:  buildAttributes(listing, schema),
     barcodeEan:  "",
     gtinBarcode: "",      // schema reference uses this name; harmless duplicate
     // additionalCategories: DEPRECATED per official spec (PDF page 5).
@@ -588,9 +646,15 @@ export function mapListingToJumiaProducts(
   listing:  ListingRow,
   variants: VariantRow[],
   brand:    { code: number; name: string },
-  currency: string = "GHS"
+  currency: string = "GHS",
+  // Optional — when given, universal/dynamic attribute values that aren't
+  // one of this category's own allowed_values get dropped/trimmed before
+  // ever reaching Jumia (see sanitizeEnumAttributes). Omitted by callers
+  // that don't have it handy (scripts, tests) — attributes pass through
+  // unchecked in that case, same as before this existed.
+  categoryAttributeSchema: JumiaCategoryAttribute[] = [],
 ): JumiaProduct[] {
-  const base = buildBaseProduct(listing, brand, currency);
+  const base = buildBaseProduct(listing, brand, currency, categoryAttributeSchema);
 
   if (!variants.length) {
     // No persisted variants → one product entry using the listing's own
@@ -712,12 +776,30 @@ export async function pushProductsToJumia(
   // 1. Resolve brand code (calls /catalog/brands)
   const brand = await resolveBrand(accessToken, listing.brand);
 
+  // 1b. Fetch the resolved category's attribute schema (cheap local DB
+  // read, no Jumia call) so mapListingToJumiaProducts can drop/trim any
+  // attribute value that isn't actually one of THIS category's allowed
+  // values — confirmed live: material_family="Fabric" sailed through with
+  // no such check and got the whole feed rejected. Best-effort: an
+  // invalid/unresolvable category here is the same condition
+  // mapListingToJumiaProducts's own resolveCategoryCode call below will
+  // hit and report properly, so this just degrades to no schema (attrs
+  // pass through unchecked, same as before this existed) rather than
+  // failing the push twice over.
+  let categoryAttributeSchema: JumiaCategoryAttribute[] = [];
+  try {
+    const { code } = resolveCategoryCode(listing);
+    categoryAttributeSchema = await getCategoryAttributes(code);
+  } catch {
+    // No valid category — mapListingToJumiaProducts reports this properly.
+  }
+
   // 2. Build the products payload. Can throw if the listing lacks a real
   //    numeric category — surface that as a structured push error rather
   //    than a 500.
   let products: ReturnType<typeof mapListingToJumiaProducts>;
   try {
-    products = mapListingToJumiaProducts(listing, variants, brand, currency);
+    products = mapListingToJumiaProducts(listing, variants, brand, currency, categoryAttributeSchema);
   } catch (e) {
     const msg = (e as Error).message ?? "Failed to build payload";
     return { success: false, jumia_ref: null, raw: null, error: msg };
@@ -800,9 +882,18 @@ export async function updateProductOnJumia(
   }
 
   const brand = await resolveBrand(accessToken, listing.brand);
+
+  let categoryAttributeSchema: JumiaCategoryAttribute[] = [];
+  try {
+    const { code } = resolveCategoryCode(listing);
+    categoryAttributeSchema = await getCategoryAttributes(code);
+  } catch {
+    // No valid category — mapListingToJumiaProducts reports this properly.
+  }
+
   let basePayload: ReturnType<typeof mapListingToJumiaProducts>;
   try {
-    basePayload = mapListingToJumiaProducts(listing, variants, brand, currency);
+    basePayload = mapListingToJumiaProducts(listing, variants, brand, currency, categoryAttributeSchema);
   } catch (e) {
     const msg = (e as Error).message ?? "Failed to build update payload";
     return { success: false, jumia_ref: null, raw: null, error: msg };
