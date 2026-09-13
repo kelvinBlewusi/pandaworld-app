@@ -1,7 +1,6 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
-import Link from "next/link";
-import { Settings as SettingsIcon, KeyRound, CreditCard } from "lucide-react";
+import { Settings as SettingsIcon, KeyRound } from "lucide-react";
 import { listExtensionApiKeys } from "@/lib/security/extension-keys";
 import { RegenerateKeyButton } from "@/components/extension/regenerate-key-button";
 import { WhatsAppCard } from "@/components/whatsapp/whatsapp-card";
@@ -45,12 +44,6 @@ export default async function ExtensionSettingsPage() {
             <dd className="font-medium text-zinc-900">{user?.primaryEmailAddress?.emailAddress ?? "—"}</dd>
           </div>
         </dl>
-        <Link
-          href="/settings/billing"
-          className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-orange-600 hover:underline"
-        >
-          <CreditCard className="h-3.5 w-3.5" /> Manage plan & billing
-        </Link>
       </div>
 
       <div className="mt-6">
