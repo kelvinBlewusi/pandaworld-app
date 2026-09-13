@@ -2,24 +2,10 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import {
-  CheckCircle2,
-  AlertCircle,
-  ExternalLink,
-  Loader2,
-  Unlink,
-  RefreshCw,
-  ShoppingBag,
-  X,
-  Info,
-  Plug,
-  Download,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
+import { CheckCircle2, AlertCircle, X, Plug, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { JumiaConnectionPublic } from "@/lib/types/jumia";
 import { WhatsAppCard } from "@/components/whatsapp/whatsapp-card";
+import { JumiaConnectionCard } from "@/components/jumia/jumia-connection-card";
 
 // ─── Inner page (needs useSearchParams — must be inside Suspense) ─────────────
 
@@ -27,24 +13,7 @@ function IntegrationsPageInner() {
   const router       = useRouter();
   const searchParams = useSearchParams();
 
-  const [conn,         setConn]         = useState<JumiaConnectionPublic | null>(null);
-  const [loading,      setLoading]      = useState(true);
-  const [connecting,   setConnecting]   = useState(false);
-  const [disconnecting,setDisconnecting]= useState(false);
-  const [showConfirm,  setShowConfirm]  = useState(false);
-  const [toast,        setToast]        = useState<{ type: "success"|"error"; msg: string } | null>(null);
-
-  // Catalogue stats (categories + brands) are intentionally not loaded
-  // on this seller-facing page — those numbers live behind /admin/* now.
-
-  // ── Load connection status ─────────────────────────────────────────────────
-  useEffect(() => {
-    fetch("/api/jumia/status")
-      .then((r) => r.json())
-      .then((d) => setConn(d))
-      .catch(() => setConn(null))
-      .finally(() => setLoading(false));
-  }, []);
+  const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null);
 
   // ── Handle Jumia OAuth redirect back ──────────────────────────────────────
   useEffect(() => {
@@ -53,10 +22,6 @@ function IntegrationsPageInner() {
 
     if (connected === "1") {
       showToast("success", "🎉 Jumia store connected! Our AI can now publish your products to vendor center for you.");
-      // Refresh status
-      fetch("/api/jumia/status")
-        .then((r) => r.json())
-        .then((d) => setConn(d));
       router.replace("/settings/integrations");
     } else if (jumiaError) {
       showToast("error", `Connection failed: ${decodeURIComponent(jumiaError)}`);
@@ -69,55 +34,6 @@ function IntegrationsPageInner() {
     setToast({ type, msg });
     setTimeout(() => setToast(null), 6000);
   }
-
-  // Category + brand sync both moved to admin-only pages
-  // (/admin/categories, /admin/brands) — sellers see read-only status
-  // cards here only.
-
-  // ── Kick off OAuth flow ───────────────────────────────────────────────────
-  function handleConnect() {
-    setConnecting(true);
-    // Redirect to our connect route which builds the Jumia auth URL
-    window.location.href = "/api/jumia/connect";
-  }
-
-  // ── Disconnect ────────────────────────────────────────────────────────────
-  async function handleDisconnect() {
-    setDisconnecting(true);
-    try {
-      const res = await fetch("/api/jumia/disconnect", { method: "POST" });
-      if (res.ok) {
-        // Row deleted — redirect to onboarding so user can reconnect a store
-        window.location.href = "/onboarding/connect";
-      } else {
-        showToast("error", "Failed to disconnect. Please try again.");
-      }
-    } finally {
-      setDisconnecting(false);
-    }
-  }
-
-  const isConnected    = conn?.connected && conn?.status === "active";
-  // The API returns this as `needs_reconnect` — the actual status string
-  // written to the DB (see markNeedsReconnect in lib/jumia/api.ts) is
-  // "needs_reconnect", never the literal "expired". Comparing against
-  // "expired" here meant this branch never matched: a seller whose token
-  // failed to refresh fell through to the "Not connected" view instead of
-  // this one-click Re-authorise button, forcing them through the full
-  // onboarding flow (re-entering/testing credentials) every time — even
-  // though app_id/app_secret never change and OAuth is all that's needed.
-  const isExpired      = !!conn?.needs_reconnect;
-  const oauthRequired  = !!conn?.oauth_required;
-  const connectedDate = conn?.connected_at
-    ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" }).format(
-        new Date(conn.connected_at)
-      )
-    : null;
-  const expiryDate = conn?.token_expires_at
-    ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(
-        new Date(conn.token_expires_at)
-      )
-    : null;
 
   return (
     <div className="space-y-8 max-w-2xl">
@@ -151,259 +67,7 @@ function IntegrationsPageInner() {
         </p>
       </div>
 
-      {/* Jumia GH card */}
-      <section className="rounded-2xl border bg-white p-6 shadow-sm space-y-5">
-        {/* Card header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-50 text-xl">
-              🛒
-            </div>
-            <div>
-              <p className="font-semibold text-zinc-900">Jumia Ghana</p>
-              <p className="text-xs text-zinc-400">
-                Vendor Center ·{" "}
-                <a
-                  href="https://vendorcenter.jumia.com"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="hover:underline text-zinc-500"
-                >
-                  vendorcenter.jumia.com
-                  <ExternalLink className="inline ml-0.5 h-2.5 w-2.5" />
-                </a>
-              </p>
-            </div>
-          </div>
-
-          {/* Status badge */}
-          {!loading && (
-            <span
-              className={cn(
-                "rounded-full px-2.5 py-1 text-xs font-semibold",
-                isConnected
-                  ? "bg-emerald-50 text-emerald-700"
-                  : isExpired
-                  ? "bg-amber-50 text-amber-700"
-                  : oauthRequired
-                  ? "bg-blue-50 text-blue-700"
-                  : "bg-zinc-100 text-zinc-500"
-              )}
-            >
-              {isConnected
-                ? "Connected"
-                : isExpired
-                ? "Token expired"
-                : oauthRequired
-                ? "Authorisation required"
-                : "Not connected"}
-            </span>
-          )}
-        </div>
-
-        <Separator />
-
-        {loading ? (
-          <div className="flex items-center gap-2 text-sm text-zinc-400">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Checking connection…
-          </div>
-        ) : isConnected ? (
-          /* ── Connected state ────────────────────────────────────────────── */
-          <div className="space-y-5">
-            {/* Store details */}
-            <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4 space-y-3">
-              <div className="flex items-center gap-2 text-emerald-700 font-semibold text-sm">
-                <CheckCircle2 className="h-4 w-4 shrink-0" />
-                {conn?.store_name
-                  ? `${conn.store_name} is connected`
-                  : "Store connected"}
-              </div>
-              <div className="grid gap-2 sm:grid-cols-2 text-sm">
-                {conn?.store_name && (
-                  <div>
-                    <p className="text-xs text-zinc-400">Store name</p>
-                    <p className="font-medium text-zinc-800">{conn.store_name}</p>
-                  </div>
-                )}
-                {conn?.seller_email && (
-                  <div>
-                    <p className="text-xs text-zinc-400">Seller email</p>
-                    <p className="font-medium text-zinc-800">{conn.seller_email}</p>
-                  </div>
-                )}
-                {conn?.seller_id && (
-                  <div>
-                    <p className="text-xs text-zinc-400">Seller ID</p>
-                    <p className="font-medium text-zinc-800 font-mono text-xs">{conn.seller_id}</p>
-                  </div>
-                )}
-                {connectedDate && (
-                  <div>
-                    <p className="text-xs text-zinc-400">Connected</p>
-                    <p className="font-medium text-zinc-800">{connectedDate}</p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Catalogue status (categories + brands) is intentionally
-                NOT shown to sellers. Counts + refresh timestamps are
-                admin telemetry — sellers don't need to see them and
-                they don't take any action on this page. The data is
-                still kept in sync centrally; admins see the same
-                numbers under /admin/categories and /admin/brands. */}
-
-            {/* Token expiry info */}
-            {expiryDate && (
-              <p className="text-xs text-zinc-400 flex items-center gap-1.5">
-                <Info className="h-3 w-3 shrink-0" />
-                Access token expires {expiryDate}. PandaWorld will refresh it automatically.
-              </p>
-            )}
-
-            {/* Actions */}
-            <div className="flex gap-3">
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-2"
-                onClick={handleConnect}
-                disabled={connecting}
-              >
-                <RefreshCw className={cn("h-3.5 w-3.5", connecting && "animate-spin")} />
-                Re-authorise
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="gap-2 text-red-400 hover:text-red-600"
-                onClick={() => setShowConfirm(true)}
-              >
-                <Unlink className="h-3.5 w-3.5" />
-                Disconnect
-              </Button>
-            </div>
-          </div>
-        ) : oauthRequired ? (
-          /* ── Credentials saved, OAuth not yet completed ─────────────────── */
-          <div className="space-y-4">
-            <div className="rounded-xl bg-blue-50 border border-blue-100 p-4 text-sm text-blue-700 flex items-start gap-2">
-              <Info className="h-4 w-4 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-semibold">One more step</p>
-                <p className="mt-0.5">
-                  Your Jumia credentials are saved. Click <strong>Authorise with Jumia</strong> to complete the connection — you&apos;ll be redirected to Vendor Center to grant access.
-                </p>
-                {conn?.store_name && (
-                  <p className="mt-1 text-blue-600 text-xs">Store: {conn.store_name}</p>
-                )}
-              </div>
-            </div>
-            <Button onClick={handleConnect} disabled={connecting} className="gap-2 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700">
-              {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShoppingBag className="h-4 w-4" />}
-              {connecting ? "Redirecting to Jumia…" : "Authorise with Jumia"}
-            </Button>
-          </div>
-        ) : isExpired ? (
-          /* ── Expired state ──────────────────────────────────────────────── */
-          <div className="space-y-4">
-            <div className="rounded-xl bg-amber-50 border border-amber-100 p-4 text-sm text-amber-700 flex items-start gap-2">
-              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-              <span>
-                Your Jumia access token has expired. Re-authorise PandaWorld to restore the connection.
-              </span>
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <Button onClick={handleConnect} disabled={connecting} className="gap-2">
-                {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                Re-authorise with Jumia
-              </Button>
-              {/* If the app was deleted/recreated in Jumia Vendor Center, the
-                  stored app_id is gone and re-authorising sends the seller
-                  into Jumia's raw "unable to retrieve client by id" error
-                  page with no way back — disconnecting here lets them start
-                  fresh with new credentials instead of getting stuck there. */}
-              <Button
-                variant="ghost"
-                size="sm"
-                className="gap-2 text-red-400 hover:text-red-600"
-                onClick={() => setShowConfirm(true)}
-              >
-                <Unlink className="h-3.5 w-3.5" />
-                Disconnect &amp; use new credentials
-              </Button>
-            </div>
-          </div>
-        ) : (
-          /* ── Not connected state ────────────────────────────────────────── */
-          <div className="space-y-5">
-            <p className="text-sm text-zinc-600 leading-relaxed">
-              Connect your Jumia seller account to push listings directly from PandaWorld
-              — no more manual uploads or .xlsx downloads. Click the button below and authorise PandaWorld
-              in the Jumia Vendor Center.
-            </p>
-
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-widest text-zinc-400 mb-2">
-                What you get
-              </p>
-              <ul className="space-y-1.5 text-sm text-zinc-600">
-                {[
-                  "One-click product submission to Jumia",
-                  "Real-time listing status & approval feedback",
-                  "Automated order syncing (Phase 4C)",
-                  "Live inventory & pricing updates (Phase 4D)",
-                ].map((feat, i) => (
-                  <li key={i} className="flex items-center gap-2">
-                    <CheckCircle2 className={cn("h-3.5 w-3.5 shrink-0", i < 2 ? "text-emerald-500" : "text-zinc-300")} />
-                    <span className={i >= 2 ? "text-zinc-400" : ""}>{feat}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            {/* Redirect URI notice */}
-            <div className="rounded-xl bg-blue-50 border border-blue-100 p-4 text-xs text-blue-700 space-y-1.5">
-              <p className="font-semibold flex items-center gap-1.5">
-                <Info className="h-3.5 w-3.5 shrink-0" />
-                Before connecting — verify your redirect URI
-              </p>
-              <p>
-                In{" "}
-                <a
-                  href="https://vendorcenter.jumia.com/settings/applications"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline"
-                >
-                  Jumia Vendor Center → Settings → Applications
-                </a>
-                , make sure your PandaWorld app&apos;s Redirect URI is set to:
-              </p>
-              <code className="block rounded bg-blue-100 px-2 py-1 text-[11px] font-mono break-all">
-                {process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3002"}/api/jumia/callback
-              </code>
-              <p className="text-blue-600">
-                The current setting was <code className="font-mono">http://localhost:3002/</code> — update it to the path above.
-              </p>
-            </div>
-
-            <Button
-              onClick={handleConnect}
-              disabled={connecting}
-              className="gap-2 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700"
-            >
-              {connecting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <ShoppingBag className="h-4 w-4" />
-              )}
-              {connecting ? "Redirecting to Jumia…" : "Connect Jumia Ghana"}
-            </Button>
-          </div>
-        )}
-      </section>
+      <JumiaConnectionCard />
 
       <WhatsAppCard />
 
@@ -424,46 +88,6 @@ function IntegrationsPageInner() {
           ))}
         </div>
       </section>
-
-      {/* Disconnect confirmation modal */}
-      {showConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="mx-4 w-full max-w-md rounded-2xl border bg-white p-6 shadow-xl space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-red-50">
-                <Unlink className="h-5 w-5 text-red-500" />
-              </div>
-              <div>
-                <p className="font-semibold text-zinc-900">Disconnect Jumia?</p>
-                <p className="text-xs text-zinc-500">PandaWorld will lose access to your store.</p>
-              </div>
-            </div>
-            <p className="text-sm text-zinc-600">
-              Your existing listings and data will remain in PandaWorld, but you won't be able
-              to push new listings to Jumia until you reconnect.
-            </p>
-            <div className="flex gap-3">
-              <Button
-                variant="outline"
-                className="flex-1"
-                onClick={() => setShowConfirm(false)}
-                disabled={disconnecting}
-              >
-                Keep connected
-              </Button>
-              <Button
-                variant="destructive"
-                className="flex-1 gap-2"
-                onClick={handleDisconnect}
-                disabled={disconnecting}
-              >
-                {disconnecting && <Loader2 className="h-4 w-4 animate-spin" />}
-                Yes, disconnect
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
