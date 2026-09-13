@@ -125,12 +125,39 @@ export function searchCategoriesByText(
  * Cost: ~$0.0001 per call (the embedding) + ~5ms Supabase query time.
  * Negligible compared to a Pass A/B vision call.
  */
+// The department-first auto-analyze pipeline (lib/actions/auto-analyze.ts)
+// deliberately dropped every embedding call from its hot path — AI
+// Studio's gemini-embedding-001 had 30-40s cold-start outliers that
+// stacked toward the route's ANALYSIS_DEADLINE_MS. Re-adding embedding
+// search as an optional quality boost on top of department-scoped fuzzy
+// search (see AGENTS.md's "retrieval upgrade" note) can't reopen that
+// risk, so this whole function races against a short local timeout —
+// short enough that even a cold AI Studio start can never meaningfully
+// eat into the caller's deadline. Vertex's text-embedding-005 (<1s,
+// provisioned-warm) comfortably beats this; AI Studio's fallback chain
+// mostly won't, and that's fine — a timeout degrades exactly like any
+// other failure here: silently, back to fuzzy-only results.
+const EMBEDDING_SEARCH_TIMEOUT_MS = 4_000;
+
 export async function searchCategoriesByEmbedding(
   query: string,
   limit: number = 8,
+  deptPath?: string,
 ): Promise<CategoryCandidate[]> {
   if (!query.trim()) return [];
 
+  const timeout = new Promise<CategoryCandidate[]>((resolve) => {
+    setTimeout(() => resolve([]), EMBEDDING_SEARCH_TIMEOUT_MS);
+  });
+
+  return Promise.race([searchCategoriesByEmbeddingUnbounded(query, limit, deptPath), timeout]);
+}
+
+async function searchCategoriesByEmbeddingUnbounded(
+  query: string,
+  limit: number,
+  deptPath?: string,
+): Promise<CategoryCandidate[]> {
   try {
     // 1. Embed the query
     const { vector } = await embedText(query);
@@ -147,11 +174,17 @@ export async function searchCategoriesByEmbedding(
     // ivfflat index can be used.
     //
     // attribute_set_sid IS NOT NULL ensures we only return listable
-    // categories (matches the rest of the pipeline).
+    // categories (matches the rest of the pipeline). deptPath, when
+    // given, scopes the match to that department's subtree (see
+    // supabase/migrations/2026-09-13_category-embedding-department-
+    // scope.sql) — same scope the department-first pipeline's fuzzy
+    // search already uses, so a semantic hit can never smuggle in a
+    // wrong-department candidate the redesign was built to rule out.
     const db = createServerClient();
     const { data, error } = await db.rpc("search_categories_by_embedding", {
       query_embedding: literal,
       match_limit:     limit,
+      dept_path:       deptPath ?? null,
     });
 
     if (error) {

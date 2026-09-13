@@ -4,17 +4,15 @@
  * session (the WhatsApp webhook) can run the exact same pipeline by
  * passing userId directly instead of it being read from request cookies.
  *
- * Runs Pass A (describe) → 3-source category retrieval → combined Pass
- * B+C (rank + fill), with the old separate Pass B / Pass C as a fallback,
- * then the full field-merge / dynamic-attribute default-fill / gap-fill /
- * description-expand pipeline, and persists everything back to the
- * listing + variants tables. The route is now a thin wrapper: authenticate,
- * rate-limit, parse the body, call this, map the result to JSON.
- *
- * The process-level embedding circuit breaker below is module state, not
- * per-request — it must live here (not in the route) so its "stop trying
- * the embedding call for the rest of this instance's lifetime" behavior is
- * shared across both the HTTP route and any future non-HTTP caller.
+ * Runs Pass A (describe) → department-first category retrieval (fuzzy text
+ * search + a timeout-bounded embedding search, both scoped to the AI's
+ * picked department — see the category-resolution section below) →
+ * combined Pass B+C (rank + fill), with the old separate Pass B / Pass C
+ * as a fallback, then the full field-merge / dynamic-attribute
+ * default-fill / gap-fill / description-expand pipeline, and persists
+ * everything back to the listing + variants tables. The route is now a
+ * thin wrapper: authenticate, rate-limit, parse the body, call this, map
+ * the result to JSON.
  */
 
 import { createServerClient } from "@/lib/supabase/server";
@@ -38,8 +36,10 @@ import {
 } from "@/lib/jumia/categories";
 import {
   searchCategoriesByText,
+  searchCategoriesByEmbedding,
   getTopLevelDepartments,
   getSubtreeCategories,
+  mergeCandidates,
   type CategoryCandidate,
 } from "@/lib/jumia/category-search";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
@@ -163,13 +163,23 @@ export async function runAutoAnalyze(
   // New approach: ask the AI which top-level DEPARTMENT (e.g. "Home &
   // Office", "Fashion") the product belongs in first — a small, cheap,
   // fast decision among ~20-40 broad options, no retrieval involved at
-  // all. Then fuzzy-search ONLY within that department's own subtree (a
-  // few hundred to low thousands of rows, not the full ~27k) for the
-  // actual candidate pool below. Even a middling text match within the
-  // RIGHT department beats a strong text match in the wrong one — and a
-  // department-scoped fuzzy search never needs Google's embedding
-  // endpoint or Jumia's catalog API, so both are dropped from this path
-  // entirely, removing their timeout risk along with their inaccuracy.
+  // all. Then search ONLY within that department's own subtree (a few
+  // hundred to low thousands of rows, not the full ~27k) for the actual
+  // candidate pool below. Even a middling match within the RIGHT
+  // department beats a strong match in the wrong one.
+  //
+  // The subtree search itself is two sources, merged: fuzzy text (fast,
+  // catches vocabulary that overlaps the category name) plus a
+  // timeout-bounded embedding search (catches vocabulary mismatches
+  // fuzzy search can't, e.g. "wireless earbuds" vs. a category literally
+  // named "In-Ear Headphones") — see searchCategoriesByEmbedding's own
+  // 4s internal timeout in lib/jumia/category-search.ts, which caps its
+  // worst case far below this route's timeout risk, so re-adding it here
+  // can't reopen the stacking-timeout problem that got it dropped in the
+  // first place. Both sources are scoped to the SAME department subtree
+  // (see the new migration's dept_path filter), so a semantic hit can
+  // never smuggle in a wrong-department candidate — it can only add or
+  // reinforce candidates the department-first design already trusts.
   // If a department pick is wrong, its next-best alternate gets a second
   // try before giving up — and giving up now means "no category yet,
   // pick one manually" (routes to the category picker), never a
@@ -207,7 +217,9 @@ export async function runAutoAnalyze(
       tried.add(dept.path);
       const subtree = getSubtreeCategories(listableCategories, dept.path);
       if (subtree.length === 0) continue;
-      const hits = searchCategoriesByText(retrievalQuery, subtree, 8);
+      const fuzzyHits = searchCategoriesByText(retrievalQuery, subtree, 8);
+      const semanticHits = await searchCategoriesByEmbedding(retrievalQuery, 8, dept.path);
+      const hits = semanticHits.length > 0 ? mergeCandidates(fuzzyHits, semanticHits, 8) : fuzzyHits;
       if (hits.length > 0) candidates = hits;
     }
   } catch (e) {

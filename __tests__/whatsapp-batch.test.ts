@@ -7,6 +7,7 @@ import {
   extractSalePrice,
   whatsappListingsUrl,
   focusedEditorUrl,
+  buyCreditsUrl,
 } from "@/lib/whatsapp/batch";
 
 describe("parseProductCount", () => {
@@ -229,5 +230,11 @@ describe("focusedEditorUrl", () => {
   it("links to the focused editor for a specific listing", () => {
     const url = focusedEditorUrl("listing-abc");
     expect(url).toContain("/extension/whatsapp-listings/listing-abc");
+  });
+});
+
+describe("buyCreditsUrl", () => {
+  it("links to the extension dashboard", () => {
+    expect(buyCreditsUrl()).toContain("/extension/dashboard");
   });
 });

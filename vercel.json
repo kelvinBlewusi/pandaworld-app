@@ -19,6 +19,10 @@
     {
       "path": "/api/cron/check-category-freshness",
       "schedule": "15 0 * * *"
+    },
+    {
+      "path": "/api/cron/embed-categories",
+      "schedule": "20 0 * * *"
     }
   ]
 }
