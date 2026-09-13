@@ -1325,6 +1325,101 @@ Return ONLY valid JSON. No markdown, no commentary:
   };
 }
 
+// ─── Pass B0: pick a top-level department ────────────────────────────────────
+//
+// Runs BEFORE retrieval — see auto-analyze.ts's category-resolution section
+// for the full rationale. A small, cheap, fast decision among ~20-40 broad
+// departments (no retrieval, no candidate list to build), used to scope the
+// fuzzy search that produces Pass B's actual candidates to one department's
+// subtree instead of the full ~27k-row catalog. Confirmed live: without this,
+// a full-catalog retrieval miss used to fall back to a blind alphabetical
+// slice of the whole catalog — how a safety helmet got filed under "Laptops".
+
+export interface DepartmentPick {
+  name:       string;
+  path:       string;
+  confidence: number;
+}
+
+export interface DepartmentPickResult {
+  primary:    DepartmentPick | null;
+  alternates: DepartmentPick[];
+}
+
+export async function aiPassB0_pickDepartment(
+  imageUrls:   string[],
+  departments: Array<{ name: string; path: string }>,
+  userContext?: string | null,
+  useCase?:    string | null,
+  environment?: ProductDescription["environment"],
+  opts: { forceBestModel?: boolean } = {},
+): Promise<DepartmentPickResult> {
+  if (departments.length === 0) return { primary: null, alternates: [] };
+  if (!imageUrls.length) {
+    const d = departments[0];
+    return { primary: { ...d, confidence: 0.3 }, alternates: [] };
+  }
+  if (USE_MOCK_AI) {
+    const d = departments[0];
+    return { primary: { ...d, confidence: 0.9 }, alternates: [] };
+  }
+  if (!process.env.GOOGLE_API_KEY) throw new Error("GOOGLE_API_KEY is not set.");
+
+  const { userId: deptUserId } = await auth();
+  const deptVisionModel = await resolveModel(deptUserId, "vision", { forceBestModel: opts.forceBestModel });
+
+  const list = departments.map((d, i) => `${i + 1}. ${d.name}`).join("\n");
+
+  const ctxSection = userContext && userContext.trim()
+    ? `\n\nSELLER CONTEXT (treat as authoritative for what the images don't show):\n"${userContext.trim()}"\n`
+    : "";
+  const useCaseBlock = useCase || (environment && environment !== "unknown")
+    ? `\nPRIMARY USE CASE: ${useCase ?? "(not specified)"}\nENVIRONMENT: ${environment ?? "unknown"}\n`
+    : "";
+
+  const prompt = `You are a Jumia marketplace classification expert. Look at the product images and pick the ONE top-level department this product's specific category would live under — this is a broad first step, not the final category.
+
+DEPARTMENTS:
+${list}
+${useCaseBlock}
+Rules:
+1. Pick exactly one department name from the list above, copied verbatim.
+2. List up to 2 alternate departments in case the primary is wrong (e.g. a product that could plausibly sit in more than one department).
+3. Confidence is 0..1 — be honest, use 0.5 or below if genuinely torn between departments.
+${ctxSection}
+Return ONLY valid JSON, no markdown:
+{
+  "primary_department": "<exact name from the list>",
+  "primary_confidence": 0.0,
+  "alternates": ["<name>", "<name>"],
+  "reasoning": "one-line explanation"
+}`;
+
+  let parsed: Record<string, unknown>;
+  try {
+    const raw = await callGemini(prompt, imageUrls, deptVisionModel);
+    parsed = parseAIResponse(raw);
+  } catch (e) {
+    throw new Error(`Department pick failed: ${(e as Error).message}`);
+  }
+
+  const byName = new Map(departments.map((d) => [d.name, d]));
+  const resolve = (rawName: unknown, rawConf?: unknown): DepartmentPick | null => {
+    const d = byName.get(String(rawName ?? ""));
+    if (!d) return null;
+    return { ...d, confidence: Math.max(0, Math.min(1, Number(rawConf ?? 0.5))) };
+  };
+
+  const primary = resolve(parsed.primary_department, parsed.primary_confidence);
+  const rawAlts = Array.isArray(parsed.alternates) ? (parsed.alternates as unknown[]) : [];
+  const alternates = rawAlts
+    .map((n) => resolve(n))
+    .filter((d): d is DepartmentPick => d !== null && (primary == null || d.name !== primary.name))
+    .slice(0, 2);
+
+  return { primary, alternates };
+}
+
 // ─── Pass B: rank candidates ────────────────────────────────────────────────
 //
 // Second AI call. Given the original images and a small (5-8) list of

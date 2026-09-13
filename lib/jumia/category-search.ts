@@ -189,6 +189,40 @@ export async function searchCategoriesByEmbedding(
 }
 
 /**
+ * One representative row per top-level department (the first breadcrumb
+ * segment, e.g. "Electronics", "Fashion"). Feeds aiPassB0_pickDepartment
+ * so the AI can pick a broad department before any category-tree
+ * searching happens — see auto-analyze.ts's category-resolution section.
+ *
+ * The representative row's own `code`/`attribute_set_sid` are whatever
+ * happened to be the first row seen for that department and are NOT
+ * meaningful on their own — callers only read back the winning pick's
+ * `path` (== the department name) to scope the next step; nothing is
+ * ever pushed to Jumia using this row's code.
+ */
+export function getTopLevelDepartments(all: JumiaCategoryRow[]): { name: string; path: string }[] {
+  const seen = new Set<string>();
+  const out: { name: string; path: string }[] = [];
+  for (const c of all) {
+    const dept = c.path.split(/\s*[>/]\s*/)[0]?.trim();
+    if (!dept || seen.has(dept)) continue;
+    seen.add(dept);
+    out.push({ name: dept, path: dept });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Every category under a top-level department — its own row (if directly
+ * listable) plus every descendant. Scopes the fuzzy narrow step to a few
+ * hundred/thousand relevant rows instead of the full ~27k catalog.
+ */
+export function getSubtreeCategories(all: JumiaCategoryRow[], departmentName: string): JumiaCategoryRow[] {
+  const prefix = `${departmentName} > `;
+  return all.filter((c) => c.path === departmentName || c.path.startsWith(prefix));
+}
+
+/**
  * Merge two candidate lists (typically: fuzzy local + Jumia catalog lookup),
  * deduplicating by code and combining their relevance scores so candidates
  * that appear in BOTH float to the top.

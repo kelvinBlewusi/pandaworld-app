@@ -151,6 +151,48 @@ export async function getListableCategories(): Promise<JumiaCategoryRow[]> {
   return rows;
 }
 
+// ─── Process-level cache for getAllCategoriesForTree ───────────────────────
+
+let _allCache: { data: JumiaCategoryRow[]; expires: number } | null = null;
+
+/** Bust the in-memory cache. Call after a successful jumia_categories sync. */
+export function invalidateAllCategoriesCache(): void {
+  _allCache = null;
+}
+
+/**
+ * Every category row — leaves, listable parents, AND pure-navigation
+ * non-listable parents (e.g. a department like "Electronics" that exists
+ * only to hold children). getListableCategories() filters the last group
+ * out via `attribute_set_sid IS NOT NULL`, which is right for the
+ * seller-facing picker but wrong for walking the tree department-first —
+ * see lib/actions/auto-analyze.ts's category-resolution section and
+ * lib/jumia/category-search.ts's getTopLevelDepartments/getSubtreeCategories.
+ *
+ * No bundled-snapshot self-heal here: this is only ever called right
+ * after getListableCategories() already confirmed the table is
+ * non-empty, so an empty result here would mean something else broke.
+ */
+export async function getAllCategoriesForTree(): Promise<JumiaCategoryRow[]> {
+  if (_allCache && _allCache.expires > Date.now()) {
+    return _allCache.data;
+  }
+
+  const db = createServerClient();
+  const rows = await selectAllPaginatedParallel<JumiaCategoryRow>((from, to) =>
+    db
+      .from("jumia_categories")
+      .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name")
+      .order("name")
+      .range(from, to),
+  );
+
+  if (rows.length > 0) {
+    _allCache = { data: rows, expires: Date.now() + LISTABLE_CACHE_TTL_MS };
+  }
+  return rows;
+}
+
 /**
  * Most-recent `synced_at` across the categories table. Used by the
  * picker to decide whether to fire a background refresh (>24h ⇒ stale).
