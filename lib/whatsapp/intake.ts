@@ -25,6 +25,7 @@ import {
   focusedEditorUrl,
   buyCreditsUrl,
   COUNT_QUICK_PICKS,
+  MAX_BATCH_SIZE,
 } from "@/lib/whatsapp/batch";
 import { splitCredentialTokens, identifyCredentials, looksLikeCredential, isResendCommand, jumiaConnectLink, promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
 import { classifyBatchIntent, looksActionable } from "@/lib/whatsapp/intent";
@@ -71,6 +72,13 @@ const ANALYSIS_DEADLINE_MS = 45_000;
 // awaiting_confirmation — worse than the analyzing-state bug since there
 // wasn't even a "still working" message.
 const SUBMIT_DEADLINE_MS = 45_000;
+
+// Batch size at or above which drafting is slow enough to be worth filling
+// the silence (the "tell me a story" offer). Was a hardcoded 10, which
+// became unreachable when MAX_BATCH_SIZE dropped to 5 — and 10 was always
+// the wrong shape for this, since it has to move whenever the cap does.
+// At ~22s for a single product, three concurrent is already a real wait.
+const BIG_BATCH_SIZE = 3;
 
 function replyText(to: string, text: string): Promise<void> {
   return sendTextIfConfigured(to, text);
@@ -274,6 +282,23 @@ async function handleGlobalCommand(
  * back into the connect flow instead of being asked "how many
  * products?" only to hit the same gate again on the very next message.
  */
+/**
+ * The end of a batch — every product submitted, session already reset.
+ * Carries a button because this was the one place the flow still stopped
+ * dead: the seller had nothing to tap and no stated phrase to type, so
+ * listing a second batch meant guessing. The id is "restart", the same
+ * canonical phrase the typed command uses (see lib/whatsapp/commands.ts),
+ * so a tap and a typed *restart* run the identical path — and the body
+ * still names the phrase for clients that can't render buttons.
+ */
+function sendBatchDoneMessage(phoneNumber: string): Promise<void> {
+  return replyButtons(
+    phoneNumber,
+    "🎉 That's the whole batch submitted! I'll message you here as each one goes live.\n\nWant to list something else? Tap below or reply *restart*.",
+    [{ id: "restart", title: "Create new listing" }],
+  );
+}
+
 async function handleGlobalRestart(userId: string, phoneNumber: string): Promise<void> {
   await resetSession(phoneNumber);
   const kind = await getJumiaConnectionKind(userId);
@@ -341,7 +366,7 @@ async function handleAnalyzingMessage(
     await replyButtons(phoneNumber, pickStory(), [{ id: "tell_story", title: "📖 Another one" }]);
     return;
   }
-  if ((session.batchSize ?? 1) >= 10) {
+  if ((session.batchSize ?? 1) >= BIG_BATCH_SIZE) {
     await replyButtons(
       phoneNumber,
       "⏳ Still drafting your products — hang tight.",
@@ -411,7 +436,7 @@ async function describeStatus(
     case "analyzing":
       return {
         text: "Drafting your products right now — this can take up to a minute.",
-        buttons: (session.batchSize ?? 1) >= 10 ? [{ id: "tell_story", title: "📖 Tell me a story" }] : undefined,
+        buttons: (session.batchSize ?? 1) >= BIG_BATCH_SIZE ? [{ id: "tell_story", title: "📖 Tell me a story" }] : undefined,
       };
     case "awaiting_confirmation": {
       const batchId = session.batchId;
@@ -471,7 +496,7 @@ async function handleAwaitingCount(
   if (!count) {
     await replyButtons(
       phoneNumber,
-      "⚠️ I need a number to get started — reply with how many products you're listing today (1–20), e.g. *3*.",
+      `⚠️ I need a number to get started — reply with how many products you're listing today (1–${MAX_BATCH_SIZE}), e.g. *3*.`,
       COUNT_QUICK_PICKS,
     );
     return;
@@ -754,7 +779,7 @@ async function startBatchAnalysis(
   // Gemini latency still adds up) — offer something to do instead of
   // silence between updates. handleAnalyzingMessage handles the tap (and
   // re-offers the button so a seller can ask for more than one).
-  if (batchSize >= 10) {
+  if (batchSize >= BIG_BATCH_SIZE) {
     await replyButtons(
       phoneNumber,
       "This is a bigger batch, so drafting may take a little while. Want something to pass the time?",
@@ -1203,7 +1228,13 @@ async function handleSubmit(
     const allSubmitted = refreshed.every((l) => l.status !== "draft" && l.status !== "failed");
     if (allSubmitted) {
       await resetSession(phoneNumber);
-      await replyText(phoneNumber, [...alreadySubmittedMessages, "🎉 That's the whole batch submitted! I'll message you here as each one goes live."].join("\n"));
+      // Same split as the else-branch below: the per-product lines go as
+      // plain text (a full batch's worth can exceed the interactive body
+      // cap), then the short sign-off carries the button.
+      if (alreadySubmittedMessages.length > 0) {
+        await replyText(phoneNumber, alreadySubmittedMessages.join("\n"));
+      }
+      await sendBatchDoneMessage(phoneNumber);
     } else {
       // Plain text first (a long list of "already submitted" lines can
       // exceed the interactive-message body cap), then a short, fixed-
@@ -1311,7 +1342,7 @@ async function handleSubmit(
     const allSubmitted = refreshed.every((l) => l.status !== "draft" && l.status !== "failed");
     if (allSubmitted) {
       await resetSession(phoneNumber);
-      await replyText(phoneNumber, "🎉 That's the whole batch submitted! I'll message you here as each one goes live.");
+      await sendBatchDoneMessage(phoneNumber);
     } else {
       // Still stuff left in this batch — never leave the seller to guess
       // the next command from the result text alone. Short, fixed body
