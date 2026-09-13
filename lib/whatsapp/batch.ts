@@ -81,15 +81,21 @@ export function parseEditCommand(text: string, batchSize: number): EditCommand |
 // an inference — if it doesn't match a clear, explicit number, it returns
 // null and the seller sets it on the review page instead.
 
-/** "price 150", "price: GHS 150", "₵150", "150 cedis" → 150. A message
- *  that's JUST a bare number ("200") also counts — confirmed live: a
- *  seller told "tell me the price" (the photo-prompt's own wording, no
- *  keyword required) reasonably just types "200", and requiring a
- *  "price"/currency prefix silently dropped it, leaving the listing with
- *  no price and "price is required" errors at submit time. Null if
- *  neither shape matches. */
+/** "price 150", "price: GHS 150", "the price is 150", "₵150", "150 cedis"
+ *  → 150. A message that's JUST a bare number ("200") also counts —
+ *  confirmed live: a seller told "tell me the price" (the photo-prompt's
+ *  own wording, no keyword required) reasonably just types "200", and
+ *  requiring a "price"/currency prefix silently dropped it, leaving the
+ *  listing with no price and "price is required" errors at submit time.
+ *  Null if neither shape matches.
+ *
+ *  The optional "is"/"was" before the separator matters: confirmed live,
+ *  "The price is 150" (a completely natural way to say it, and how the
+ *  photo-collection prompt's own example phrases it) didn't match when
+ *  the gap between "price" and the separator only allowed whitespace —
+ *  the seller got told "still needs: price" despite having stated it. */
 export function extractPrice(text: string): number | null {
-  const labeled = text.match(/price\s*[:=]?\s*(?:GH[SC]?|GH₵|₵)?\s*(\d+(?:\.\d+)?)/i);
+  const labeled = text.match(/price\s*(?:is|was)?\s*[:=]?\s*(?:GH[SC]?|GH₵|₵)?\s*(\d+(?:\.\d+)?)/i);
   if (labeled) return parseFloat(labeled[1]);
   const currency = text.match(/(?:GH[SC]?|GH₵|₵)\s*(\d+(?:\.\d+)?)/i) ?? text.match(/(\d+(?:\.\d+)?)\s*ced[ei]s/i);
   if (currency) return parseFloat(currency[1]);
@@ -98,9 +104,12 @@ export function extractPrice(text: string): number | null {
   return null;
 }
 
-/** "stock 10", "qty: 10", "quantity 10" → 10. Null otherwise. */
+/** "stock 10", "qty: 10", "the stock is 10", "quantity 10" → 10. Null
+ *  otherwise. Same "is"/"was" tolerance as extractPrice, and for the same
+ *  reason — a seller phrasing it as a full sentence shouldn't silently
+ *  fail to register. */
 export function extractStock(text: string): number | null {
-  const match = text.match(/(?:stock|qty|quantity)\s*[:=]?\s*(\d+)/i);
+  const match = text.match(/(?:stock|qty|quantity)\s*(?:is|was)?\s*[:=]?\s*(\d+)/i);
   if (!match) return null;
   const n = parseInt(match[1], 10);
   return Number.isFinite(n) && n > 0 ? n : null;

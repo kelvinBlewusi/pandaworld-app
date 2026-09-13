@@ -107,6 +107,16 @@ describe("extractPrice", () => {
     expect(extractPrice("200")).toBe(200);
     expect(extractPrice("  99.50  ")).toBe(99.5);
   });
+
+  it("parses a full-sentence 'is'/'was' phrasing — confirmed live failure", () => {
+    // A seller typed "The variation is red\nThe price is 150\nDone" and was
+    // told "still needs: price" despite stating it plainly — the old regex
+    // only tolerated whitespace/':'/'=' between "price" and the number, not
+    // the word "is" a natural sentence puts there.
+    expect(extractPrice("The price is 150")).toBe(150);
+    expect(extractPrice("the price was 99.50")).toBe(99.5);
+    expect(extractPrice("Variation is red\nThe price is 150\nDone")).toBe(150);
+  });
 });
 
 describe("extractStock", () => {
@@ -119,6 +129,11 @@ describe("extractStock", () => {
   it("returns null when not explicitly labeled", () => {
     expect(extractStock("price 150")).toBeNull();
     expect(extractStock("3 sizes available")).toBeNull();
+  });
+
+  it("parses a full-sentence 'is'/'was' phrasing", () => {
+    expect(extractStock("the stock is 10")).toBe(10);
+    expect(extractStock("quantity was 20")).toBe(20);
   });
 });
 
