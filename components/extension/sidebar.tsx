@@ -100,7 +100,7 @@ function ComingSoonItem({ label, icon: Icon }: { label: string; icon: React.Elem
   );
 }
 
-export function ExtensionSidebar({ onClose }: { onClose?: () => void }) {
+export function ExtensionSidebar({ onClose, isAdmin = false }: { onClose?: () => void; isAdmin?: boolean }) {
   const { user } = useUser();
 
   return (
@@ -143,16 +143,25 @@ export function ExtensionSidebar({ onClose }: { onClose?: () => void }) {
 
       <div className="px-3 pb-4">
         {/* Explicit, opt-in bridge into the classic Jumia-OAuth flow — greyed
-            out (2026-09-13) while WhatsApp + the extension are the focus.
-            Left in the DOM rather than deleted so re-enabling it later is a
-            one-line change back to a Link (was: href="/push-listings"). */}
-        <div
-          aria-disabled="true"
-          title="Temporarily unavailable — use WhatsApp or the Chrome extension instead"
-          className="flex cursor-not-allowed items-center justify-center gap-1.5 rounded-lg border border-zinc-100 px-3 py-2 text-xs font-medium text-zinc-300"
-        >
-          Push Listings from here <ArrowRight className="h-3 w-3" />
-        </div>
+            out for regular sellers (2026-09-13) while WhatsApp + the
+            extension are the focus, but left live for admins (see
+            lib/auth/is-admin.ts) who still need it for testing/support. */}
+        {isAdmin ? (
+          <Link
+            href="/push-listings"
+            className="flex items-center justify-center gap-1.5 rounded-lg border border-zinc-200 px-3 py-2 text-xs font-medium text-zinc-500 transition-colors hover:border-zinc-300 hover:text-zinc-900"
+          >
+            Push Listings from here <ArrowRight className="h-3 w-3" />
+          </Link>
+        ) : (
+          <div
+            aria-disabled="true"
+            title="Temporarily unavailable — use WhatsApp or the Chrome extension instead"
+            className="flex cursor-not-allowed items-center justify-center gap-1.5 rounded-lg border border-zinc-100 px-3 py-2 text-xs font-medium text-zinc-300"
+          >
+            Push Listings from here <ArrowRight className="h-3 w-3" />
+          </div>
+        )}
 
         <div className="mt-3 flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-zinc-50">
           <UserButton appearance={{ elements: { avatarBox: "h-7 w-7" } }} />

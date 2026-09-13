@@ -10,6 +10,7 @@
 
 import { mapListingToJumiaProducts, type JumiaProduct } from "@/lib/jumia/api";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
+import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 
 // ─── Shape of a valid POST /feeds/products/create payload per Postman ───────
 
@@ -366,6 +367,66 @@ describe("Jumia /feeds/products/create payload conformance", () => {
       expect(json).toContain('"sellerSku"');
       expect(json).toContain('"parentSku"');
       expect(json).toContain('"translations"');
+    });
+  });
+
+  describe("category-schema attribute sanitisation", () => {
+    // Confirmed live: material_family="Fabric" was sent for a category
+    // whose material_family enum never contains the literal string
+    // "Fabric" (Jumia's real lists use "Textile"/specific fabric names) —
+    // Jumia rejected the WHOLE feed over that one mismatched value, with
+    // no earlier check catching it.
+    const materialFamilySchema: JumiaCategoryAttribute[] = [
+      {
+        name: "material_family",
+        label: "Material family",
+        type: "multi",
+        allowed_values: ["Textile", "Metal", "Plastic", "Wood", "Canvas"],
+        required: false,
+        is_variant: false,
+      },
+    ];
+
+    it("drops an attribute whose value isn't one of the category's allowed_values", () => {
+      const listing = { ...sampleListing, material_family: "Fabric" };
+      const products = mapListingToJumiaProducts(listing, [], brand, currency, materialFamilySchema);
+      const names = products[0].attributes.map((a) => a.name);
+      expect(names).not.toContain("material_family");
+    });
+
+    it("keeps an attribute whose value IS one of the category's allowed_values", () => {
+      const listing = { ...sampleListing, material_family: "Metal" };
+      const products = mapListingToJumiaProducts(listing, [], brand, currency, materialFamilySchema);
+      const attr = products[0].attributes.find((a) => a.name === "material_family");
+      expect(attr?.value).toBe("Metal");
+    });
+
+    it("matches case-insensitively", () => {
+      const listing = { ...sampleListing, material_family: "metal" };
+      const products = mapListingToJumiaProducts(listing, [], brand, currency, materialFamilySchema);
+      const attr = products[0].attributes.find((a) => a.name === "material_family");
+      expect(attr?.value).toBe("metal");
+    });
+
+    it("trims a multi-value attribute down to only the valid picks", () => {
+      const listing = { ...sampleListing, material_family: "Metal, Fabric, Wood" };
+      const products = mapListingToJumiaProducts(listing, [], brand, currency, materialFamilySchema);
+      const attr = products[0].attributes.find((a) => a.name === "material_family");
+      expect(attr?.value).toBe("Metal, Wood");
+    });
+
+    it("leaves attributes with no matching schema entry untouched", () => {
+      const listing = { ...sampleListing, main_material: "Aluminium" };
+      const products = mapListingToJumiaProducts(listing, [], brand, currency, materialFamilySchema);
+      const attr = products[0].attributes.find((a) => a.name === "main_material");
+      expect(attr?.value).toBe("Aluminium");
+    });
+
+    it("is a no-op when no schema is passed (backward compatible)", () => {
+      const listing = { ...sampleListing, material_family: "Fabric" };
+      const products = mapListingToJumiaProducts(listing, [], brand, currency);
+      const attr = products[0].attributes.find((a) => a.name === "material_family");
+      expect(attr?.value).toBe("Fabric");
     });
   });
 });
