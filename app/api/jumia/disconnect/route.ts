@@ -29,11 +29,15 @@ export async function POST() {
   try {
     const wa = await getWhatsAppConnection(userId);
     if (wa.connected && wa.phoneNumber) {
+      // disconnectJumiaForUser deletes the connection row entirely (no
+      // saved app_id/secret left to shortcut with), so this always needs
+      // the full connect form — the same page (main)/layout.tsx's own
+      // gate redirects a disconnected seller to.
       await sendCtaUrlIfConfigured(
         wa.phoneNumber,
         "🔌 Your Jumia store was disconnected from PandaWorld from the website. Message me here whenever you're ready to reconnect, or use the button below.",
-        "Extension settings",
-        `${appUrl()}/extension/settings`,
+        "Reconnect Jumia",
+        `${appUrl()}/onboarding/connect`,
       );
     }
   } catch (e) {
