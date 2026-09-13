@@ -240,9 +240,15 @@ export function searchCategoriesByText(
 // short enough that even a cold AI Studio start can never meaningfully
 // eat into the caller's deadline. Vertex's text-embedding-005 (<1s,
 // provisioned-warm) comfortably beats this; AI Studio's fallback chain
-// mostly won't, and that's fine — a timeout degrades exactly like any
-// other failure here: silently, back to fuzzy-only results.
+// mostly won't, and that's fine — a timeout degrades back to fuzzy-only
+// results. It degrades LOUDLY, though: see the logging below.
 const EMBEDDING_SEARCH_TIMEOUT_MS = 4_000;
+
+/** Distinguishes "the race hit the timeout" from "the search ran and found
+ *  nothing". Both used to return [], which is why a semantic layer that
+ *  timed out on every single call was indistinguishable from a working one
+ *  with no matches — and nothing anywhere said which was happening. */
+const TIMED_OUT = Symbol("embedding-search-timeout");
 
 export async function searchCategoriesByEmbedding(
   query: string,
@@ -251,11 +257,48 @@ export async function searchCategoriesByEmbedding(
 ): Promise<CategoryCandidate[]> {
   if (!query.trim()) return [];
 
-  const timeout = new Promise<CategoryCandidate[]>((resolve) => {
-    setTimeout(() => resolve([]), EMBEDDING_SEARCH_TIMEOUT_MS);
+  const started = Date.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), EMBEDDING_SEARCH_TIMEOUT_MS);
   });
 
-  return Promise.race([searchCategoriesByEmbeddingUnbounded(query, limit, deptPath), timeout]);
+  let result: CategoryCandidate[] | typeof TIMED_OUT;
+  try {
+    result = await Promise.race([
+      searchCategoriesByEmbeddingUnbounded(query, limit, deptPath),
+      timeout,
+    ]);
+  } finally {
+    // Without this the losing timer keeps the event loop referenced for the
+    // rest of its 4s, on every call.
+    clearTimeout(timer);
+  }
+
+  const elapsed = Date.now() - started;
+
+  if (result === TIMED_OUT) {
+    console.warn(
+      `[category-search] embedding search TIMED OUT after ${EMBEDDING_SEARCH_TIMEOUT_MS}ms — ` +
+        `this query got fuzzy-only candidates. Seeing this on most analyses means the semantic ` +
+        `layer is effectively switched off, and which fix applies depends on the backend: on AI ` +
+        `Studio, gemini-embedding-001 runs 30-40s cold, so configure Vertex (GCP_PROJECT_ID + ` +
+        `GOOGLE_APPLICATION_CREDENTIALS_JSON). On Vertex, text-embedding-005 itself answers in ` +
+        `<1s, so a timeout points at the first call in a cold process paying for the OAuth ` +
+        `token handshake (see getVertexAccessToken in lib/ai/embeddings.ts) rather than at the ` +
+        `model — worth raising this budget rather than chasing the model.`,
+    );
+    return [];
+  }
+
+  // Logged on success too, including the zero-result case: the margin
+  // against the timeout is the thing worth watching (3.8s means the next
+  // slightly-slower call silently loses the semantic layer).
+  console.info(
+    `[category-search] embedding search ok in ${elapsed}ms → ${result.length} candidate(s)` +
+      (deptPath ? ` scoped to "${deptPath}"` : " (unscoped)"),
+  );
+  return result;
 }
 
 async function searchCategoriesByEmbeddingUnbounded(
