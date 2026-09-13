@@ -19,7 +19,7 @@ export function BeginWhatsAppBanner() {
   // configured (so there's no wa.me link to open automatically) — same
   // degraded case WhatsAppCard handles by showing the code as text
   // instead of a button. Not an error: the code is real and usable.
-  const [manualCode, setManualCode] = useState<string | null>(null);
+  const [manualCode, setManualCode] = useState<{ code: string; message: string } | null>(null);
 
   async function handleClick() {
     setLoading(true);
@@ -35,7 +35,7 @@ export function BeginWhatsAppBanner() {
       if (data?.waLink) {
         window.open(data.waLink, "_blank", "noopener,noreferrer");
       } else if (data?.code) {
-        setManualCode(data.code);
+        setManualCode({ code: data.code, message: data.message ?? `LINK-${data.code}` });
       } else {
         setError("Couldn't generate a link — try again.");
       }
@@ -65,18 +65,18 @@ export function BeginWhatsAppBanner() {
 
       {manualCode && (
         <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4 text-center text-sm">
-          <p className="text-emerald-700">Send this code as a WhatsApp message to the PandaWorld bot number:</p>
+          <p className="text-emerald-700">Send this message to the PandaWorld bot number:</p>
           <div className="mt-2 flex items-center justify-center gap-2">
             <code className="rounded bg-emerald-100 px-2.5 py-1.5 font-mono text-sm text-emerald-900">
-              LINK-{manualCode}
+              LINK-{manualCode.code}
             </code>
             <button
               type="button"
-              onClick={() => navigator.clipboard.writeText(`LINK-${manualCode}`)}
+              onClick={() => navigator.clipboard.writeText(manualCode.message)}
               className="flex items-center gap-1 text-xs text-emerald-700 hover:text-emerald-900"
             >
               <Copy className="h-3 w-3" />
-              Copy
+              Copy message
             </button>
           </div>
           <p className="mt-1 text-xs text-emerald-500">This code expires in 15 minutes.</p>

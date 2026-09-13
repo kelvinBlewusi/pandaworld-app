@@ -30,13 +30,26 @@ export function generateCode(): string {
 }
 
 /**
+ * The wa.me deep link's pre-filled text — a friendly greeting ahead of the
+ * actual code, rather than just "LINK-A1B2C3D4" on its own, so a seller
+ * tapping the button sends something that reads like a real message
+ * instead of a bare code with no context. extractLinkCode's regex
+ * (lib/whatsapp/webhook-verify.ts) searches for the code anywhere in the
+ * message rather than requiring an exact match, specifically so this
+ * greeting doesn't break linking.
+ */
+export function buildLinkMessage(code: string): string {
+  return `Hi! I want to link my PandaWorld account to the WhatsApp Bot, here is my connection code: LINK-${code}`;
+}
+
+/**
  * Create a new link code for this user and return it plus the ready-to-tap
  * wa.me deep link. Doesn't invalidate any earlier unused codes for the same
  * user — a seller who generates a few in a row (e.g. one expired) just ends
  * up with several valid codes, all resolving to the same account, which is
  * harmless.
  */
-export async function createLinkCode(userId: string): Promise<{ code: string; waLink: string }> {
+export async function createLinkCode(userId: string): Promise<{ code: string; waLink: string; message: string }> {
   const db = createServerClient();
   const botNumber = process.env.WHATSAPP_BOT_NUMBER; // E.164, digits only, e.g. "233241234567"
 
@@ -50,10 +63,9 @@ export async function createLinkCode(userId: string): Promise<{ code: string; wa
       expires_at: new Date(Date.now() + LINK_CODE_TTL_MS).toISOString(),
     });
     if (!error) {
-      const waLink = botNumber
-        ? `https://wa.me/${botNumber}?text=${encodeURIComponent(`LINK-${code}`)}`
-        : "";
-      return { code, waLink };
+      const message = buildLinkMessage(code);
+      const waLink = botNumber ? `https://wa.me/${botNumber}?text=${encodeURIComponent(message)}` : "";
+      return { code, waLink, message };
     }
     if (attempt === 1) throw new Error(`Failed to create link code: ${error.message}`);
   }

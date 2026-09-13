@@ -17,8 +17,8 @@ export async function POST() {
   if (limited) return limited;
 
   try {
-    const { code, waLink } = await createLinkCode(userId);
-    return NextResponse.json({ code, waLink });
+    const { code, waLink, message } = await createLinkCode(userId);
+    return NextResponse.json({ code, waLink, message });
   } catch (e) {
     console.error("[whatsapp generate-link]", e);
     return NextResponse.json(

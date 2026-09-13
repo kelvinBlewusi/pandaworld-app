@@ -60,4 +60,16 @@ describe("extractLinkCode", () => {
     expect(extractLinkCode("LINK-A1B2C3")).toBeNull();
     expect(extractLinkCode("LINK-A1B2C3D4E5")).toBeNull();
   });
+
+  it("finds the code inside the wa.me deep link's pre-filled greeting", () => {
+    expect(
+      extractLinkCode(
+        "Hi! I want to link my PandaWorld account to the WhatsApp Bot, here is my connection code: LINK-A1B2C3D4",
+      ),
+    ).toBe("A1B2C3D4");
+  });
+
+  it("finds the code when a seller adds their own words around it", () => {
+    expect(extractLinkCode("hey it's me, LINK-A1B2C3D4 thanks!")).toBe("A1B2C3D4");
+  });
 });
