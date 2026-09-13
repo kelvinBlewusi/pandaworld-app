@@ -136,11 +136,11 @@ function ExtensionLink() {
 
 function NewListingLink() {
   const pathname = usePathname();
-  const isActive = pathname.startsWith("/listings/new");
+  const isActive = pathname.startsWith("/listings/new") || pathname.startsWith("/extension/whatsapp-listings");
 
   return (
     <Link
-      href="/listings/new/batch?count=1&mode=own"
+      href="/extension/whatsapp-listings"
       className={cn(
         "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-all duration-150",
         isActive
