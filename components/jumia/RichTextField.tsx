@@ -14,10 +14,11 @@
  * <blockquote>, <table>, …) so what the seller sees here is what
  * renders on the live product page.
  *
- * Backwards-compat: existing DB values are plain text — possibly with
- * "• " bullets from the AI's highlights output. `normaliseIncoming()`
+ * Backwards-compat: existing DB values may be plain text — possibly with
+ * "• " bullets from the AI's highlights output. `normaliseRichTextValue()`
  * converts those into a proper <ul> before the editor mounts, so the
  * bullets render as real list items instead of literal "• " characters.
+ * Values that contain HTML anywhere are passed straight through.
  */
 
 import { useEffect, useRef } from "react";
@@ -41,6 +42,7 @@ import {
   Undo2, Redo2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { normaliseRichTextValue, escapeHtml } from "@/lib/utils/rich-text-value";
 
 interface RichTextFieldProps {
   value:        string;
@@ -48,50 +50,6 @@ interface RichTextFieldProps {
   placeholder?: string;
   rows?:        number;       // hint for min-height — translated to min-h
   id?:          string;
-}
-
-// ─── Migration helper ─────────────────────────────────────────────────────────
-//
-// Convert legacy plain-text values (especially AI-generated "• bullet"
-// highlights) into HTML the editor renders nicely. Skipped when the
-// value already looks like HTML.
-function normaliseIncoming(raw: string): string {
-  if (!raw) return "";
-  const trimmed = raw.trim();
-  // Already HTML — pass through.
-  if (/^\s*<(p|ul|ol|h[1-6]|blockquote|table|div|br)\b/i.test(trimmed)) {
-    return trimmed;
-  }
-
-  // Bullet list detection: any line starting with "•", "-", or "*"
-  // followed by a space is treated as a list item. We require at least
-  // 2 such lines to avoid mis-converting a single sentence that
-  // happens to start with "-".
-  const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const bulletRe = /^\s*[•\-*]\s+(.+)$/;
-  const allBullets =
-    lines.length >= 2 && lines.every((l) => bulletRe.test(l));
-  if (allBullets) {
-    const items = lines
-      .map((l) => l.replace(bulletRe, "$1"))
-      .map((t) => `<li>${escapeHtml(t)}</li>`)
-      .join("");
-    return `<ul>${items}</ul>`;
-  }
-
-  // Otherwise: wrap paragraphs separated by blank lines, single line
-  // breaks become <br>.
-  const paragraphs = trimmed.split(/\n{2,}/);
-  return paragraphs
-    .map((p) => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`)
-    .join("");
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
 }
 
 // ─── Toolbar ──────────────────────────────────────────────────────────────────
@@ -302,7 +260,7 @@ export function RichTextField({
   // Snapshot the initial value at mount only. Later value changes are
   // pushed in via the useEffect-with-setContent below — NOT via the
   // useEditor `content` option, which would trigger a refresh.
-  const initialValueRef = useRef(normaliseIncoming(value));
+  const initialValueRef = useRef(normaliseRichTextValue(value));
 
   const editor = useEditor(
     {
@@ -372,7 +330,7 @@ export function RichTextField({
   // the editor's current HTML to avoid clobbering mid-typing state.
   useEffect(() => {
     if (!editor) return;
-    const incoming = normaliseIncoming(value);
+    const incoming = normaliseRichTextValue(value);
     if (incoming !== editor.getHTML() && incoming !== "<p></p>") {
       editor.commands.setContent(incoming, { emitUpdate: false });
     }

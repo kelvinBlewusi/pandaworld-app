@@ -20,6 +20,10 @@ export interface ContentStyleRule {
   /** Matches a normalized harvested field label (e.g. "name", "product description"). */
   appliesTo: (normalizedLabel: string) => boolean;
   rule: string;
+  /** True for the free-text fields whose value is HTML (Description,
+   *  Highlights) — these get HTML_SHAPE_RULE appended. A title is a plain
+   *  string and must never be told to emit tags. */
+  narrative?: true;
 }
 
 export const CONTENT_STYLE_RULES: ContentStyleRule[] = [
@@ -29,6 +33,7 @@ export const CONTENT_STYLE_RULES: ContentStyleRule[] = [
   },
   {
     appliesTo: (l) => l.includes("description"),
+    narrative: true,
     rule: `Description: free-form — prose paragraphs, a <table>, a <ul>, or any mix, whichever combination best showcases THIS specific product. ALL formatting styles are allowed (bold, italics, underline, headings, bullets, tables) and NONE are required — whether to use a table at all is entirely your own call for THIS product, never a fixed requirement. Not locked to a fixed paragraph count or a single format: a story-led product may read best as flowing prose, a spec-heavy one may lead with a <table> before any prose, and most products benefit from a mix. The actual structure should genuinely vary from one listing to the next — two different products should never read as if poured from the same template; pick whatever shape fits THIS product, not a habit. Tables aren't capped at a 2-column Spec/Value layout — use as many columns and rows as the content genuinely calls for (e.g. a size chart, a multi-variant comparison, a nutrition/ingredients breakdown), whichever shape actually fits what you're presenting.
   MINIMUM LENGTH: at least 1500 characters of actual written prose/bullet content — not counting HTML markup, and not counting anything inside a <table>...</table> (a table is a bonus on top of this floor if you use one, never a substitute for it). Write as much genuine, specific detail as the product actually earns — real materials, dimensions, use-cases, construction, care instructions, whatever the image and notes actually support — to comfortably clear that floor with real substance, not padding. Never pad with filler sentences just to run longer; length should come from genuine detail, not repetition or vague marketing phrases — but "don't pad" is not license to stop short: even "just a medal" has real things to say once you look past the obvious (what it's made of, how it's finished, who buys it and why, how it compares to a cheaper version, how it's meant to be used or displayed). Find that substance rather than settling for the first few sentences that come to mind.
   Open with a one-sentence hook naming the product (may bold it inline). Weave <strong>key spec/feature phrases</strong> naturally into the prose as you go — including as a bold micro-heading directly followed by more prose in the same paragraph (e.g. "<strong>Effortless Slicing.</strong> The large, smooth-rolling wheel glides through..."). Nearly every product has at least one or two genuine buyer/use-case angles (occasion, recipient, setting) — close with a "Perfect for:" <ul> where each <li> starts with a bold audience/use-case and a colon, unless the product is truly single-purpose with nothing real to say there.
@@ -39,6 +44,7 @@ export const CONTENT_STYLE_RULES: ContentStyleRule[] = [
   },
   {
     appliesTo: (l) => l.includes("highlight"),
+    narrative: true,
     rule: `Highlights: free-form, like Description above — a <ul><li> list, prose paragraphs, a <table>, or any mix, whichever combination best fits what THIS product actually has to say. ALL formatting styles are allowed here too (bold, italics, underline, headings, bullets, tables) and NONE are required — whether to use a table at all is your own call for THIS product. NOT locked to a fixed bullet format or a fixed item count, and the actual structure should genuinely vary from one listing to the next rather than defaulting to the same shape every time. A bulleted list (each item like <li><strong>Short Feature Label</strong>: one or more sentences of real, specific benefit</li>) is a strong common default, especially for feature-dense products — but when the product has clear technical specs (dimensions, ingredients, materials, capacity, servings), lead with a <table> — not capped at 2 columns, use however many the specs actually need — and a story-led or premium product may read better as two short prose paragraphs than five clipped bullets.
   MINIMUM LENGTH: at least 800 characters of actual written content across all items — not counting HTML markup, and not counting anything inside a <table>...</table> (a table is a bonus on top of this floor if you use one, never a substitute for it). Write as much genuine, specific detail per point as the product warrants to comfortably clear that floor with real substance — don't cut yourself off at one short sentence if there's real substance to explain — but never pad with filler just to sound longer or more thorough. NEVER write a highlight as a single short clause restating the label (e.g. "Durable Design: Built to last as a lasting memento") — that's too thin to be useful. Every item needs the actual WHY or HOW behind it: what it's made of, how it achieves the benefit, or what makes this product's version of that feature genuinely good — if a highlight could be copy-pasted onto any competing product unchanged, it isn't specific enough yet.`,
   },
@@ -49,25 +55,45 @@ const CLOSING_RULE =
   "Never end description or highlights with a request for reviews/feedback/ratings — keep the content to the product itself.";
 
 /**
+ * Appended whenever a narrative (HTML-valued) rule applies.
+ *
+ * The rules above ask for "prose paragraphs" and the model took that
+ * literally: measured on live listings, descriptions opened with hundreds
+ * of characters of BARE text before the first tag (319, 373, 609) while
+ * highlights, asked for a <ul>, always started at character 1. A value
+ * that is half raw text and half markup is not HTML, and every consumer
+ * downstream has to guess which it is — which is exactly how the editor
+ * came to display real <strong> and <ul> tags to sellers as literal text.
+ *
+ * Also bans the empty bold heading the model emitted when it had no label
+ * to put in one (a live description contained a bare "<strong>:</strong>",
+ * which renders on Jumia as a stray bold colon).
+ */
+const HTML_SHAPE_RULE =
+  "WELL-FORMED HTML: the value of description and highlights is HTML, so it must start with a tag and every piece of text must sit inside one — wrap each prose paragraph in <p>...</p> rather than leaving it as bare text before or between your tags. Never emit an element with no real text in it (no empty <p></p>, no <strong>:</strong> or <strong></strong> placeholder where a label was meant to go): if you have nothing to put in a heading, leave the heading out entirely. Close every tag you open, and nest lists properly (<li> only ever inside <ul> or <ol>).";
+
+/** The block both builders below produce, given the rules that apply. */
+function assembleBlock(applicable: ContentStyleRule[]): string {
+  if (!applicable.length) return "";
+  const lines = applicable.map((r) => `- ${r.rule}`).join("\n");
+  const html  = applicable.some((r) => r.narrative) ? `\n- ${HTML_SHAPE_RULE}` : "";
+  return `\n\nCONTENT STYLE:\n${lines}\n- ${CLOSING_RULE}${html}\n`;
+}
+
+/**
  * Builds the CONTENT STYLE prompt block for whichever of the rules above
  * are relevant to this page's harvested fields. Empty string when none
  * apply (e.g. a page with no Name/Description/Highlights field at all).
  */
 export function buildStyleGuideBlock(fields: HarvestedField[]): string {
   const labels = fields.map((f) => norm(f.label));
-  const applicable = CONTENT_STYLE_RULES.filter((r) => labels.some((l) => r.appliesTo(l)));
-  if (!applicable.length) return "";
-  const lines = applicable.map((r) => `- ${r.rule}`).join("\n");
-  return `\n\nCONTENT STYLE:\n${lines}\n- ${CLOSING_RULE}\n`;
+  return assembleBlock(CONTENT_STYLE_RULES.filter((r) => labels.some((l) => r.appliesTo(l))));
 }
 
 /** Shared by the two exports below — same shape as buildStyleGuideBlock's
  *  own filter, but against a fixed label list instead of harvested fields. */
 function buildBlockForLabels(labels: string[]): string {
-  const applicable = CONTENT_STYLE_RULES.filter((r) => labels.some((l) => r.appliesTo(l)));
-  if (!applicable.length) return "";
-  const lines = applicable.map((r) => `- ${r.rule}`).join("\n");
-  return `\n\nCONTENT STYLE:\n${lines}\n- ${CLOSING_RULE}\n`;
+  return assembleBlock(CONTENT_STYLE_RULES.filter((r) => labels.some((l) => r.appliesTo(l))));
 }
 
 /**
