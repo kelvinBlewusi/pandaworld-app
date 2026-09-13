@@ -55,6 +55,16 @@ const MAX_LISTING_IMAGES = 8;
 // finishing" for a listing whose analysis hadn't wrapped up yet.
 const ANALYSIS_DEADLINE_MS = 45_000;
 
+// Same hard-ceiling risk as ANALYSIS_DEADLINE_MS above, but for
+// handleSubmit's concurrent pushListingToJumia() fan-out — a "submit all"
+// on a large batch, or a slow Jumia API, can run long. Unlike
+// startBatchAnalysis, handleSubmit had NO per-listing try/catch at all
+// before this: a single push throwing used to reject the whole
+// Promise.all with no reply ever sent and the session stuck in
+// awaiting_confirmation — worse than the analyzing-state bug since there
+// wasn't even a "still working" message.
+const SUBMIT_DEADLINE_MS = 45_000;
+
 function replyText(to: string, text: string): Promise<void> {
   return sendTextIfConfigured(to, text);
 }
@@ -833,38 +843,77 @@ async function handleSubmit(
   // per-listing either way.
   await getValidJumiaCredentials(userId).catch(() => {});
 
-  // Pushed concurrently, not sequentially — a "submit all" on a large
-  // batch doing N sequential Jumia calls could exceed this route's 60s
-  // ceiling (see maxDuration in app/api/whatsapp/webhook/route.ts) and
-  // leave a reply never sent. Each Jumia push is an independent HTTP call,
-  // safe to fire in parallel for the batch sizes this flow allows (≤20).
-  const results = await Promise.all(
-    targets.map(async (listing) => {
-      const seq = listing.whatsapp_seq;
-      const result = await pushListingToJumia(userId, listing.id);
-      if (result.ok) return `Product ${seq}: ✅ submitted — pending Jumia review.`;
-      if (result.code === "validation") return `Product ${seq}: ⚠️ ${result.message} Fix it at ${focusedEditorUrl(listing.id)} then reply submit again.`;
-      if (result.needsReconnect) {
-        // Same one-time-link mechanism as lib/whatsapp/jumia-connect.ts's
-        // promptJumiaConnection, used inline here rather than through it —
-        // this must NOT touch session state (still awaiting_confirmation),
-        // since the seller is mid-review of this batch, not starting a
-        // fresh connect flow. They just tap the link, reconnect, and reply
-        // submit again from right where they left off.
-        const token = await createConnectToken(userId);
-        return `Product ${seq}: ⚠️ Jumia needs to be reconnected — tap here: ${jumiaConnectLink(token)}, then reply submit again.`;
-      }
-      return `Product ${seq}: ❌ ${result.message}`;
-    }),
-  );
+  try {
+    // Pushed concurrently, not sequentially — a "submit all" on a large
+    // batch doing N sequential Jumia calls could exceed this route's 60s
+    // ceiling (see maxDuration in app/api/whatsapp/webhook/route.ts) and
+    // leave a reply never sent. Each Jumia push is an independent HTTP call,
+    // safe to fire in parallel for the batch sizes this flow allows (≤20).
+    const pushWork = Promise.all(
+      targets.map(async (listing) => {
+        const seq = listing.whatsapp_seq;
+        try {
+          const result = await pushListingToJumia(userId, listing.id);
+          if (result.ok) return `Product ${seq}: ✅ submitted — pending Jumia review.`;
+          if (result.code === "validation") return `Product ${seq}: ⚠️ ${result.message} Fix it at ${focusedEditorUrl(listing.id)} then reply submit again.`;
+          if (result.needsReconnect) {
+            // Same one-time-link mechanism as lib/whatsapp/jumia-connect.ts's
+            // promptJumiaConnection, used inline here rather than through it —
+            // this must NOT touch session state (still awaiting_confirmation),
+            // since the seller is mid-review of this batch, not starting a
+            // fresh connect flow. They just tap the link, reconnect, and reply
+            // submit again from right where they left off.
+            const token = await createConnectToken(userId);
+            return `Product ${seq}: ⚠️ Jumia needs to be reconnected — tap here: ${jumiaConnectLink(token)}, then reply submit again.`;
+          }
+          return `Product ${seq}: ❌ ${result.message}`;
+        } catch (e) {
+          // One product's push throwing must never sink the rest of the
+          // batch — every other entry in this Promise.all still needs to
+          // resolve, or the seller gets zero reply and no way to tell what
+          // happened (this had no per-listing catch at all before).
+          console.error(`[whatsapp intake] product ${seq} submit threw: ${(e as Error).message}`);
+          return `Product ${seq}: ❌ Unexpected error — reply submit again to retry.`;
+        }
+      }),
+    );
 
-  await replyText(phoneNumber, results.join("\n"));
+    // Race against SUBMIT_DEADLINE_MS (see its doc comment) rather than
+    // just awaiting pushWork directly — same reasoning as
+    // startBatchAnalysis's ANALYSIS_DEADLINE_MS race.
+    const DEADLINE = Symbol("deadline");
+    const deadline = new Promise<typeof DEADLINE>((resolve) => {
+      setTimeout(() => resolve(DEADLINE), SUBMIT_DEADLINE_MS);
+    });
+    const raceResult = await Promise.race([pushWork, deadline]);
 
-  const refreshed = await getBatchListings(batchId);
-  const allSubmitted = refreshed.every((l) => l.status !== "draft" && l.status !== "failed");
-  if (allSubmitted) {
-    await resetSession(phoneNumber);
-    await replyText(phoneNumber, "🎉 That's the whole batch submitted! I'll message you here as each one goes live.");
+    if (raceResult === DEADLINE) {
+      console.warn(`[whatsapp intake] batch ${batchId} submit hit the ${SUBMIT_DEADLINE_MS}ms soft deadline`);
+      await replyCta(
+        phoneNumber,
+        `⏳ Submitting is taking longer than usual. Check the status of each product below — anything still processing will update shortly, and *submit all* is safe to try again for whatever didn't go through.`,
+        "Review listings",
+        whatsappListingsUrl(batchId),
+      );
+      return;
+    }
+
+    await replyText(phoneNumber, raceResult.join("\n"));
+
+    const refreshed = await getBatchListings(batchId);
+    const allSubmitted = refreshed.every((l) => l.status !== "draft" && l.status !== "failed");
+    if (allSubmitted) {
+      await resetSession(phoneNumber);
+      await replyText(phoneNumber, "🎉 That's the whole batch submitted! I'll message you here as each one goes live.");
+    }
+  } catch (e) {
+    console.error(`[whatsapp intake] handleSubmit failed for batch ${batchId}: ${(e as Error).message}`);
+    await replyCta(
+      phoneNumber,
+      `⚠️ Something went wrong while submitting. Check what's there below and reply *submit all* to try again.`,
+      "Review listings",
+      whatsappListingsUrl(batchId),
+    );
   }
 }
 

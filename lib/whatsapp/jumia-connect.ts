@@ -26,10 +26,21 @@ export function jumiaRedirectUri(): string {
   return `${appUrl()}/api/jumia/callback`;
 }
 
+// Zero-width spaces/joiners, left/right-to-left marks, line/paragraph
+// separators, and the BOM — characters that render as nothing but break
+// an exact-match comparison. Mobile keyboards and some copy sources can
+// inject these silently; a Client ID/Secret carrying one would fail
+// Jumia's exact match with nothing visibly wrong in the chat.
+const INVISIBLE_CHARS_RE = /[\u200B-\u200F\u2028\u2029\uFEFF]/g;
+
+function stripInvisibleChars(s: string): string {
+  return s.replace(INVISIBLE_CHARS_RE, "");
+}
+
 /** Splits a pasted message into non-empty tokens on whitespace/newlines —
  *  how a seller pastes "Client ID" and "Client Secret", together or apart. */
 export function splitCredentialTokens(text: string): string[] {
-  return text.trim().split(/\s+/).filter(Boolean);
+  return text.trim().split(/\s+/).filter(Boolean).map(stripInvisibleChars);
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
