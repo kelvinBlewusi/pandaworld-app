@@ -26,8 +26,11 @@ import type { VariantRow, AxisDef } from "@/lib/jumia/variant-types";
  * the WhatsApp bot sends once a chat-drafted product finishes analysis
  * (see lib/whatsapp/intake.ts). Deliberately much simpler than the full
  * editor (app/(main)/listings/[id]/review/review-client.tsx): no AI-assist
- * tooling, no quality score, no category picker, no bulk variant actions —
- * just this product's fields, editable, with Save and Submit.
+ * tooling, no quality score, no image add/remove/reorder, no bulk
+ * variant actions — just this product's fields, editable, with Save and
+ * Submit. A category picker WAS added later (CategoryDrawer below) so a
+ * WhatsApp-only seller isn't forced out to the full editor just to fix
+ * a wrong category — see handleCategoryChange.
  *
  * Variants ARE supported (a chat-drafted product can already come out of
  * runAutoAnalyze with more than one — the same analysis pipeline the web
