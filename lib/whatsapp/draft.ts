@@ -1,5 +1,3 @@
-import { appUrl } from "@/lib/whatsapp/app-url";
-
 /**
  * Pure text-shaping helpers for the WhatsApp draft-reply flow, split out
  * from lib/whatsapp/intake.ts so they're unit-testable without pulling in
@@ -9,10 +7,6 @@ import { appUrl } from "@/lib/whatsapp/app-url";
  * anything merely imports it. Same reasoning as webhook-verify.ts being
  * split from the webhook route.
  */
-
-export function reviewUrl(listingId: string): string {
-  return `${appUrl()}/listings/${listingId}/review`;
-}
 
 /**
  * True when the seller's message or photo caption ends with a standalone
