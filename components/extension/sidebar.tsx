@@ -142,17 +142,17 @@ export function ExtensionSidebar({ onClose }: { onClose?: () => void }) {
       </nav>
 
       <div className="px-3 pb-4">
-        {/* Explicit, opt-in bridge into the classic Jumia-OAuth flow — kept
-            as a distinct bordered pill (not a regular nav item) so it reads
-            as "leave the extension flow", same intent as before this
-            redesign. Lands on /push-listings, not the OAuth gate itself. */}
-        <Link
-          href="/push-listings"
-          title="Push listings the classic way — connects Jumia via OAuth in PandaWorld's main app"
-          className="flex items-center justify-center gap-1.5 rounded-lg border border-zinc-200 px-3 py-2 text-xs font-medium text-zinc-600 hover:border-zinc-300 hover:bg-zinc-50"
+        {/* Explicit, opt-in bridge into the classic Jumia-OAuth flow — greyed
+            out (2026-09-13) while WhatsApp + the extension are the focus.
+            Left in the DOM rather than deleted so re-enabling it later is a
+            one-line change back to a Link (was: href="/push-listings"). */}
+        <div
+          aria-disabled="true"
+          title="Temporarily unavailable — use WhatsApp or the Chrome extension instead"
+          className="flex cursor-not-allowed items-center justify-center gap-1.5 rounded-lg border border-zinc-100 px-3 py-2 text-xs font-medium text-zinc-300"
         >
           Push Listings from here <ArrowRight className="h-3 w-3" />
-        </Link>
+        </div>
 
         <div className="mt-3 flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-zinc-50">
           <UserButton appearance={{ elements: { avatarBox: "h-7 w-7" } }} />
