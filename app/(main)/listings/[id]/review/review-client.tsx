@@ -1293,9 +1293,14 @@ export function ReviewClient({
   const [refillSuccess, setRefillSuccess] = useState<string | null>(null);
   const [refillError,   setRefillError]   = useState<string | null>(null);
 
-  // Drawer pick → schema-only mode. Empty input fields render immediately.
-  // No AI tokens spent until the seller hits "Fill empty fields with AI"
-  // on the schema form.
+  // Drawer pick → straight to a full AI refill for the new category — one
+  // action instead of two. This used to be schema-only (empty fields,
+  // requiring a separate "Fill empty fields with AI" click to populate
+  // them) — collapsing the two into the pick itself matches how a
+  // category correction is meant to feel: pick the right one, get a
+  // filled-in listing back, done. "Fill with AI" (handleFillWithAI below)
+  // stays available for re-running the fill later without touching
+  // category (e.g. after manually clearing a field).
   const handleCategoryChange = async (cat: { code: number; name: string; path: string }) => {
     const previousCode = categoryCode;
 
@@ -1312,7 +1317,7 @@ export function ReviewClient({
     setRefillError(null);
     try {
       const res = await fetch(
-        `/api/listings/${listing.id}/refill-attributes?mode=schema-only`,
+        `/api/listings/${listing.id}/refill-attributes`,
         {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
@@ -1335,7 +1340,7 @@ export function ReviewClient({
       setColumnOverrides({});
       setRefillSuccess(
         data.attributesSchema > 0
-          ? `${data.attributesSchema} field${data.attributesSchema === 1 ? "" : "s"} ready — fill them in or click “Fill with AI”.`
+          ? `Category set — AI filled ${data.aiFilled} of ${data.attributesSchema} field${data.attributesSchema === 1 ? "" : "s"}.`
           : `Category set. No category-specific fields needed.`
       );
       router.refresh();

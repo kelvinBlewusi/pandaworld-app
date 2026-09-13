@@ -27,6 +27,7 @@ import {
   aiFillGaps,
   aiExpandDescription,
   type CandidateWithSchema,
+  type RankedCategory,
 } from "@/lib/actions/ai";
 import {
   getListableCategories,
@@ -51,7 +52,7 @@ export type AutoAnalyzeResult =
       timings: Record<string, number>;
       description: Awaited<ReturnType<typeof aiPassA_describeProduct>>;
       category: { code: number; name: string; path: string; confidence: number };
-      alternates: unknown;
+      alternates: RankedCategory[];
       needsUserConfirmation: boolean;
       candidates_considered: number;
       attributes_in_schema: number;

@@ -75,6 +75,11 @@ export function WhatsAppFocusedEditor({
   const [refillingAttributes, setRefillingAttributes] = useState(false);
   const [refillError, setRefillError] = useState<string | null>(null);
 
+  // Straight to a full AI refill on pick — same one-action collapse as
+  // review-client.tsx's handleCategoryChange, doubly important here since
+  // a chat-drafted product landing on this page with no category at all
+  // means the seller is actively correcting a low-confidence AI pick and
+  // wants a filled-in listing back, not another empty form to type into.
   const handleCategoryChange = async (cat: { code: number; name: string; path: string }) => {
     const previousCode = categoryCode;
     setCategoryCode(String(cat.code));
@@ -85,7 +90,7 @@ export function WhatsAppFocusedEditor({
     setRefillingAttributes(true);
     setRefillError(null);
     try {
-      const res = await fetch(`/api/listings/${listing.id}/refill-attributes?mode=schema-only`, {
+      const res = await fetch(`/api/listings/${listing.id}/refill-attributes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ categoryCode: cat.code, categoryPath: cat.path }),

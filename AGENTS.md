@@ -149,6 +149,29 @@ now a thin wrapper: authenticate, rate-limit, call it, map the result to JSON.
       File: lib/actions/ai.ts → aiExpandDescription()
 ```
 
+**Category-detection hardening (2026-09-13)**, on top of the department-first
+pipeline above:
+- **Catalog freshness check**: `/api/cron/check-category-freshness` (daily,
+  00:15 UTC) compares our cached `jumia_categories` row count against a
+  live re-fetch and records the result in `jumia_category_sync_health`
+  (single row) — surfaced as a warning banner on `/admin/categories`.
+  Sync itself is still admin-triggered; this only flags drift so it's
+  never silently unbounded. Needs the first `ADMIN_USER_IDS` account to
+  have an active Jumia connection (uses its token for the read-only
+  catalog call).
+- **One-action correction**: picking a category (drawer, focused editor,
+  or a WhatsApp alternate-category button) now always runs the AI refill
+  immediately instead of requiring a separate "Fill with AI" click.
+  Shared logic: `lib/jumia/refill-attributes.ts` → `refillAttributesForCategory()`,
+  used by both `/api/listings/[id]/refill-attributes` and
+  `lib/whatsapp/intake.ts`'s `handleCategoryCorrection()`.
+- **WhatsApp confidence surfacing**: when `runAutoAnalyze` returns
+  `needsUserConfirmation`, `startBatchAnalysis` sends a dedicated
+  reply-buttons message with up to 3 alternate categories
+  (id `category:<listingId>:<code>`) right in chat — previously this only
+  showed on the web review page's `AIConfidenceBanner`, which a
+  WhatsApp-only seller would never see.
+
 **Total cost**: ~$0.003 (happy path) to ~$0.007 (with web search + expand).
 **Total wall clock**: ~10-20s warm cache, ~25-35s cold start.
 **Vercel timeout**: 60s (`export const maxDuration = 60` in route).
@@ -233,6 +256,7 @@ Run in order. All applied through Supabase Dashboard → SQL Editor (NOT auto-ap
 - `2026-05-21_plan_quotas.sql` — subscriptions / quota tracking
 - `2026-05-26_category-embeddings.sql` — pgvector(768) column + ivfflat index + search RPC
 - `2026-05-26_listing-user-prompt.sql` — listings.user_prompt column (persists "what do you want in the listing" hint)
+- `2026-09-13_category-sync-health.sql` — single-row `jumia_category_sync_health` table for the nightly catalog freshness check
 
 ---
 

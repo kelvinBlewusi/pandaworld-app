@@ -35,10 +35,19 @@ interface FinalizeResponse {
   lastSyncedAt: string | null;
 }
 
+interface SyncHealth {
+  checkedAt:  string;
+  localCount: number;
+  liveCount:  number;
+  isStale:    boolean;
+  error:      string | null;
+}
+
 interface AdminCategoriesClientProps {
   initialTotal:        number;
   initialListable:     number;
   initialLastSyncedAt: string | null;
+  syncHealth:          SyncHealth | null;
   topLevelDistribution: Array<{ name: string; count: number }>;
 }
 
@@ -46,6 +55,7 @@ export function AdminCategoriesClient({
   initialTotal,
   initialListable,
   initialLastSyncedAt,
+  syncHealth,
   topLevelDistribution,
 }: AdminCategoriesClientProps) {
   // Steady-state stats
@@ -172,6 +182,31 @@ export function AdminCategoriesClient({
           data — no per-seller syncing.
         </p>
       </header>
+
+      {/* Freshness banner — from the nightly /api/cron/check-category-freshness
+          check comparing our cached count against Jumia's live one. Only
+          rendered when there's something to flag; a fresh/no-error result
+          shows nothing here (the "Last refreshed" stat below is enough). */}
+      {syncHealth && (syncHealth.isStale || syncHealth.error) && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+          <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <div>
+            {syncHealth.error ? (
+              <p>Freshness check failed: {syncHealth.error}</p>
+            ) : (
+              <p>
+                Catalog may be stale — {syncHealth.localCount.toLocaleString()} categories cached vs{" "}
+                {syncHealth.liveCount.toLocaleString()} on Jumia right now. Consider refreshing below.
+              </p>
+            )}
+            <p className="mt-0.5 text-amber-700">
+              Checked {new Date(syncHealth.checkedAt).toLocaleString("en-GB", {
+                day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+              })}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Status card */}
       <div className="rounded-xl border bg-white p-5 shadow-sm space-y-4">
