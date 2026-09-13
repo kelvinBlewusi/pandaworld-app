@@ -20,6 +20,7 @@
 
 export type GlobalCommand =
   | { type: "restart" }
+  | { type: "retry"; seq: number | null }
   | { type: "disconnect" }
   | { type: "confirm_disconnect" }
   | { type: "keep_connected" }
@@ -28,6 +29,13 @@ export type GlobalCommand =
   | { type: "help" };
 
 const RESTART_RE = /^(restart|start over|start again|cancel|stop|new batch|reset)[.!]?$/i;
+// "Retry" is the deliberate opposite of "restart": same batch, same photos,
+// run the failed step again. Every error message pairs the two (see
+// replyError in lib/whatsapp/intake.ts), because after a failure those are
+// the only two things a seller ever wants and neither was reachable
+// without knowing a phrase. An optional product number scopes it to one
+// product, which is what the per-product failure messages send.
+const RETRY_RE = /^retry(?:\s+(?:product\s*)?(\d+))?(?:\s+(?:that|again|it))?[.!]?$/i;
 const CONFIRM_DISCONNECT_RE = /^confirm disconnect[.!]?$/i;
 // A dedicated phrase for "no, don't disconnect" — deliberately NOT "cancel"
 // (already claimed by RESTART_RE above to mean "abandon the current batch").
@@ -53,6 +61,8 @@ export function parseGlobalCommand(text: string): GlobalCommand | null {
   if (DISCONNECT_RE.test(t)) return { type: "disconnect" };
   if (RECONNECT_JUMIA_RE.test(t)) return { type: "reconnect_jumia" };
   if (RESTART_RE.test(t)) return { type: "restart" };
+  const retry = RETRY_RE.exec(t);
+  if (retry) return { type: "retry", seq: retry[1] ? Number(retry[1]) : null };
   if (STATUS_RE.test(t)) return { type: "status" };
   if (HELP_RE.test(t)) return { type: "help" };
   return null;

@@ -130,6 +130,38 @@ describe("buildDescriptionStyleBlock", () => {
   });
 });
 
+// The live bug this rule exists to prevent: descriptions opened with
+// hundreds of characters of BARE prose before their first tag (measured
+// at 319, 373 and 609 on real listings) while highlights, asked for a
+// <ul>, always started at character 1. RichTextField's HTML sniffing
+// then read the description as plain text and escaped it, so sellers saw
+// "<strong>" and "<ul>" spelled out on screen in one field and rendered
+// properly in the other — same component, same page.
+describe("well-formed HTML rule", () => {
+  it("is attached to every block that asks for description or highlights", () => {
+    for (const block of [buildDescriptionAndHighlightsStyleBlock(), buildDescriptionStyleBlock()]) {
+      expect(block).toContain("WELL-FORMED HTML");
+      expect(block).toMatch(/wrap each prose paragraph in <p>/);
+    }
+  });
+
+  it("bans the empty bold heading seen in a live description", () => {
+    // A shipped listing contained a bare "<strong>:</strong>", which
+    // renders on Jumia as a stray bold colon.
+    expect(buildDescriptionStyleBlock()).toContain("<strong>:</strong>");
+  });
+
+  it("is NOT attached when only the title rule applies — a title is a plain string", () => {
+    const titleOnly = buildStyleGuideBlock([{ label: "Name", type: "text" }]);
+    expect(titleOnly).toContain("Name/title:");
+    expect(titleOnly).not.toContain("WELL-FORMED HTML");
+  });
+
+  it("is not emitted at all when no rule applies", () => {
+    expect(buildStyleGuideBlock([{ label: "Warranty duration", type: "text" }])).toBe("");
+  });
+});
+
 describe("buildSearchGroundingInstruction", () => {
   it("is unconditional — not gated by which fields are on the page", () => {
     expect(buildSearchGroundingInstruction()).toContain("You have web search available");

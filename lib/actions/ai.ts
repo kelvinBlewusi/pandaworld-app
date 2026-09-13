@@ -42,6 +42,7 @@ import {
 } from "@/lib/ai/content-style-rules";
 import { pickModelForPlan, pickModelForOwnImagesFlow, type ModelKind } from "@/lib/billing/ai-models";
 import { getQuotaSummary } from "@/lib/billing/quota";
+import { trackGeminiCall, isQuotaError } from "@/lib/ai/quota-telemetry";
 import type { Plan } from "@/lib/billing/plans";
 
 // ─── Tier-aware model selection helper ──────────────────────────────────────
@@ -546,9 +547,23 @@ async function callGemini(
   // slower than expected" question without ad-hoc instrumentation.
   const tryModel = async (name: string): Promise<{ text: string; ms: number; backend: string }> => {
     const t0 = Date.now();
-    const { text, backend } = await callGeminiBackend(name, parts);
+    // Wrapped so peak concurrency and quota rejections are countable — see
+    // lib/ai/quota-telemetry.ts. Observes only; never changes behaviour.
+    const { text, backend } = await trackGeminiCall(() => callGeminiBackend(name, parts));
     const ms = Date.now() - t0;
     return { text, ms, backend };
+  };
+
+  // A quota rejection and a "that model doesn't exist" rejection used to
+  // produce identical log lines, so the one failure that means "the whole
+  // project is at its ceiling" was indistinguishable from routine model
+  // drift. Tagged distinctly here so it can be grepped for, and so the
+  // fallback chain below says which kind of failure it is falling back
+  // from.
+  const describeFailure = (stage: string, name: string, e: unknown): string => {
+    const message = (e as Error).message ?? String(e);
+    const kind = isQuotaError(e) ? "[AI][QUOTA] " : "";
+    return `${kind}${stage} model ${name} failed: ${message.slice(0, 200)}`;
   };
 
   // 1. Caller passed a tier-aware preferred model (e.g. Free → 2.0 Flash,
@@ -561,9 +576,7 @@ async function callGemini(
       console.info(`[AI] Model=${preferredModel} backend=${backend} call_ms=${ms} images=${validImageParts.length}`);
       return text;
     } catch (e) {
-      console.warn(
-        `[AI] Tier-preferred model ${preferredModel} failed: ${(e as Error).message.slice(0, 100)}. Falling back.`,
-      );
+      console.warn(`[AI] ${describeFailure("Tier-preferred", preferredModel, e)}. Falling back.`);
     }
   }
 
@@ -574,7 +587,7 @@ async function callGemini(
       console.info(`[AI] Model=${_resolvedModel} (cached) backend=${backend} call_ms=${ms} images=${validImageParts.length}`);
       return text;
     } catch (e) {
-      console.warn(`[AI] Cached model ${_resolvedModel} failed: ${(e as Error).message}`);
+      console.warn(`[AI] ${describeFailure("Cached", _resolvedModel, e)}`);
       _resolvedModel = null;
     }
   }
@@ -588,6 +601,12 @@ async function callGemini(
       console.info(`[AI] Model=${modelName} (fallback) backend=${backend} call_ms=${ms} images=${validImageParts.length}`);
       return text;
     } catch (e) {
+      if (isQuotaError(e)) {
+        // Worth its own line: if EVERY model in the list answers this way
+        // the project is over quota, and the final "No Gemini model
+        // worked" error names every model but not the actual reason.
+        console.warn(`[AI] ${describeFailure("Preferred", modelName, e)}`);
+      }
       errors.push(`${modelName}: ${(e as Error).message.slice(0, 100)}`);
     }
   }

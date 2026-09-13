@@ -35,6 +35,41 @@ describe("parseGlobalCommand", () => {
     expect(parseGlobalCommand("")).toBeNull();
   });
 
+  // "Retry" is the counterpart to "restart" that every error message now
+  // offers: same batch, same photos, run the failed step again. Before it
+  // existed the only recovery a seller could find after a failure was
+  // re-sending every photo.
+  it("matches retry, with and without a product number", () => {
+    expect(parseGlobalCommand("retry")).toEqual({ type: "retry", seq: null });
+    expect(parseGlobalCommand("Retry!")).toEqual({ type: "retry", seq: null });
+    expect(parseGlobalCommand("  RETRY.  ")).toEqual({ type: "retry", seq: null });
+    expect(parseGlobalCommand("retry again")).toEqual({ type: "retry", seq: null });
+    expect(parseGlobalCommand("retry that")).toEqual({ type: "retry", seq: null });
+    expect(parseGlobalCommand("retry 2")).toEqual({ type: "retry", seq: 2 });
+    expect(parseGlobalCommand("retry product 3")).toEqual({ type: "retry", seq: 3 });
+    expect(parseGlobalCommand("Retry Product3")).toEqual({ type: "retry", seq: 3 });
+  });
+
+  it("keeps retry and restart distinct — they mean opposite things", () => {
+    // Restart throws the batch away; retry keeps it and re-runs the failed
+    // step. Collapsing either into the other would silently destroy a
+    // seller's uploaded photos or silently re-bill them for a re-draft.
+    expect(parseGlobalCommand("retry")).not.toEqual({ type: "restart" });
+    expect(parseGlobalCommand("restart")).not.toEqual(expect.objectContaining({ type: "retry" }));
+    expect(parseGlobalCommand("start over")).toEqual({ type: "restart" });
+  });
+
+  it("does not swallow free text that merely mentions retrying", () => {
+    // The button ids are whole-message phrases; a sentence about retrying
+    // must still reach the batch handlers as ordinary text, or a seller
+    // describing a problem would have their batch re-queued underneath
+    // them.
+    expect(parseGlobalCommand("retry the blue one please")).toBeNull();
+    expect(parseGlobalCommand("can you retry")).toBeNull();
+    expect(parseGlobalCommand("retrying")).toBeNull();
+    expect(parseGlobalCommand("2: retry")).toBeNull();
+  });
+
   it("matches 'keep jumia connected' as its own command, never as restart/disconnect", () => {
     expect(parseGlobalCommand("keep jumia connected")).toEqual({ type: "keep_connected" });
     expect(parseGlobalCommand("Keep Jumia Connected!")).toEqual({ type: "keep_connected" });

@@ -9,6 +9,7 @@ import {
   type AnalysisJob,
 } from "@/lib/whatsapp/analysis-queue";
 import { runQueuedAnalysis, finalizeBatch } from "@/lib/whatsapp/intake";
+import { readGeminiTelemetry } from "@/lib/ai/quota-telemetry";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -48,7 +49,7 @@ export async function POST(req: NextRequest) {
 
   const jobs = await claimAnalysisJobs(CLAIM_LIMIT);
   if (jobs.length === 0) {
-    return NextResponse.json({ claimed: 0, done: 0, failed: 0, batchesClosed: 0 });
+    return NextResponse.json({ claimed: 0, done: 0, failed: 0, batchesClosed: 0, gemini: readGeminiTelemetry() });
   }
 
   console.info(`[worker] claimed ${jobs.length} analysis job(s)`);
@@ -103,5 +104,17 @@ export async function POST(req: NextRequest) {
   // cut short when the response returns.
   nudgeWorker();
 
-  return NextResponse.json({ claimed: jobs.length, done, failed, batchesClosed });
+  // Gemini counters ride along in the response body on purpose. pg_net
+  // stores every response in net._http_response, so this is queryable
+  // straight from SQL — the same channel that proved the worker was
+  // 404ing. peakInFlight is the number that decides whether CLAIM_LIMIT or
+  // the cron fan-out can safely go up; quotaErrors > 0 means they can't.
+  //
+  //   select status_code, content::jsonb -> 'gemini'
+  //   from net._http_response order by created desc limit 20;
+  const gemini = readGeminiTelemetry();
+  if (gemini.quotaErrors > 0) {
+    console.warn(`[worker][QUOTA] ${gemini.quotaErrors} quota rejection(s) across ${gemini.calls} Gemini call(s), peak concurrency ${gemini.peakInFlight}`);
+  }
+  return NextResponse.json({ claimed: jobs.length, done, failed, batchesClosed, gemini });
 }
