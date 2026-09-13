@@ -6,7 +6,7 @@ import { createListingForUser } from "@/lib/listings/create";
 import { runAutoAnalyze } from "@/lib/actions/auto-analyze";
 import { getOrCreateCreditBalance, deductCredits } from "@/lib/billing/extension-credits";
 import { WHATSAPP_DRAFT_CREDIT_COST } from "@/lib/billing/credit-packs";
-import { pushListingToJumia, missingFieldLabels } from "@/lib/jumia/push-listing";
+import { pushListingToJumia, missingFieldLabels, refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { getJumiaConnectionKind, testJumiaCredentials, saveJumiaCredentialsForUser, disconnectJumiaForUser } from "@/lib/jumia/credentials";
@@ -1140,12 +1140,77 @@ async function handleSubmit(
     return;
   }
 
-  const targets = cmd.all
+  const requested = cmd.all
     ? listings
     : listings.filter((l) => l.whatsapp_seq != null && cmd.seqs.includes(l.whatsapp_seq));
 
-  if (targets.length === 0) {
+  if (requested.length === 0) {
     await replyCta(phoneNumber, "I couldn't find those product numbers in this batch — check the review page and try again.", "Review listings", whatsappListingsUrl(batchId));
+    return;
+  }
+
+  // Confirmed live: a seller submitted a product (→ pending_approval), then
+  // replied "submit" again for the same one — pushListingToJumia had no
+  // status check at all, so it silently treated the already-pending
+  // listing exactly like a failed-retry, generated a NEW sku suffix, and
+  // pushed it to Jumia a second time as a genuine duplicate product, with
+  // nothing telling the seller it had already been submitted. "processing"
+  // means a push for this exact listing is already in flight RIGHT NOW
+  // (set by pushListingToJumia itself right before calling Jumia) — same
+  // duplicate risk if a seller taps submit twice in quick succession.
+  const ALREADY_SUBMITTED_STATUSES = new Set<ListingRow["status"]>(["pending_approval", "live", "processing"]);
+
+  // Before deciding who's "already submitted", check any pending listing's
+  // REAL current status against Jumia — it may have already resolved
+  // (approved OR rejected) since it was last polled, and the once-daily
+  // cron (app/api/cron/jumia-feeds — Vercel's Hobby plan caps cron
+  // frequency to once a day) alone could leave that stale for up to 24h.
+  // A pending listing that turns out to have been REJECTED must fall
+  // through to the normal retry path below, not get reported as "already
+  // submitted, don't resubmit" — only "still pending" or "now live" should.
+  const refreshedStatuses = new Map<string, ListingRow["status"]>();
+  const stillPending = requested.filter((l) => l.status === "pending_approval");
+  if (stillPending.length > 0) {
+    try {
+      const { accessToken } = await getValidJumiaCredentials(userId);
+      await Promise.all(
+        stillPending.map(async (l) => {
+          const { status } = await refreshPendingFeedStatus(accessToken, { id: l.id, status: l.status, jumia_ref: l.jumia_ref });
+          if (status !== l.status) refreshedStatuses.set(l.id, status as ListingRow["status"]);
+        }),
+      );
+    } catch {
+      // Credentials unavailable right now — fall back to each listing's
+      // last-known DB status; getValidJumiaCredentials below (for the
+      // actual push) will surface the same problem properly if it's real.
+    }
+  }
+  const effectiveStatus = (l: ListingRow): ListingRow["status"] => refreshedStatuses.get(l.id) ?? l.status;
+
+  const targets = requested.filter((l) => !ALREADY_SUBMITTED_STATUSES.has(effectiveStatus(l)));
+  const alreadySubmittedMessages = requested
+    .filter((l) => ALREADY_SUBMITTED_STATUSES.has(effectiveStatus(l)))
+    .map((l) => {
+      const status = effectiveStatus(l);
+      return `Product ${l.whatsapp_seq}: already ${STATUS_LABELS[status]?.toLowerCase() ?? status} — no need to resubmit.`;
+    });
+
+  if (targets.length === 0) {
+    // Every requested product was already submitted — nothing to push.
+    // Still never a dead end: check whether the WHOLE batch (not just what
+    // was requested here) is done, same as the real-push path below.
+    const refreshed = await getBatchListings(batchId);
+    const allSubmitted = refreshed.every((l) => l.status !== "draft" && l.status !== "failed");
+    if (allSubmitted) {
+      await resetSession(phoneNumber);
+      await replyText(phoneNumber, [...alreadySubmittedMessages, "🎉 That's the whole batch submitted! I'll message you here as each one goes live."].join("\n"));
+    } else {
+      // Plain text first (a long list of "already submitted" lines can
+      // exceed the interactive-message body cap), then a short, fixed-
+      // length CTA so this never dead-ends either.
+      await replyText(phoneNumber, alreadySubmittedMessages.join("\n"));
+      await replyCta(phoneNumber, "Check what's left:", "Review listings", whatsappListingsUrl(batchId));
+    }
     return;
   }
 
@@ -1164,16 +1229,32 @@ async function handleSubmit(
     // Pushed concurrently, not sequentially — a "submit all" on a large
     // batch doing N sequential Jumia calls could exceed this route's 60s
     // ceiling (see maxDuration in app/api/whatsapp/webhook/route.ts) and
-    // leave a reply never sent. Each Jumia push is an independent HTTP call,
-    // safe to fire in parallel for the batch sizes this flow allows (≤20).
-    const pushWork = Promise.all(
-      targets.map(async (listing) => {
+    // leave a reply never sent. But NOT unbounded either: lib/jumia/api.ts's
+    // own doc comment states Jumia's limit as "200 req/min, max 4 req/sec"
+    // — confirmed a real risk, not just theoretical, since each push can be
+    // 1-2 Jumia calls (an occasional live brand lookup that misses the
+    // local jumia_brands cache, plus the create-feed call itself). Firing
+    // all ≤20 pushes from a single "submit all" at once could burst well
+    // past 4/sec and get some products 429-rejected, which would have
+    // looked to the seller like an unexplained generic push failure on a
+    // handful of otherwise-fine products. A capped worker pool (same
+    // cursor-based shape as embedTextBatch in lib/ai/embeddings.ts) keeps
+    // it comfortably under that ceiling while adding negligible wall-clock
+    // time against SUBMIT_DEADLINE_MS.
+    const PUSH_CONCURRENCY = 3;
+    const messages: string[] = new Array(targets.length);
+    let cursor = 0;
+    const pushWorker = async (): Promise<void> => {
+      for (let i = cursor++; i < targets.length; i = cursor++) {
+        const listing = targets[i];
         const seq = listing.whatsapp_seq;
         try {
           const result = await pushListingToJumia(userId, listing.id);
-          if (result.ok) return `Product ${seq}: ✅ submitted — pending Jumia review.`;
-          if (result.code === "validation") return `Product ${seq}: ⚠️ ${result.message} Fix it at ${focusedEditorUrl(listing.id)} then reply submit again.`;
-          if (result.needsReconnect) {
+          if (result.ok) {
+            messages[i] = `Product ${seq}: ✅ submitted — pending Jumia review.`;
+          } else if (result.code === "validation") {
+            messages[i] = `Product ${seq}: ⚠️ ${result.message} Fix it at ${focusedEditorUrl(listing.id)} then reply submit again.`;
+          } else if (result.needsReconnect) {
             // Same one-time-link mechanism as lib/whatsapp/jumia-connect.ts's
             // promptJumiaConnection, used inline here rather than through it —
             // this must NOT touch session state (still awaiting_confirmation),
@@ -1181,19 +1262,23 @@ async function handleSubmit(
             // fresh connect flow. They just tap the link, reconnect, and reply
             // submit again from right where they left off.
             const token = await createConnectToken(userId);
-            return `Product ${seq}: ⚠️ Jumia needs to be reconnected — tap here: ${jumiaConnectLink(token)}, then reply submit again.`;
+            messages[i] = `Product ${seq}: ⚠️ Jumia needs to be reconnected — tap here: ${jumiaConnectLink(token)}, then reply submit again.`;
+          } else {
+            messages[i] = `Product ${seq}: ❌ ${result.message}`;
           }
-          return `Product ${seq}: ❌ ${result.message}`;
         } catch (e) {
           // One product's push throwing must never sink the rest of the
-          // batch — every other entry in this Promise.all still needs to
-          // resolve, or the seller gets zero reply and no way to tell what
-          // happened (this had no per-listing catch at all before).
+          // batch — every other worker still needs to keep going, or the
+          // seller gets zero reply and no way to tell what happened (this
+          // had no per-listing catch at all before).
           console.error(`[whatsapp intake] product ${seq} submit threw: ${(e as Error).message}`);
-          return `Product ${seq}: ❌ Unexpected error — reply submit again to retry.`;
+          messages[i] = `Product ${seq}: ❌ Unexpected error — reply submit again to retry.`;
         }
-      }),
-    );
+      }
+    };
+    const pushWork = Promise.all(
+      Array.from({ length: Math.min(PUSH_CONCURRENCY, targets.length) }, pushWorker),
+    ).then(() => messages);
 
     // Race against SUBMIT_DEADLINE_MS (see its doc comment) rather than
     // just awaiting pushWork directly — same reasoning as
@@ -1215,13 +1300,27 @@ async function handleSubmit(
       return;
     }
 
-    await replyText(phoneNumber, raceResult.join("\n"));
+    // Plain text, not replyButtons — a full batch's worth of per-product
+    // result lines can run well past WhatsApp's ~1024-char interactive-
+    // body cap (a plain text message allows far more), and a rejected
+    // send here would look like "submitting failed" even though every
+    // product actually went through.
+    await replyText(phoneNumber, [...alreadySubmittedMessages, ...raceResult].join("\n"));
 
     const refreshed = await getBatchListings(batchId);
     const allSubmitted = refreshed.every((l) => l.status !== "draft" && l.status !== "failed");
     if (allSubmitted) {
       await resetSession(phoneNumber);
       await replyText(phoneNumber, "🎉 That's the whole batch submitted! I'll message you here as each one goes live.");
+    } else {
+      // Still stuff left in this batch — never leave the seller to guess
+      // the next command from the result text alone. Short, fixed body
+      // here (not the result text) so this one's always well under the
+      // button-message length limit.
+      await replyButtons(phoneNumber, "What's next?", [
+        { id: "submit all", title: "Submit all ✅" },
+        { id: "restart", title: "Restart 🔄" },
+      ]);
     }
   } catch (e) {
     console.error(`[whatsapp intake] handleSubmit failed for batch ${batchId}: ${(e as Error).message}`);
