@@ -1,4 +1,4 @@
-import { splitCredentialTokens, identifyCredentials, isResendCommand, buildConnectInstructions, jumiaConnectLink } from "@/lib/whatsapp/jumia-connect";
+import { splitCredentialTokens, identifyCredentials, looksLikeCredential, isResendCommand, buildConnectInstructions, jumiaConnectLink } from "@/lib/whatsapp/jumia-connect";
 
 describe("splitCredentialTokens", () => {
   it("splits on whitespace", () => {
@@ -52,6 +52,29 @@ describe("identifyCredentials", () => {
   it("falls back to the given order when both tokens look like a UUID", () => {
     const other = "11111111-2222-3333-4444-555555555555";
     expect(identifyCredentials(uuid, other)).toEqual({ appId: uuid, secretKey: other });
+  });
+});
+
+describe("looksLikeCredential", () => {
+  it("rejects short conversational replies — confirmed live failure", () => {
+    // A seller replied "Okay" then "Ok" to the connect instructions; both
+    // got silently accepted as credentials before this check existed,
+    // wasting a real Jumia API call before failing with "Invalid App ID
+    // or Secret Key".
+    expect(looksLikeCredential("Okay")).toBe(false);
+    expect(looksLikeCredential("Ok")).toBe(false);
+    expect(looksLikeCredential("Hi")).toBe(false);
+    expect(looksLikeCredential("Thanks")).toBe(false);
+  });
+
+  it("accepts a real Client ID (UUID) and Client Secret", () => {
+    expect(looksLikeCredential("b827fe1b-72c7-4851-83b8-a1c8508dd967")).toBe(true);
+    expect(looksLikeCredential("YmLqm5GVeMCQWhwK4pxm0i-Q7vNSGXN2SVV5IqRKxGQ=")).toBe(true);
+  });
+
+  it("ignores surrounding whitespace when measuring length", () => {
+    expect(looksLikeCredential("   short   ")).toBe(false);
+    expect(looksLikeCredential("  b827fe1b-72c7-4851-83b8-a1c8508dd967  ")).toBe(true);
   });
 });
 

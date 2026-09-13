@@ -64,6 +64,24 @@ export function identifyCredentials(a: string, b: string): { appId: string; secr
   return { appId: a, secretKey: b };
 }
 
+/**
+ * Loose plausibility check for one pasted credential token — a real Client
+ * ID is always a 36-char UUID and a real Client Secret is always a long
+ * random string, so anything shorter than this is never a real credential.
+ * Confirmed live: a seller's stray "Okay" got silently accepted as the
+ * Client ID (no check existed before this), then "Ok" as the Client
+ * Secret, wasting a real Jumia API call on two words that obviously
+ * weren't credentials before finally surfacing "Invalid App ID or Secret
+ * Key" — no clearer to the seller than if it had been caught immediately.
+ * Deliberately loose (length only, no format check) since a seller may
+ * legitimately paste the Secret before the ID (identifyCredentials sorts
+ * that out by shape after both halves arrive) — this only needs to rule
+ * out conversational replies, not validate the actual credential shape.
+ */
+export function looksLikeCredential(token: string): boolean {
+  return token.trim().length >= 16;
+}
+
 export function isResendCommand(text: string): boolean {
   return /^resend[.!]?$/i.test(text.trim());
 }

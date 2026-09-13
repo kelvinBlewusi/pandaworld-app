@@ -25,7 +25,7 @@ import {
   focusedEditorUrl,
   buyCreditsUrl,
 } from "@/lib/whatsapp/batch";
-import { splitCredentialTokens, identifyCredentials, isResendCommand, jumiaConnectLink, promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
+import { splitCredentialTokens, identifyCredentials, looksLikeCredential, isResendCommand, jumiaConnectLink, promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
 import { classifyBatchIntent, looksActionable } from "@/lib/whatsapp/intent";
 import type { ListingRow } from "@/lib/supabase/types";
 
@@ -418,6 +418,22 @@ async function handleAwaitingJumiaCredentials(
   const tokens = splitCredentialTokens(text);
   let appId: string;
   let secretKey: string;
+
+  // Catches conversational replies ("Okay", "Ok", "Hi", "Thanks") before
+  // they're ever treated as a credential — confirmed live: without this,
+  // a stray "Okay" got stored as pendingAppId and confirmed back as "Got
+  // the Client ID", then "Ok" as the Client Secret triggered a real (and
+  // pointless) call to Jumia's API before finally failing. Checked on
+  // every token up front so none of the branches below need their own
+  // version of this guard.
+  const implausible = tokens.some((t) => !looksLikeCredential(t));
+  if (tokens.length > 0 && implausible) {
+    await replyText(
+      phoneNumber,
+      "That doesn't look like a Jumia Client ID or Client Secret — they're both long strings from Vendor Center → Settings → Applications. Paste your Client ID and Client Secret again.",
+    );
+    return;
+  }
 
   // A 2+-token message always wins as a fresh (appId, secretKey) pair —
   // even if a pendingAppId was already waiting — since a seller who
