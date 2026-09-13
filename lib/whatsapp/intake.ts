@@ -31,6 +31,7 @@ import { splitCredentialTokens, identifyCredentials, looksLikeCredential, isRese
 import { classifyBatchIntent, looksActionable } from "@/lib/whatsapp/intent";
 import { pickStory } from "@/lib/whatsapp/waiting-stories";
 import type { ListingRow } from "@/lib/supabase/types";
+import { enqueueAnalysisJobs, nudgeWorker, type AnalysisJob } from "@/lib/whatsapp/analysis-queue";
 
 /**
  * WhatsApp chatbot, Stage 4: multi-product batches, entirely in chat.
@@ -49,21 +50,19 @@ import type { ListingRow } from "@/lib/supabase/types";
 
 const MAX_LISTING_IMAGES = 8;
 
-// This route's maxDuration (app/api/whatsapp/webhook/route.ts) is a hard
-// 60s ceiling that Vercel enforces by killing the whole function — no
-// catch block runs, nothing gets a chance to reply or reset session
-// state. Confirmed live 2026-09-12: a 2-product batch's concurrent AI
-// analysis occasionally ran long enough (Gemini latency + the 4s/6s
-// retrieval fallbacks in lib/actions/auto-analyze.ts stacking up) to hit
-// it, leaving the seller wedged in "analyzing" forever — every message
-// after that just got "Still drafting" with no way out except *restart*.
-// ANALYSIS_DEADLINE_MS races the real analysis against a timer well
-// inside that ceiling so a reply + state reset always goes out before
-// Vercel can silently kill us, even if it means reporting "still
-// finishing" for a listing whose analysis hadn't wrapped up yet.
-const ANALYSIS_DEADLINE_MS = 45_000;
+// Batch analysis no longer needs a deadline guard. It used to run every
+// product's AI analysis inline here, racing this route's hard 60s
+// maxDuration (Vercel kills the function outright — no catch block runs,
+// no reply goes out, and the seller was left wedged in "analyzing"
+// forever). ANALYSIS_DEADLINE_MS existed to always beat that kill, at the
+// cost of telling sellers "still finishing" about products that had
+// produced nothing. startBatchAnalysis now only reserves and enqueues, so
+// it returns in well under a second whatever the batch size, and the work
+// happens in app/api/worker/analyze-jobs. The ceiling still applies to the
+// WORKER, which is why that route claims a bounded number of jobs per tick
+// rather than draining the queue.
 
-// Same hard-ceiling risk as ANALYSIS_DEADLINE_MS above, but for
+// The same hard-ceiling risk does still apply to
 // handleSubmit's concurrent pushListingToJumia() fan-out — a "submit all"
 // on a large batch, or a slow Jumia API, can run long. Unlike
 // startBatchAnalysis, handleSubmit had NO per-listing try/catch at all
@@ -753,13 +752,21 @@ async function handleAwaitingPhotos(
 }
 
 /**
- * Fires once the LAST product's "done" arrives — every product in the
- * batch is drafted together at this point, not one at a time as each
- * "done" came in. Runs all N analyses concurrently (not sequentially: N
- * products at ~10-15s each could otherwise exceed this route's 60s
- * ceiling — see maxDuration in app/api/whatsapp/webhook/route.ts) and
- * sends a live update the moment each one finishes, so the seller sees
- * real progress instead of one long silence.
+ * Fires once the LAST product's "done" arrives. Reserves quota and credits
+ * for the whole batch, tells the seller what it can't draft and why, then
+ * QUEUES the analyses and returns — see lib/whatsapp/analysis-queue.ts.
+ *
+ * It used to run every analysis inline, concurrently, right here. That
+ * raced Vercel's hard 60s kill (one product measured 22.7s in production),
+ * which is why the batch cap sat at 5 and why anything that missed the
+ * soft deadline told the seller "still finishing" having produced nothing.
+ * Queuing turns that hard failure into a longer wait: the webhook now
+ * returns in well under a second no matter how large the batch, and
+ * app/api/worker/analyze-jobs drains it a few products at a time.
+ *
+ * The session stays in "analyzing" until the worker settles the last job
+ * and calls finalizeBatch — the seller's experience is unchanged, the work
+ * just no longer happens inside their request.
  */
 async function startBatchAnalysis(
   phoneNumber: string,
@@ -775,10 +782,6 @@ async function startBatchAnalysis(
     phoneNumber,
     `🔎 Got everything for all ${batchSize} product${batchSize === 1 ? "" : "s"} — drafting them now. I'll update you as each one finishes…`,
   );
-  // A big batch can take a while (each product analyzes concurrently, but
-  // Gemini latency still adds up) — offer something to do instead of
-  // silence between updates. handleAnalyzingMessage handles the tap (and
-  // re-offers the button so a seller can ask for more than one).
   if (batchSize >= BIG_BATCH_SIZE) {
     await replyButtons(
       phoneNumber,
@@ -787,25 +790,17 @@ async function startBatchAnalysis(
     );
   }
 
-  // Everything below is wrapped in try/catch: this function already
-  // flipped the session to "analyzing" above, and until it reaches a
-  // terminal state (awaiting_confirmation, below) that state's own
-  // handler just replies "still drafting" to every message — including
-  // "restart" or "help", since the global-command check happens before
-  // that per-state fallback. An uncaught throw anywhere in here used to
-  // leave the seller wedged in "analyzing" forever with no way out and
-  // no explanation — confirmed live: runAutoAnalyze (and the DB/rate-
-  // limit calls around it) can throw rather than always resolving to
-  // {ok:false,...}, and Promise.all rejects the instant any one of its
-  // entries does, so one bad product could sink the whole batch.
+  // Still wrapped: a throw here would strand the seller in "analyzing",
+  // where every message just gets "Still drafting" back. Much less can go
+  // wrong now that this only reserves and enqueues, but the failure mode
+  // it guards against is unchanged, so the guard stays.
   try {
     const listings = await getBatchListings(batchId);
 
     // Reserve rate-limit slots for the whole batch up front — cheap,
     // synchronous checks — so a seller without quota for all N finds out
-    // before any (expensive) AI calls fire, rather than partway through a
-    // concurrent batch. Same per-user limit the web app's Analyze button
-    // and the old single-product flow both used.
+    // before any (expensive) AI calls fire. Same per-user limit the web
+    // app's Analyze button and the old single-product flow both used.
     const withQuota: ListingRow[] = [];
     const overQuota: ListingRow[] = [];
     for (const listing of listings) {
@@ -813,134 +808,21 @@ async function startBatchAnalysis(
       (limited.success ? withQuota : overQuota).push(listing);
     }
 
-    // Same up-front reservation, but against the shared extension-credit
-    // ledger (lib/billing/extension-credits.ts) rather than the in-memory
-    // rate limiter — a WhatsApp draft costs WHATSAPP_DRAFT_CREDIT_COST from
-    // the exact same balance the Chrome extension spends from. Checked
-    // before any Gemini call fires so a seller who's run out finds out
-    // immediately rather than after drafting (and being billed for) some
-    // prefix of the batch.
+    // Same up-front reservation against the shared extension-credit ledger
+    // (lib/billing/extension-credits.ts) — a WhatsApp draft costs
+    // WHATSAPP_DRAFT_CREDIT_COST from the exact same balance the Chrome
+    // extension spends from. Checked before anything is queued so a seller
+    // who's run out finds out immediately rather than after being billed
+    // for some prefix of the batch.
     const creditBalance = await getOrCreateCreditBalance(userId);
     const affordableCount = Number.isFinite(creditBalance)
       ? Math.max(0, Math.floor(creditBalance / WHATSAPP_DRAFT_CREDIT_COST))
       : withQuota.length;
     const overCredit = withQuota.splice(affordableCount);
 
-    // Collected as each product finishes, rendered as grouped "Submit
-    // product N" buttons only AFTER every "Edit product N" live update has
-    // gone out (below, once the whole batch settles) — confirmed live:
-    // sending each product's submit button right when it finished meant
-    // edit and submit links alternated per product (Edit 1, Submit 1, Edit
-    // 2, Submit 2, ...), which read as jumbled once a seller scrolled back.
-    // Grouping every edit first, then every submit, reads as two clean
-    // passes instead.
-    const readyToSubmitSeqs: number[] = [];
-
-    const analysisWork = Promise.all(
-      withQuota.map(async (listing) => {
-        const seq = listing.whatsapp_seq;
-        try {
-          const result = await runAutoAnalyze(userId, listing.id, null);
-          if (result.ok) {
-            // Gives access to the focused single-product editor the
-            // moment this product's draft is ready — see
-            // components/extension/whatsapp-focused-editor.tsx — rather
-            // than making the seller wait for the batch-wide summary or
-            // hunt for it on the review page. Only worth doing mid-batch
-            // when there ARE other products still drafting (batchSize>1);
-            // a 1-product batch's single "drafted" event folds straight
-            // into the one combined completion message below instead of
-            // sending this as a separate message first.
-            if (batchSize > 1) {
-              await replyCta(
-                phoneNumber,
-                `✅ Product ${seq} drafted: ${result.title ?? "(untitled)"}.`,
-                `Edit product ${seq}`,
-                focusedEditorUrl(listing.id),
-              );
-              // Pre-submit validation summary, right when this product is
-              // ready to look at — not just discovered as a rejection
-              // after the seller already typed "submit all". Plain text
-              // here, not a button (see readyToSubmitSeqs above) — the
-              // tappable "Submit product N" comes later, grouped with
-              // every other ready product's.
-              const missing = await describeMissingFields(listing.id);
-              await replyText(phoneNumber, missing || "Ready to submit.");
-              if (seq != null) readyToSubmitSeqs.push(seq);
-            }
-            // Low-confidence category pick — surfaced right here in chat
-            // (for every batch size, not just >1) instead of only on a web
-            // confidence banner most WhatsApp sellers never open. Its own
-            // message: a dedicated reply-buttons send gets the full 3-button
-            // budget for alternates, which the missing-fields message above
-            // (already carrying "Submit product N") doesn't have room for.
-            if (result.needsUserConfirmation && result.alternates.length > 0) {
-              const pct = Math.round(result.category.confidence * 100);
-              await replyButtons(
-                phoneNumber,
-                `🤔 Not fully sure about product ${seq}'s category — picked "${result.category.path}" (${pct}% confident). Tap the right one below if this isn't it:`,
-                result.alternates.slice(0, 3).map((alt) => ({
-                  id:    `category:${listing.id}:${alt.code}`,
-                  title: alt.name.slice(0, 20),
-                })),
-              );
-            }
-            // Deducted only now, after a successful draft — same rule
-            // app/api/extension/fill/route.ts's deductCredits() call
-            // follows for the extension. Fire-and-forget on failure (a
-            // lost CAS race, say): the draft already happened and the
-            // seller already has it, so a ledger hiccup here shouldn't
-            // block their reply.
-            deductCredits(userId, WHATSAPP_DRAFT_CREDIT_COST, "WhatsApp product draft").catch((e) =>
-              console.error(`[whatsapp intake] credit deduction failed for product ${seq}: ${(e as Error).message}`),
-            );
-          } else {
-            await replyCta(
-              phoneNumber,
-              `⚠️ Product ${seq} couldn't be drafted: ${result.message}`,
-              `Fix product ${seq}`,
-              focusedEditorUrl(listing.id),
-            );
-          }
-        } catch (e) {
-          // One product's analyze throwing must never sink the rest of
-          // the batch — every other entry in this Promise.all still
-          // needs to resolve, or the whole session stays wedged.
-          console.error(`[whatsapp intake] product ${seq} analysis threw: ${(e as Error).message}`);
-          await replyCta(
-            phoneNumber,
-            `⚠️ Product ${seq} couldn't be drafted (unexpected error).`,
-            `Fix product ${seq}`,
-            focusedEditorUrl(listing.id),
-          );
-        }
-      }),
-    );
-
-    // Race against ANALYSIS_DEADLINE_MS (see its doc comment) rather than
-    // just awaiting analysisWork directly — a slow batch must never be
-    // allowed to run past Vercel's hard 60s kill with no reply sent.
-    // Whatever's still in flight when the deadline wins keeps running
-    // (Node doesn't cancel it), but this function stops waiting on it and
-    // frees the seller immediately instead of gambling on the platform
-    // not killing the function first.
-    const deadline = new Promise<"deadline">((resolve) => {
-      setTimeout(() => resolve("deadline"), ANALYSIS_DEADLINE_MS);
-    });
-    const raceResult = await Promise.race([analysisWork.then(() => "done" as const), deadline]);
-
-    if (raceResult === "deadline") {
-      console.warn(`[whatsapp intake] batch ${batchId} hit the ${ANALYSIS_DEADLINE_MS}ms soft deadline — releasing session early`);
-      await updateSession(phoneNumber, { state: "awaiting_confirmation" });
-      await replyCta(
-        phoneNumber,
-        `⏳ Drafting is taking longer than usual. Check what's ready below — anything still finishing will show up shortly, and *submit all* still works once you see it there.`,
-        "Review listings",
-        whatsappListingsUrl(batchId),
-      );
-      return;
-    }
-
+    // Sent now rather than held until the batch settles: "you're out of
+    // credits for product 4" is a fact the moment it's known, and making a
+    // seller wait several minutes to hear it would be worse, not better.
     for (const listing of overQuota) {
       await replyCta(
         phoneNumber,
@@ -949,7 +831,6 @@ async function startBatchAnalysis(
         whatsappListingsUrl(batchId),
       );
     }
-
     for (const listing of overCredit) {
       await replyCta(
         phoneNumber,
@@ -959,74 +840,191 @@ async function startBatchAnalysis(
       );
     }
 
-    await updateSession(phoneNumber, { state: "awaiting_confirmation" });
-
-    // No standalone "Review listing(s)" send anymore — it duplicated the
-    // per-product "Edit product N" links above (and, for batchSize===1,
-    // the single Edit link right below) without adding anything a seller
-    // needed that those didn't already cover. "Edit"/"Submit" stay
-    // separate sends (cta_url and reply-buttons can't share one message).
-    if (batchSize === 1) {
-      const refreshed = await getBatchListings(batchId);
-      const only = refreshed[0];
-      if (only?.title) {
-        const missing = await describeMissingFields(only.id);
-        await replyCta(
-          phoneNumber,
-          missing ? `✅ Product drafted: ${only.title}.\n⚠️ ${missing}` : `✅ Product drafted: ${only.title}. Ready to submit!`,
-          "Edit product",
-          focusedEditorUrl(only.id),
-        );
-        await replyButtons(
-          phoneNumber,
-          `Reply *submit*, or say something like "change the price to 150" to edit it first.`,
-          [
-            { id: "submit all", title: "Submit ✅" },
-            { id: "restart",    title: "Restart 🔄" },
-          ],
-        );
-      }
-      // else: the one product's own failure message (sent above, inside
-      // the Promise.all) already covers what happened — nothing to add.
+    if (withQuota.length === 0) {
+      // Nothing draftable — don't leave the seller in "analyzing" waiting
+      // on a worker that has no work to do for them.
+      await updateSession(phoneNumber, { state: "awaiting_confirmation" });
+      await replyCta(
+        phoneNumber,
+        "Nothing left to draft in this batch right now.",
+        "Review listings",
+        whatsappListingsUrl(batchId),
+      );
       return;
     }
 
-    // Every "Edit product N" link already went out live, above, as each
-    // product finished — now that the whole batch has settled, send every
-    // ready product's "Submit product N" button as its own grouped pass
-    // (chunked to 3 per message, WhatsApp's per-message button cap) so
-    // edits and submits read as two separate blocks, not alternating pairs.
-    readyToSubmitSeqs.sort((a, b) => a - b);
-    for (let i = 0; i < readyToSubmitSeqs.length; i += 3) {
-      const chunk = readyToSubmitSeqs.slice(i, i + 3);
-      await replyButtons(
-        phoneNumber,
-        "Submit a specific product:",
-        chunk.map((seq) => ({ id: `submit ${seq}`, title: `Submit product ${seq}` })),
-      );
-    }
-
-    // Per-product detail (drafted/failed, missing fields) already went out
-    // above as each one finished — this closing message is just the
-    // batch-wide summary + actions.
-    await replyButtons(
+    await enqueueAnalysisJobs({
+      batchId,
+      userId,
       phoneNumber,
-      `🎉 Done drafting your ${batchSize} products! Check the messages above for each one, then reply *submit all* when ready — or tell me a product number (e.g. *submit 2*) to submit just one.`,
-      [
-        { id: "submit all", title: "Submit all ✅" },
-        { id: "restart",    title: "Restart 🔄" },
-      ],
-    );
+      batchSize,
+      listings: withQuota.map((l) => ({ listingId: l.id, seq: l.whatsapp_seq ?? null })),
+    });
+
+    // Start the work now rather than waiting up to a minute for the next
+    // pg_cron tick — without this a 1-product draft that used to finish in
+    // ~22s could take 80s, which reads as a regression. Not awaited, and
+    // pg_cron remains the guarantee if it doesn't land.
+    nudgeWorker();
   } catch (e) {
-    console.error(`[whatsapp intake] startBatchAnalysis failed for batch ${batchId}: ${(e as Error).message}`);
+    console.error(`[whatsapp intake] batch ${batchId} could not be queued: ${(e as Error).message}`);
     await updateSession(phoneNumber, { state: "awaiting_confirmation" });
     await replyCta(
       phoneNumber,
-      `⚠️ Something went wrong while drafting your products.\n\nCheck what's there below, reply *submit all* once you're ready, or *restart* to start over.`,
+      "⚠️ Something went wrong starting the drafts. Your photos are saved — open your listings and try again from there.",
       "Review listings",
       whatsappListingsUrl(batchId),
     );
   }
+}
+
+/**
+ * Analyse ONE queued product and report it to the seller — the body that
+ * used to live inside startBatchAnalysis's Promise.all, now called by
+ * app/api/worker/analyze-jobs once per claimed job.
+ *
+ * Throws on failure so the worker can release the job for another attempt;
+ * anything it has already told the seller is written to be safe to see
+ * more than once.
+ */
+export async function runQueuedAnalysis(job: AnalysisJob): Promise<void> {
+  const { phone_number: phoneNumber, seq, batch_size: batchSize, user_id: userId } = job;
+
+  const db = createServerClient();
+  const { data: listing } = await db
+    .from("listings")
+    .select("*")
+    .eq("id", job.listing_id)
+    .maybeSingle();
+
+  if (!listing) {
+    console.warn(`[whatsapp worker] listing ${job.listing_id} vanished before analysis`);
+    return;
+  }
+
+  const result = await runAutoAnalyze(userId, job.listing_id, null);
+
+  if (!result.ok) {
+    await replyCta(
+      phoneNumber,
+      `⚠️ Product ${seq} couldn't be drafted: ${result.message}`,
+      `Fix product ${seq}`,
+      focusedEditorUrl(job.listing_id),
+    );
+    return;
+  }
+
+  // Gives access to the focused single-product editor the moment this
+  // product's draft is ready, rather than making the seller wait for the
+  // batch-wide summary. Only worth doing mid-batch when there ARE other
+  // products still drafting; a 1-product batch's single "drafted" event
+  // folds straight into finalizeBatch's combined message instead.
+  if (batchSize > 1) {
+    await replyCta(
+      phoneNumber,
+      `✅ Product ${seq} drafted: ${result.title ?? "(untitled)"}.`,
+      `Edit product ${seq}`,
+      focusedEditorUrl(job.listing_id),
+    );
+    const missing = await describeMissingFields(job.listing_id);
+    await replyText(phoneNumber, missing || "Ready to submit.");
+  }
+
+  // Low-confidence category pick — surfaced right here in chat (for every
+  // batch size) instead of only on a web confidence banner most
+  // WhatsApp-only sellers never open.
+  if (result.needsUserConfirmation && result.alternates.length > 0) {
+    const pct = Math.round(result.category.confidence * 100);
+    await replyButtons(
+      phoneNumber,
+      `🤔 Not fully sure about product ${seq}'s category — picked "${result.category.path}" (${pct}% confident). Tap the right one below if this isn't it:`,
+      result.alternates.slice(0, 3).map((alt) => ({
+        id:    `category:${job.listing_id}:${alt.code}`,
+        title: alt.name.slice(0, 20),
+      })),
+    );
+  }
+
+  // Deducted only after a successful draft — the same rule
+  // app/api/extension/fill/route.ts follows. Fire-and-forget on failure:
+  // the draft already happened and the seller already has it, so a ledger
+  // hiccup here shouldn't block their reply.
+  deductCredits(userId, WHATSAPP_DRAFT_CREDIT_COST, "WhatsApp product draft").catch((e) =>
+    console.error(`[whatsapp worker] credit deduction failed for product ${seq}: ${(e as Error).message}`),
+  );
+}
+
+/**
+ * Close out a batch once every job has settled — the tail of what used to
+ * be startBatchAnalysis, called by the worker that finished the last job.
+ *
+ * Everything is derived from the database rather than accumulated in
+ * memory, because the products are now analysed across several worker
+ * ticks (and possibly several processes), so there is no single run to
+ * collect state in.
+ *
+ * Assumes the caller already won claimBatchFinalization — that's what
+ * moves the session out of "analyzing", and what guarantees only one
+ * worker gets here per batch.
+ */
+export async function finalizeBatch(
+  batchId:     string,
+  phoneNumber: string,
+  batchSize:   number,
+): Promise<void> {
+  const listings = await getBatchListings(batchId);
+
+  if (batchSize === 1) {
+    const only = listings[0];
+    if (only?.title) {
+      const missing = await describeMissingFields(only.id);
+      await replyCta(
+        phoneNumber,
+        missing ? `✅ Product drafted: ${only.title}.\n⚠️ ${missing}` : `✅ Product drafted: ${only.title}. Ready to submit!`,
+        "Edit product",
+        focusedEditorUrl(only.id),
+      );
+      await replyButtons(
+        phoneNumber,
+        `Reply *submit*, or say something like "change the price to 150" to edit it first.`,
+        [
+          { id: "submit all", title: "Submit ✅" },
+          { id: "restart",    title: "Restart 🔄" },
+        ],
+      );
+    }
+    // else: the product's own failure message (sent by runQueuedAnalysis)
+    // already covers what happened — nothing to add.
+    return;
+  }
+
+  // Every "Edit product N" link already went out live as each product
+  // finished — now that the whole batch has settled, send every ready
+  // product's "Submit product N" button as its own grouped pass (chunked
+  // to 3 per message, WhatsApp's per-message button cap) so edits and
+  // submits read as two separate blocks, not alternating pairs.
+  const readyToSubmitSeqs = listings
+    .filter((l) => l.title && l.whatsapp_seq != null)
+    .map((l) => l.whatsapp_seq as number)
+    .sort((a, b) => a - b);
+
+  for (let i = 0; i < readyToSubmitSeqs.length; i += 3) {
+    const chunk = readyToSubmitSeqs.slice(i, i + 3);
+    await replyButtons(
+      phoneNumber,
+      "Submit a specific product:",
+      chunk.map((seq) => ({ id: `submit ${seq}`, title: `Submit product ${seq}` })),
+    );
+  }
+
+  await replyButtons(
+    phoneNumber,
+    `🎉 Done drafting your ${batchSize} products! Check the messages above for each one, then reply *submit all* when ready — or tell me a product number (e.g. *submit 2*) to submit just one.`,
+    [
+      { id: "submit all", title: "Submit all ✅" },
+      { id: "restart",    title: "Restart 🔄" },
+    ],
+  );
 }
 
 async function handleAwaitingBatchConfirmation(
