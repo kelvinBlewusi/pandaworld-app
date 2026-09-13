@@ -338,16 +338,16 @@ export function WhatsAppFocusedEditor({
     <div className="mx-auto max-w-2xl space-y-6">
       <Link
         href="/extension/whatsapp-listings"
-        className="inline-flex items-center gap-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-800"
+        className="inline-flex items-center gap-1.5 text-sm font-medium text-zinc-500 hover:text-zinc-800"
       >
-        <ArrowLeft className="h-3 w-3" />
+        <ArrowLeft className="h-3.5 w-3.5" />
         Back to WhatsApp listings
       </Link>
 
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-widest text-orange-600">Edit product</p>
-          <h1 className="mt-1 text-xl font-bold text-zinc-900">{title || "(untitled)"}</h1>
+          <p className="text-sm font-semibold uppercase tracking-widest text-orange-600">Edit product</p>
+          <h1 className="mt-1 text-2xl font-bold text-zinc-900">{title || "(untitled)"}</h1>
         </div>
         <StatusPill status={status} />
       </div>
@@ -363,64 +363,64 @@ export function WhatsAppFocusedEditor({
 
       <div className="space-y-4 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
         <div>
-          <Label className="text-xs text-zinc-500">Product name</Label>
-          <Input value={title} onChange={(e) => setTitle(e.target.value)} className="mt-1" />
+          <Label className="text-sm text-zinc-500">Product name</Label>
+          <Input value={title} onChange={(e) => setTitle(e.target.value)} className="mt-1 h-11 text-base" />
         </div>
 
         {!multiVariant && (
           <>
             <div className="flex gap-4">
               <div className="flex-1">
-                <Label className="text-xs text-zinc-500">Price (GHS)</Label>
+                <Label className="text-sm text-zinc-500">Price (GHS)</Label>
                 <Input
                   type="number"
                   value={variants[0]?.globalPrice ?? ""}
                   onChange={(e) => updateVariant(variants[0].id, "globalPrice", e.target.value)}
                   placeholder="0.00"
-                  className={cn("mt-1", needsPrice && "border-amber-300")}
+                  className={cn("mt-1 h-11 text-base", needsPrice && "border-amber-300")}
                 />
               </div>
               <div className="flex-1">
-                <Label className="text-xs text-zinc-500">Stock</Label>
+                <Label className="text-sm text-zinc-500">Stock</Label>
                 <Input
                   type="number"
                   value={variants[0]?.quantity ?? ""}
                   onChange={(e) => updateVariant(variants[0].id, "quantity", e.target.value)}
                   placeholder="1"
-                  className="mt-1"
+                  className="mt-1 h-11 text-base"
                 />
               </div>
             </div>
             <button
               type="button"
               onClick={addVariation}
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-orange-600 hover:text-orange-700"
+              className="inline-flex items-center gap-1.5 text-sm font-medium text-orange-600 hover:text-orange-700"
             >
-              <Plus className="h-3.5 w-3.5" /> Add a variation (color, size, etc.)
+              <Plus className="h-4 w-4" /> Add a variation (color, size, etc.)
             </button>
           </>
         )}
         <div>
-          <Label className="text-xs text-zinc-500 flex items-center gap-2">
+          <Label className="text-sm text-zinc-500 flex items-center gap-2">
             Category
-            {refillingAttributes && <Loader2 className="h-3 w-3 animate-spin text-orange-500" />}
+            {refillingAttributes && <Loader2 className="h-3.5 w-3.5 animate-spin text-orange-500" />}
           </Label>
           <button
             type="button"
             onClick={() => setShowCategoryPicker(true)}
             disabled={refillingAttributes}
             className={cn(
-              "mt-1 flex h-10 w-full items-center justify-between rounded-md border bg-white px-3 text-sm text-left transition-colors",
+              "mt-1 flex h-11 w-full items-center justify-between rounded-md border bg-white px-3 text-base text-left transition-colors",
               categoryName ? "border-zinc-200 text-zinc-800" : "border-amber-300 text-zinc-400",
               refillingAttributes && "opacity-60 cursor-not-allowed",
             )}
           >
             <span className="truncate">{categoryName || "Pick a category"}</span>
-            <ChevronRight className="h-4 w-4 shrink-0 text-zinc-400" />
+            <ChevronRight className="h-5 w-5 shrink-0 text-zinc-400" />
           </button>
           {refillError && (
-            <p className="mt-1 flex items-start gap-1 text-[11px] text-red-600">
-              <AlertCircle className="h-3 w-3 mt-0.5 shrink-0" /> {refillError}
+            <p className="mt-1 flex items-start gap-1 text-sm text-red-600">
+              <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" /> {refillError}
             </p>
           )}
         </div>
@@ -428,11 +428,11 @@ export function WhatsAppFocusedEditor({
 
       {multiVariant && (
         <div className="space-y-3 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
-          <h2 className="text-sm font-semibold text-zinc-800">Variants</h2>
+          <h2 className="text-base font-semibold text-zinc-800">Variants</h2>
 
           {schemaAxes.length > 0 && (
             <div className="rounded-md border border-zinc-200 bg-zinc-50/50 p-3 space-y-2">
-              <p className="text-xs font-semibold text-zinc-600">Variant axes</p>
+              <p className="text-sm font-semibold text-zinc-600">Variant axes</p>
               <div className="flex flex-wrap gap-1.5">
                 {schemaAxes.map((a) => {
                   const active = !!axesDef.find((x) => x.name === a.name);
@@ -442,13 +442,13 @@ export function WhatsAppFocusedEditor({
                       type="button"
                       onClick={() => (active ? removeAxis(a.name) : addAxis(a))}
                       className={cn(
-                        "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+                        "rounded-full border px-2.5 py-1 text-sm font-medium transition-colors",
                         active
                           ? "border-orange-500 bg-orange-500 text-white"
                           : "border-zinc-200 bg-white text-zinc-600 hover:border-orange-300",
                       )}
                     >
-                      {active && <Check className="inline h-3 w-3 mr-1" />}
+                      {active && <Check className="inline h-3.5 w-3.5 mr-1" />}
                       {a.label}
                     </button>
                   );
@@ -456,7 +456,7 @@ export function WhatsAppFocusedEditor({
               </div>
               {axesDef.map((axis) => (
                 <div key={axis.name} className="space-y-1">
-                  <p className="text-[11px] font-medium text-zinc-500">{axis.label} values</p>
+                  <p className="text-xs font-medium text-zinc-500">{axis.label} values</p>
                   <div className="flex flex-wrap gap-1">
                     {axis.allowedValues.map((v) => {
                       const sel = axis.values.includes(v);
@@ -466,7 +466,7 @@ export function WhatsAppFocusedEditor({
                           type="button"
                           onClick={() => toggleAxisValue(axis.name, v)}
                           className={cn(
-                            "rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+                            "rounded-full border px-2 py-0.5 text-xs transition-colors",
                             sel
                               ? "border-orange-300 bg-orange-50 text-orange-700"
                               : "border-zinc-200 bg-white text-zinc-500 hover:border-zinc-300",
@@ -498,15 +498,15 @@ export function WhatsAppFocusedEditor({
           <button
             type="button"
             onClick={addVariation}
-            className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-zinc-300 bg-white py-3 text-xs font-semibold text-orange-500 hover:border-orange-300 hover:bg-orange-50 transition-colors"
+            className="flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-zinc-300 bg-white py-3 text-sm font-semibold text-orange-500 hover:border-orange-300 hover:bg-orange-50 transition-colors"
           >
-            <Plus className="h-3.5 w-3.5" /> ADD VARIATION
+            <Plus className="h-4 w-4" /> ADD VARIATION
           </button>
         </div>
       )}
 
       {needsCategory ? (
-        <div className="rounded-md border border-dashed border-zinc-300 bg-zinc-50/50 p-6 text-center text-sm text-zinc-500">
+        <div className="rounded-md border border-dashed border-zinc-300 bg-zinc-50/50 p-6 text-center text-base text-zinc-500">
           Pick a category above to see this product's Jumia fields.
         </div>
       ) : (
@@ -523,10 +523,10 @@ export function WhatsAppFocusedEditor({
       )}
 
       {message && (
-        <p className={cn("text-sm", message.type === "ok" ? "text-emerald-600" : "text-red-600")}>{message.text}</p>
+        <p className={cn("text-base", message.type === "ok" ? "text-emerald-600" : "text-red-600")}>{message.text}</p>
       )}
       {needsPrice && !message && (
-        <p className="text-xs text-amber-600">No price yet — set one above before submitting.</p>
+        <p className="text-sm text-amber-600">No price yet — set one above before submitting.</p>
       )}
 
       <div className="flex flex-wrap items-center gap-3 border-t border-zinc-100 pt-4">
@@ -542,9 +542,9 @@ export function WhatsAppFocusedEditor({
         )}
         <Link
           href={reviewUrl(listing.id)}
-          className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-zinc-400 hover:text-zinc-700"
+          className="ml-auto inline-flex items-center gap-1 text-sm font-medium text-zinc-400 hover:text-zinc-700"
         >
-          Full editor <ExternalLink className="h-3 w-3" />
+          Full editor <ExternalLink className="h-3.5 w-3.5" />
         </Link>
       </div>
 
