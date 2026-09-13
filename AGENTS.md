@@ -103,6 +103,9 @@ now a thin wrapper: authenticate, rate-limit, call it, map the result to JSON.
       subtree (as of 2026-09-13 — see "Retrieval upgrade" below) → up to
       8 candidates. If that comes up empty, retry with the department
       pick's next-best alternate before giving up.
+      The query is searched TERM BY TERM, IDF-weighted, never as one
+      string — see "Fuzzy retrieval was silently broken" below. This is
+      load-bearing, not a refinement.
       File: lib/jumia/category-search.ts → searchCategoriesByText(),
       searchCategoriesByEmbedding(), getTopLevelDepartments(),
       getSubtreeCategories(), mergeCandidates()
@@ -225,6 +228,47 @@ pipeline above:
   pack for the dashboard's "Plan" pill. WhatsApp's pre-existing
   plan-quota gate (`checkQuota`/`incrementUsage`) is untouched — both
   systems currently run side by side.
+- **Fuzzy retrieval was silently broken (fixed 2026-09-13)**: Fuse's bitap
+  matcher caps a search pattern at 32 characters (`MAX_BITS` in
+  `fuse.cjs`) and splits anything longer into arbitrary mid-word 32-char
+  chunks that each have to match. `retrievalQuery` is title + keywords +
+  use case + environment — essentially always past that cap — so
+  `searchCategoriesByText()` was being handed a pattern it could not
+  match. Measured against the real catalog for a canvas wall-art print:
+  `"canvas art"` (10 chars) returned Pre-Stretched Canvas 0.41 / Boards &
+  Canvas 0.35 / Wall Art 0.33, while `"canvas art wall decor"` (21) and
+  the real ~107-char query returned **nothing at all**. Retrieval then
+  fell through to the full-catalog retry (same broken long query) and the
+  vision model was handed whatever noise surfaced — which is how a canvas
+  print was pushed to Jumia as "Icing & Decorating Spatulas" at 0.95
+  confidence. The earlier "safety helmet / canvas easel filed under
+  Laptops" incidents share this root cause; the alphabetical-fallback
+  removal treated the symptom.
+  Fix: search each term separately (so no pattern nears 32 chars) and
+  score a category by the IDF-weighted mean of its per-term relevances.
+  IDF matters as much as the split — a real query carries a few
+  discriminating words among a lot of filler that matches half the
+  department, and unweighted terms let "decor"/"supplies"/"kits" outvote
+  "canvas". A cheap 4-char-prefix substring prefilter runs first so Fuse
+  only scores rows that could plausibly match (33ms for a department
+  subtree, 112ms for the full catalog; without it, 12 terms over 27k rows
+  blocked the event loop for ~5s).
+- **"None of these fit" (2026-09-13)**: `aiPassBC_pickAndFill`'s prompt
+  used to require `chosen_code` to be one of the candidates, so a bad
+  candidate set could only ever produce a confidently wrong answer — and
+  its confidence meant "best of these three", not "actually fits this
+  product", which is why 0.95 sailed past `needsUserConfirmation`
+  (`top1 < 0.75 || top1 - top2 < 0.15`). It may now return
+  `chosen_code: null`, surfaced as `noCandidateFits`, and the confidence
+  rule now explicitly asks how well the category fits the product.
+  `runAutoAnalyze` routes that to `no_category_picked` (seller picks
+  manually) rather than the separate-passes fallback, which would just
+  force the same bad pick from the same candidates.
+  Both "no category" exits now go through `bailToManualCategory()`, which
+  persists Pass A's title/description/highlights on the way out (honouring
+  seller edits). Before, an early return saved nothing — so a seller who
+  had already been charged for the draft got a listing holding nothing but
+  its images.
 - **One content style everywhere**: `aiPassA_describeProduct()` and
   `aiExpandDescription()` (both in `lib/actions/ai.ts` — the shared entry
   points for every WhatsApp-drafted and web-uploaded listing) now pull

@@ -23,6 +23,26 @@
  *
  * Threshold is tuned generous (0.5) — we'd rather return a few false
  * positives that the AI ranks out than miss the right category entirely.
+ *
+ * The query is searched TERM BY TERM, not as one string, and the per-term
+ * relevances are averaged over the whole query (see searchCategoriesByText).
+ * That is not a refinement — it's load-bearing. Fuse's bitap matcher caps a
+ * pattern at 32 characters and silently splits anything longer into
+ * arbitrary 32-char chunks (MAX_BITS in fuse.cjs), mid-word, each of which
+ * then has to match. The caller's query is title + keywords + use case +
+ * environment, so it is essentially always past that cap, and searching it
+ * whole collapsed retrieval to noise or nothing at all. Measured against
+ * the real catalog, for a canvas wall-art print:
+ *   "canvas art"            (10 chars) → Pre-Stretched Canvas 0.41, Boards & Canvas 0.35, Wall Art 0.33
+ *   "canvas art wall decor" (21 chars) → NO HITS AT ALL
+ *   the real 80-char query             → NO HITS, then noise from the
+ *                                        full-catalog retry, which is how a
+ *                                        canvas print reached the vision
+ *                                        model as "Icing & Decorating
+ *                                        Spatulas" and got pushed at 0.95
+ *                                        confidence.
+ * Keeping every pattern short is therefore the whole point; don't
+ * "simplify" this back into a single fuse.search(query).
  */
 
 import Fuse from "fuse.js";
@@ -44,18 +64,79 @@ export interface CategoryCandidate {
 interface IndexedRow extends JumiaCategoryRow {
   /** Last segment of the breadcrumb, e.g. "Headphones" */
   lastSegment: string;
+  /** Everything Fuse searches, lowercased — used only by the cheap
+   *  substring prefilter in searchCategoriesByText. */
+  haystack: string;
 }
 
 function prepareIndex(rows: JumiaCategoryRow[]): IndexedRow[] {
-  return rows.map((r) => ({
-    ...r,
-    lastSegment: r.path.split(/\s*[>/]\s*/).filter(Boolean).pop() ?? r.name,
-  }));
+  return rows.map((r) => {
+    const lastSegment = r.path.split(/\s*[>/]\s*/).filter(Boolean).pop() ?? r.name;
+    return {
+      ...r,
+      lastSegment,
+      haystack: `${r.name} ${lastSegment} ${r.path} ${r.attribute_set_name ?? ""}`.toLowerCase(),
+    };
+  });
+}
+
+/** Words that match half the catalog and only dilute the per-term average
+ *  below. Deliberately short — anything product-meaningful ("home",
+ *  "kitchen", "office") stays, because those genuinely narrow a category. */
+const QUERY_STOPWORDS = new Set([
+  "the", "and", "for", "with", "from", "this", "that", "your", "our", "its",
+  "new", "set", "pack", "item", "product", "quality", "unknown",
+]);
+
+/** Cap on terms per query — bounds the per-term searches below. Pass A
+ *  emits a title plus up to 10 keywords, so this comfortably covers a real
+ *  query while keeping the worst case bounded. */
+const MAX_QUERY_TERMS = 12;
+
+/** How many rows each single-term search may contribute. Generous: a term
+ *  matching the right category weakly still needs to reach the accumulator,
+ *  and the hit count doubles as the term's document frequency for the IDF
+ *  weighting below — too small a cap would flatten common and rare terms
+ *  into looking equally selective. */
+const PER_TERM_LIMIT = 60;
+
+/** How much of a term the substring prefilter matches on. Short enough to
+ *  survive plurals and endings ("painting" → "pain", "spatulas" → "spat"),
+ *  long enough to still exclude most of the catalog. */
+const TERM_PREFIX_LENGTH = 4;
+
+/** Splits a retrieval query into de-duplicated, searchable terms. Every
+ *  term is a single word, so no pattern can reach Fuse's 32-char cap. */
+function queryTerms(query: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of query.toLowerCase().split(/[^a-z0-9]+/)) {
+    if (raw.length < 3 || QUERY_STOPWORDS.has(raw) || seen.has(raw)) continue;
+    seen.add(raw);
+    out.push(raw);
+    if (out.length >= MAX_QUERY_TERMS) break;
+  }
+  return out;
 }
 
 /**
  * Fuzzy search the leaf list for the strongest matches against a free-text
- * query (typically an AI-generated product title or description).
+ * query (typically an AI-generated product title plus keywords).
+ *
+ * Each term is searched separately and a category's score is the weighted
+ * mean of its per-term relevances across the WHOLE query — terms it doesn't
+ * match count as zero. So a category matching several of the query's words
+ * ("canvas", "art", "painting") outranks one matching a single incidental
+ * word ("decorating" → "Icing & Decorating Spatulas"), which searching the
+ * query as one string got exactly backwards.
+ *
+ * Terms are IDF-weighted, which is what makes that hold in practice: a real
+ * query carries a handful of discriminating words ("canvas") among a lot of
+ * filler that matches half the department ("home", "decor", "supplies",
+ * "kits"). Weighting every term equally just lets the filler outvote the
+ * signal — measured on the real catalog, an unweighted mean put "Party
+ * Decorations & Supplies" and "Fabric Decorating Kits" above
+ * "Pre-Stretched Canvas" for a canvas art print.
  *
  * Returns top-N candidates with relevance scores in [0, 1].
  */
@@ -66,9 +147,24 @@ export function searchCategoriesByText(
 ): CategoryCandidate[] {
   if (!query.trim() || categories.length === 0) return [];
 
+  const terms = queryTerms(query);
+  if (terms.length === 0) return [];
+
   const indexed = prepareIndex(categories);
 
-  const fuse = new Fuse(indexed, {
+  // Searching every term against every row is what costs: Fuse's bitap
+  // matcher is char-level, so one term over the full 27k-row catalog runs
+  // ~470ms, and a 12-term query ~5s of blocked event loop. Almost all of
+  // that is spent proving that rows sharing nothing with the query don't
+  // match. A substring prefilter on a short prefix of each term drops
+  // those for free, leaving Fuse to do the graded scoring it's actually
+  // needed for. The prefix (not the whole term) keeps plurals and small
+  // variants — "spatular" still reaches "Spatulas" via "spat".
+  const prefixes = terms.map((t) => t.slice(0, TERM_PREFIX_LENGTH));
+  const pool = indexed.filter((r) => prefixes.some((p) => r.haystack.includes(p)));
+  if (pool.length === 0) return [];
+
+  const fuse = new Fuse(pool, {
     includeScore: true,
     threshold:    0.5,
     ignoreLocation: true,
@@ -80,29 +176,38 @@ export function searchCategoriesByText(
     ],
   });
 
-  const hits = fuse.search(query, { limit: limit * 2 });   // over-fetch then dedupe
+  // Fuse already returns one result per item (combined across keys), so each
+  // term contributes at most once per category. A term's hit count is also
+  // its document frequency — the more of the pool it matches, the less it
+  // says about any one category.
+  const perTerm = terms.map((term) => fuse.search(term, { limit: PER_TERM_LIMIT }));
+  const weights = perTerm.map((hits) => Math.log(1 + categories.length / (1 + hits.length)));
+  const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+  if (totalWeight === 0) return [];
 
-  // Dedupe by code (Fuse can repeat when multiple keys match)
-  const seen = new Set<number>();
-  const out: CategoryCandidate[] = [];
-  for (const h of hits) {
-    const r = h.item;
-    if (seen.has(r.code)) continue;
-    seen.add(r.code);
-    // Fuse score: 0 = perfect, 1 = no match. Flip to a relevance.
-    const retrievalScore = 1 - (h.score ?? 0);
-    out.push({
-      code:               r.code,
-      name:               r.name,
-      path:               r.path,
-      attribute_set_sid:  r.attribute_set_sid,
-      retrievalScore,
-      source:             "fuzzy",
-    });
-    if (out.length >= limit) break;
-  }
+  // code → running total of IDF-weighted per-term relevance.
+  const totals = new Map<number, { row: IndexedRow; total: number }>();
+  perTerm.forEach((hits, i) => {
+    for (const h of hits) {
+      // Fuse score: 0 = perfect, 1 = no match. Flip to a relevance.
+      const weighted = (1 - (h.score ?? 0)) * weights[i];
+      const entry = totals.get(h.item.code);
+      if (entry) entry.total += weighted;
+      else totals.set(h.item.code, { row: h.item, total: weighted });
+    }
+  });
 
-  return out;
+  return Array.from(totals.values())
+    .map(({ row, total }) => ({
+      code:               row.code,
+      name:               row.name,
+      path:               row.path,
+      attribute_set_sid:  row.attribute_set_sid,
+      retrievalScore:     total / totalWeight,
+      source:             "fuzzy" as const,
+    }))
+    .sort((a, b) => b.retrievalScore - a.retrievalScore)
+    .slice(0, limit);
 }
 
 /**
