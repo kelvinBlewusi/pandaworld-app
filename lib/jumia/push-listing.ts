@@ -11,7 +11,14 @@
  */
 
 import { createServerClient } from "@/lib/supabase/server";
-import { getValidJumiaCredentials, pushProductsToJumia, markNeedsReconnect, getFeedStatus } from "@/lib/jumia/api";
+import {
+  getValidJumiaCredentials,
+  pushProductsToJumia,
+  markNeedsReconnect,
+  getFeedStatus,
+  getFeedProductDetails,
+  type FeedProductInfo,
+} from "@/lib/jumia/api";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
 
 export interface PushListingVariantInput {
@@ -294,10 +301,41 @@ export async function pushListingToJumia(
  * any non-cron refresh silently swallowed the seller's "it's live"
  * message.
  */
+export interface FeedResolution {
+  /** The listing's status after this check — unchanged if nothing resolved. */
+  status:       string;
+  error:        string | null;
+  /** How many of the feed's products Jumia accepted. */
+  liveCount:    number;
+  totalCount:   number;
+  /** Seller SKUs Jumia rejected, when it told us which. */
+  rejectedSkus: string[];
+}
+
+/** First human-readable reason we can find, preferring the per-product
+ *  errors (which name the actual variant's problem) over the feed-level
+ *  ones. Jumia sometimes hands back objects rather than strings. */
+function firstErrorText(rejected: FeedProductInfo[], feedErrors: unknown[]): string | null {
+  for (const item of rejected) {
+    const first = item.errors.find((e) => typeof e === "string" && e.trim());
+    if (first) return first;
+  }
+  for (const e of feedErrors) {
+    if (typeof e === "string" && e.trim()) return e;
+    if (e && typeof e === "object") return JSON.stringify(e);
+  }
+  return null;
+}
+
 /**
- * Tell a WhatsApp seller their listing resolved, in the same words the
- * cron uses (app/api/cron/jumia-feeds). Only fires for listings that came
- * from the chat flow — a web-app listing's seller watches the app instead.
+ * Tell a WhatsApp seller their listing resolved. Only fires for listings
+ * that came from the chat flow — a web-app listing's seller watches the
+ * app instead.
+ *
+ * Says what actually happened, including the partial case: a feed where
+ * four variants went live and one was rejected used to be reported to the
+ * seller (when it was reported at all) as a flat failure, which
+ * contradicted the four live products sitting in their Vendor Center.
  *
  * Best-effort throughout: a failed lookup or send must never turn a
  * successful status refresh into an error for the caller.
@@ -306,6 +344,9 @@ async function notifyListingResolved(
   listingId: string,
   newStatus: string,
   errorMsg: string | null,
+  counts: { liveCount: number; totalCount: number; rejectedSkus: string[] } = {
+    liveCount: 0, totalCount: 0, rejectedSkus: [],
+  },
 ): Promise<void> {
   try {
     const db = createServerClient();
@@ -324,12 +365,15 @@ async function notifyListingResolved(
     if (!wa.connected || !wa.phoneNumber) return;
 
     const name = (row.title as string | null) ?? "Your product";
-    await sendTextIfConfigured(
-      wa.phoneNumber,
-      newStatus === "live"
-        ? `🎉 "${name}" is now live on Jumia!`
-        : `⚠️ "${name}" was rejected by Jumia: ${errorMsg ?? "see the app for details"}`,
-    );
+    const partial = newStatus === "live" && counts.totalCount > counts.liveCount && counts.liveCount > 0;
+
+    const text = newStatus !== "live"
+      ? `⚠️ "${name}" was rejected by Jumia: ${errorMsg ?? "see the app for details"}`
+      : partial
+        ? `✅ "${name}" is live on Jumia — ${counts.liveCount} of ${counts.totalCount} variants went through.\n\n⚠️ Jumia rejected ${counts.rejectedSkus.length ? counts.rejectedSkus.join(", ") : "the rest"}. You can fix and resubmit just those from your listings.`
+        : `🎉 "${name}" is now live on Jumia!`;
+
+    await sendTextIfConfigured(wa.phoneNumber, text);
   } catch (e) {
     console.warn(`[push-listing] resolve notification failed for ${listingId}: ${(e as Error).message}`);
   }
@@ -338,41 +382,79 @@ async function notifyListingResolved(
 export async function refreshPendingFeedStatus(
   accessToken: string,
   listing: { id: string; status: string; jumia_ref: string | null },
-): Promise<{ status: string; error?: string | null }> {
-  if (listing.status !== "pending_approval" || !listing.jumia_ref) {
-    return { status: listing.status };
+  opts: { allowNonPending?: boolean } = {},
+): Promise<FeedResolution> {
+  const isPending = listing.status === "pending_approval";
+  if ((!isPending && !opts.allowNonPending) || !listing.jumia_ref) {
+    return { status: listing.status, error: null, liveCount: 0, totalCount: 0, rejectedSkus: [] };
   }
   try {
-    const feedStatus = await getFeedStatus(accessToken, listing.jumia_ref);
-    if (!feedStatus) return { status: listing.status };
+    // Both come from the same GET /feeds/{id} — the counts tell us what
+    // happened, the per-item details tell us to WHICH variant, which is
+    // the difference between "your listing failed" and "4 of 5 variants
+    // are live, Orange was rejected".
+    const [feedStatus, productDetails] = await Promise.all([
+      getFeedStatus(accessToken, listing.jumia_ref),
+      getFeedProductDetails(accessToken, listing.jumia_ref),
+    ]);
+    if (!feedStatus) return { status: listing.status, error: null, liveCount: 0, totalCount: 0, rejectedSkus: [] };
 
-    let newStatus: string | null = null;
-    let errorMsg: string | null = null;
-    if (feedStatus.status === "DONE") {
-      if (feedStatus.failed > 0) {
-        newStatus = "failed";
-        const firstError = feedStatus.errors[0];
-        errorMsg = firstError ? JSON.stringify(firstError).slice(0, 500) : "Jumia rejected one or more products in the feed";
-      } else {
-        newStatus = "live";
-      }
-    } else if (feedStatus.status === "ERROR") {
-      newStatus = "failed";
-      errorMsg = feedStatus.errors.length ? JSON.stringify(feedStatus.errors[0]).slice(0, 500) : "Jumia feed processing error";
+    const state = feedStatus.status.toUpperCase();
+    const terminal = state === "DONE" || state === "COMPLETED" || state === "ERROR" || state === "FAILED";
+    if (!terminal) {
+      return { status: listing.status, error: null, liveCount: 0, totalCount: feedStatus.total, rejectedSkus: [] };
     }
 
-    if (!newStatus) return { status: listing.status };
+    const details      = productDetails ?? [];
+    const rejected     = details.filter((p) => p.qcStatus === "rejected" || (!p.productSid && p.errors.length > 0));
+    const rejectedSkus = rejected.map((p) => p.sellerSku).filter(Boolean);
+    const totalCount   = feedStatus.total || details.length;
+    const failedCount  = feedStatus.failed || rejectedSkus.length;
+    const liveCount    = Math.max(0, totalCount - failedCount);
 
-    const db = createServerClient();
-    await db.from("listings").update({
+    // A feed where SOME products succeeded leaves the listing genuinely
+    // live and sellable on Jumia — marking the whole thing "failed"
+    // (which every copy of this logic used to do) contradicts what the
+    // seller sees in Vendor Center and hides the variants that DID work.
+    // Only a feed where nothing got through is a failure.
+    const newStatus = failedCount === 0
+      ? "live"
+      : liveCount > 0 ? "live" : "failed";
+
+    const reason = firstErrorText(rejected, feedStatus.errors);
+    const errorMsg = failedCount === 0
+      ? null
+      : liveCount > 0
+        ? `${liveCount} of ${totalCount} variants went live. Jumia rejected ${rejectedSkus.length ? rejectedSkus.join(", ") : `${failedCount} variant(s)`}${reason ? `: ${reason}` : "."}`.slice(0, 500)
+        : (reason ?? "Jumia rejected every product in this feed").slice(0, 500);
+
+    if (newStatus === listing.status && !isPending) {
+      return { status: listing.status, error: errorMsg, liveCount, totalCount, rejectedSkus };
+    }
+
+    const updates: Record<string, unknown> = {
       status:      newStatus,
       jumia_error: errorMsg,
       updated_at:  new Date().toISOString(),
-    }).eq("id", listing.id);
-    await notifyListingResolved(listing.id, newStatus, errorMsg);
-    return { status: newStatus, error: errorMsg };
+    };
+    // Take the sid/qc off a product that actually succeeded — details[0]
+    // may well be the rejected one, which carries no usable sid.
+    const succeeded = details.find((p) => p.productSid);
+    if (succeeded?.productSid) updates.jumia_product_sid = succeeded.productSid;
+    if (succeeded?.qcStatus)   updates.jumia_qc_status   = succeeded.qcStatus;
+
+    const db = createServerClient();
+    await db.from("listings").update(updates).eq("id", listing.id);
+
+    // Only the pending → resolved transition is news. Re-checking an
+    // already-resolved listing (what /api/jumia/diagnose does) must not
+    // message the seller again.
+    if (isPending) {
+      await notifyListingResolved(listing.id, newStatus, errorMsg, { liveCount, totalCount, rejectedSkus });
+    }
+    return { status: newStatus, error: errorMsg, liveCount, totalCount, rejectedSkus };
   } catch (e) {
     console.warn(`[push-listing] refreshPendingFeedStatus failed for ${listing.id}: ${(e as Error).message}`);
-    return { status: listing.status };
+    return { status: listing.status, error: null, liveCount: 0, totalCount: 0, rejectedSkus: [] };
   }
 }

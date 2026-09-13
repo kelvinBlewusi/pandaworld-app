@@ -3,10 +3,8 @@ import { createServerClient } from "@/lib/supabase/server";
 import { encrypt, decrypt } from "@/lib/security/token-crypto";
 
 export const dynamic = "force-dynamic";
-import { getFeedStatus, getFeedProductDetails } from "@/lib/jumia/api";
 import { refreshAccessToken } from "@/lib/jumia/oauth";
-import { getWhatsAppConnection } from "@/lib/whatsapp/link";
-import { sendTextIfConfigured } from "@/lib/whatsapp/client";
+import { refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
 
 // ─── GET /api/cron/jumia-feeds ────────────────────────────────────────────────
 // Vercel cron — runs every 5 minutes (see vercel.json)
@@ -90,82 +88,31 @@ export async function GET(req: NextRequest) {
       continue;
     }
 
-    // Poll each feed for this user
+    // Poll each feed for this user.
+    //
+    // The status logic, the productSid/qc capture and the WhatsApp notify
+    // all used to be written out inline here — and separately again in
+    // /api/jumia/feeds/poll, /api/jumia/diagnose and push-listing.ts. Four
+    // copies meant four chances to disagree, and they did: three of them
+    // never notified the seller at all, so whichever happened to observe
+    // the transition first silently consumed it (the row stops being
+    // pending_approval, so this cron never looks at it again). All four
+    // also counted a feed with ANY failed product as a total failure, which
+    // is how a listing with four live variants and one rejected showed up
+    // as "Failed". One shared implementation now, in push-listing.ts.
     for (const listing of listings) {
-      const feedStatus = await getFeedStatus(accessToken, listing.jumia_ref as string);
-      if (!feedStatus) continue;
-
-      let newStatus: string | null = null;
-      let errorMsg: string | null = null;
-      const s = feedStatus.status.toUpperCase();
-
-      if (s === "DONE" || s === "COMPLETED") {
-        newStatus = feedStatus.failed > 0 ? "failed" : "live";
-        if (feedStatus.failed > 0 && feedStatus.errors.length) {
-          errorMsg = String(feedStatus.errors[0]).slice(0, 500);
-        }
-      } else if (s === "ERROR" || s === "FAILED") {
-        newStatus = "failed";
-        errorMsg = feedStatus.errors.length
-          ? String(feedStatus.errors[0]).slice(0, 500)
-          : "Jumia feed processing error";
-      }
-
-      if (newStatus) {
-        // When the feed is DONE, fetch the productSid + qc.status. We need
-        // these to perform any future stock/price/status updates per Jumia
-        // docs: only QC-approved products allow updates.
-        const updates: Record<string, unknown> = {
-          status:      newStatus,
-          jumia_error: errorMsg,
-          updated_at:  new Date().toISOString(),
-        };
-
-        if (feedStatus.status === "DONE" && newStatus === "live") {
-          const productInfos = await getFeedProductDetails(accessToken, listing.jumia_ref as string);
-          if (productInfos && productInfos.length > 0) {
-            // For non-variant listings we expect exactly one product entry
-            const info = productInfos[0];
-            if (info.productSid)        updates.jumia_product_sid = info.productSid;
-            if (info.qcStatus)          updates.jumia_qc_status   = info.qcStatus;
-            // If multiple variants, store the full map for later lookup
-            if (productInfos.length > 1) {
-              updates.jumia_product_map = productInfos.reduce<Record<string, { sid: string | null; qc: string | null }>>(
-                (acc, p) => { acc[p.sellerSku] = { sid: p.productSid, qc: p.qcStatus }; return acc; },
-                {}
-              );
-            }
-            console.info(
-              `[Cron] ${listing.id} → ${newStatus} (sid=${info.productSid ?? "—"}, qc=${info.qcStatus ?? "—"})`
-            );
-          }
-        }
-
-        await db.from("listings").update(updates).eq("id", listing.id);
+      const before = "pending_approval";
+      const result = await refreshPendingFeedStatus(accessToken, {
+        id:         listing.id as string,
+        status:     before,
+        jumia_ref:  listing.jumia_ref as string,
+      });
+      if (result.status !== before) {
         updated++;
-        if (!(feedStatus.status === "DONE" && newStatus === "live")) {
-          console.info(`[Cron] ${listing.id} → ${newStatus}`);
-        }
-
-        // Notify over WhatsApp when this listing came from that chat flow
-        // (see lib/whatsapp/intake.ts) — the seller asked to be told once
-        // their submission clears Jumia's review, one way or another.
-        // Listings pushed from the web app don't get this; they check
-        // status in the app itself.
-        if (listing.whatsapp_batch_id) {
-          try {
-            const wa = await getWhatsAppConnection(userId as string);
-            if (wa.connected && wa.phoneNumber) {
-              const name = (listing.title as string | null) ?? "Your product";
-              const text = newStatus === "live"
-                ? `🎉 "${name}" is now live on Jumia!`
-                : `⚠️ "${name}" was rejected by Jumia: ${errorMsg ?? "see the app for details"}`;
-              await sendTextIfConfigured(wa.phoneNumber, text);
-            }
-          } catch (e) {
-            console.warn(`[Cron] WhatsApp notify failed for listing ${listing.id}: ${(e as Error).message}`);
-          }
-        }
+        console.info(
+          `[Cron] ${listing.id} → ${result.status}` +
+          (result.totalCount > 1 ? ` (${result.liveCount}/${result.totalCount} variants live)` : ""),
+        );
       }
     }
   }

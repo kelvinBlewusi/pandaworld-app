@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { getValidJumiaCredentials, getFeedStatus } from "@/lib/jumia/api";
+import { refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
 
 // ─── POST /api/jumia/feeds/poll ───────────────────────────────────────────────
 // Body: { listingIds: string[] }
@@ -62,44 +63,31 @@ export async function POST(req: NextRequest) {
     let currentStatus = row.status;
 
     // ── A. Poll create feed (pending_approval) ──────────────────────────────
+    //
+    // Delegated to refreshPendingFeedStatus, which is also what the cron,
+    // the diagnose route and the WhatsApp flow use. This branch used to be
+    // a fourth copy of the same logic; they had drifted, and all of them
+    // treated a feed with any failed product as a total failure rather
+    // than the partial success it usually is.
     if (row.status === "pending_approval" && row.jumia_ref) {
-      const feedStatus = await getFeedStatus(accessToken, row.jumia_ref as string);
+      const resolution = await refreshPendingFeedStatus(accessToken, {
+        id:        row.id as string,
+        status:    row.status as string,
+        jumia_ref: row.jumia_ref as string,
+      });
 
-      if (feedStatus) {
+      if (resolution.status !== row.status) {
         console.info(
-          `[Feed Poll] listingId=${row.id} feedId=${row.jumia_ref} status=${feedStatus.status} success=${feedStatus.success} failed=${feedStatus.failed}`
+          `[Feed Poll] listingId=${row.id} feedId=${row.jumia_ref} → ${resolution.status} ` +
+          `(${resolution.liveCount}/${resolution.totalCount} live)`,
         );
-
-        let newStatus: string | null = null;
-        let errorMsg:  string | null = null;
-
-        if (feedStatus.status === "DONE") {
-          if (feedStatus.failed > 0) {
-            newStatus = "failed";
-            const firstError = feedStatus.errors[0];
-            errorMsg = firstError
-              ? JSON.stringify(firstError).slice(0, 500)
-              : "Jumia rejected one or more products in the feed";
-          } else {
-            newStatus = "live";
-          }
-        } else if (feedStatus.status === "ERROR") {
-          newStatus = "failed";
-          errorMsg = feedStatus.errors.length
-            ? JSON.stringify(feedStatus.errors[0]).slice(0, 500)
-            : "Jumia feed processing error";
-        }
-
-        if (newStatus) {
-          await db.from("listings").update({
-            status:      newStatus,
-            jumia_error: errorMsg,
-            updated_at:  new Date().toISOString(),
-          }).eq("id", row.id);
-          currentStatus = newStatus;
-          results.push({ id: row.id, status: newStatus, ...(errorMsg ? { error: errorMsg } : {}) });
-          continue;
-        }
+        currentStatus = resolution.status;
+        results.push({
+          id:     row.id,
+          status: resolution.status,
+          ...(resolution.error ? { error: resolution.error } : {}),
+        });
+        continue;
       }
     }
 

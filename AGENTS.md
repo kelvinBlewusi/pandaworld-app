@@ -228,8 +228,31 @@ pipeline above:
   pack for the dashboard's "Plan" pill. WhatsApp's pre-existing
   plan-quota gate (`checkQuota`/`incrementUsage`) is untouched — both
   systems currently run side by side.
-- **Batch cap is a capacity decision (2026-09-13)**: `MAX_BATCH_SIZE`
-  (`lib/whatsapp/batch.ts`) dropped 20 → 5. `startBatchAnalysis` runs every
+- **Batch analysis runs on a queue (2026-09-13)**: `startBatchAnalysis` no
+  longer analyses anything. It reserves quota + credits, tells the seller
+  what it can't draft, enqueues one `analysis_jobs` row per product and
+  returns — so the webhook finishes in well under a second whatever the
+  batch size. `app/api/worker/analyze-jobs` drains the queue `CLAIM_LIMIT`
+  (3) products per tick, chaining into itself while work remains, with
+  pg_cron as the guaranteed trigger.
+  - **Scheduling lives in Postgres, not `vercel.json`** — Hobby caps
+    Vercel cron at once a DAY. `supabase/schedule-workers.sql` is a
+    run-once-by-hand file (it needs the real `CRON_SECRET`, kept in
+    Supabase Vault rather than inlined, since `cron.job.command` is
+    readable by any DB user). It schedules both the worker and
+    `/api/cron/jumia-feeds` every minute.
+  - **Two safety properties worth not breaking**: `claim_analysis_jobs`
+    uses `FOR UPDATE SKIP LOCKED`, so overlapping ticks (pg_cron + the
+    webhook's own nudge) take disjoint work instead of double-analysing
+    and double-billing a product; and `claimBatchFinalization` flips the
+    session out of "analyzing" as a conditional UPDATE, so exactly one
+    worker sends the "🎉 Done drafting!" close-out even when two finish
+    the last two jobs at once.
+  - `MAX_BATCH_SIZE` went back to 20 as a result. What binds now is the
+    shared Gemini/Vertex project quota (still unmeasured) and seller
+    patience, not a per-request ceiling.
+- **Batch cap history (2026-09-13)**: `MAX_BATCH_SIZE`
+  (`lib/whatsapp/batch.ts`) dropped 20 → 5 before the queue existed. `startBatchAnalysis` runs every
   product's analysis concurrently inside the WhatsApp webhook, which Vercel
   kills at 60s; a single product measured 22.7s in production, already half
   `ANALYSIS_DEADLINE_MS`. At 20 that meant 60-80 concurrent Gemini vision

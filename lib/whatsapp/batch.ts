@@ -10,25 +10,27 @@ import { appUrl } from "@/lib/whatsapp/app-url";
 /**
  * How many products one chat batch may hold.
  *
- * Lowered from 20 to 5 on 2026-09-13, on measurement rather than taste.
- * startBatchAnalysis runs every product's analysis CONCURRENTLY inside the
- * WhatsApp webhook, which Vercel kills at 60s (ANALYSIS_DEADLINE_MS in
- * lib/whatsapp/intake.ts races it at 45s so a reply always gets out). A
- * single product measured 22.7s end to end in production — already half
- * that deadline on its own — and each one makes 3-4 Gemini vision calls
- * and holds up to MAX_LISTING_IMAGES images in the shared in-process
- * cache. At 20 that is 60-80 concurrent Gemini calls and up to 160 cached
- * images from one instance: rate-limit territory, and every product that
- * misses the deadline reports "still finishing" to the seller having
- * consumed nothing but time.
+ * Briefly 5, now 20 again — but for a different reason than the original
+ * 20, which was simply untested. Analysis used to run CONCURRENTLY inside
+ * the WhatsApp webhook, racing Vercel's 60s kill; one product measured
+ * 22.7s in production, so a large batch meant products silently reporting
+ * "still finishing" having produced nothing, and 5 was what actually fit.
  *
- * 5 keeps the burst near 20 calls with roughly 2x headroom over the
- * measured single-product time. Raising it meaningfully isn't a matter of
- * changing this number — it needs the analysis moved off the request path
- * onto a background worker, at which point the 60s ceiling stops being
- * the binding constraint at all.
+ * Batches now queue (supabase/migrations/2026-09-13_analysis-jobs-queue.sql)
+ * and drain in app/api/worker/analyze-jobs, CLAIM_LIMIT products per tick,
+ * each tick chaining into the next. The per-request ceiling no longer
+ * applies, so exceeding capacity costs TIME rather than failing: a 20-
+ * product batch takes a few minutes and the seller watches "✅ Product N
+ * drafted" arrive throughout.
+ *
+ * What still binds, and what to check before raising this further:
+ *   - The Gemini/Vertex per-project quota, which every seller shares. That
+ *     is the real global ceiling and it is not measured yet.
+ *   - Patience. At CLAIM_LIMIT 3 this is roughly 3 products per ~25s, so
+ *     50 would be a ~7-minute wait — long enough to read as broken even
+ *     though nothing is.
  */
-export const MAX_BATCH_SIZE = 5;
+export const MAX_BATCH_SIZE = 20;
 
 /** "3", "3.", "three products" (digits only — no word-number parsing, kept
  *  deliberately simple) → 3. Rejects 0, negatives, and anything above the cap. */
