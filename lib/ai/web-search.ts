@@ -53,6 +53,37 @@ const MAX_RESULTS = 5;
 // lifetime of the process; no LRU eviction needed at our scale.
 const _cache = new Map<string, { results: WebSearchResult[]; expires: number }>();
 
+// Set once the API answers with something no retry can fix — a disabled
+// API, a key that isn't allowed to call it, a bad search-engine id, or an
+// exhausted daily quota. Null means "no permanent problem seen".
+//
+// Confirmed live on 2026-09-14: every gap-fill was paying for a round trip
+// to be told
+//   403 "Requests to this API customsearch method
+//        google.customsearch.v1.CustomSearchService.List are blocked."
+// and swallowing it as an ordinary miss, so grounding had been silently
+// off for an unknown length of time while still costing a call per
+// analysis. A configuration error is not a cache miss and should not be
+// retried on every single listing.
+let _disabledReason: string | null = null;
+
+/** Permanent-looking API failures, by status. A 5xx or a timeout is NOT
+ *  in here — those are worth retrying. */
+function permanentFailureReason(status: number, body: string): string | null {
+  if (status === 403) {
+    return /blocked|not enabled|disabled|PERMISSION_DENIED|forbidden/i.test(body)
+      ? "the Custom Search API is not enabled for this key's project, or the key's API restrictions exclude it"
+      : "access forbidden";
+  }
+  if (status === 400) {
+    return /API key not valid|invalid.*(key|cx)|Request contains an invalid argument/i.test(body)
+      ? "GOOGLE_API_KEY or GOOGLE_CSE_ID is not valid for Custom Search"
+      : null;
+  }
+  if (status === 429) return "daily Custom Search quota exhausted (100/day on the free tier)";
+  return null;
+}
+
 function pruneExpired(): void {
   const now = Date.now();
   _cache.forEach((entry, key) => {
@@ -79,6 +110,7 @@ export async function webSearch(query: string): Promise<WebSearchResult[]> {
   const clean  = query.trim();
 
   if (!apiKey || !cseId || clean.length === 0) return [];
+  if (_disabledReason) return [];
 
   // Cache lookup.
   pruneExpired();
@@ -102,8 +134,27 @@ export async function webSearch(query: string): Promise<WebSearchResult[]> {
     const elapsed = Date.now() - t0;
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      const permanent = permanentFailureReason(res.status, text);
+
+      if (permanent) {
+        // Latch off for this process. pg_cron and Vercel recycle
+        // instances often enough that fixing the config takes effect
+        // without a deploy, and a config error that repeats on every
+        // analysis is noise that buries real failures.
+        _disabledReason = permanent;
+        console.error(
+          `[web-search] DISABLED for this process — HTTP ${res.status}: ${permanent}. ` +
+            `Gap-fill will run WITHOUT web grounding until this is fixed. ` +
+            `Check that "Custom Search API" is enabled in the Google Cloud project behind ` +
+            `GOOGLE_API_KEY, and that the key's API restrictions allow it — note this key is ` +
+            `separate from the Vertex service account, so the Vertex migration would not have ` +
+            `carried its permissions over. Raw: ${text.slice(0, 200)}`,
+        );
+        return [];
+      }
+
       console.warn(
-        `[web-search] HTTP ${res.status} after ${elapsed}ms — ${text.slice(0, 200)}`,
+        `[web-search] HTTP ${res.status} after ${elapsed}ms (transient, will retry next call) — ${text.slice(0, 200)}`,
       );
       return [];
     }
@@ -158,5 +209,17 @@ export function formatSearchSnippetsForPrompt(results: WebSearchResult[], maxIte
  * thrown away anyway.
  */
 export function isWebSearchEnabled(): boolean {
+  if (_disabledReason) return false;
   return Boolean(process.env.GOOGLE_API_KEY && process.env.GOOGLE_CSE_ID);
+}
+
+/** Why web search switched itself off in this process, or null. Exported
+ *  for tests and for anything that wants to report configuration health. */
+export function webSearchDisabledReason(): string | null {
+  return _disabledReason;
+}
+
+/** Tests only — clears the latch. */
+export function __resetWebSearchLatch(): void {
+  _disabledReason = null;
 }
