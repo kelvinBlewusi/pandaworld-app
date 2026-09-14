@@ -264,6 +264,16 @@ export async function pushListingToJumia(
     return { ok: true, jumiaRef: result.jumia_ref, sku: row.sku, skuChanged: isRetry };
   }
 
+  // Refused locally — nothing reached Jumia. Recording it as a rejection
+  // would be untrue twice over: it would leave the listing "failed" for a
+  // submission that never happened, and it would clear the way for the
+  // same payload to be retried unchanged. It's the same class of problem
+  // as a missing price, so it comes back the same way: a validation error
+  // naming the fields, with the draft left intact to fix.
+  if (result.blocked === "missing_required") {
+    return { ok: false, code: "validation", message: result.error ?? "This category needs more attributes." };
+  }
+
   const errMsg = String(result.error ?? "");
   if (errMsg.includes("401") || errMsg.includes("403") || errMsg.toLowerCase().includes("unauthor")) {
     await markNeedsReconnect(db, userId);

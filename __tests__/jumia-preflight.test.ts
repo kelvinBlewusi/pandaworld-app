@@ -121,3 +121,55 @@ describe("preflightAttributes", () => {
     expect(r.notes.filter((n) => n.reason === "not_in_schema")).toHaveLength(3);
   });
 });
+
+describe("preflightAttributes — carriedElsewhere", () => {
+  // Jumia marks these required on effectively every category, and the
+  // payload does send all three — as top-level product fields, not as
+  // attributes. Counting them missing fired three false positives on
+  // every single push, which is why the required list could only ever be
+  // logged and never trusted to gate anything.
+  const universal: JumiaCategoryAttribute[] = [
+    attr({ name: "name",           label: "Name",        required: true }),
+    attr({ name: "description",    label: "Product description", required: true }),
+    attr({ name: "variation",      label: "Variation",   required: true, is_variant: true }),
+    attr({ name: "product_weight", label: "Weight (kg)", required: true }),
+  ];
+
+  it("does not report a required attribute the product carries elsewhere", () => {
+    const r = preflightAttributes([{ name: "product_weight", value: "1.3 kg" }], universal, {
+      carriedElsewhere: ["name", "description", "variation"],
+    });
+    expect(r.missingRequired).toEqual([]);
+  });
+
+  it("still reports the one that is genuinely absent", () => {
+    // The real rejection: "The column [product_weight] is missing from
+    // the file" — Jumia throws away every product in the feed over it.
+    const r = preflightAttributes([{ name: "model", value: "LEVELPRO3" }], universal, {
+      carriedElsewhere: ["name", "description", "variation"],
+    });
+    expect(r.missingRequired.map((n) => n.attribute)).toEqual(["product_weight"]);
+    expect(r.missingRequired[0].label).toBe("Weight (kg)");
+  });
+
+  it("matches carried names case-insensitively", () => {
+    const r = preflightAttributes([{ name: "product_weight", value: "1.3 kg" }], universal, {
+      carriedElsewhere: ["Name", "DESCRIPTION", "Variation"],
+    });
+    expect(r.missingRequired).toEqual([]);
+  });
+
+  it("reports everything required when nothing is declared carried", () => {
+    // Default behaviour is unchanged for callers that don't opt in.
+    const r = preflightAttributes([{ name: "product_weight", value: "1.3 kg" }], universal);
+    expect(r.missingRequired.map((n) => n.attribute).sort())
+      .toEqual(["description", "name", "variation"]);
+  });
+
+  it("treats a whitespace-only required value as missing", () => {
+    const r = preflightAttributes([{ name: "product_weight", value: "   " }], universal, {
+      carriedElsewhere: ["name", "description", "variation"],
+    });
+    expect(r.missingRequired.map((n) => n.attribute)).toEqual(["product_weight"]);
+  });
+});
