@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { updateListing, replaceVariantsForListing } from "@/lib/actions/listings";
 import { SchemaForm } from "@/components/jumia/SchemaForm";
 import { VariantCard, buildAxisCombos } from "@/components/jumia/VariantCard";
-import { columnFor, fieldChangeToUpdate } from "@/lib/jumia/attribute-mapping";
+import { columnFor, fieldChangeToUpdate, readAttributeValue } from "@/lib/jumia/attribute-mapping";
 import { STATIC_FIELDS, universalInfoFields } from "@/lib/jumia/universal-fields";
 import type { ListingRow, ListingStatus, VariantRow as VariantRowDB } from "@/lib/supabase/types";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
@@ -239,7 +239,31 @@ export function WhatsAppFocusedEditor({
         : a,
     ));
 
-  const overrideValues: Record<string, string> = { ...dynAttrs, ...columnOverrides };
+  // Column-backed fields must render from the COLUMN, never from a stale
+  // dynamic_attributes copy of the same name.
+  //
+  // Confirmed live: this page showed a different Product description than
+  // the full editor for the same listing, because auto-analyze writes BOTH
+  // listings.description (rich HTML, Pass A) and a plain-text
+  // dynamic_attributes.description (the category schema's own attribute),
+  // and `{ ...dynAttrs, ...columnOverrides }` renders the dynAttrs one
+  // until the seller happens to edit the field — columnOverrides is empty
+  // on first render. Jumia's product description comes from the COLUMN
+  // (see buildBaseProduct in lib/jumia/api.ts), so this page was showing
+  // the one value that does NOT reach Jumia as the description.
+  //
+  // The full editor never had this bug because it appends explicit
+  // description/highlights/brand mirrors after the spread. Doing it by
+  // column mapping instead of by hardcoded name covers every such field,
+  // including ones added to ATTRIBUTE_TO_COLUMN later.
+  const overrideValues: Record<string, string> = { ...dynAttrs };
+  for (const name of Array.from(new Set([
+    ...Object.keys(dynAttrs),
+    ...universalInfoFields().map((f) => f.name),
+  ]))) {
+    if (columnFor(name)) overrideValues[name] = readAttributeValue(listing, name);
+  }
+  Object.assign(overrideValues, columnOverrides);
   const needsPrice = !variants[0]?.globalPrice?.trim();
   const needsCategory = !categoryCode;
   const canPush = status === "draft" || status === "failed";

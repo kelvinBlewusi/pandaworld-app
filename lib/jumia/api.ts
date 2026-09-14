@@ -411,6 +411,10 @@ interface JumiaAttribute {
 // mapListingToJumiaProducts, so each product carries its own unique value.
 const PER_VARIANT_ATTRIBUTE_NAMES = new Set<string>(["variation"]);
 
+/** dynamic_attributes keys that duplicate the product-level description.
+ *  Never sent as attributes — see the skip in buildAttributes. */
+const DESCRIPTION_ATTRIBUTE_NAMES = new Set(["description", "product_description"]);
+
 function buildAttributes(listing: ListingRow, schema: JumiaCategoryAttribute[]): JumiaAttribute[] {
   const attrs: JumiaAttribute[] = [];
 
@@ -457,6 +461,17 @@ function buildAttributes(listing: ListingRow, schema: JumiaCategoryAttribute[]):
         // Skip per-variant attribute names — those get injected per-product
         // in mapListingToJumiaProducts using each variant's own value.
         if (PER_VARIANT_ATTRIBUTE_NAMES.has(name.toLowerCase())) continue;
+        // Skip the description: the product object already carries it at
+        // top level from listings.description (see buildBaseProduct), and
+        // auto-analyze writes a SECOND, different one into
+        // dynamic_attributes when the category schema happens to define a
+        // "description" attribute — plain text where the column holds rich
+        // HTML. Sending both means Jumia receives two contradictory
+        // descriptions for one product, and the attribute copy risks the
+        // exact "Attribute [x] is not visible for category [y]" rejection
+        // that has already failed pushes here. The column is the source of
+        // truth; this copy is a stale duplicate.
+        if (DESCRIPTION_ATTRIBUTE_NAMES.has(name.toLowerCase())) continue;
         // Don't duplicate attributes already set above
         if (!attrs.find((a) => a.name === name)) {
           attrs.push({ name, value: String(value), translations: [] });

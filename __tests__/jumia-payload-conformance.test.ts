@@ -370,6 +370,52 @@ describe("Jumia /feeds/products/create payload conformance", () => {
     });
   });
 
+  // Confirmed live on listing eb1e3508: auto-analyze writes TWO different
+  // descriptions — rich HTML into listings.description (Pass A) and a
+  // plain-text one into dynamic_attributes.description, when the category
+  // schema happens to define a "description" attribute. Sending both means
+  // Jumia receives two contradictory descriptions for one product, and the
+  // attribute copy risks the same "Attribute [x] is not visible for
+  // category [y]" rejection that has already failed pushes here.
+  describe("duplicate description attribute", () => {
+    const withDupe: ListingRow = {
+      ...sampleListing,
+      description: "<p>The <strong>real</strong> rich-text description that Jumia should show.</p>",
+      dynamic_attributes: {
+        description:         "A different, plain-text description the AI wrote into the schema attribute.",
+        product_description: "Yet another copy under the alias spelling.",
+        ram:                 "8 GB",
+      },
+    };
+
+    const p = mapListingToJumiaProducts(withDupe, [], brand, currency)[0];
+    const attrNames = (p.attributes ?? []).map((a) => a.name.toLowerCase());
+
+    it("sends the COLUMN as the product description", () => {
+      // description is a translation object ({ value, translations[] }),
+      // not a bare string — see buildBaseProduct.
+      const value = JSON.stringify(p.description);
+      expect(value).toContain("real");
+      expect(value).not.toContain("plain-text description");
+    });
+
+    it("never sends description as an attribute alongside it", () => {
+      expect(attrNames).not.toContain("description");
+      expect(attrNames).not.toContain("product_description");
+    });
+
+    it("still sends genuine category attributes", () => {
+      // The skip must be surgical — dropping real schema attributes would
+      // be a much worse bug than the duplicate it fixes.
+      expect(attrNames).toContain("ram");
+    });
+
+    it("still sends highlights as short_description from the column", () => {
+      const short = (p.attributes ?? []).find((a) => a.name === "short_description");
+      expect(short?.value).toContain("6.6-inch");
+    });
+  });
+
   describe("category-schema attribute sanitisation", () => {
     // Confirmed live: material_family="Fabric" was sent for a category
     // whose material_family enum never contains the literal string
