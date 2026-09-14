@@ -421,15 +421,52 @@ export async function fetchCategoriesFromJumia(accessToken: string): Promise<Jum
 }
 
 /**
- * Jumia attribute type codes:
- *  0 = string/text
- *  1 = number/decimal
- *  2 = boolean
+ * Jumia attribute type codes.
+ *
+ * The numeric codes below were CORRECTED against the live cache after a
+ * rejection exposed them. The mapping originally read 1=number, 2=boolean;
+ * both were wrong, and the shape of the wrongness is unmistakable:
+ *
+ *   code 2 → we stored "boolean"   19 distinct names, EVERY one a
+ *                                  quantity: capacity_liter, cpu_cores,
+ *                                  cpu_speed, storage_capacity, voltage,
+ *                                  display_size, pages, year_of_publication…
+ *                                  Not one is a yes/no. Jumia confirmed it
+ *                                  directly: "Attribute [capacity_liter]
+ *                                  with the value [0.35] should be a number
+ *                                  without decimals."
+ *
+ *   code 1 → we stored "number"    description, short_description,
+ *                                  package_content, product_warranty,
+ *                                  manufacturer_txt, warranty_address —
+ *                                  594 categories each, all long free text.
+ *                                  (battery_capacity appears here once
+ *                                  against 82 categories where it's TEXT;
+ *                                  that is Jumia being inconsistent, not a
+ *                                  second meaning for the code.)
+ *
+ * So no numeric code in the live data means NUMBER except 2, and none
+ * means BOOLEAN at all — a real boolean arrives as the string "BOOLEAN",
+ * which the switch above already handles.
+ *
+ * Code 5 is grouped with 1 because it always has been and nothing in the
+ * cache distinguishes them; every row in that bucket is long text. If a
+ * future sync proves otherwise, the raw code is logged now (see below).
+ *
+ *  0 = text
+ *  1 = long text / text area
+ *  2 = number
  *  3 = multi-select (tag array)
  *  4 = enum/select (single value from options list)
- *  5 = date
+ *  5 = long text (assumed — see above)
  */
-function mapAttrType(rawType: unknown, hasOptions: boolean): JumiaAttrType {
+/** The documented string codes. Anything else gets logged once per sync. */
+const KNOWN_RAW_ATTR_TYPES = new Set([
+  "BOOLEAN", "DATE", "DATE_TIME", "NUMBER",
+  "MULTI_SELECTION", "SELECTION", "TEXT_AREA", "TEXT",
+]);
+
+export function mapAttrType(rawType: unknown, hasOptions: boolean): JumiaAttrType {
   // The API may return either a numeric legacy code OR the official string code
   // documented in Postman: BOOLEAN, DATE, DATE_TIME, MULTI_SELECTION, NUMBER,
   // SELECTION, TEXT, TEXT_AREA.
@@ -447,8 +484,8 @@ function mapAttrType(rawType: unknown, hasOptions: boolean): JumiaAttrType {
 
   // Legacy numeric codes
   const code = Number(rawType);
-  if (code === 2) return "boolean";
-  if (code === 1 || code === 5) return "number";
+  if (code === 2) return "number";
+  if (code === 1 || code === 5) return "textarea";
   if (code === 3) return "multi";
   if (code === 4 || hasOptions) return "enum";
   return "string";
@@ -513,6 +550,16 @@ export async function fetchAttributesFromJumia(
       // raw to mapAttrType which handles both string and legacy numeric codes.
       const hasOpts = allowedValues.length > 0;
       const type    = mapAttrType(attr.type, hasOpts);
+
+      // Record the RAW code alongside what we made of it. The numeric
+      // codes had been mis-mapped since this was written and nothing
+      // surfaced it until Jumia rejected a feed over a field we'd typed
+      // boolean — because the only place the mapping was visible was a
+      // Yes/No dropdown on a form no one had reason to distrust. One line
+      // per unfamiliar code is cheap; being wrong about it again is not.
+      if (!KNOWN_RAW_ATTR_TYPES.has(String(attr.type ?? "").toUpperCase().trim())) {
+        console.info(`[Jumia attrs] raw type ${JSON.stringify(attr.type)} → "${type}" (${String(attr.name ?? "?")})`);
+      }
 
       // Label: prefer the English translation, fall back to the description,
       // then to the field name.

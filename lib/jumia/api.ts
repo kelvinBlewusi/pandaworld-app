@@ -427,8 +427,26 @@ const PRODUCT_LEVEL_ATTRIBUTE_NAMES = new Set([
   "name", "product_name", "title",        // → product.name
 ]);
 
+/**
+ * Every schema-required name the product carries OUTSIDE its attribute
+ * list, so the pre-flight's required check doesn't report them missing.
+ *
+ * Jumia marks name, description and variation required on effectively
+ * every category; all three are sent, just not as attributes. Without
+ * this the required check fired three false positives on every push and
+ * could never be trusted as a gate — only as a log line, which is all it
+ * was until a real "product_weight is missing" rejection got through it.
+ */
+const CARRIED_OUTSIDE_ATTRIBUTES: string[] = [
+  ...Array.from(PRODUCT_LEVEL_ATTRIBUTE_NAMES),
+  ...Array.from(PER_VARIANT_ATTRIBUTE_NAMES),
+];
+
 function buildAttributes(listing: ListingRow, schema: JumiaCategoryAttribute[]): JumiaAttribute[] {
   const attrs: JumiaAttribute[] = [];
+  const requiredNames = new Set(
+    schema.filter((f) => f.required).map((f) => f.name.toLowerCase()),
+  );
 
   const add = (name: string, value: string | null | undefined) => {
     if (value != null && value !== "") {
@@ -493,7 +511,24 @@ function buildAttributes(listing: ListingRow, schema: JumiaCategoryAttribute[]):
         // it matters for any column-mapped attribute a future category
         // schema introduces without one.
         const columnBacked = columnFor(name);
-        const value = columnBacked ? readAttributeValue(listing, name) : String(dynValue);
+        let value = columnBacked ? readAttributeValue(listing, name) : String(dynValue);
+
+        // An empty COLUMN used to drop the attribute outright, taking the
+        // value we already hold in dynamic_attributes with it. For an
+        // optional attribute that costs one field. For a REQUIRED one it
+        // costs the whole product: Jumia answers "The column
+        // [product_weight] is missing from the file" and throws away
+        // every product in the feed — which is exactly what happened to
+        // three listings, one of them with "product_weight": "1.3"
+        // sitting in dynamic_attributes the entire time.
+        //
+        // Scoped to required attributes on purpose. Where the column is
+        // optional, empty can be a deliberate clearing by the seller, and
+        // resurrecting a stale AI copy would overrule them. A required
+        // field has no valid empty state, so there is nothing to overrule.
+        if (columnBacked && value.trim() === "" && requiredNames.has(name.toLowerCase())) {
+          value = String(dynValue);
+        }
         if (value.trim() === "") continue;
         // Don't duplicate attributes already set above
         if (!attrs.find((a) => a.name === name)) {
@@ -514,7 +549,9 @@ function buildAttributes(listing: ListingRow, schema: JumiaCategoryAttribute[]):
   // Also upgrades the enum handling from drop-on-mismatch to
   // snap-then-drop, so a casing or plural near-miss is corrected rather
   // than silently losing the seller an attribute they did supply.
-  const preflight = preflightAttributes(attrs, schema);
+  const preflight = preflightAttributes(attrs, schema, {
+    carriedElsewhere: CARRIED_OUTSIDE_ATTRIBUTES,
+  });
   const summary = summarisePreflight(preflight);
   if (summary) {
     console.info(`[Jumia preflight] ${summary} — ${preflight.notes.map((n) => `${n.attribute}: ${n.detail}`).join("; ")}`);
@@ -755,11 +792,56 @@ export function mapListingToJumiaProducts(
 
 // ─── Jumia API call ───────────────────────────────────────────────────────────
 
+/**
+ * Schema-required attributes that no product in the feed carries a value
+ * for, by their human labels ("Weight (kg)"), for a message a seller can
+ * act on.
+ *
+ * Reads the FINAL payload rather than the listing, so it sees exactly
+ * what Jumia will see — after the pre-flight has dropped, snapped and
+ * trimmed, and after each variant's own `variation` has been injected.
+ * Checking the listing instead would be checking a different thing from
+ * the one being sent, which is how the gap this closes opened in the
+ * first place.
+ *
+ * An empty schema means the fetch failed, not that the category declares
+ * nothing — it blocks nothing, exactly as the pre-flight doesn't.
+ */
+function missingRequiredFor(
+  products: ReturnType<typeof mapListingToJumiaProducts>,
+  schema:   JumiaCategoryAttribute[],
+): string[] {
+  if (schema.length === 0 || products.length === 0) return [];
+
+  const carried = new Set(CARRIED_OUTSIDE_ATTRIBUTES.map((n) => n.toLowerCase()));
+  const present = new Set<string>();
+  for (const product of products) {
+    for (const attr of product.attributes) {
+      if (String(attr.value ?? "").trim() !== "") present.add(attr.name.toLowerCase());
+    }
+  }
+
+  return schema
+    .filter((f) => f.required
+      && !present.has(f.name.toLowerCase())
+      && !carried.has(f.name.toLowerCase()))
+    .map((f) => f.label || f.name);
+}
+
 export interface JumiaPushResult {
   success:   boolean;
   jumia_ref: string | null;  // feedId — poll GET /feeds/{id} for status
   raw:       unknown;
   error?:    string;
+  /**
+   * Set when the payload was refused locally and NOTHING was sent to
+   * Jumia. The caller must not record this as a Jumia rejection — no feed
+   * exists, the listing was never submitted, and the seller can fix the
+   * named fields and submit normally.
+   */
+  blocked?:  "missing_required";
+  /** Schema-required attribute labels that were empty, for the message. */
+  missing?:  string[];
 }
 
 /**
@@ -805,6 +887,29 @@ export async function pushProductsToJumia(
   } catch (e) {
     const msg = (e as Error).message ?? "Failed to build payload";
     return { success: false, jumia_ref: null, raw: null, error: msg };
+  }
+
+  // 2b. Refuse a payload the category schema already says Jumia will
+  //     reject. Jumia bins the ENTIRE feed over one missing required
+  //     attribute ("The column [product_weight] is missing from the
+  //     file"), so sending it costs the seller the product, a round trip,
+  //     and a listing left sitting at "failed" for a problem we could see
+  //     before the request left the building.
+  //
+  //     The pre-flight has computed this list since #98 and only logged
+  //     it. Logging was never going to stop a rejection.
+  const missingRequired = missingRequiredFor(products, categoryAttributeSchema);
+  if (missingRequired.length > 0) {
+    const labels = missingRequired.join(", ");
+    console.warn(`[Jumia API] ⛔ not sending — category requires ${labels}`);
+    return {
+      success:   false,
+      jumia_ref: null,
+      raw:       null,
+      blocked:   "missing_required",
+      missing:   missingRequired,
+      error:     `This category requires ${labels}. Jumia rejects the whole listing without ${missingRequired.length === 1 ? "it" : "them"}, so nothing was submitted — add ${missingRequired.length === 1 ? "it" : "them"} and submit again.`,
+    };
   }
 
   const url  = `${JUMIA_API_BASE}/feeds/products/create`;

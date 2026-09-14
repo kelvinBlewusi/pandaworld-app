@@ -497,4 +497,81 @@ describe("Jumia /feeds/products/create payload conformance", () => {
       expect(attr?.value).toBe("Fabric");
     });
   });
+
+  describe("required attribute backed by an empty column", () => {
+    // The live rejection this closes, three times on record:
+    //   "The column [product_weight] is missing from the file."
+    // Jumia throws away EVERY product in the feed over it.
+    //
+    // product_weight is column-mapped (→ weight_kg). When the column was
+    // empty, buildAttributes read the column, got "", and dropped the
+    // attribute — discarding the value sitting in dynamic_attributes the
+    // whole time. One of the three rejected listings had
+    // "product_weight": "1.3" in there when the feed went out without it.
+    const weightSchema: JumiaCategoryAttribute[] = [
+      {
+        name: "product_weight",
+        label: "Weight (kg)",
+        type: "string",
+        allowed_values: [],
+        required: true,
+        is_variant: false,
+      },
+    ];
+
+    it("falls back to the dynamic_attributes value when the column is empty", () => {
+      const listing: ListingRow = {
+        ...sampleListing,
+        weight_kg: null,
+        dynamic_attributes: { product_weight: "1.3" },
+      };
+      const products = mapListingToJumiaProducts(listing, [], brand, currency, weightSchema);
+      const attr = products[0].attributes.find((a) => a.name === "product_weight");
+      expect(attr?.value).toBe("1.3");
+    });
+
+    it("still prefers the COLUMN when it has a value", () => {
+      // The whole point of the column-mapped rule: the column is what the
+      // editors write and what the seller sees, so a dynamic copy can
+      // only ever be equal or stale. A seller who corrects the weight
+      // must not have the old one pushed.
+      const listing: ListingRow = {
+        ...sampleListing,
+        weight_kg: 2.5,
+        dynamic_attributes: { product_weight: "1.3" },
+      };
+      const products = mapListingToJumiaProducts(listing, [], brand, currency, weightSchema);
+      const attr = products[0].attributes.find((a) => a.name === "product_weight");
+      expect(attr?.value).toBe("2.5 kg");
+    });
+
+    it("does NOT resurrect a stale copy for an OPTIONAL attribute", () => {
+      // Scoping matters. An optional column left empty can be a seller
+      // deliberately clearing it, and reviving an old AI value would
+      // overrule them. A required field has no valid empty state, so
+      // there is nothing to overrule — that asymmetry is the rule.
+      const optional: JumiaCategoryAttribute[] = [
+        { ...weightSchema[0], required: false },
+      ];
+      const listing: ListingRow = {
+        ...sampleListing,
+        weight_kg: null,
+        dynamic_attributes: { product_weight: "1.3" },
+      };
+      const products = mapListingToJumiaProducts(listing, [], brand, currency, optional);
+      expect(products[0].attributes.map((a) => a.name)).not.toContain("product_weight");
+    });
+
+    it("leaves the attribute out when there is no value anywhere", () => {
+      // Never invented. A weight the seller has to pay shipping on is
+      // exactly the kind of field this codebase refuses to guess.
+      const listing: ListingRow = {
+        ...sampleListing,
+        weight_kg: null,
+        dynamic_attributes: {},
+      };
+      const products = mapListingToJumiaProducts(listing, [], brand, currency, weightSchema);
+      expect(products[0].attributes.map((a) => a.name)).not.toContain("product_weight");
+    });
+  });
 });

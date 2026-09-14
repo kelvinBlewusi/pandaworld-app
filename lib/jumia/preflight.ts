@@ -103,6 +103,22 @@ function splitMulti(value: string): string[] {
   return value.split(",").map((v) => v.trim()).filter(Boolean);
 }
 
+export interface PreflightOptions {
+  /**
+   * Schema-required names the PRODUCT object carries somewhere OTHER than
+   * the attribute list, and which are therefore not missing just because
+   * they're absent from it.
+   *
+   * Jumia's schema marks `name`, `description` and `variation` required
+   * for effectively every category, but the payload sends them as
+   * top-level product fields (and `variation` per variant). Counting
+   * those as missing made `missingRequired` fire on every single push —
+   * three false positives that would drown the one real one and make the
+   * list useless as a gate.
+   */
+  carriedElsewhere?: Iterable<string>;
+}
+
 /**
  * Validate and repair an attribute payload against a category schema.
  *
@@ -114,6 +130,7 @@ function splitMulti(value: string): string[] {
 export function preflightAttributes(
   attributes: PreflightAttribute[],
   schema:     JumiaCategoryAttribute[],
+  options:    PreflightOptions = {},
 ): PreflightResult {
   if (schema.length === 0) {
     return { attributes, notes: [], missingRequired: [] };
@@ -187,8 +204,13 @@ export function preflightAttributes(
 
   // Required-but-empty, reported rather than invented.
   const present = new Set(out.map((a) => a.name.toLowerCase()));
+  const carried = new Set(
+    Array.from(options.carriedElsewhere ?? []).map((n) => n.toLowerCase()),
+  );
   const missingRequired: PreflightNote[] = schema
-    .filter((f) => f.required && !present.has(f.name.toLowerCase()))
+    .filter((f) => f.required
+      && !present.has(f.name.toLowerCase())
+      && !carried.has(f.name.toLowerCase()))
     .map((f) => ({
       attribute: f.name,
       label:     f.label,
