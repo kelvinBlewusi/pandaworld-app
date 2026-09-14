@@ -478,6 +478,13 @@ billing system underneath. Single switch: `FREE_FOR_ALL_MODE` in
 - `NEXT_PUBLIC_SUPABASE_URL` + `NEXT_PUBLIC_SUPABASE_ANON_KEY` + `SUPABASE_SERVICE_ROLE_KEY`
 - `GOOGLE_API_KEY` — single key for Gemini + Imagen + embeddings + Custom Search
 - `GOOGLE_CSE_ID` — Programmable Search Engine ID (set 2026-05-28 to `05213a7d53c7a498e`)
+- `GOOGLE_CSE_API_KEY` — the API key Custom Search runs on. **Must be a
+  SEPARATE key from `GOOGLE_API_KEY`**: Google refuses to combine the Gemini
+  API restriction with any other on one key ("Cannot be combined with the
+  currently selected API restrictions", because Gemini keys bind to a service
+  account), and `GOOGLE_API_KEY` is the AI Studio fallback for generation,
+  embeddings and extension-fill. Falls back to `GOOGLE_API_KEY` when unset,
+  which is the state that 403s with `API_KEY_SERVICE_BLOCKED`.
 - `JUMIA_CLIENT_ID` + `JUMIA_CLIENT_SECRET` + `JUMIA_REDIRECT_URI` + `JUMIA_API_ENV` (`sandbox` | `production`)
 - `NEXT_PUBLIC_APP_URL` — `https://pandaworldai.site` in prod
 - `ADMIN_USER_IDS` — comma-separated Clerk userIds with admin bypass
