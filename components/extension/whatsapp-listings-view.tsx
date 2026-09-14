@@ -1,15 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Loader2, Send, ExternalLink, X } from "lucide-react";
+import { Loader2, Send, ExternalLink, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusPill } from "@/components/ui/status-pill";
 import { cn } from "@/lib/utils";
-import { updateListing } from "@/lib/actions/listings";
+import { deleteListing, updateListing } from "@/lib/actions/listings";
 import { focusedEditorUrl } from "@/lib/whatsapp/batch";
 import type { ListingRow, ListingStatus } from "@/lib/supabase/types";
 
@@ -211,15 +211,46 @@ export function WhatsAppListingsView({ batches }: { batches: WhatsAppBatch[] }) 
 }
 
 function WhatsAppListingRow({ listing }: { listing: ListingRow }) {
+  const router = useRouter();
   const [price, setPrice]   = useState(listing.selling_price != null ? String(listing.selling_price) : "");
   const [stock, setStock]   = useState(String(listing.quantity ?? ""));
   const [status, setStatus] = useState<ListingStatus>(listing.status);
   const [saving, setSaving] = useState(false);
   const [pushing, setPushing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [message, setMessage] = useState<{ type: "ok" | "error"; text: string } | null>(null);
 
   const needsPrice = !listing.selling_price && !price;
   const canPush = status === "draft" || status === "failed";
+
+  // A listing Jumia already has is a different thing to delete than a
+  // draft: removing the row here does NOT take the product down from
+  // Jumia, it only stops PandaWorld tracking it — so the seller loses
+  // their way back to it while it stays live for buyers. Say that
+  // plainly rather than letting them find out afterwards.
+  const onJumia = status === "live" || status === "pending_approval";
+
+  async function handleDelete() {
+    const name = listing.title ?? "this product";
+    const warning = onJumia
+      ? `Delete "${name}" from PandaWorld?\n\nThis does NOT remove it from Jumia — it stays live there, you just stop tracking it here. This cannot be undone.`
+      : `Delete "${name}"? This cannot be undone.`;
+    if (!window.confirm(warning)) return;
+
+    setDeleting(true);
+    setMessage(null);
+    try {
+      await deleteListing(listing.id);
+      // The row is server-rendered from the batch query, so a refresh is
+      // what actually makes it disappear. Stay in the deleting state
+      // until then — re-enabling the button over a row that is about to
+      // vanish just invites a second click on a listing that is gone.
+      router.refresh();
+    } catch (e) {
+      setMessage({ type: "error", text: (e as Error).message });
+      setDeleting(false);
+    }
+  }
 
   async function persist(): Promise<boolean> {
     try {
@@ -341,6 +372,21 @@ function WhatsAppListingRow({ listing }: { listing: ListingRow }) {
           >
             Edit product <ExternalLink className="h-3 w-3" />
           </Link>
+          {/* Pushed to the far end, away from Save and Push. The
+              destructive action should not sit under a thumb aiming for
+              the one next to it. */}
+          <button
+            type="button"
+            onClick={handleDelete}
+            disabled={deleting}
+            aria-label={`Delete ${listing.title ?? "product"}`}
+            className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-zinc-400 transition-colors hover:text-red-600 disabled:opacity-50"
+          >
+            {deleting
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              : <Trash2 className="h-3.5 w-3.5" />}
+            Delete
+          </button>
         </div>
 
         {needsPrice && !message && (

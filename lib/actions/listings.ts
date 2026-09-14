@@ -132,6 +132,11 @@ export async function deleteListing(id: string): Promise<void> {
   }
 
   revalidatePath("/listings");
+  // The chat-originated listings have their own page, and a seller who
+  // deletes from there and navigates away and back would otherwise be
+  // shown the router's cached copy — with the row they just deleted
+  // still in it.
+  revalidatePath("/extension/whatsapp-listings");
 }
 
 // ─── Duplicate a listing ─────────────────────────────────────────────────────
