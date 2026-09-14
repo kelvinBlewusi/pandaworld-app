@@ -12,6 +12,63 @@ import {
 // and swallowing it as an ordinary miss — so grounding had been silently
 // off for an unknown length of time while still costing a call per
 // analysis. A configuration error is not a cache miss.
+// Google will not let one API key hold the Gemini API restriction AND any
+// other: ticking Custom Search greys Gemini out with "Cannot be combined
+// with the currently selected API restrictions", because Gemini keys must
+// be bound to a service account. GOOGLE_API_KEY is the AI Studio fallback
+// for generation, embeddings and extension-fill, so it physically cannot
+// also be the Custom Search key — hence a separate variable.
+describe("Custom Search key selection", () => {
+  const realFetch = global.fetch;
+  const saved = { ...process.env };
+  afterEach(() => { global.fetch = realFetch; process.env = { ...saved }; });
+
+  // Distinct query per test on purpose: webSearch caches a successful
+  // result for an hour keyed by the query, so a shared string would give
+  // the next test a cache hit and no fetch to inspect.
+  function captureKey() {
+    const seen: string[] = [];
+    global.fetch = (async (url: string) => {
+      seen.push(new URL(String(url)).searchParams.get("key") ?? "");
+      return { ok: true, status: 200, json: async () => ({ items: [] }), text: async () => "" };
+    }) as unknown as typeof fetch;
+    return seen;
+  }
+
+  beforeEach(() => {
+    __resetWebSearchLatch();
+    process.env.GOOGLE_CSE_ID = "cx";
+  });
+
+  it("prefers the dedicated key over the shared Gemini one", async () => {
+    process.env.GOOGLE_API_KEY     = "gemini-key";
+    process.env.GOOGLE_CSE_API_KEY = "search-key";
+    const seen = captureKey();
+    await webSearch("dedicated-key-probe");
+    expect(seen).toEqual(["search-key"]);
+  });
+
+  it("falls back to GOOGLE_API_KEY so nothing breaks before the new var is set", async () => {
+    process.env.GOOGLE_API_KEY = "gemini-key";
+    delete process.env.GOOGLE_CSE_API_KEY;
+    const seen = captureKey();
+    await webSearch("fallback-key-probe");
+    expect(seen).toEqual(["gemini-key"]);
+  });
+
+  it("is enabled on the dedicated key alone, with no shared key present", async () => {
+    delete process.env.GOOGLE_API_KEY;
+    process.env.GOOGLE_CSE_API_KEY = "search-key";
+    expect(isWebSearchEnabled()).toBe(true);
+  });
+
+  it("is disabled when neither key is set", () => {
+    delete process.env.GOOGLE_API_KEY;
+    delete process.env.GOOGLE_CSE_API_KEY;
+    expect(isWebSearchEnabled()).toBe(false);
+  });
+});
+
 describe("web search — permanent-failure latch", () => {
   const realFetch = global.fetch;
   const saved = { ...process.env };
