@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { embedPendingCategories } from "@/lib/jumia/embed-categories";
+import { readGeminiTelemetry } from "@/lib/ai/quota-telemetry";
 
 // Same 60s budget as the admin route this reuses embedPendingCategories
 // from, but this loops multiple batches per invocation (see TIME_BUDGET_MS
@@ -63,7 +64,16 @@ export async function GET(req: NextRequest) {
     console.log(
       `[cron/embed-categories] ${totalEmbedded} embedded across ${runs} batch(es); ${lastRemaining} remaining`,
     );
-    return NextResponse.json({ ok: true, embedded: totalEmbedded, remaining: lastRemaining, runs });
+    // Same counters the analysis worker reports, for the same reason:
+    // pg_net stores the response body, so quota pressure is queryable
+    // from SQL. This route needs them more than the worker does — it is
+    // the single heaviest consumer of the shared Google quota, and the
+    // 2026-09-14 re-embed's 429s had to be dug out of raw Vercel logs
+    // because this response carried no counters at all.
+    return NextResponse.json({
+      ok: true, embedded: totalEmbedded, remaining: lastRemaining, runs,
+      gemini: readGeminiTelemetry(),
+    });
   } catch (e) {
     const error = e instanceof Error ? e.message : "Unknown error";
     console.error(`[cron/embed-categories] failed: ${error}`);

@@ -41,7 +41,12 @@ refactors. Hates Lorem-ipsum-style placeholder code.
 - **AI**: Google AI Studio API key (`GOOGLE_API_KEY`) for:
   - Gemini 3.1 Flash Lite (vision + text) — listing analyze, gap-fill, description-expand
   - Gemini 2.5 Flash Image — text-to-image + image polish/rebuild
-  - text-embedding (gemini-embedding-001 with `outputDimensionality: 768`) — not currently called by the analyze pipeline (see Operational gotchas); still available via lib/ai/embeddings.ts
+  - text-embedding — **Vertex `text-embedding-005`** whenever `GCP_PROJECT_ID` +
+    `GOOGLE_APPLICATION_CREDENTIALS_JSON` are set (they are, in production);
+    AI Studio's `gemini-embedding-001` only as the no-Vertex fallback. Which
+    model wrote a given category vector is recorded in
+    `jumia_categories.embedding_model` — see "Embedding model drift" below for
+    why that column exists and why it is not optional.
   - Custom Search API (added 2026-05-28, CSE ID `05213a7d53c7a498e`) — web search ground truth for gap-fill
 - **External integrations**: Jumia Vendor Center (OAuth), PhotoRoom (background removal, legacy), Resend (transactional email, optional)
 - **Observability**: Vercel logs, Sentry (`app/error.tsx`)
@@ -492,6 +497,34 @@ billing system underneath. Single switch: `FREE_FOR_ALL_MODE` in
 
 ## Operational gotchas (things that have bitten us)
 
+0. **Embedding model drift (cost: four months of wrong categories)**: on
+   2026-05-26 the category index was embedded with AI Studio's
+   `gemini-embedding-001`. On 2026-05-29 embedding QUERIES moved to Vertex's
+   `text-embedding-005`. Nobody re-embedded the index, so from that day the
+   index and the queries lived in two different vector spaces. Both models emit
+   768 dimensions, so **nothing ever errored** — pgvector compared unrelated
+   spaces and returned confident nonsense. A safety helmet was filed under "Ball
+   Transfers", another under "Automobile > Car Care > Cleaning Kits", a canvas
+   print under "Icing & Decorating Spatulas", and four of seven Jumia push
+   failures traced to a wrong category.
+
+   It stayed invisible because nothing recorded which model wrote a vector, and
+   unfixable because `embedPendingCategories` selected only `WHERE embedding IS
+   NULL` — at 100% coverage the daily cron was a permanent no-op that could not
+   rewrite a stale vector even in principle.
+
+   **The invariant now: never write an embedding without writing
+   `embedding_model` in the same statement.** The backfill re-embeds any row
+   whose model differs from `currentEmbeddingModel()`, so a future backend
+   switch heals itself on the next cron run. Fixed 2026-09-14 (#88).
+
+   **And if you ever re-embed in bulk, REINDEX afterwards.** The ivfflat index
+   (`lists=100`) computes its centroids at build time from the then-current
+   vector distribution; leaving the old centroids in place keeps recall broken
+   even once every vector is correct. It needs `maintenance_work_mem` above the
+   32MB default — 256MB works.
+
+
 0. **The embedding search was timing out on Vertex too (fixed 2026-09-13)**:
    measured live on a real WhatsApp draft — `[category-search] embedding
    search TIMED OUT after 4000ms`, with Vertex correctly configured, the
@@ -606,10 +639,10 @@ Listed by priority. Pick from here when looking for "what to do next".
 7. **Install sharp + resize images server-side** as alternative to Supabase
    transforms (so the Free-plan-Supabase user doesn't pay full-res Gemini cost).
    Sharp is heavy binary — consider only if SaaS scales past 1000 active sellers.
-8. **Migrate from AI Studio API key to Vertex AI** — same models, higher rate
-   limits (cures the embedding cold-start), Cloud Billing integration.
-   ~6 hours. Wait until either (a) error rate stays high after current fixes, or
-   (b) crossing ~500 paid users.
+8. ~~**Migrate from AI Studio API key to Vertex AI**~~ — DONE (2026-05-29,
+   `6022a45` + `94444fa`). Production runs `backend=vertex`. Left here only
+   because migrating the embedding half without re-embedding the index is what
+   caused the four-month category outage described below.
 
 ### Feature expansion (when relevant)
 9. **Cloud Vision OCR** (Tier 1.2 of GCP plan) — dedicated OCR for packaging text.
