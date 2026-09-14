@@ -108,27 +108,107 @@ export async function enqueueAnalysisJobs(
 }
 
 /**
+ * Run a Supabase call, retrying once after a short pause.
+ *
+ * Exported for tests — the retry policy is the load-bearing part of the
+ * fix, not an implementation detail.
+ *
+ * PostgREST on this project intermittently answers with a 504 — its own
+ * log says "Warp server error: Thread killed by timeout manager", and
+ * Postgres itself is idle at the time (25/60 connections, no locks, no
+ * slow queries), so it is the REST layer, not the database. Measured at
+ * roughly 11% of worker ticks, and worse since the 3x fan-out put three
+ * workers on the same instant.
+ *
+ * One retry is the right shape for that: a cold PostgREST thread almost
+ * always answers the second time, and anything that doesn't is a real
+ * outage that pg_cron's next tick will cover anyway. Retrying harder
+ * would pile more load onto the thing that is already struggling.
+ */
+export async function withRetry<T>(
+  label: string,
+  run: () => PromiseLike<{ data: T | null; error: { message: string } | null }>,
+): Promise<{ data: T | null; error: string | null }> {
+  const first = await run();
+  if (!first.error) return { data: first.data, error: null };
+
+  console.warn(`[analysis-queue] ${label} failed (${first.error.message}) — retrying once`);
+  await new Promise((resolve) => setTimeout(resolve, 400));
+
+  const second = await run();
+  if (!second.error) {
+    console.info(`[analysis-queue] ${label} succeeded on retry`);
+    return { data: second.data, error: null };
+  }
+  return { data: null, error: second.error.message };
+}
+
+export interface ClaimResult {
+  jobs: AnalysisJob[];
+  /** Non-null when the claim itself failed. NOT the same as an empty
+   *  queue — see the note on claimAnalysisJobs. */
+  error: string | null;
+}
+
+/**
  * Atomically claim up to `limit` jobs for this worker tick. Safe to call
  * concurrently — see claim_analysis_jobs in the migration (FOR UPDATE SKIP
  * LOCKED), which is what stops two overlapping ticks from analysing, and
  * billing for, the same product twice.
+ *
+ * Returns the failure rather than swallowing it. This used to log and
+ * `return []`, which made a database timeout indistinguishable from "no
+ * work to do" — to the worker, to its response body, and to anyone
+ * reading net._http_response to check the queue was healthy. It reported
+ * `claimed: 0` either way, so roughly one tick in nine silently did
+ * nothing and looked exactly like an idle system.
+ *
+ * Retry safety: if the first attempt actually committed and only its
+ * response was lost, the retry claims a DIFFERENT set and the first set
+ * sits in 'running' with nobody working it. That is already handled —
+ * claim_analysis_jobs reclaims anything whose locked_at has gone stale
+ * (5 minutes), so the cost is a delay on those jobs, never a loss.
  */
-export async function claimAnalysisJobs(limit: number): Promise<AnalysisJob[]> {
+export async function claimAnalysisJobs(limit: number): Promise<ClaimResult> {
   const db = createServerClient();
-  const { data, error } = await db.rpc("claim_analysis_jobs", { claim_limit: limit });
+  const { data, error } = await withRetry("claim", () =>
+    db.rpc("claim_analysis_jobs", { claim_limit: limit }),
+  );
+
   if (error) {
-    console.error(`[analysis-queue] claim failed: ${error.message}`);
-    return [];
+    console.error(`[analysis-queue] claim failed after retry: ${error}`);
+    return { jobs: [], error };
   }
-  return (data ?? []) as AnalysisJob[];
+  return { jobs: (data ?? []) as AnalysisJob[], error: null };
 }
 
-export async function markJobDone(jobId: string): Promise<void> {
+/**
+ * Mark a finished job done. Returns false if it could not be recorded.
+ *
+ * This used to ignore its own result entirely. A dropped write here is
+ * not cosmetic: the row stays 'running', goes stale after 5 minutes, gets
+ * reclaimed, and the product is analysed a second time — and DEDUCTED FOR
+ * a second time, since runQueuedAnalysis bills on success. At an 11%
+ * PostgREST failure rate that is a live double-billing path, not a
+ * theoretical one.
+ */
+export async function markJobDone(jobId: string): Promise<boolean> {
   const db = createServerClient();
-  await db
-    .from("analysis_jobs")
-    .update({ status: "done", error: null, updated_at: new Date().toISOString() })
-    .eq("id", jobId);
+  const { error } = await withRetry("markJobDone", () =>
+    db
+      .from("analysis_jobs")
+      .update({ status: "done", error: null, updated_at: new Date().toISOString() })
+      .eq("id", jobId)
+      .select("id"),
+  );
+
+  if (error) {
+    console.error(
+      `[analysis-queue] could not mark job ${jobId} done (${error}) — it will be reclaimed as stale and re-analysed, double-charging the seller`,
+    );
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -136,13 +216,27 @@ export async function markJobDone(jobId: string): Promise<void> {
  * remain (claim_analysis_jobs retires it to 'failed' once attempts run
  * out), so a transient Gemini blip gets another go on the next tick
  * instead of costing the seller that product.
+ *
+ * A dropped write here is less costly than in markJobDone — the row is
+ * already 'running' and stale-reclaim produces the retry we wanted
+ * anyway — but it loses the error message, so it is still worth a retry
+ * and a loud line.
  */
-export async function markJobFailed(jobId: string, message: string): Promise<void> {
+export async function markJobFailed(jobId: string, message: string): Promise<boolean> {
   const db = createServerClient();
-  await db
-    .from("analysis_jobs")
-    .update({ status: "queued", error: message.slice(0, 500), updated_at: new Date().toISOString() })
-    .eq("id", jobId);
+  const { error } = await withRetry("markJobFailed", () =>
+    db
+      .from("analysis_jobs")
+      .update({ status: "queued", error: message.slice(0, 500), updated_at: new Date().toISOString() })
+      .eq("id", jobId)
+      .select("id"),
+  );
+
+  if (error) {
+    console.error(`[analysis-queue] could not release job ${jobId} (${error}) — falling back to stale reclaim`);
+    return false;
+  }
+  return true;
 }
 
 /**

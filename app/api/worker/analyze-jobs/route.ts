@@ -47,15 +47,26 @@ export async function POST(req: NextRequest) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
 
-  const jobs = await claimAnalysisJobs(CLAIM_LIMIT);
+  // claimError is reported separately from an empty claim on purpose: a
+  // PostgREST timeout and "nothing to do" both used to surface as
+  // `claimed: 0`, so a tick that silently accomplished nothing was
+  // indistinguishable from an idle queue — including in
+  // net._http_response, which is where the health of this worker is
+  // actually read from.
+  const { jobs, error: claimError } = await claimAnalysisJobs(CLAIM_LIMIT);
   if (jobs.length === 0) {
-    return NextResponse.json({ claimed: 0, done: 0, failed: 0, batchesClosed: 0, gemini: readGeminiTelemetry() });
+    return NextResponse.json({
+      claimed: 0, done: 0, failed: 0, batchesClosed: 0,
+      ...(claimError ? { claimError } : {}),
+      gemini: readGeminiTelemetry(),
+    });
   }
 
   console.info(`[worker] claimed ${jobs.length} analysis job(s)`);
 
   let done = 0;
   let failed = 0;
+  let unrecorded = 0;
 
   // Concurrent: these are network-bound Gemini calls, and running them in
   // series would put even 3 products past this route's own 60s ceiling.
@@ -63,8 +74,11 @@ export async function POST(req: NextRequest) {
     jobs.map(async (job) => {
       try {
         await runQueuedAnalysis(job);
-        await markJobDone(job.id);
-        done++;
+        // A job that ran but could not be marked done will be reclaimed
+        // as stale and analysed — and billed — a second time. Counted so
+        // that shows up in the response rather than only in a log line.
+        if (await markJobDone(job.id)) done++;
+        else unrecorded++;
       } catch (e) {
         // Released back to 'queued' with the attempt counted, so a
         // transient failure gets another go on the next tick rather than
@@ -116,5 +130,12 @@ export async function POST(req: NextRequest) {
   if (gemini.quotaErrors > 0) {
     console.warn(`[worker][QUOTA] ${gemini.quotaErrors} quota rejection(s) across ${gemini.calls} Gemini call(s), peak concurrency ${gemini.peakInFlight}`);
   }
-  return NextResponse.json({ claimed: jobs.length, done, failed, batchesClosed, gemini });
+  if (unrecorded > 0) {
+    console.error(`[worker] ${unrecorded} job(s) completed but could not be marked done — expect stale reclaim and double charges`);
+  }
+  return NextResponse.json({
+    claimed: jobs.length, done, failed, batchesClosed,
+    ...(unrecorded > 0 ? { unrecorded } : {}),
+    gemini,
+  });
 }
