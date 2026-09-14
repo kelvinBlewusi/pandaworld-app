@@ -251,8 +251,7 @@ export function JumiaConnectionCard({ returnTo }: { returnTo?: string }) {
         // straight into an OAuth redirect that would just 400.
         <div className="space-y-4">
           <p className="text-sm text-zinc-600 leading-relaxed">
-            Connect your Jumia seller account to push listings directly from PandaWorld — no more manual
-            uploads or .xlsx downloads.
+            Connect your Jumia seller account to push listings directly from PandaWorld.
           </p>
           <Button
             asChild
