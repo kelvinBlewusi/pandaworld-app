@@ -23,7 +23,7 @@ export interface EmbedCategoriesResult {
 }
 
 /** In-flight embed calls per batch. See the note at its use site. */
-const EMBED_CONCURRENCY = 10;
+const EMBED_CONCURRENCY = 5;
 
 export async function embedPendingCategories(batchSize: number): Promise<EmbedCategoriesResult> {
   const db = createServerClient();
@@ -75,21 +75,21 @@ export async function embedPendingCategories(batchSize: number): Promise<EmbedCa
     return parts.join(" ");
   });
 
-  // 3. Embed in parallel.
+  // 3. Embed in parallel, 5 at a time.
   //
-  //    embedTextBatch defaults to 5, chosen when AI Studio was the only
-  //    backend and embeddings shared a tight quota bucket with text
-  //    generation. On Vertex, text-embedding-005 is provisioned-warm with
-  //    far more headroom, and this job is the one workload where the
-  //    difference matters: a full re-embed is ~27,700 calls, and at 5 in
-  //    flight (~0.5s each) that is over an hour of wall clock.
+  //    MEASURED, not guessed. This was briefly raised to 10 on the
+  //    reasoning that Vertex's text-embedding-005 has more headroom than
+  //    the AI Studio model the original 5 was chosen for. It does not:
+  //    the full 27,720-row re-embed on 2026-09-14 took 1,269 HTTP 429s
+  //    from Vertex at concurrency 10, throttled batches down from 300
+  //    completions to as few as 52, and burned quota on rejected calls
+  //    that had to be retried on a later batch anyway.
   //
-  //    Kept deliberately moderate rather than maximal — this shares a
-  //    project quota with the analysis pipeline, and starving a seller's
-  //    draft to finish a backfill faster is a bad trade. Every call is
-  //    counted (lib/ai/quota-telemetry.ts), so if this ever does push the
-  //    project into 429s it shows up as quotaErrors rather than as
-  //    mysterious drafting failures.
+  //    5 is the number that does not trip the limit. Raising it does not
+  //    make the job finish sooner — it just converts headroom into
+  //    rejections — and this shares a project quota with the analysis
+  //    pipeline, so overshooting here is a seller's draft failing, not
+  //    just a slower backfill.
   const results = await embedTextBatch(texts, EMBED_CONCURRENCY);
 
   // 4. Update each row that got a successful embedding.
