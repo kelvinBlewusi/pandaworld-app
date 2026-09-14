@@ -447,25 +447,47 @@ describe("Jumia /feeds/products/create payload conformance", () => {
       expect(attr?.value).toBe("Metal");
     });
 
-    it("matches case-insensitively", () => {
+    it("sends the SCHEMA's spelling, not the seller's, on a case near-miss", () => {
+      // Previously this matched case-insensitively but sent the seller's
+      // own casing ("metal"). Jumia's own comparison may not be as
+      // forgiving as ours, and we know the exact string it accepts — so
+      // send that one.
       const listing = { ...sampleListing, material_family: "metal" };
       const products = mapListingToJumiaProducts(listing, [], brand, currency, materialFamilySchema);
       const attr = products[0].attributes.find((a) => a.name === "material_family");
-      expect(attr?.value).toBe("metal");
+      expect(attr?.value).toBe("Metal");
     });
 
     it("trims a multi-value attribute down to only the valid picks", () => {
       const listing = { ...sampleListing, material_family: "Metal, Fabric, Wood" };
       const products = mapListingToJumiaProducts(listing, [], brand, currency, materialFamilySchema);
       const attr = products[0].attributes.find((a) => a.name === "material_family");
-      expect(attr?.value).toBe("Metal, Wood");
+      expect(attr?.value).toBe("Metal,Wood");
     });
 
-    it("leaves attributes with no matching schema entry untouched", () => {
+    it("DROPS an attribute the category's schema doesn't declare", () => {
+      // This test previously asserted the opposite — that an attribute
+      // with no schema entry was passed through untouched. That behaviour
+      // is what produced three of the seven rejections on record:
+      //
+      //   "Attribute [color_family] is not visible for category [Laptops]"
+      //   "Attribute [main_material] is not visible for category [Laptops]"
+      //   "Attribute [graphics_memory] is not visible for category [Laptops]"
+      //
+      // Jumia rejects the ENTIRE feed over one undeclared attribute, so
+      // passing it through costs the seller the whole product to keep a
+      // field that was never going to be accepted.
       const listing = { ...sampleListing, main_material: "Aluminium" };
       const products = mapListingToJumiaProducts(listing, [], brand, currency, materialFamilySchema);
-      const attr = products[0].attributes.find((a) => a.name === "main_material");
-      expect(attr?.value).toBe("Aluminium");
+      const names = products[0].attributes.map((a) => a.name);
+      expect(names).not.toContain("main_material");
+    });
+
+    it("still sends everything the schema DOES declare", () => {
+      // The counterweight: dropping is only safe if it is precise.
+      const listing = { ...sampleListing, material_family: "Metal" };
+      const products = mapListingToJumiaProducts(listing, [], brand, currency, materialFamilySchema);
+      expect(products[0].attributes.map((a) => a.name)).toContain("material_family");
     });
 
     it("is a no-op when no schema is passed (backward compatible)", () => {

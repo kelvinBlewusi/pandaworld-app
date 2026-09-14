@@ -14,6 +14,7 @@
 
 import { createServerClient } from "@/lib/supabase/server";
 import { columnFor, readAttributeValue } from "@/lib/jumia/attribute-mapping";
+import { preflightAttributes, summarisePreflight } from "@/lib/jumia/preflight";
 import { refreshAccessToken, JUMIA_API_BASE } from "@/lib/jumia/oauth";
 import { mockCategories } from "@/lib/mock/categories";
 import { findBrandExact } from "@/lib/jumia/brands";
@@ -502,59 +503,23 @@ function buildAttributes(listing: ListingRow, schema: JumiaCategoryAttribute[]):
     }
   }
 
-  return sanitizeEnumAttributes(attrs, schema);
-}
-
-/**
- * Drops (or trims) any attribute value that isn't actually one of the
- * resolved category's own allowed_values for that field — confirmed live:
- * material_family sent "Fabric" (a value the AI's own prompt suggests as
- * an example) but no Jumia category schema anywhere accepts the literal
- * string "Fabric" for this enum field, only "Textile"/"Tissu"/specific
- * fabric names — Jumia rejected the ENTIRE product feed over that one
- * mismatched enum value. Only fields with a non-empty allowed_values list
- * are enum/select types in Jumia's schema (see JumiaCategoryAttribute's
- * own doc comment); free-text fields (empty allowed_values, or no schema
- * entry at all — e.g. a universal attribute the category doesn't even
- * define) pass through untouched. A "multi" field's value may be several
- * comma-separated picks — each is checked independently, keeping only the
- * ones that match; the whole attribute is dropped only if none do, same
- * "null beats wrong" rule this codebase uses everywhere else rather than
- * risk sending a value the category's schema will never accept.
- */
-function sanitizeEnumAttributes(attrs: JumiaAttribute[], schema: JumiaCategoryAttribute[]): JumiaAttribute[] {
-  if (schema.length === 0) return attrs;
-  const enumsByName = new Map<string, Set<string>>();
-  for (const field of schema) {
-    if (field.allowed_values.length > 0) {
-      enumsByName.set(field.name.toLowerCase(), new Set(field.allowed_values.map((v) => v.toLowerCase())));
-    }
+  // Validate the whole payload against the category's own schema before it
+  // leaves — see lib/jumia/preflight.ts. This supersedes the enum-only
+  // sanitiser that used to run here, and closes the hole that cost three
+  // of the seven rejections on record: an attribute the category does not
+  // DECLARE was passed through untouched, and Jumia answered "Attribute
+  // [color_family] is not visible for category [Laptops]" and threw away
+  // the whole feed.
+  //
+  // Also upgrades the enum handling from drop-on-mismatch to
+  // snap-then-drop, so a casing or plural near-miss is corrected rather
+  // than silently losing the seller an attribute they did supply.
+  const preflight = preflightAttributes(attrs, schema);
+  const summary = summarisePreflight(preflight);
+  if (summary) {
+    console.info(`[Jumia preflight] ${summary} — ${preflight.notes.map((n) => `${n.attribute}: ${n.detail}`).join("; ")}`);
   }
-  if (enumsByName.size === 0) return attrs;
-
-  const out: JumiaAttribute[] = [];
-  for (const attr of attrs) {
-    const allowed = enumsByName.get(attr.name.toLowerCase());
-    if (!allowed) {
-      out.push(attr);
-      continue;
-    }
-    const picks = attr.value.split(",").map((v) => v.trim()).filter(Boolean);
-    const valid = picks.filter((v) => allowed.has(v.toLowerCase()));
-    if (valid.length === 0) {
-      console.warn(
-        `[Jumia mapping] dropping attribute '${attr.name}': value "${attr.value}" isn't one of this category's allowed values`,
-      );
-      continue;
-    }
-    if (valid.length !== picks.length) {
-      console.warn(
-        `[Jumia mapping] trimming attribute '${attr.name}': "${attr.value}" → "${valid.join(", ")}" (dropped values not in this category's allowed list)`,
-      );
-    }
-    out.push({ ...attr, value: valid.join(", ") });
-  }
-  return out;
+  return preflight.attributes.map((a) => ({ name: a.name, value: a.value, translations: [] }));
 }
 
 // ─── Payload mapping ──────────────────────────────────────────────────────────
@@ -686,7 +651,7 @@ export function mapListingToJumiaProducts(
   currency: string = "GHS",
   // Optional — when given, universal/dynamic attribute values that aren't
   // one of this category's own allowed_values get dropped/trimmed before
-  // ever reaching Jumia (see sanitizeEnumAttributes). Omitted by callers
+  // ever reaching Jumia (see lib/jumia/preflight.ts). Omitted by callers
   // that don't have it handy (scripts, tests) — attributes pass through
   // unchecked in that case, same as before this existed.
   categoryAttributeSchema: JumiaCategoryAttribute[] = [],
