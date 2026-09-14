@@ -1,5 +1,6 @@
 import {
   parseProductCount,
+  readProductCount,
   parseSubmitCommand,
   parseEditCommand,
   extractPrice,
@@ -11,6 +12,43 @@ import {
   COUNT_QUICK_PICKS,
   MAX_BATCH_SIZE,
 } from "@/lib/whatsapp/batch";
+
+// parseProductCount collapses every rejection to null, which made "50"
+// and "a few" indistinguishable to the caller — so a seller who asked for
+// 50 products was answered "⚠️ I need a number to get started". They had
+// given one. The cap is real and worth stating plainly.
+describe("readProductCount — says WHY a count was rejected", () => {
+  it("accepts a valid count", () => {
+    expect(readProductCount("3")).toEqual({ ok: true, count: 3 });
+    expect(readProductCount(String(MAX_BATCH_SIZE))).toEqual({ ok: true, count: MAX_BATCH_SIZE });
+  });
+
+  it("distinguishes over-the-cap from gibberish, and reports the number asked for", () => {
+    expect(readProductCount(String(MAX_BATCH_SIZE + 1))).toEqual({
+      ok: false, reason: "too_many", value: MAX_BATCH_SIZE + 1,
+    });
+    expect(readProductCount("50")).toEqual({ ok: false, reason: "too_many", value: 50 });
+    expect(readProductCount("a few")).toEqual({ ok: false, reason: "no_number" });
+    expect(readProductCount("")).toEqual({ ok: false, reason: "no_number" });
+  });
+
+  it("distinguishes zero from gibberish", () => {
+    expect(readProductCount("0")).toEqual({ ok: false, reason: "too_few", value: 0 });
+  });
+
+  it("still rejects negatives as 'no number', not as a count of -1", () => {
+    expect(readProductCount("-1")).toEqual({ ok: false, reason: "no_number" });
+  });
+
+  it("agrees with parseProductCount on every outcome", () => {
+    // The old entry point must keep its exact contract — it is what the
+    // button-id round-trip and the existing tests rely on.
+    for (const input of ["3", "0", "-1", "21", "50", "a few", "", "  5  ", "3 products"]) {
+      const detailed = readProductCount(input);
+      expect(parseProductCount(input)).toBe(detailed.ok ? detailed.count : null);
+    }
+  });
+});
 
 describe("parseProductCount", () => {
   it("parses a plain number", () => {

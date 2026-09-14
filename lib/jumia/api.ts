@@ -13,6 +13,7 @@
  */
 
 import { createServerClient } from "@/lib/supabase/server";
+import { columnFor, readAttributeValue } from "@/lib/jumia/attribute-mapping";
 import { refreshAccessToken, JUMIA_API_BASE } from "@/lib/jumia/oauth";
 import { mockCategories } from "@/lib/mock/categories";
 import { findBrandExact } from "@/lib/jumia/brands";
@@ -411,9 +412,19 @@ interface JumiaAttribute {
 // mapListingToJumiaProducts, so each product carries its own unique value.
 const PER_VARIANT_ATTRIBUTE_NAMES = new Set<string>(["variation"]);
 
-/** dynamic_attributes keys that duplicate the product-level description.
- *  Never sent as attributes — see the skip in buildAttributes. */
-const DESCRIPTION_ATTRIBUTE_NAMES = new Set(["description", "product_description"]);
+/**
+ * dynamic_attributes keys that duplicate a field the PRODUCT object
+ * already carries. Never sent as attributes — see buildAttributes.
+ *
+ * Measured across live listings: of the 14 column-mapped names that
+ * actually appear in dynamic_attributes, 12 are already harmless because
+ * a static add() above claims the name first and the dedup guard drops
+ * the copy. Only these two slipped through, on 28 listings each.
+ */
+const PRODUCT_LEVEL_ATTRIBUTE_NAMES = new Set([
+  "description", "product_description",   // → product.description
+  "name", "product_name", "title",        // → product.name
+]);
 
 function buildAttributes(listing: ListingRow, schema: JumiaCategoryAttribute[]): JumiaAttribute[] {
   const attrs: JumiaAttribute[] = [];
@@ -456,25 +467,36 @@ function buildAttributes(listing: ListingRow, schema: JumiaCategoryAttribute[]):
   // These are the real Jumia attribute field names (e.g. ram, operating_system, network)
   const dynAttrs = listing.dynamic_attributes as Record<string, string> | null;
   if (dynAttrs) {
-    for (const [name, value] of Object.entries(dynAttrs)) {
-      if (value != null && String(value).trim() !== "") {
+    for (const [name, dynValue] of Object.entries(dynAttrs)) {
+      if (dynValue != null && String(dynValue).trim() !== "") {
         // Skip per-variant attribute names — those get injected per-product
         // in mapListingToJumiaProducts using each variant's own value.
         if (PER_VARIANT_ATTRIBUTE_NAMES.has(name.toLowerCase())) continue;
-        // Skip the description: the product object already carries it at
-        // top level from listings.description (see buildBaseProduct), and
-        // auto-analyze writes a SECOND, different one into
-        // dynamic_attributes when the category schema happens to define a
-        // "description" attribute — plain text where the column holds rich
-        // HTML. Sending both means Jumia receives two contradictory
-        // descriptions for one product, and the attribute copy risks the
-        // exact "Attribute [x] is not visible for category [y]" rejection
-        // that has already failed pushes here. The column is the source of
-        // truth; this copy is a stale duplicate.
-        if (DESCRIPTION_ATTRIBUTE_NAMES.has(name.toLowerCase())) continue;
+        // Skip anything the product object already carries at top level —
+        // description and name. auto-analyze writes a SECOND copy of each
+        // into dynamic_attributes whenever the category schema happens to
+        // define an attribute of that name (plain text where the column
+        // holds rich HTML, in description's case). Sending both means
+        // Jumia receives two contradictory values for one product, and an
+        // attribute the category may not declare risks the exact
+        // "Attribute [x] is not visible for category [y]" rejection that
+        // has already failed pushes here.
+        if (PRODUCT_LEVEL_ATTRIBUTE_NAMES.has(name.toLowerCase())) continue;
+
+        // Every other column-mapped name: send the COLUMN, not the
+        // dynamic_attributes copy. The column is what the editors write
+        // and what the seller sees, so a copy can only ever be equal or
+        // stale — a seller who corrects the colour would otherwise have
+        // the old one pushed. Today the dedup guard below already makes
+        // this a no-op for the twelve names a static add() claims first;
+        // it matters for any column-mapped attribute a future category
+        // schema introduces without one.
+        const columnBacked = columnFor(name);
+        const value = columnBacked ? readAttributeValue(listing, name) : String(dynValue);
+        if (value.trim() === "") continue;
         // Don't duplicate attributes already set above
         if (!attrs.find((a) => a.name === name)) {
-          attrs.push({ name, value: String(value), translations: [] });
+          attrs.push({ name, value, translations: [] });
         }
       }
     }

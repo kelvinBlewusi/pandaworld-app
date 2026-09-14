@@ -35,13 +35,38 @@ export const MAX_BATCH_SIZE = 20;
 /** "3", "3.", "three products" (digits only — no word-number parsing, kept
  *  deliberately simple) → 3. Rejects 0, negatives, and anything above the cap. */
 export function parseProductCount(text: string): number | null {
+  const result = readProductCount(text);
+  return result.ok ? result.count : null;
+}
+
+/** Why a count was rejected — so the seller gets told the real reason. */
+export type CountRejection =
+  | { ok: true;  count: number }
+  | { ok: false; reason: "no_number" }
+  | { ok: false; reason: "too_many"; value: number }
+  | { ok: false; reason: "too_few";  value: number };
+
+/**
+ * Same parse as parseProductCount, but says WHY it failed.
+ *
+ * parseProductCount collapses every rejection to null, which made "50"
+ * and "a few" indistinguishable to the caller — so a seller who asked for
+ * 50 products was answered "⚠️ I need a number to get started". They had
+ * given one. The cap is real and worth stating plainly; pretending not to
+ * understand is the wrong way to state it.
+ */
+export function readProductCount(text: string): CountRejection {
   const trimmed = text.trim();
   const match = trimmed.match(/\d+/);
-  if (!match || match.index == null) return null;
-  if (trimmed[match.index - 1] === "-") return null; // "-1" isn't a count
+  if (!match || match.index == null) return { ok: false, reason: "no_number" };
+  // "-1" isn't a count.
+  if (trimmed[match.index - 1] === "-") return { ok: false, reason: "no_number" };
+
   const n = parseInt(match[0], 10);
-  if (!Number.isFinite(n) || n < 1 || n > MAX_BATCH_SIZE) return null;
-  return n;
+  if (!Number.isFinite(n)) return { ok: false, reason: "no_number" };
+  if (n < 1) return { ok: false, reason: "too_few",  value: n };
+  if (n > MAX_BATCH_SIZE) return { ok: false, reason: "too_many", value: n };
+  return { ok: true, count: n };
 }
 
 /** Quick-pick buttons for the "how many products?" prompt — the single
