@@ -12,6 +12,12 @@ import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { getJumiaConnectionKind, testJumiaCredentials, saveJumiaCredentialsForUser, disconnectJumiaForUser } from "@/lib/jumia/credentials";
 import { createConnectToken } from "@/lib/jumia/connect-token";
 import { parseGlobalCommand, type GlobalCommand } from "@/lib/whatsapp/commands";
+import {
+  guideHowToListMessage,
+  guideControlsMessage,
+  helpMessage,
+  unsupportedMediaMessage,
+} from "@/lib/whatsapp/onboarding";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { endsWithDoneSignal, stripDoneSignal } from "@/lib/whatsapp/draft";
 import {
@@ -210,12 +216,24 @@ export async function handleLinkedMessage(
   userId: string,
   phoneNumber: string,
   messageId: string | undefined,
-  content: { text?: string; imageMediaId?: string },
+  content: { text?: string; imageMediaId?: string; unsupported?: string },
 ): Promise<void> {
   const session = await getOrCreateSession(userId, phoneNumber);
 
   if (messageId && session.lastMessageId === messageId) {
     console.info(`[whatsapp intake] skipping duplicate message ${messageId} for ${phoneNumber}`);
+    return;
+  }
+
+  // Something the bot cannot read — say so rather than dropping it. This
+  // used to fall through the whole state machine in silence, which is the
+  // worst possible answer and lands hardest on a seller's first attempt.
+  // State is deliberately left untouched: they can simply send a photo
+  // next and carry on exactly where they were.
+  if (content.unsupported) {
+    console.info(`[whatsapp intake] unsupported message type "${content.unsupported}" from ${phoneNumber}`);
+    await replyText(phoneNumber, unsupportedMediaMessage(content.unsupported));
+    if (messageId) await updateSession(phoneNumber, { lastMessageId: messageId });
     return;
   }
 
@@ -271,11 +289,14 @@ async function handleGlobalCommand(
     case "retry":
       await handleGlobalRetry(userId, phoneNumber, session, cmd.seq);
       return;
+    case "how_it_works":
+      await sendGuide(phoneNumber);
+      return;
     case "status":
       await sendStatusReply(phoneNumber, await describeStatus(session));
       return;
     case "help":
-      await replyButtons(phoneNumber, HELP_TEXT, [
+      await replyButtons(phoneNumber, helpMessage(), [
         { id: "status", title: "Status" },
         { id: "restart", title: "Restart 🔄" },
         { id: "disconnect", title: "Disconnect" },
@@ -621,14 +642,18 @@ async function handleAnalyzingMessage(
   await replyText(phoneNumber, "⏳ Still drafting your products — one sec.");
 }
 
-const HELP_TEXT = [
-  "Here's what I understand at any point in the conversation:",
-  "• *retry* — run the last thing that failed again, using the photos you already sent (*retry 2* for just product 2)",
-  "• *restart* (or *cancel*) — stop what you're doing and start a new batch",
-  "• *status* — see where things stand right now",
-  "• *disconnect* — unlink your Jumia store from PandaWorld",
-  "• *help* — this message",
-].join("\n");
+/**
+ * Send the full guide — two plain-text messages.
+ *
+ * Plain text, not interactive: WhatsApp caps an interactive body at ~1024
+ * characters and the guide needs the room. Content lives in
+ * lib/whatsapp/onboarding.ts alongside the welcome and the help reply, so
+ * the three can never drift apart on what the bot actually does.
+ */
+async function sendGuide(phoneNumber: string): Promise<void> {
+  await replyText(phoneNumber, guideHowToListMessage());
+  await replyText(phoneNumber, guideControlsMessage());
+}
 
 // Matches components/ui/status-pill.tsx's exact label wording, so a
 // seller sees the same words in chat as they would on the web dashboard.

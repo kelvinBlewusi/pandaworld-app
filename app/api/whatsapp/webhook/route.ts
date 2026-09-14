@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { redeemLinkCode, getUserIdForPhoneNumber } from "@/lib/whatsapp/link";
+import { claimOnboarding, redeemLinkCode, getUserIdForPhoneNumber } from "@/lib/whatsapp/link";
+import { welcomeMessage, HOW_IT_WORKS_BUTTON } from "@/lib/whatsapp/onboarding";
 import { sendButtonsIfConfigured, sendCtaUrlIfConfigured, markReadWithTypingIfConfigured } from "@/lib/whatsapp/client";
 import { verifyWhatsAppSignature, extractLinkCode } from "@/lib/whatsapp/webhook-verify";
 import { contentOf, type IncomingMessage } from "@/lib/whatsapp/message-content";
@@ -131,6 +132,19 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
     // of that into this fresh link.
     const kind = await getJumiaConnectionKind(result.userId);
     await getOrCreateSession(result.userId, msg.from);
+
+    // First-run welcome, before the linked confirmation below.
+    //
+    // Deliberately short and deliberately NOT blocking: it teaches the one
+    // rule that most often decides whether a listing can be pushed at all
+    // (state your price), offers the rest behind a button, and then the
+    // seller's real next step — connect Jumia, or "how many products?" —
+    // fires immediately underneath. A full tutorial here would compete
+    // with that next step and lose; the guide is pull, not push, and stays
+    // reachable forever by typing *help*.
+    if (await claimOnboarding(msg.from)) {
+      await sendButtonsIfConfigured(msg.from, welcomeMessage(), [HOW_IT_WORKS_BUTTON]);
+    }
 
     if (kind === "connected") {
       await updateSession(msg.from, {

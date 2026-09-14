@@ -26,7 +26,25 @@ export interface IncomingMessage {
  * deterministic parsers already used for typed text, with no new parsing
  * logic needed per button.
  */
-export function contentOf(msg: IncomingMessage): { text?: string; imageMediaId?: string } {
+export interface MessageContent {
+  text?:         string;
+  imageMediaId?: string;
+  /**
+   * Set when the message carried something the bot cannot read — a video,
+   * voice note, document, sticker, location, contact card, or any future
+   * type Meta adds. Carries Meta's own type string so the reply can name
+   * the right thing.
+   *
+   * This used to return {} instead, and the message fell through the whole
+   * state machine in silence: a seller sends a video of their product,
+   * sees it delivered, and nothing ever comes back. Deny-by-default rather
+   * than a list of known-bad types, so a type nobody has thought of yet
+   * still gets an answer instead of the void.
+   */
+  unsupported?: string;
+}
+
+export function contentOf(msg: IncomingMessage): MessageContent {
   if (msg.type === "image" && msg.image?.id) {
     return { imageMediaId: msg.image.id, text: msg.image.caption };
   }
@@ -34,5 +52,8 @@ export function contentOf(msg: IncomingMessage): { text?: string; imageMediaId?:
     return { text: msg.interactive.button_reply.id };
   }
   if (msg.text?.body) return { text: msg.text.body };
-  return {};
+  // An image whose media id never arrived is a delivery problem, not an
+  // unreadable type — treated as unsupported all the same, since the
+  // seller still needs to hear something back.
+  return { unsupported: msg.type || "unknown" };
 }
