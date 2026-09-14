@@ -28,6 +28,7 @@ import {
   type RankedCategory,
 } from "@/lib/actions/ai";
 import { warmEmbeddingBackend } from "@/lib/ai/embeddings";
+import { detectPhotoNarration } from "@/lib/ai/content-style-rules";
 import {
   getListableCategories,
   getAllCategoriesForTree,
@@ -575,6 +576,22 @@ export async function runAutoAnalyze(
   }
 
   // Other top-level fields
+  // Measure whether the buyer-focus rule is landing. A live listing once
+  // read "the KAISHENG YOUPIN logo indicates a focus on quality hardware
+  // tools" — copy describing the blister pack rather than the lock inside
+  // it. Logged rather than stripped: these phrases sit mid-sentence, and
+  // cutting them leaves mangled prose, which is a worse listing than the
+  // one that needed fixing.
+  const narration = [
+    ...detectPhotoNarration(description.description),
+    ...detectPhotoNarration(description.highlights),
+  ];
+  if (narration.length > 0) {
+    console.warn(
+      `[auto-analyze] listing=${listingId} copy reads as photo description, not product writing: ${narration.join("; ")}`,
+    );
+  }
+
   setField("description",     description.description,     { confidence: 0.85, source: "inferred" });
   setField("highlights",      description.highlights,      { confidence: 0.85, source: "inferred" });
   setField("color",           description.color,           { confidence: 0.85, source: "image" });

@@ -72,12 +72,55 @@ const CLOSING_RULE =
 const HTML_SHAPE_RULE =
   "WELL-FORMED HTML: the value of description and highlights is HTML, so it must start with a tag and every piece of text must sit inside one — wrap each prose paragraph in <p>...</p> rather than leaving it as bare text before or between your tags. Never emit an element with no real text in it (no empty <p></p>, no <strong>:</strong> or <strong></strong> placeholder where a label was meant to go): if you have nothing to put in a heading, leave the heading out entirely. Close every tag you open, and nest lists properly (<li> only ever inside <ul> or <ol>).";
 
+/**
+ * Appended alongside HTML_SHAPE_RULE for narrative fields.
+ *
+ * THE FAILURE THIS EXISTS FOR, verbatim from a live listing (a pink
+ * combination cable lock photographed in its blister pack):
+ *
+ *   "The 'NEW TO GO' branding suggests a modern and updated design, while
+ *    the 'KAISHENG YOUPIN' logo indicates a focus on quality hardware
+ *    tools. The packaging also highlights 'Your car guard, new generation
+ *    explosion-proof series,' emphasizing its protective capabilities."
+ *
+ * Three separate faults, and all three are habits of an image captioner
+ * rather than a copywriter:
+ *
+ *   1. It describes the PACKAGING, not the product. A buyer is not
+ *      purchasing a blister pack.
+ *   2. It hedges like an observer — "suggests", "indicates", "appears
+ *      to" — because the model is reporting what it can see rather than
+ *      asserting what the product is.
+ *   3. It quotes and literally translates the Chinese packaging slogan.
+ *      "Your car guard, new generation explosion-proof series" is
+ *      marketing copy that does not survive translation; reproduced in an
+ *      English Jumia listing it reads as nonsense and undermines trust in
+ *      the whole page.
+ *
+ * Meanwhile it never told the buyer the one thing they want to know: that
+ * they can lock a bike in seconds and never carry a key.
+ */
+const BUYER_FOCUS_RULE =
+  "WRITE TO THE BUYER, ABOUT THE PRODUCT — never about the photograph, the packaging, or the branding. " +
+  "The buyer is purchasing the item, not the blister pack it is photographed in, and they cannot see your image while reading. " +
+  "NEVER write phrases like \"the image shows\", \"pictured here\", \"the packaging highlights\", \"the label reads\", " +
+  "\"the branding suggests\", \"the logo indicates\", \"appears to be\" or \"seems to\": every one of them reports an observation " +
+  "instead of stating a product fact, and hedging tells a shopper you are guessing. Say \"The steel cable resists cutting\", never " +
+  "\"the packaging suggests it is cut-resistant\". " +
+  "Text printed on the box is a SOURCE of facts, never content to reproduce: read a spec off it and state it plainly (\"4-digit combination\", " +
+  "\"1.2m steel cable\"), but NEVER quote a slogan and NEVER translate foreign marketing copy literally — a phrase like " +
+  "\"your car guard, new generation explosion-proof series\" is meaningless to a buyer and makes the listing look machine-made. " +
+  "Brand names belong in the brand field, not narrated in the prose. " +
+  "Every sentence must answer \"why does this matter to me?\" rather than \"what can I see?\" — lead with what the buyer gets " +
+  "(locks a bike in seconds, no key to lose, fits through most wheel spokes), and use the visible details only as the evidence for it.";
+
 /** The block both builders below produce, given the rules that apply. */
 function assembleBlock(applicable: ContentStyleRule[]): string {
   if (!applicable.length) return "";
   const lines = applicable.map((r) => `- ${r.rule}`).join("\n");
-  const html  = applicable.some((r) => r.narrative) ? `\n- ${HTML_SHAPE_RULE}` : "";
-  return `\n\nCONTENT STYLE:\n${lines}\n- ${CLOSING_RULE}${html}\n`;
+  const narrative = applicable.some((r) => r.narrative);
+  const extras = narrative ? `\n- ${BUYER_FOCUS_RULE}\n- ${HTML_SHAPE_RULE}` : "";
+  return `\n\nCONTENT STYLE:\n${lines}\n- ${CLOSING_RULE}${extras}\n`;
 }
 
 /**
@@ -134,4 +177,37 @@ export function buildDescriptionStyleBlock(): string {
  */
 export function buildSearchGroundingInstruction(): string {
   return `\n\nWEB SEARCH: You have web search available for every field below, not just Description/Highlights. When you can identify the specific brand/model with real confidence from the image, use it: for Description/Highlights, look up and use genuine facts (verified specs, materials, certifications, typical dimensions/capacity, how it compares to similar products) instead of guessing from the photo alone — real, specific, searched-up facts make for a noticeably stronger listing than vague description. For structured attributes (Model, Main material, Country of origin, Certifications, and similar exact-value fields), search to confirm the precise real value rather than guessing a plausible-sounding one. Only use a searched-up fact when you're genuinely confident the result is about THIS exact product, not a similar-looking or differently-specced one — when unsure, rely on what's visibly true or omit the field per the normal rules, rather than inventing or misattributing detail. For Description/Highlights specifically: never surface the search itself in the copy — no source links, "according to [site]," citation markers, or anything that reads as a research summary; the listing should read as the seller's own confident description, with the sourcing invisible. For a structured field, the value itself must be a real value in Jumia's own format for that field — never a citation, URL, or a phrase like "according to the manufacturer."\n`;
+}
+
+/**
+ * Phrases that mark copy as describing a photo rather than selling a
+ * product. Used to MEASURE whether BUYER_FOCUS_RULE is landing — a prompt
+ * rule with no feedback loop is a guess.
+ *
+ * Detection only. Deliberately not auto-stripped: these appear
+ * mid-sentence, and cutting them leaves mangled prose, which is a worse
+ * listing than the one that needed fixing.
+ */
+const PHOTO_NARRATION_PATTERNS: RegExp[] = [
+  /\bthe (image|photo|picture)s? (show|shows|depict|depicts|features)\b/i,
+  /\bpictured (here|above|below)\b/i,
+  /\bas (shown|seen) in the (image|photo|picture)\b/i,
+  /\bthe packaging (also )?(highlights|shows|states|reads|indicates|suggests)\b/i,
+  /\bthe (label|box|packaging) (reads|says|states)\b/i,
+  // No leading "the": real copy interposes the brand name — the live
+  // failure read "the 'KAISHENG YOUPIN' logo indicates a focus on…".
+  /\b(branding|logo|label) (suggests|indicates|implies)\b/i,
+  /\b(appears|seems) to be\b/i,
+];
+
+/** The photo-narration phrases present in a piece of generated copy, if
+ *  any. Empty means the copy reads as product writing. */
+export function detectPhotoNarration(text: string | null | undefined): string[] {
+  if (!text) return [];
+  const hits: string[] = [];
+  for (const pattern of PHOTO_NARRATION_PATTERNS) {
+    const match = pattern.exec(text);
+    if (match) hits.push(match[0].toLowerCase());
+  }
+  return hits;
 }

@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 // ─── GET /api/cron/delete-stale-drafts ────────────────────────────────────────
 // Vercel cron — runs daily at 00:10 UTC (see vercel.json).
 //
-// Deletes any listing still in "draft" or "failed" status 30 days after
+// Deletes any listing still in "draft" or "failed" status 2 days after
 // creation — abandoned drafts (started on the web dashboard, the
 // extension, or a WhatsApp chat batch that was never submitted) that
 // would otherwise pile up forever on /listings and
@@ -23,7 +23,15 @@ export const dynamic = "force-dynamic";
 // CRON_SECRET is unset we refuse — better than exposing a route that
 // could be triggered by anyone to mass-delete drafts.
 
-const STALE_DAYS = 30;
+// 2 days, down from 30. A chat-drafted product is a snapshot of an
+// intent the seller had in one sitting — photos taken in a shop, a price
+// in mind. If it hasn't been submitted within a couple of days it is far
+// more likely abandoned than pending, and the pile of them is what makes
+// the listings page hard to read. Re-drafting is cheap (send the photos
+// again); wading through weeks of dead drafts is not.
+//
+// Anything that ever reached Jumia is still never touched, at any age.
+const STALE_DAYS = 2;
 const REFUNDABLE_STATUSES = new Set(["draft", "processing"]);
 
 export async function GET(req: NextRequest) {
