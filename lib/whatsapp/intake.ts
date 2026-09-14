@@ -186,6 +186,33 @@ async function missingFieldsFor(listingId: string): Promise<string[]> {
   return missingFieldLabels(data as ListingRow);
 }
 
+/**
+ * Things the seller asked for in their note that the draft could NOT
+ * honour, phrased for them.
+ *
+ * Re-derived from the stored note rather than persisted at draft time:
+ * extractSalePrice is pure, user_prompt is already saved, and a column
+ * for a transient message would be state to keep in sync for no gain.
+ *
+ * Exists because silence was the worst possible answer here. A seller who
+ * writes "Start and end date is 30th September 2026 to 31 December 2025"
+ * has stated a promo window and expects to see one; the range is
+ * backwards, so we refuse it — correctly — but saying nothing looks
+ * identical to the system never having read the line at all.
+ */
+async function noteWarningsFor(listingId: string): Promise<string[]> {
+  const db = createServerClient();
+  const { data } = await db
+    .from("listings")
+    .select("user_prompt")
+    .eq("id", listingId)
+    .maybeSingle();
+  const note = (data?.user_prompt as string | null) ?? "";
+  if (!note) return [];
+  const sale = extractSalePrice(note);
+  return sale?.dateWarning ? [sale.dateWarning] : [];
+}
+
 /** Saves a seller's free-text note against a product, plus a deterministic
  *  (non-AI) pass for an explicit price/stock — see batch.ts for why this
  *  is regex, not an AI guess: those two fields are seller-owned everywhere
@@ -1258,6 +1285,7 @@ export async function runQueuedAnalysis(job: AnalysisJob): Promise<void> {
     // batch: "Still needs: price." and "Ready to submit." arrived as two
     // anonymous messages under two drafted products.
     const missing = await missingFieldsFor(job.listing_id);
+    const noteWarnings = await noteWarningsFor(job.listing_id);
     await replyCta(
       phoneNumber,
       [
@@ -1265,6 +1293,7 @@ export async function runQueuedAnalysis(job: AnalysisJob): Promise<void> {
         missing.length > 0
           ? `⚠️ Product ${seq} still needs ${missing.join(" and ")} — tap *Edit product ${seq}* below to add it.`
           : "Ready to submit.",
+        ...noteWarnings.map((w) => `⚠️ Product ${seq}: ${w}.`),
       ].join("\n"),
       `Edit product ${seq}`,
       focusedEditorUrl(job.listing_id),
@@ -1319,9 +1348,13 @@ export async function finalizeBatch(
     const only = listings[0];
     if (only?.title) {
       const missing = await describeMissingFields(only.id);
+      // Same warnings the multi-product path shows — a 1-product batch is
+      // the MOST likely place a seller writes a detailed note, so it is
+      // the last place that should swallow one.
+      const noteWarnings = (await noteWarningsFor(only.id)).map((w) => `\n⚠️ ${w}.`).join("");
       await replyCta(
         phoneNumber,
-        missing ? `✅ Product drafted: ${only.title}.\n⚠️ ${missing}` : `✅ Product drafted: ${only.title}. Ready to submit!`,
+        (missing ? `✅ Product drafted: ${only.title}.\n⚠️ ${missing}` : `✅ Product drafted: ${only.title}. Ready to submit!`) + noteWarnings,
         "Edit product",
         focusedEditorUrl(only.id),
       );

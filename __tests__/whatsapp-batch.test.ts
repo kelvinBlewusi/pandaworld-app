@@ -292,9 +292,15 @@ describe("extractSalePrice", () => {
     // pairing is nonsensical (start is over a year after end). There's no
     // reliable way to guess which side is the typo, so both are dropped —
     // the sale price itself must still register.
-    expect(
-      extractSalePrice("sale price 150 from 30 September 2026 to 31 December 2025", now),
-    ).toEqual({ salePrice: 150 });
+    //
+    // It now also carries a reason. Dropping the dates was always right;
+    // doing it silently was not, because to the seller that is
+    // indistinguishable from the line never having been read.
+    const r = extractSalePrice("sale price 150 from 30 September 2026 to 31 December 2025", now);
+    expect(r?.salePrice).toBe(150);
+    expect(r?.startDate).toBeUndefined();
+    expect(r?.endDate).toBeUndefined();
+    expect(r?.dateWarning).toBeTruthy();
   });
 
   it("keeps a valid range when start is genuinely before end", () => {
@@ -324,5 +330,77 @@ describe("focusedEditorUrl", () => {
 describe("buyCreditsUrl", () => {
   it("links to the extension dashboard", () => {
     expect(buyCreditsUrl()).toContain("/extension/dashboard");
+  });
+});
+
+describe("extractSalePrice — the forms sellers actually type", () => {
+  const NOW = new Date("2026-09-14T00:00:00Z");
+
+  // Verbatim from a live note. It produced NOTHING: no sale price, no
+  // dates. Three separate reasons, only one of which was intentional.
+  const LIVE_NOTE = `Only black is red is available
+The price is 200
+I will do a promo so make the Sales price 150
+Start and end date is 30th September 2026 to 31 December 2025`;
+
+  it('reads "Sales price" — the plural cost a live listing its promo', () => {
+    // The pattern required "sale price" exactly, so a single trailing "s"
+    // meant the whole clause was invisible. sale_price landed as null and
+    // the seller had to type 150 into the editor by hand.
+    expect(extractSalePrice(LIVE_NOTE, NOW)?.salePrice).toBe(150);
+  });
+
+  it("reads the other ways a promo price gets written", () => {
+    expect(extractSalePrice("sale price 150", NOW)?.salePrice).toBe(150);
+    expect(extractSalePrice("promo price is 150", NOW)?.salePrice).toBe(150);
+    expect(extractSalePrice("promotional price: 150", NOW)?.salePrice).toBe(150);
+    expect(extractSalePrice("discounted price at 150", NOW)?.salePrice).toBe(150);
+  });
+
+  it('reads a range introduced by a label, not just by "from"', () => {
+    // "Start and end date is X to Y" is how the label on the form reads
+    // back to you; requiring "from" meant this produced no dates at all.
+    const r = extractSalePrice(
+      "Sale price 150. Start and end date is 30 September 2026 to 31 December 2026",
+      NOW,
+    );
+    expect(r).toEqual({ salePrice: 150, startDate: "2026-09-30", endDate: "2026-12-31" });
+  });
+
+  it('still reads the "from ... to ..." form', () => {
+    const r = extractSalePrice("sale price 100 from 20 September 2026 to 30 September 2026", NOW);
+    expect(r?.startDate).toBe("2026-09-20");
+    expect(r?.endDate).toBe("2026-09-30");
+  });
+
+  it("does not read a bare X-to-Y as a sale window", () => {
+    // The lead-in has to stay anchored: unanchored, a size range or a
+    // delivery estimate would silently become a promo window.
+    const sizes = extractSalePrice("sale price 150. Available in sizes 4 to 8", NOW);
+    expect(sizes?.startDate).toBeUndefined();
+    expect(sizes?.endDate).toBeUndefined();
+    const delivery = extractSalePrice("sale price 150. Takes 3 to 5 days", NOW);
+    expect(delivery?.startDate).toBeUndefined();
+  });
+
+  it("refuses an inverted range and SAYS so", () => {
+    // The live note's dates end a year before they start — a typo. The
+    // refusal is right; the silence was not. A seller who states a promo
+    // window and hears nothing cannot tell the difference between "we
+    // read it and it was wrong" and "we never read it".
+    const r = extractSalePrice(LIVE_NOTE, NOW);
+    expect(r?.salePrice).toBe(150);
+    expect(r?.startDate).toBeUndefined();
+    expect(r?.endDate).toBeUndefined();
+    expect(r?.dateWarning).toMatch(/ends before it starts/);
+  });
+
+  it("stays quiet when the dates are fine", () => {
+    const r = extractSalePrice("sale price 150 from 1 October 2026 to 31 October 2026", NOW);
+    expect(r?.dateWarning).toBeUndefined();
+  });
+
+  it("still ignores a percentage discount", () => {
+    expect(extractSalePrice("discount 20% off everything", NOW)).toBeNull();
   });
 });

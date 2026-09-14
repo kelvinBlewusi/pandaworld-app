@@ -193,6 +193,13 @@ export interface SalePriceExtraction {
   startDate?: string;
   /** ISO "YYYY-MM-DD", only set when confidently parsed. */
   endDate?: string;
+  /**
+   * Set when a date range WAS found but refused. The seller wrote
+   * something they expect to see on the listing, so silence reads as the
+   * system ignoring them — the caller surfaces this so they can correct
+   * it rather than discover the missing promo dates later.
+   */
+  dateWarning?: string;
 }
 
 const MONTH_NAMES: Record<string, number> = {
@@ -252,6 +259,22 @@ function parseDatePhrase(raw: string, now: Date): string | null {
  *  guard stops "20% off"/"discount 20%" from being misread as a GH₵20
  *  sale price — "discount" alone (unlike "sale price") is genuinely
  *  ambiguous between a percentage and a flat amount. */
+/**
+ * A sale window, however the seller happens to introduce it.
+ *
+ * Previously this required the literal word "from", which meant a note
+ * reading "Start and end date is 30th September 2026 to 31 December 2026"
+ * produced no dates at all — the seller stated a promo window in plain
+ * English and got silence. "from" is only one of the ways people write it,
+ * and not the most natural one after a label like "start and end date".
+ *
+ * Still anchored on an explicit lead-in rather than matching a bare
+ * "X to Y" anywhere in the note: unanchored, "available in sizes 4 to 8"
+ * or "takes 3 to 5 days" would both read as a sale window.
+ */
+const DATE_RANGE_RE =
+  /(?:from|between|(?:sale|promo(?:tion)?|start(?:\s+and\s+end)?|end)?\s*dates?\s*(?:is|are|will\s+be)?\s*(?:from)?)\s+([^.,\n]+?)\s+(?:to|until|till|through)\s+([^.,\n]+?)(?=[.,\n]|$)/i;
+
 export function extractSalePrice(text: string, now: Date = new Date()): SalePriceExtraction | null {
   // (?!\d) before the %-guard matters: without it, a greedy \d+ that fails
   // the %-guard backtracks to a SHORTER digit run that dodges it (e.g.
@@ -260,12 +283,12 @@ export function extractSalePrice(text: string, now: Date = new Date()): SalePric
   // salePrice=2). (?!\d) rejects any match that isn't the full digit run,
   // closing that backtrack path.
   const priceMatch = text.match(
-    /(?:sale\s*price|discount(?:ed)?\s*(?:price)?)\s*(?:is|was|to|of)?\s*[:=]?\s*(?:GH[SC]?|GH₵|₵)?\s*(\d+(?:\.\d+)?)(?!\d)(?!\s*%)/i,
+    /(?:sales?\s*price|promo(?:tion(?:al)?)?\s*price|discount(?:ed)?\s*(?:price)?)\s*(?:is|was|to|of|at)?\s*[:=]?\s*(?:GH[SC]?|GH₵|₵)?\s*(\d+(?:\.\d+)?)(?!\d)(?!\s*%)/i,
   );
   if (!priceMatch) return null;
   const result: SalePriceExtraction = { salePrice: parseFloat(priceMatch[1]) };
 
-  const range = text.match(/from\s+([^.,\n]+?)\s+(?:to|until|till)\s+([^.,\n]+?)(?=[.,\n]|$)/i);
+  const range = text.match(DATE_RANGE_RE);
   if (range) {
     const start = parseDatePhrase(range[1], now);
     const end = parseDatePhrase(range[2], now);
@@ -280,6 +303,8 @@ export function extractSalePrice(text: string, now: Date = new Date()): SalePric
     // sale PRICE itself still applies; only the date window is dropped.
     if (start && end && start > end) {
       console.warn(`[whatsapp batch] dropped inverted sale date range: "${start}" to "${end}"`);
+      result.dateWarning =
+        `the promo dates read ${start} to ${end}, which ends before it starts — the sale price is set, but add the dates in the editor`;
     } else {
       if (start) result.startDate = start;
       if (end) result.endDate = end;
