@@ -28,7 +28,11 @@ import {
   type RankedCategory,
 } from "@/lib/actions/ai";
 import { warmEmbeddingBackend } from "@/lib/ai/embeddings";
-import { detectPhotoNarration } from "@/lib/ai/content-style-rules";
+import {
+  detectPhotoNarration,
+  proseLength,
+  CONTENT_LENGTH_FLOORS,
+} from "@/lib/ai/content-style-rules";
 import {
   extractNoteAssertions,
   checkAssertions,
@@ -597,6 +601,23 @@ export async function runAutoAnalyze(
   if (narration.length > 0) {
     console.warn(
       `[auto-analyze] listing=${listingId} copy reads as photo description, not product writing: ${narration.join("; ")}`,
+    );
+  }
+
+  // Measure what the model actually produced against the floors the style
+  // rules ask for. This is here because the floors were being missed by
+  // roughly half and nothing said so: the prompt asked for 1500 characters
+  // of prose in one place and "80-3000 characters" twenty lines later, and
+  // the model followed the second. Prose length excludes markup and table
+  // content, exactly as the rules define it, so a big spec table cannot
+  // mask a two-paragraph description.
+  const descProse = proseLength(description.description);
+  const hlProse   = proseLength(description.highlights);
+  if (descProse < CONTENT_LENGTH_FLOORS.description || hlProse < CONTENT_LENGTH_FLOORS.highlights) {
+    console.warn(
+      `[auto-analyze] listing=${listingId} copy under the style floor: ` +
+      `description=${descProse}/${CONTENT_LENGTH_FLOORS.description} ` +
+      `highlights=${hlProse}/${CONTENT_LENGTH_FLOORS.highlights}`,
     );
   }
 

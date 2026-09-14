@@ -3,6 +3,9 @@ import {
   buildSearchGroundingInstruction,
   buildDescriptionAndHighlightsStyleBlock,
   detectPhotoNarration,
+  proseLength,
+  CONTENT_LENGTH_FLOORS,
+  CONTENT_STYLE_RULES,
   buildDescriptionStyleBlock,
 } from "@/lib/ai/content-style-rules";
 import type { HarvestedField } from "@/lib/extension/fill";
@@ -262,5 +265,57 @@ describe("buildSearchGroundingInstruction", () => {
   it("gates on confidence — never asserts a searched fact without it", () => {
     const block = buildSearchGroundingInstruction();
     expect(block).toMatch(/genuinely confident/);
+  });
+});
+
+describe("proseLength", () => {
+  // The floors are stated as "not counting HTML markup, and not counting
+  // anything inside a <table>" — a table is a bonus on top of the floor,
+  // never a way to reach it. Measuring the raw string would let a big
+  // spec table mask a two-paragraph description, which is the exact
+  // substitution the rules forbid.
+  it("ignores markup", () => {
+    expect(proseLength("<p>Hello world</p>")).toBe("Hello world".length);
+    expect(proseLength("<p><strong>Bold</strong> text</p>")).toBe("Bold text".length);
+  });
+
+  it("ignores everything inside a table", () => {
+    const withTable =
+      "<p>Real prose here.</p><table><tr><td>Capacity</td><td>0.35 L</td></tr></table>";
+    expect(proseLength(withTable)).toBe("Real prose here.".length);
+  });
+
+  it("ignores multiple tables, and text after them", () => {
+    const html = "<p>One.</p><table><tr><td>a</td></tr></table><p>Two.</p><table><tr><td>b</td></tr></table>";
+    expect(proseLength(html)).toBe("One. Two.".length);
+  });
+
+  it("collapses whitespace rather than counting layout", () => {
+    expect(proseLength("<p>a</p>\n\n   <p>b</p>")).toBe("a b".length);
+    expect(proseLength("<p>a&nbsp;b</p>")).toBe("a b".length);
+  });
+
+  it("is 0 for empty, null and markup-only values", () => {
+    expect(proseLength("")).toBe(0);
+    expect(proseLength(null)).toBe(0);
+    expect(proseLength(undefined)).toBe(0);
+    expect(proseLength("<p></p>")).toBe(0);
+  });
+
+  it("counts a table-only value as zero prose", () => {
+    // The case the floor exists to catch.
+    expect(proseLength("<table><tr><td>lots and lots of spec text</td></tr></table>")).toBe(0);
+  });
+});
+
+describe("CONTENT_LENGTH_FLOORS", () => {
+  it("matches the numbers the prompt rules state", () => {
+    // If a rule's "MINIMUM LENGTH" line changes, this must change with it
+    // — otherwise the compliance warning measures against a stale floor.
+    expect(CONTENT_LENGTH_FLOORS.description).toBe(1500);
+    expect(CONTENT_LENGTH_FLOORS.highlights).toBe(800);
+    const rules = JSON.stringify(CONTENT_STYLE_RULES);
+    expect(rules).toContain(`at least ${CONTENT_LENGTH_FLOORS.description} characters`);
+    expect(rules).toContain(`at least ${CONTENT_LENGTH_FLOORS.highlights} characters`);
   });
 });

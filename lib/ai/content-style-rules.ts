@@ -211,3 +211,32 @@ export function detectPhotoNarration(text: string | null | undefined): string[] 
   }
   return hits;
 }
+
+// ─── Length floors, for measuring whether the prompt is being obeyed ────────
+
+/** The floors CONTENT_STYLE_RULES states in prose, as numbers, so callers
+ *  can check compliance instead of assuming it. Keep in sync with the
+ *  "MINIMUM LENGTH" lines in the two narrative rules above. */
+export const CONTENT_LENGTH_FLOORS = {
+  description: 1500,
+  highlights:  800,
+} as const;
+
+/**
+ * Prose length as the style rules define it: excluding HTML markup AND
+ * excluding anything inside a <table>, because both rules say a table is
+ * a bonus on top of the floor rather than a way to reach it.
+ *
+ * Measuring the raw string instead would let a big spec table mask a
+ * two-paragraph description — the exact substitution the rules forbid.
+ */
+export function proseLength(html: string | null | undefined): number {
+  if (!html) return 0;
+  const withoutTables = html.replace(/<table\b[\s\S]*?<\/table>/gi, " ");
+  return withoutTables
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .length;
+}
