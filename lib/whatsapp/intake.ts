@@ -13,6 +13,7 @@ import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { getJumiaConnectionKind, testJumiaCredentials, saveJumiaCredentialsForUser, disconnectJumiaForUser } from "@/lib/jumia/credentials";
 import { createConnectToken } from "@/lib/jumia/connect-token";
 import { parseGlobalCommand, type GlobalCommand } from "@/lib/whatsapp/commands";
+import { extractVariantClaim } from "@/lib/whatsapp/variant-claims";
 import {
   guideHowToListMessage,
   guideControlsMessage,
@@ -209,8 +210,30 @@ async function noteWarningsFor(listingId: string): Promise<string[]> {
     .maybeSingle();
   const note = (data?.user_prompt as string | null) ?? "";
   if (!note) return [];
+
+  const warnings: string[] = [];
   const sale = extractSalePrice(note);
-  return sale?.dateWarning ? [sale.dateWarning] : [];
+  if (sale?.dateWarning) warnings.push(sale.dateWarning);
+
+  // A variant claim the draft could not resolve. Read off the variants
+  // table rather than a stored flag: auto-analyze has already dropped
+  // every proposed option in that case, so "the seller restricted the
+  // options AND there are none" is the condition itself.
+  const claim = extractVariantClaim(note);
+  if (claim) {
+    const { count } = await db
+      .from("variants")
+      .select("id", { count: "exact", head: true })
+      .eq("listing_id", listingId);
+    if ((count ?? 0) === 0) {
+      warnings.push(
+        `you wrote "${claim.source}" — I couldn't tell which options that leaves, so none were added. ` +
+        `Tap Edit to set the ones you actually stock`,
+      );
+    }
+  }
+
+  return warnings;
 }
 
 /** Saves a seller's free-text note against a product, plus a deterministic

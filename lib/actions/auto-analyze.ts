@@ -34,6 +34,10 @@ import {
   CONTENT_LENGTH_FLOORS,
 } from "@/lib/ai/content-style-rules";
 import {
+  extractVariantClaim,
+  reconcileVariants,
+} from "@/lib/whatsapp/variant-claims";
+import {
   extractNoteAssertions,
   checkAssertions,
   correctionsFrom,
@@ -1068,12 +1072,43 @@ export async function runAutoAnalyze(
   // Wrapped in try/catch — if the variants insert fails, the listing
   // update above is still useful, so we surface a warning rather than
   // failing the whole pipeline.
-  if (description.variations.length > 0) {
+  // What the seller said about which options they actually stock beats
+  // what the photo shows — see lib/whatsapp/variant-claims.ts. The prompt
+  // already said so; a live note ("Only black is red is available") got
+  // all five photographed colours anyway, leaving a seller committed to
+  // four they don't have.
+  //
+  // Too few variants is the seller adding one back in the editor. Too
+  // many is stock they must honour or cancel, on a marketplace that
+  // penalises cancellations. So an unresolvable claim keeps NOTHING.
+  const variantClaim = extractVariantClaim(userContext);
+  const reconciled = reconcileVariants(
+    variantClaim,
+    description.variations.map((v) => v.label),
+  );
+  let variations = description.variations;
+  if (reconciled.kind === "restrict") {
+    variations = description.variations.filter((v) => reconciled.keep.includes(v.label));
+    if (variations.length !== description.variations.length) {
+      console.info(
+        `[auto-analyze] listing=${listingId} seller named the stocked options ("${reconciled.source}") — ` +
+        `kept ${variations.length} of ${description.variations.length}`,
+      );
+    }
+  } else if (reconciled.kind === "unresolved") {
+    variations = [];
+    console.warn(
+      `[auto-analyze] listing=${listingId} variant claim unresolved ("${reconciled.source}"): ` +
+      `${reconciled.reason} — dropped all ${description.variations.length} proposed options`,
+    );
+  }
+
+  if (variations.length > 0) {
     try {
       const baseSku    = (listing.sku as string | undefined) ?? listingId.slice(0, 8).toUpperCase();
       const basePrice  = (listing.selling_price as number | undefined) ?? null;
       const baseStock  = (listing.quantity as number | undefined) ?? 1;
-      const rows = description.variations.map((v) => ({
+      const rows = variations.map((v) => ({
         listing_id:      listingId,
         variation:       v.label,
         seller_sku:      `${baseSku}-${v.sku_suffix}`,
@@ -1090,6 +1125,15 @@ export async function runAutoAnalyze(
       await db.from("variants").insert(rows);
     } catch (e) {
       console.warn(`[auto-analyze] variant persist failed: ${(e as Error).message}`);
+    }
+  } else if (reconciled.kind === "unresolved") {
+    // Clear whatever a previous run left. Without this a re-analyze that
+    // NOW recognises the claim would leave the old photo-derived variants
+    // sitting there — the exact rows this is meant to withdraw.
+    try {
+      await db.from("variants").delete().eq("listing_id", listingId);
+    } catch (e) {
+      console.warn(`[auto-analyze] variant clear failed: ${(e as Error).message}`);
     }
   }
 
@@ -1129,7 +1173,7 @@ export async function runAutoAnalyze(
     candidates_considered: candidates.length,
     attributes_in_schema:  attrs.length,
     attributes_filled:     Object.keys(filled.dynamic_attributes).length,
-    variations_detected:   description.variations.length,
+    variations_detected:   variations.length,
     title:                 (updates.title as string | undefined) ?? listing.title,
     brand:                 (updates.brand as string | undefined) ?? listing.brand,
   };
