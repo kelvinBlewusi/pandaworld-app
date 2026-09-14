@@ -8,6 +8,7 @@ import { getOrCreateCreditBalance, deductCredits } from "@/lib/billing/extension
 import { WHATSAPP_DRAFT_CREDIT_COST } from "@/lib/billing/credit-packs";
 import { pushListingToJumia, missingFieldLabels, refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
+import { classifyJumiaRejection, isAutoFixable } from "@/lib/jumia/rejection-remedy";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { getJumiaConnectionKind, testJumiaCredentials, saveJumiaCredentialsForUser, disconnectJumiaForUser } from "@/lib/jumia/credentials";
 import { createConnectToken } from "@/lib/jumia/connect-token";
@@ -167,15 +168,22 @@ async function getBatchListings(batchId: string): Promise<ListingRow[]> {
  *  what the seller sees here can never drift from what a real push
  *  would actually reject. */
 async function describeMissingFields(listingId: string): Promise<string> {
+  const labels = await missingFieldsFor(listingId);
+  return labels.length > 0 ? `Still needs: ${labels.join(", ")}.` : "";
+}
+
+/** The raw missing-field labels, for callers that want to phrase the
+ *  warning themselves — "Product 2 still needs a price" reads better than
+ *  a pre-built sentence pasted after a product number. */
+async function missingFieldsFor(listingId: string): Promise<string[]> {
   const db = createServerClient();
   const { data } = await db
     .from("listings")
     .select("title, description, selling_price, category_code, brand, images")
     .eq("id", listingId)
     .maybeSingle();
-  if (!data) return "";
-  const missing = missingFieldLabels(data as ListingRow);
-  return missing.length > 0 ? `Still needs: ${missing.join(", ")}.` : "";
+  if (!data) return [];
+  return missingFieldLabels(data as ListingRow);
 }
 
 /** Saves a seller's free-text note against a product, plus a deterministic
@@ -242,6 +250,19 @@ export async function handleLinkedMessage(
   // they always take effect immediately. This is also the seller's manual
   // escape hatch out of "analyzing" if startBatchAnalysis's own try/catch
   // below somehow doesn't cover a failure — see lib/whatsapp/commands.ts.
+  // "Fix & resubmit" from a Jumia rejection — id is `fix:<listingId>`.
+  // Handled globally, before the per-state dispatch, because a rejection
+  // arrives whenever Jumia finishes processing: minutes or hours later,
+  // by which time the batch has closed and the session has moved on or
+  // reset entirely. Routing it through a state would make the button work
+  // only if the seller happened to still be mid-batch.
+  const fixMatch = content.text?.trim().match(/^fix:([0-9a-f-]{36})$/i);
+  if (fixMatch) {
+    await handleFixAndResubmit(userId, phoneNumber, fixMatch[1]);
+    if (messageId) await updateSession(phoneNumber, { lastMessageId: messageId });
+    return;
+  }
+
   const globalCmd = content.text ? parseGlobalCommand(content.text) : null;
 
   if (globalCmd) {
@@ -1229,14 +1250,25 @@ export async function runQueuedAnalysis(job: AnalysisJob): Promise<void> {
   // products still drafting; a 1-product batch's single "drafted" event
   // folds straight into finalizeBatch's combined message instead.
   if (batchSize > 1) {
+    // One message, not two. This used to send the "✅ Product N drafted"
+    // line and then a bare follow-up reading only "Still needs: price." —
+    // which never named a product, so in a batch the seller could not tell
+    // WHICH one was missing a price, and the warning arrived detached from
+    // the Edit button that fixes it. Confirmed from a live 2-product
+    // batch: "Still needs: price." and "Ready to submit." arrived as two
+    // anonymous messages under two drafted products.
+    const missing = await missingFieldsFor(job.listing_id);
     await replyCta(
       phoneNumber,
-      `✅ Product ${seq} drafted: ${result.title ?? "(untitled)"}.`,
+      [
+        `✅ Product ${seq} drafted: ${result.title ?? "(untitled)"}.`,
+        missing.length > 0
+          ? `⚠️ Product ${seq} still needs ${missing.join(" and ")} — tap *Edit product ${seq}* below to add it.`
+          : "Ready to submit.",
+      ].join("\n"),
       `Edit product ${seq}`,
       focusedEditorUrl(job.listing_id),
     );
-    const missing = await describeMissingFields(job.listing_id);
-    await replyText(phoneNumber, missing || "Ready to submit.");
   }
 
   // Low-confidence category pick — surfaced right here in chat (for every
@@ -1758,6 +1790,111 @@ async function handleEdit(
  * right category and getting a filled-in listing back happens in one tap,
  * without needing the focused editor for the common case.
  */
+/**
+ * "Fix & resubmit" on a Jumia rejection.
+ *
+ * A rejection used to be a dead end: the seller got Jumia's own wording
+ * ("The column [product_weight] is missing from the file") and was left to
+ * translate that into an action. Most rejections fall into a few shapes,
+ * and one of them — missing or invalid category attributes — the system
+ * can genuinely repair by re-filling the schema and pushing again.
+ *
+ * Deliberately honest about the rest. A price Jumia is missing is a price
+ * only the seller has; claiming to have fixed it and re-pushing the same
+ * payload would fail identically and waste their time. Seller-only causes
+ * are named and handed back with the editor link.
+ */
+async function handleFixAndResubmit(
+  userId:      string,
+  phoneNumber: string,
+  listingId:   string,
+): Promise<void> {
+  const db = createServerClient();
+  const { data: row } = await db
+    .from("listings")
+    .select("id, whatsapp_seq, title, jumia_error, category_code, category_path, user_prompt")
+    .eq("id", listingId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (!row) {
+    await replyError(phoneNumber, "⚠️ I couldn't find that product — it may have been removed.");
+    return;
+  }
+
+  const label = row.whatsapp_seq != null ? `Product ${row.whatsapp_seq}` : (row.title as string | null) ?? "That product";
+
+  // Anything the seller alone can supply blocks the push regardless of
+  // what Jumia complained about — check it before spending an AI call.
+  const missing = await missingFieldsFor(listingId);
+  if (missing.length > 0) {
+    await replyError(
+      phoneNumber,
+      `⚠️ ${label} still needs ${missing.join(" and ")} before Jumia will take it — that part only you can fill in.`,
+      { retryId: `fix:${listingId}`, retryTitle: "Fix & resubmit", cta: { label: "Open editor", url: focusedEditorUrl(listingId) } },
+    );
+    return;
+  }
+
+  const remedy = classifyJumiaRejection(row.jumia_error as string | null);
+
+  if (!isAutoFixable(remedy.kind)) {
+    await replyError(
+      phoneNumber,
+      `⚠️ ${label}: ${remedy.explanation} That one needs you — open the editor and I'll resubmit once it's sorted.`,
+      { retryId: `fix:${listingId}`, retryTitle: "Fix & resubmit", cta: { label: "Open editor", url: focusedEditorUrl(listingId) } },
+    );
+    return;
+  }
+
+  await replyText(phoneNumber, `🔧 ${label}: ${remedy.explanation} Fixing and resubmitting…`);
+
+  // Re-fill the category schema before re-pushing. Skipped for a pure
+  // duplicate-SKU rejection, where the payload was fine and the push path
+  // generates a fresh suffix on its own — an AI call there would cost a
+  // credit to change nothing.
+  if (remedy.kind !== "repush" && row.category_code) {
+    try {
+      const refill = await refillAttributesForCategory(userId, listingId, Number(row.category_code), {
+        categoryPath: row.category_path as string | null,
+        userContext:  (row.user_prompt as string | null) ?? null,
+      });
+      if (!refill.ok) {
+        await replyError(
+          phoneNumber,
+          `⚠️ ${label}: couldn't refill the category fields (${refill.message}).`,
+          { retryId: `fix:${listingId}`, retryTitle: "Fix & resubmit", cta: { label: "Open editor", url: focusedEditorUrl(listingId) } },
+        );
+        return;
+      }
+    } catch (e) {
+      console.error(`[whatsapp intake] fix-and-resubmit refill failed for ${listingId}: ${(e as Error).message}`);
+      await replyError(
+        phoneNumber,
+        `⚠️ ${label}: something went wrong while fixing it.`,
+        { retryId: `fix:${listingId}`, retryTitle: "Fix & resubmit", cta: { label: "Open editor", url: focusedEditorUrl(listingId) } },
+      );
+      return;
+    }
+  }
+
+  const result = await pushListingToJumia(userId, listingId);
+
+  if (result.ok) {
+    await replyText(phoneNumber, `✅ ${label}: resubmitted — pending Jumia review.`);
+    return;
+  }
+
+  // Failed again. Say so rather than looping silently: a second identical
+  // rejection means the automatic repair isn't the right one, and the
+  // seller needs to see that instead of tapping the same button forever.
+  await replyError(
+    phoneNumber,
+    `⚠️ ${label}: Jumia still isn't happy — ${result.message}`,
+    { retryId: `fix:${listingId}`, retryTitle: "Fix & resubmit", cta: { label: "Open editor", url: focusedEditorUrl(listingId) } },
+  );
+}
+
 async function handleCategoryCorrection(
   userId: string,
   phoneNumber: string,

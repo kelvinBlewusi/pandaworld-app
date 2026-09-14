@@ -359,7 +359,7 @@ async function notifyListingResolved(
     if (!row?.whatsapp_batch_id) return;
 
     const { getWhatsAppConnection } = await import("@/lib/whatsapp/link");
-    const { sendTextIfConfigured } = await import("@/lib/whatsapp/client");
+    const { sendTextIfConfigured, sendButtonsIfConfigured } = await import("@/lib/whatsapp/client");
 
     const wa = await getWhatsAppConnection(row.user_id as string);
     if (!wa.connected || !wa.phoneNumber) return;
@@ -373,6 +373,18 @@ async function notifyListingResolved(
         ? `✅ "${name}" is live on Jumia — ${counts.liveCount} of ${counts.totalCount} variants went through.\n\n⚠️ Jumia rejected ${counts.rejectedSkus.length ? counts.rejectedSkus.join(", ") : "the rest"}. You can fix and resubmit just those from your listings.`
         : `🎉 "${name}" is now live on Jumia!`;
 
+    // A rejection gets a way out of it. Without this the message is a dead
+    // end: Jumia's own wording ("The column [product_weight] is missing
+    // from the file"), and nothing the seller can act on from the chat.
+    // The button id carries the listing id because a rejection lands
+    // whenever Jumia finishes processing — often long after the batch
+    // closed and the session moved on — so it cannot rely on chat state.
+    if (newStatus !== "live") {
+      await sendButtonsIfConfigured(wa.phoneNumber, text, [
+        { id: `fix:${listingId}`, title: "Fix & resubmit" },
+      ]);
+      return;
+    }
     await sendTextIfConfigured(wa.phoneNumber, text);
   } catch (e) {
     console.warn(`[push-listing] resolve notification failed for ${listingId}: ${(e as Error).message}`);
