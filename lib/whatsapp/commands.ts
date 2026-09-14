@@ -25,6 +25,7 @@ export type GlobalCommand =
   | { type: "confirm_disconnect" }
   | { type: "keep_connected" }
   | { type: "reconnect_jumia" }
+  | { type: "how_it_works" }
   | { type: "status" }
   | { type: "help" };
 
@@ -48,6 +49,10 @@ const DISCONNECT_RE = /^disconnect( jumia)?[.!]?$/i;
 // one session state) since a seller could tap it from a stale/leftover
 // state left over from before they disconnected.
 const RECONNECT_JUMIA_RE = /^reconnect jumia[.!]?$/i;
+// Offered as a button beside the first-run welcome, and typeable forever
+// after. Kept broad because a seller reaching for it is, by definition,
+// someone who does not yet know the right words.
+const HOW_IT_WORKS_RE = /^(how it works|how does (this|it) work|guide|how to use|how do i use (this|it))[.!?]?$/i;
 const STATUS_RE = /^(status|where am i)[.!?]?$/i;
 const HELP_RE = /^(help|\?|commands)[.!]?$/i;
 
@@ -63,6 +68,7 @@ export function parseGlobalCommand(text: string): GlobalCommand | null {
   if (RESTART_RE.test(t)) return { type: "restart" };
   const retry = RETRY_RE.exec(t);
   if (retry) return { type: "retry", seq: retry[1] ? Number(retry[1]) : null };
+  if (HOW_IT_WORKS_RE.test(t)) return { type: "how_it_works" };
   if (STATUS_RE.test(t)) return { type: "status" };
   if (HELP_RE.test(t)) return { type: "help" };
   return null;

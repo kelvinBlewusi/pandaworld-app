@@ -132,6 +132,35 @@ export interface WhatsAppConnectionPublic {
 }
 
 /** Connection status for the current user — feeds the Settings page. */
+/**
+ * Claim the right to send the first-run welcome, exactly once.
+ *
+ * Written as a conditional UPDATE rather than a read-then-write so two
+ * webhook deliveries of the same LINK code can't both decide they are
+ * first and send the welcome twice — the same reason
+ * claimBatchFinalization is shaped this way. Returns true only for the
+ * caller whose UPDATE actually matched a not-yet-onboarded row.
+ *
+ * Fails CLOSED on a database error: no welcome is better than a duplicate
+ * one, and the seller still gets the normal linked confirmation either
+ * way.
+ */
+export async function claimOnboarding(phoneNumber: string): Promise<boolean> {
+  const db = createServerClient();
+  const { data, error } = await db
+    .from("whatsapp_connections")
+    .update({ onboarded_at: new Date().toISOString() })
+    .eq("phone_number", phoneNumber)
+    .is("onboarded_at", null)
+    .select("phone_number");
+
+  if (error) {
+    console.warn(`[whatsapp link] onboarding claim failed for ${phoneNumber}: ${error.message}`);
+    return false;
+  }
+  return (data?.length ?? 0) > 0;
+}
+
 export async function getWhatsAppConnection(userId: string): Promise<WhatsAppConnectionPublic> {
   const db = createServerClient();
   const { data } = await db
