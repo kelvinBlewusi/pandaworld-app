@@ -36,6 +36,7 @@ import {
   isRestrictedBrand,
   stripBrandFromTitle,
 } from "@/lib/ai/jumia-content-policy";
+import { buildNoteIntentPrompt } from "@/lib/whatsapp/note-intent";
 import {
   buildDescriptionAndHighlightsStyleBlock,
   buildDescriptionStyleBlock,
@@ -2209,6 +2210,45 @@ Output ONLY the expanded description text. No JSON wrapper, no markdown fences, 
   } catch (e) {
     console.warn(`[aiExpandDescription] failed: ${(e as Error).message}`);
     return current;
+  }
+}
+
+/**
+ * Read a seller's free-text note into structured intent.
+ *
+ * Text-only and image-free on purpose: this pass must never blend what a
+ * photo SHOWS with what the seller SAID. That conflation is what put five
+ * photographed colours onto a listing whose note restricted it.
+ *
+ * Returns raw parsed JSON — UNVERIFIED. The caller passes it through
+ * verifyNoteIntent(), which is what makes a model safe on a seller's
+ * price: every value has to carry a verbatim span of the note, and that
+ * span has to actually be in it. Returning raw here keeps the
+ * hallucination gate in one readable place rather than smearing it
+ * across the call site.
+ *
+ * Never throws. A failed note pass means the regex layer's results stand,
+ * which is exactly the behaviour before this existed.
+ */
+export async function aiReadNoteIntent(note: string): Promise<unknown> {
+  const trimmed = (note ?? "").trim();
+  if (!trimmed) return null;
+  if (USE_MOCK_AI) return null;
+
+  const today  = new Date().toISOString().slice(0, 10);
+  const prompt = buildNoteIntentPrompt(trimmed, today);
+
+  // forceBestModel pins the same model the rest of the draft pipeline
+  // uses, so note reading can't silently differ by seller tier — two
+  // sellers writing the same note must get the same listing.
+  const textModel = await resolveModel(null, "text", { forceBestModel: true });
+
+  try {
+    const raw = await callGemini(prompt, [], textModel);
+    return parseAIResponse(raw);
+  } catch (e) {
+    console.warn(`[aiReadNoteIntent] failed (non-fatal): ${(e as Error).message}`);
+    return null;
   }
 }
 

@@ -981,6 +981,64 @@ async function handleAwaitingJumiaOauth(
   );
 }
 
+/** Postgres unique-violation, however the client surfaces it. */
+function isDuplicateSlot(e: unknown): boolean {
+  const msg = (e as Error)?.message ?? "";
+  return /duplicate key value|23505|already exists/i.test(msg);
+}
+
+/**
+ * The one listing for this product, creating it only if nobody else
+ * already has. See the call site for the album race this exists for.
+ *
+ * Returns the EXISTING row whenever there is one, so a second, third and
+ * fourth photo of the same product all land on it. The quota is only ever
+ * charged by whichever call actually inserts — createListingForUser bumps
+ * the counter after a successful insert, so a loser that throws on the
+ * unique index costs the seller nothing.
+ */
+async function claimBatchSlot(
+  userId:  string,
+  batchId: string | null,
+  seq:     number,
+): Promise<{ ok: true; listingId: string } | { ok: false; message: string }> {
+  const db = createServerClient();
+
+  const findExisting = async (): Promise<string | null> => {
+    if (!batchId) return null;
+    const { data } = await db
+      .from("listings")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("whatsapp_batch_id", batchId)
+      .eq("whatsapp_seq", seq)
+      .maybeSingle();
+    return (data?.id as string | undefined) ?? null;
+  };
+
+  const existing = await findExisting();
+  if (existing) return { ok: true, listingId: existing };
+
+  try {
+    const listing = await createListingForUser(userId, {
+      whatsapp_batch_id: batchId,
+      whatsapp_seq:      seq,
+    });
+    return { ok: true, listingId: listing.id };
+  } catch (e) {
+    if (isDuplicateSlot(e)) {
+      // Another delivery of the same album won. Adopt its listing rather
+      // than reporting an error the seller did nothing to cause.
+      const winner = await findExisting();
+      if (winner) return { ok: true, listingId: winner };
+    }
+    return {
+      ok:      false,
+      message: (e as Error).message.replace(/^QUOTA_EXCEEDED:\s*/, ""),
+    };
+  }
+}
+
 async function handleAwaitingPhotos(
   userId: string,
   phoneNumber: string,
@@ -994,20 +1052,26 @@ async function handleAwaitingPhotos(
   // ── Photo, with or without a caption in the same message ────────────────
   if (content.imageMediaId) {
     if (!listingId) {
-      try {
-        const listing = await createListingForUser(userId, {});
-        listingId = listing.id;
-        const db = createServerClient();
-        await db
-          .from("listings")
-          .update({ whatsapp_batch_id: session.batchId, whatsapp_seq: seq })
-          .eq("id", listingId);
-        await updateSession(phoneNumber, { listingId });
-      } catch (e) {
-        const message = (e as Error).message.replace(/^QUOTA_EXCEEDED:\s*/, "");
-        await replyError(phoneNumber, `⚠️ Couldn't start product ${seq}: ${message}`);
+      // CLAIM the (batch, position) slot rather than just creating a row.
+      //
+      // WhatsApp delivers an album as several webhook messages within the
+      // same second. Each ran this block, each saw session.listingId still
+      // null, and each created a listing — so photos of ONE product became
+      // one listing per photo. Confirmed live: two "4 Burner Gas ..."
+      // listings 115ms apart, one holding the seller's note and the other
+      // an orphan with photos and nothing else.
+      //
+      // Reading first narrows the window; only the unique index closes it
+      // (see 2026-09-14_one-listing-per-batch-slot.sql), because the losing
+      // INSERT has to fail for the loser to know to adopt the winner's row.
+      // So: look, then claim, then on collision look again.
+      const claimed = await claimBatchSlot(userId, session.batchId, seq);
+      if (!claimed.ok) {
+        await replyError(phoneNumber, `⚠️ Couldn't start product ${seq}: ${claimed.message}`);
         return;
       }
+      listingId = claimed.listingId;
+      await updateSession(phoneNumber, { listingId });
     }
 
     const db = createServerClient();
