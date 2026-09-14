@@ -3,6 +3,7 @@ import {
   getSubtreeCategories,
   searchCategoriesByText,
   mergeCandidates,
+  poolByRank,
   type CategoryCandidate,
 } from "@/lib/jumia/category-search";
 import type { JumiaCategoryRow } from "@/lib/jumia/categories";
@@ -196,5 +197,67 @@ describe("mergeCandidates — rank fusion, not raw score", () => {
   it("handles an empty source without dropping the other", () => {
     expect(mergeCandidates(fuzzy, [], 8).map((h) => h.code)).toEqual([1022834, 1023049, 1023067]);
     expect(mergeCandidates([], embedding, 8)).toHaveLength(3);
+  });
+});
+
+// Regression guards for the confirmed live failure: a safety helmet was
+// filed under "Automobile > Car Care > Cleaning Kits". The department pick
+// itself was wrong, and retrieval stopped at the FIRST department that
+// returned anything — so the alternates were a fallback for an EMPTY
+// department, never a wrong one. A confidently-wrong pick is never empty:
+// it returns eight plausible candidates from the wrong subtree, and the
+// vision model got a shortlist with no correct answer in it at all.
+describe("poolByRank — a wrong department must be survivable", () => {
+  const c = (code: number, name: string): CategoryCandidate =>
+    ({ code, name, path: name, attribute_set_sid: "sid", retrievalScore: 0.5, source: "fuzzy" });
+
+  const automobile = [c(1, "Cleaning Kits"), c(2, "Car Polish"), c(3, "Wash Mitts")];
+  const homeOffice = [c(10, "Hard Hats"), c(11, "Head Protection"), c(12, "Safety Goggles")];
+
+  it("includes the right department's best hit even when it was searched second", () => {
+    const pooled = poolByRank([automobile, homeOffice], 8);
+    expect(pooled.map((h) => h.code)).toContain(10);
+    // And it arrives immediately — second overall, not buried past a
+    // whole wrong department.
+    expect(pooled.findIndex((h) => h.code === 10)).toBe(1);
+  });
+
+  it("lets every department place its best before any places its second", () => {
+    const pooled = poolByRank([automobile, homeOffice], 4);
+    expect(pooled.map((h) => h.code)).toEqual([1, 10, 2, 11]);
+  });
+
+  it("keeps the primary department leading", () => {
+    // A confident primary should still sit at the top; pooling widens the
+    // shortlist, it does not demote the pick.
+    expect(poolByRank([automobile, homeOffice], 8)[0].code).toBe(1);
+  });
+
+  it("preserves each department's own ordering", () => {
+    const pooled = poolByRank([automobile, homeOffice], 8);
+    const home = pooled.filter((h) => h.code >= 10).map((h) => h.code);
+    expect(home).toEqual([10, 11, 12]);
+  });
+
+  it("handles ragged lists — a department with fewer hits doesn't leave gaps", () => {
+    const pooled = poolByRank([[c(1, "only")], homeOffice], 8);
+    expect(pooled.map((h) => h.code)).toEqual([1, 10, 11, 12]);
+  });
+
+  it("skips empty departments entirely", () => {
+    expect(poolByRank([[], homeOffice, []], 8).map((h) => h.code)).toEqual([10, 11, 12]);
+    expect(poolByRank([[], [], []], 8)).toEqual([]);
+    expect(poolByRank([], 8)).toEqual([]);
+  });
+
+  it("deduplicates by code", () => {
+    const shared = c(99, "Hard Hats");
+    const pooled = poolByRank([[shared, c(1, "a")], [shared, c(2, "b")]], 8);
+    expect(pooled.filter((h) => h.code === 99)).toHaveLength(1);
+  });
+
+  it("never exceeds the limit", () => {
+    expect(poolByRank([automobile, homeOffice], 3)).toHaveLength(3);
+    expect(poolByRank([automobile, homeOffice], 0)).toHaveLength(0);
   });
 });

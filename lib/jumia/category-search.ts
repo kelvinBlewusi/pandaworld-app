@@ -310,8 +310,32 @@ async function searchCategoriesByEmbeddingUnbounded(
     // 1. Embed the query
     const { vector } = await embedText(query);
     const literal = toPgvectorLiteral(vector);
+    return await matchByVector(literal, limit, deptPath);
+  } catch (e) {
+    console.warn(
+      `[category-search] searchCategoriesByEmbedding failed: ${(e as Error).message}. Falling back to fuzzy search only.`,
+    );
+    return [];
+  }
+}
 
-    // 2. Cosine-similarity query.
+/**
+ * The pgvector half of the search, taking an already-embedded query.
+ *
+ * Separate from the embedding step so a multi-department search pays for
+ * ONE embedding and runs N scoped matches against it, rather than
+ * embedding the identical text once per department. That is not just
+ * tidiness: embeddings share the project quota that the category
+ * re-embed pushed into 1,269 HTTP 429s, so tripling the calls per
+ * analysis to search three departments would be a real cost.
+ */
+async function matchByVector(
+  literal: string,
+  limit: number,
+  deptPath?: string,
+): Promise<CategoryCandidate[]> {
+  try {
+    // Cosine-similarity query.
     //
     // The <=> operator is pgvector's cosine DISTANCE (0=identical,
     // 1=orthogonal, 2=opposite). Convert to similarity by `1 - dist`
@@ -461,4 +485,103 @@ export function mergeCandidates(
       retrievalScore: score / (2 / (RRF_K + 1)),
       source:         sources > 1 ? ("merged" as const) : candidate.source,
     }));
+}
+
+/**
+ * Semantic search across SEVERAL department subtrees at once, embedding
+ * the query only once.
+ *
+ * Returns one result list per department, in the order given, so the
+ * caller can keep track of which department produced what. A department
+ * whose match fails or returns nothing yields an empty list rather than
+ * taking the others down with it.
+ *
+ * The whole fan-out races the same single timeout the one-department
+ * search uses: the matches run in parallel against an already-computed
+ * vector, so three departments cost barely more wall-clock than one, and
+ * the budget that protects the caller's deadline shouldn't multiply just
+ * because the search got wider.
+ */
+export async function searchCategoriesByEmbeddingMulti(
+  query: string,
+  limit: number,
+  deptPaths: string[],
+): Promise<CategoryCandidate[][]> {
+  if (!query.trim() || deptPaths.length === 0) return deptPaths.map(() => []);
+
+  const started = Date.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), EMBEDDING_SEARCH_TIMEOUT_MS);
+  });
+
+  const run = async (): Promise<CategoryCandidate[][]> => {
+    const { vector } = await embedText(query);
+    const literal = toPgvectorLiteral(vector);
+    return Promise.all(deptPaths.map((path) => matchByVector(literal, limit, path)));
+  };
+
+  let result: CategoryCandidate[][] | typeof TIMED_OUT;
+  try {
+    result = await Promise.race([
+      run().catch((e) => {
+        console.warn(`[category-search] multi-department embedding search failed: ${(e as Error).message}`);
+        return deptPaths.map(() => [] as CategoryCandidate[]);
+      }),
+      timeout,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const elapsed = Date.now() - started;
+
+  if (result === TIMED_OUT) {
+    console.warn(
+      `[category-search] multi-department embedding search TIMED OUT after ${EMBEDDING_SEARCH_TIMEOUT_MS}ms ` +
+        `across ${deptPaths.length} department(s) — these queries got fuzzy-only candidates.`,
+    );
+    return deptPaths.map(() => []);
+  }
+
+  console.info(
+    `[category-search] embedding search ok in ${elapsed}ms → ` +
+      deptPaths.map((p, i) => `${result[i].length} in "${p}"`).join(", "),
+  );
+  return result;
+}
+
+/**
+ * Pool candidate lists from several departments, round-robin by rank.
+ *
+ * Every department contributes its best candidate before any department
+ * contributes its second, so one department cannot crowd the others out
+ * of the shortlist handed to the vision model. Order within a department
+ * is preserved, and the first list (the primary department) leads each
+ * round, so a confident primary still sits at the top.
+ *
+ * Why not merge by score: the fuzzy scorer computes IDF over whichever
+ * subtree it was given, so a 0.4 in a 200-row department and a 0.4 in a
+ * 4,000-row one do not mean the same thing. Ranks are comparable across
+ * pools; raw scores are not. Same reasoning as mergeCandidates above,
+ * one level up.
+ */
+export function poolByRank(
+  lists: CategoryCandidate[][],
+  limit = 8,
+): CategoryCandidate[] {
+  const out: CategoryCandidate[] = [];
+  const seen = new Set<number>();
+  const depth = Math.max(0, ...lists.map((l) => l.length));
+
+  for (let rank = 0; rank < depth && out.length < limit; rank++) {
+    for (const list of lists) {
+      if (out.length >= limit) break;
+      const candidate = list[rank];
+      if (!candidate || seen.has(candidate.code)) continue;
+      seen.add(candidate.code);
+      out.push(candidate);
+    }
+  }
+  return out;
 }
