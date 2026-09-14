@@ -30,6 +30,8 @@
  * On Vertex AI, we hit `text-embedding-005` directly — no fallback list
  * needed because the model catalogue is predictable per project.
  */
+import { trackGeminiCall } from "@/lib/ai/quota-telemetry";
+
 const EMBEDDING_MODELS_TO_TRY = [
   "gemini-embedding-001",    // works on current key — try first
   "text-embedding-004",      // older public name; 404s on some keys
@@ -316,6 +318,28 @@ async function tryEmbedOneModel(
 }
 
 /**
+ * The model `embedText` would use right now.
+ *
+ * Exists so stored vectors can be compared against the live backend
+ * WITHOUT embedding anything: jumia_categories.embedding_model records
+ * what wrote each row, and the backfill re-embeds whatever no longer
+ * matches this. That is the check that was missing when the category
+ * index stayed on gemini-embedding-001 while queries moved to Vertex's
+ * text-embedding-005 — four months of confident nonsense, because
+ * nothing ever compared the two.
+ *
+ * Exact on Vertex, where the model is fixed. On AI Studio the model is
+ * resolved by a fallback chain, so before the first successful call this
+ * returns the first candidate — the one that will be tried first, and in
+ * practice the one that answers. A row mislabelled that way costs one
+ * needless re-embed on the next run, never a silent mismatch.
+ */
+export function currentEmbeddingModel(): string {
+  if (isVertexEmbeddingsEnabled()) return VERTEX_EMBEDDING_MODEL;
+  return _resolvedEmbeddingModel ?? EMBEDDING_MODELS_TO_TRY[0];
+}
+
+/**
  * Embed a single piece of text. Routes through Vertex AI when configured
  * (GCP_PROJECT_ID + GOOGLE_APPLICATION_CREDENTIALS_JSON set) — Vertex's
  * text-embedding-005 is provisioned-warm and returns in <1s consistently,
@@ -337,8 +361,14 @@ export async function embedText(text: string): Promise<EmbedTextResult> {
 
   // Vertex path — predictable model, no fallback chain needed because
   // text-embedding-005 is always GA on Vertex projects with billing.
+  //
+  // Counted like every other Google call (see lib/ai/quota-telemetry.ts).
+  // Embeddings share a project quota bucket with generation, and a full
+  // category re-embed is ~27,700 calls in a burst — by far the heaviest
+  // thing this system ever does to that quota, so it is exactly the
+  // workload peak concurrency needs to be visible for.
   if (isVertexEmbeddingsEnabled()) {
-    return embedViaVertex(truncated);
+    return trackGeminiCall(() => embedViaVertex(truncated));
   }
 
   // AI Studio fast path: we've already resolved a working model
