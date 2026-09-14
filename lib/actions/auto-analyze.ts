@@ -30,6 +30,11 @@ import {
 import { warmEmbeddingBackend } from "@/lib/ai/embeddings";
 import { detectPhotoNarration } from "@/lib/ai/content-style-rules";
 import {
+  extractNoteAssertions,
+  checkAssertions,
+  correctionsFrom,
+} from "@/lib/whatsapp/note-assertions";
+import {
   getListableCategories,
   getAllCategoriesForTree,
   getCategoryAttributes,
@@ -525,7 +530,10 @@ export async function runAutoAnalyze(
 
   // Updates payload — every visible top-level field the AI can infer
   const updates: Record<string, unknown> = {};
-  const newSources:    Record<string, "ai">                                                                            = {};
+  // "user" as well as "ai": a fact the seller stated outright in their
+  // notes is a seller edit, written in chat rather than a form, and
+  // marking it so stops a later re-run overwriting it (isUserEdited).
+  const newSources:    Record<string, "ai" | "user">                                                                   = {};
   const newConfidence: Record<string, { confidence: number; source: "image" | "ocr" | "inferred" | "seller-required"; reasoning?: string }> = {};
 
   // canFill: true when the field is either empty OR previously-AI-set.
@@ -618,6 +626,51 @@ export async function runAutoAnalyze(
   }
   setField("weight_kg", scrubbedWeight, { confidence: 0.7, source: "image", reasoning: "Weight inferred from visible packaging" });
   setField("main_material",   description.main_material,   { confidence: 0.8,  source: "inferred" });
+
+  // What the seller actually SAID wins over what the model inferred from
+  // a photo.
+  //
+  // Price, stock and sale price already work this way — read from the
+  // notes by regex and applied directly, because they are seller-owned
+  // and this pipeline refuses to let an AI guess them. Everything else
+  // the seller wrote ("comes in red, blue and green", "brand: Kaisheng")
+  // was handed to the model as free-text context and then never checked.
+  // If the seller wrote pink and the draft said red, nothing noticed —
+  // not at draft time, not at push time, not ever. Prompting is a
+  // request; this is the verification.
+  //
+  // Only explicit, marked statements are extracted (see
+  // lib/whatsapp/note-assertions.ts), and a correction is applied only
+  // where the draft actually contradicts one — a more specific value
+  // ("Stainless Steel" for "steel") is left alone rather than replaced
+  // with the seller's shorter word.
+  const assertions = extractNoteAssertions(userContext);
+  if (assertions.length > 0) {
+    const checks = checkAssertions(assertions, {
+      brand:         (updates.brand as string | undefined) ?? description.brand ?? null,
+      color:         (updates.color as string | undefined) ?? description.color ?? null,
+      main_material: (updates.main_material as string | undefined) ?? description.main_material ?? null,
+      model:         (updates.model as string | undefined) ?? description.model ?? null,
+    });
+
+    for (const [field, value] of Object.entries(correctionsFrom(checks))) {
+      // Bypasses setField's canFill guard on purpose: this is the
+      // seller's own instruction, which outranks both an AI value and the
+      // "don't overwrite" rule that exists to protect seller edits — it
+      // IS a seller edit, just written in chat instead of a form.
+      updates[field] = value;
+      newSources[field] = "user";
+      newConfidence[field] = { confidence: 1, source: "seller-required" };
+    }
+
+    const broken = checks.filter((c) => !c.honoured);
+    if (broken.length > 0) {
+      console.info(
+        `[auto-analyze] listing=${listingId} applied seller's own words over the draft: ` +
+          broken.map((c) => `${c.assertion.field} "${c.actual ?? "(empty)"}" → "${c.assertion.value}" (from ${JSON.stringify(c.assertion.source)})`).join("; "),
+      );
+    }
+  }
   setField("material_family", description.material_family, { confidence: 0.8,  source: "inferred" });
 
   // ── AI-defaulted fields (May 2026) — were seller-required before, now
