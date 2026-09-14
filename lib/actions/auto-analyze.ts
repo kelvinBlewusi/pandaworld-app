@@ -37,9 +37,10 @@ import {
 } from "@/lib/jumia/categories";
 import {
   searchCategoriesByText,
-  searchCategoriesByEmbedding,
   getTopLevelDepartments,
   getSubtreeCategories,
+  searchCategoriesByEmbeddingMulti,
+  poolByRank,
   mergeCandidates,
   type CategoryCandidate,
 } from "@/lib/jumia/category-search";
@@ -267,16 +268,53 @@ export async function runAutoAnalyze(
       { forceBestModel: true },
     );
 
-    const tried = new Set<string>();
-    for (const dept of [deptPick.primary, ...deptPick.alternates]) {
-      if (!dept || candidates.length > 0 || tried.has(dept.path)) continue;
-      tried.add(dept.path);
-      const subtree = getSubtreeCategories(listableCategories, dept.path);
-      if (subtree.length === 0) continue;
-      const fuzzyHits = searchCategoriesByText(retrievalQuery, subtree, 8);
-      const semanticHits = await searchCategoriesByEmbedding(retrievalQuery, 8, dept.path);
-      const hits = semanticHits.length > 0 ? mergeCandidates(fuzzyHits, semanticHits, 8) : fuzzyHits;
-      if (hits.length > 0) candidates = hits;
+    // Search the primary department AND its alternates, then pool.
+    //
+    // This used to stop at the first department that returned ANYTHING
+    // (`if (candidates.length > 0) continue`), which made the alternates
+    // a fallback for an EMPTY department rather than a wrong one. A
+    // confidently-wrong pick is never empty: it returns eight plausible
+    // candidates from the wrong subtree, the loop stops, and the vision
+    // model is handed a shortlist with no correct answer anywhere in it.
+    // That is how a safety helmet was filed under "Automobile > Car Care
+    // > Cleaning Kits" — the department pick was wrong, and nothing
+    // downstream could recover from it, because the right department was
+    // never searched.
+    //
+    // Pooling instead of short-circuiting means a wrong primary is
+    // survivable: the correct department's candidates are in the
+    // shortlist too, and picking between them is exactly what the vision
+    // model is good at. It also fits the catalog, which lists the same
+    // leaf under several departments (Hard Hats exists under both
+    // Industrial & Scientific and Home & Office), so "the" right
+    // department is often not even unique.
+    const deptsToSearch = [deptPick.primary, ...deptPick.alternates]
+      .filter((d): d is NonNullable<typeof d> => Boolean(d))
+      .filter((d, i, all) => all.findIndex((o) => o.path === d.path) === i)
+      .filter((d) => getSubtreeCategories(listableCategories, d.path).length > 0)
+      .slice(0, 3);
+
+    if (deptsToSearch.length > 0) {
+      // One embedding, N scoped matches, all inside one timeout budget.
+      const semanticPerDept = await searchCategoriesByEmbeddingMulti(
+        retrievalQuery,
+        8,
+        deptsToSearch.map((d) => d.path),
+      );
+
+      const perDept = deptsToSearch.map((dept, i) => {
+        const subtree = getSubtreeCategories(listableCategories, dept.path);
+        const fuzzyHits = searchCategoriesByText(retrievalQuery, subtree, 8);
+        const semanticHits = semanticPerDept[i] ?? [];
+        return semanticHits.length > 0 ? mergeCandidates(fuzzyHits, semanticHits, 8) : fuzzyHits;
+      });
+
+      candidates = poolByRank(perDept, 8);
+
+      console.info(
+        `[auto-analyze] searched ${deptsToSearch.length} department(s): ` +
+          deptsToSearch.map((d, i) => `"${d.name}"→${perDept[i].length}`).join(", "),
+      );
     }
   } catch (e) {
     console.warn(`[auto-analyze] department pick failed, falling back to full-catalog fuzzy search: ${(e as Error).message}`);
