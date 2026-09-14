@@ -36,11 +36,14 @@ import {
   GoogleGenerativeAI,
   type GenerativeModel as AIStudioModel,
 } from "@google/generative-ai";
-import {
-  VertexAI,
-  type GenerativeModel as VertexModel,
-  type Part as VertexPart,
-} from "@google-cloud/vertexai";
+// Vertex goes through @google/genai, NOT @google-cloud/vertexai. The
+// latter has been deprecated since 2025-06-24 with a stated removal date
+// of 2026-06-24 — a date that has now passed, and it printed that warning
+// on every single call. @google/genai is Google's replacement and speaks
+// to both Vertex and AI Studio; only the Vertex half is migrated here,
+// because the AI Studio path is the rollback (see isVertexEnabled) and
+// changing both at once would remove the thing we fall back to.
+import { GoogleGenAI, type Part as VertexPart } from "@google/genai";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -64,7 +67,7 @@ export interface GeminiCallResult {
 
 // ─── Backend resolution ─────────────────────────────────────────────────────
 
-let _vertexClient: VertexAI | null = null;
+let _vertexClient: GoogleGenAI | null = null;
 let _aiStudioClient: GoogleGenerativeAI | null = null;
 
 /**
@@ -83,7 +86,7 @@ export function isVertexEnabled(): boolean {
  * The service-account JSON is provided via env var rather than file path
  * so Vercel's secret manager can hold it.
  */
-function getVertexClient(): VertexAI {
+function getVertexClient(): GoogleGenAI {
   if (_vertexClient) return _vertexClient;
 
   const credsRaw = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
@@ -106,7 +109,8 @@ function getVertexClient(): VertexAI {
   // GoogleAuth happily accepts a key with literal `\n` characters — it
   // de-escapes during the JWT sign. No extra normalisation needed here.
 
-  _vertexClient = new VertexAI({
+  _vertexClient = new GoogleGenAI({
+    vertexai: true,
     project:  process.env.GCP_PROJECT_ID!,
     location: process.env.VERTEX_AI_LOCATION ?? "us-central1",
     googleAuthOptions: { credentials },
@@ -151,7 +155,7 @@ function getAIStudioClient(): GoogleGenerativeAI {
 /**
  * Grounding tool declaration for both SDKs, as a raw pass-through object
  * rather than either SDK's typed `Tool` union — both `@google/generative-ai`
- * (0.24.1) and `@google-cloud/vertexai` (1.12.0) only type the OLDER
+ * (0.24.1) and `@google/genai` (2.22.0) only type the OLDER
  * `googleSearchRetrieval` tool (1.5-era, dynamic-retrieval-based); neither
  * has caught up to `google_search`, the tool current Gemini generations use.
  * Verified this is still safe: both SDKs' generateContent() passes `tools`
@@ -186,12 +190,18 @@ export async function callGeminiBackend(
 
   if (!preferAiStudio && isVertexEnabled()) {
     const vertex = getVertexClient();
-    const model: VertexModel = vertex.getGenerativeModel({ model: modelName });
-    const result = await model.generateContent({
+    // Three shape changes from @google-cloud/vertexai, all here:
+    //   - no per-model object; the model name is an argument
+    //   - tools move inside `config`
+    //   - the result IS the response (no `.response` wrapper)
+    const result = await vertex.models.generateContent({
+      model:    modelName,
       contents: [{ role: "user", parts: parts as VertexPart[] }],
-      ...(opts.groundWithSearch ? { tools: [GOOGLE_SEARCH_TOOL] as unknown as import("@google-cloud/vertexai").Tool[] } : {}),
+      ...(opts.groundWithSearch
+        ? { config: { tools: [GOOGLE_SEARCH_TOOL] as unknown as import("@google/genai").Tool[] } }
+        : {}),
     });
-    const candidate = result.response?.candidates?.[0];
+    const candidate = result.candidates?.[0];
     const responseParts = candidate?.content?.parts ?? [];
     const text = responseParts
       .filter((p): p is { text: string } => typeof (p as { text?: unknown }).text === "string")

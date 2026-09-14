@@ -16,6 +16,7 @@ import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { endsWithDoneSignal, stripDoneSignal } from "@/lib/whatsapp/draft";
 import {
   parseProductCount,
+  readProductCount,
   parseSubmitCommand,
   parseEditCommand,
   extractPrice,
@@ -738,16 +739,22 @@ async function handleAwaitingCount(
     return;
   }
 
-  const count = content.text ? parseProductCount(content.text) : null;
+  const parsed = content.text ? readProductCount(content.text) : { ok: false as const, reason: "no_number" as const };
 
-  if (!count) {
-    await replyButtons(
-      phoneNumber,
-      `⚠️ I need a number to get started — reply with how many products you're listing today (1–${MAX_BATCH_SIZE}), e.g. *3*.`,
-      COUNT_QUICK_PICKS,
-    );
+  if (!parsed.ok) {
+    // Say which thing went wrong. Answering "50" with "I need a number"
+    // reads as the bot not understanding, when the real answer is that
+    // the batch cap is 20 — a fact the seller can act on immediately.
+    const message =
+      parsed.reason === "too_many"
+        ? `⚠️ ${parsed.value} is more than I can draft in one go — the most is ${MAX_BATCH_SIZE} at a time. Reply with a number up to ${MAX_BATCH_SIZE} and you can start another batch straight after.`
+        : parsed.reason === "too_few"
+          ? `⚠️ I need at least 1 product to get started — reply with how many you're listing today (1–${MAX_BATCH_SIZE}).`
+          : `⚠️ I need a number to get started — reply with how many products you're listing today (1–${MAX_BATCH_SIZE}), e.g. *3*.`;
+    await replyButtons(phoneNumber, message, COUNT_QUICK_PICKS);
     return;
   }
+  const count = parsed.count;
 
   const batchId = crypto.randomUUID();
   await updateSession(phoneNumber, {

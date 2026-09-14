@@ -93,7 +93,9 @@ async function getVertexAccessToken(): Promise<string> {
       throw new Error("GOOGLE_APPLICATION_CREDENTIALS_JSON is required for Vertex embeddings.");
     }
     const credentials = JSON.parse(credsRaw);
-    // Dynamic import — google-auth-library ships with @google-cloud/vertexai.
+    // Dynamic import — google-auth-library is a direct dependency (it was
+    // transitive via @google-cloud/vertexai until that deprecated SDK was
+    // removed; a direct import deserves a direct dependency).
     // Lazy-import so AI-Studio-only deployments don't pay the cost of loading it.
     const { GoogleAuth } = await import("google-auth-library");
     _vertexAuthClient = new GoogleAuth({
