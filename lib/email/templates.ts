@@ -14,18 +14,9 @@
  * right place even when they open the email on a different device.
  */
 
-import { PLANS } from "@/lib/billing/plans";
+import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 
 const BRAND = "PandaWorld";
-
-/**
- * The free plan's monthly listing allowance, read from the plan config
- * rather than written out — the welcome email used to claim "2 free
- * listings", which matched neither the plan (5/month) nor anything else
- * the site says. Deriving it means the email can't drift again when the
- * allowance changes.
- */
-const FREE_MONTHLY_LISTINGS = PLANS.free.monthly_listings;
 
 interface RenderResult {
   subject: string;
@@ -40,8 +31,15 @@ export function welcomeEmail(opts: {
   appUrl:     string;
 }): RenderResult {
   const greeting = opts.firstName ? `Hi ${escapeHtml(opts.firstName)},` : "Hi,";
-  const dashboardUrl = `${opts.appUrl}/dashboard`;
-  const docsUrl      = `${opts.appUrl}/pricing`;
+  // /extension/dashboard, NOT /dashboard. The latter lives in the (main)
+  // route group, whose layout redirects to /onboarding/connect unless the
+  // seller already has an ACTIVE Jumia OAuth connection — so this email
+  // was walking every brand-new signup straight into the Jumia wall that
+  // the WhatsApp and extension flows exist to let them skip. The extension
+  // shell has no such gate.
+  const dashboardUrl = `${opts.appUrl}/extension/dashboard`;
+  const whatsappUrl  = `${opts.appUrl}/extension/whatsapp-listings`;
+  const pricingUrl   = `${opts.appUrl}/pricing`;
 
   return {
     subject: `Welcome to ${BRAND}`,
@@ -50,24 +48,43 @@ export function welcomeEmail(opts: {
       body: `
         <p style="margin:0 0 16px;">${greeting}</p>
         <p style="margin:0 0 16px;">
-          Welcome aboard. You can now upload a phone photo of a product and
-          our AI will pick the right Jumia category, fill the required
-          attributes, polish the image, and push the listing straight to
-          Vendor Center.
+          Welcome aboard. PandaWorld writes your Jumia listings for you, sends
+          them to your Jumia shop and saves you time — and there are two ways
+          to use it, so pick whichever suits how you work.
+        </p>
+        <p style="margin:0 0 8px; font-size:15px;"><strong>1. From WhatsApp</strong></p>
+        <p style="margin:0 0 16px; font-size:14px; color:#3f3f46;">
+          Send the bot your product photos and a line about each one — the
+          price, the colours, what&rsquo;s in the box. It writes the listing,
+          picks the Jumia category, fills the attributes, and submits when
+          you say so. You can connect your Jumia account right there in the
+          chat; no forms.
+        </p>
+        <p style="margin:0 0 8px; font-size:15px;"><strong>2. The Chrome extension</strong></p>
+        <p style="margin:0 0 24px; font-size:14px; color:#3f3f46;">
+          Already filling in Jumia&rsquo;s own form? The extension fills it for
+          you while you sit on the page.
         </p>
         <p style="margin:0 0 24px;">
-          You&rsquo;ve got <strong>${FREE_MONTHLY_LISTINGS} free listings every
-          month</strong> to try things out — no card needed.
+          <strong>Start for free</strong> — no card needed.
         </p>
-        ${ctaButton("Create your first listing", dashboardUrl)}
+        ${ctaButtonPair(
+          { label: "Start listing from WhatsApp", href: whatsappUrl },
+          { label: "Start using Chrome extension", href: CHROME_WEB_STORE_URL },
+        )}
         <p style="margin:24px 0 8px; font-size:13px; color:#52525b;">
-          A few things to know:
+          Two things worth knowing now:
         </p>
         <ul style="margin:0 0 24px 16px; padding:0; font-size:13px; color:#52525b;">
-          <li style="margin:0 0 6px;">Connect your Jumia Vendor Center first — we walk you through it.</li>
-          <li style="margin:0 0 6px;">The AI&rsquo;s suggestions need a quick eyeball before submit. It can miss.</li>
-          <li>Image polish + AI rebuild are credit-based after your free listings — see <a href="${docsUrl}" style="color:#ea580c;">pricing</a>.</li>
+          <li style="margin:0 0 6px;"><strong>Always tell us the price.</strong> We never guess it, and a product without one can&rsquo;t be submitted to Jumia.</li>
+          <li>The AI&rsquo;s suggestions need a quick eyeball before you submit. It can miss.</li>
         </ul>
+        <p style="margin:0 0 16px; font-size:13px; color:#52525b;">
+          Your <a href="${dashboardUrl}" style="color:#ea580c;">dashboard</a> shows
+          everything you&rsquo;ve drafted, and
+          <a href="${pricingUrl}" style="color:#ea580c;">pricing</a> covers what
+          happens past the free listings.
+        </p>
         <p style="margin:0; font-size:13px; color:#71717a;">
           Reply to this email if you get stuck. We read every message.
         </p>
@@ -76,18 +93,30 @@ export function welcomeEmail(opts: {
     text: [
       greeting,
       "",
-      "Welcome to PandaWorld.",
+      "Welcome to PandaWorld. We write your Jumia listings for you, send them to your Jumia shop and save you time - and there are two ways to use it, so pick whichever suits how you work.",
       "",
-      "You can now upload a phone photo of a product and our AI will pick the right Jumia category, fill the required attributes, polish the image, and push the listing to Vendor Center.",
+      "1. From WhatsApp",
+      "   Send the bot your product photos and a line about each one - the price,",
+      "   the colours, what's in the box. It writes the listing, picks the Jumia",
+      "   category, fills the attributes, and submits when you say so. You can",
+      "   connect your Jumia account right there in the chat; no forms.",
       "",
-      `You've got ${FREE_MONTHLY_LISTINGS} free listings every month to try — no card needed.`,
+      "2. The Chrome extension",
+      "   Already filling in Jumia's own form? The extension fills it for you",
+      "   while you sit on the page.",
       "",
-      `Get started: ${dashboardUrl}`,
+      "Start for free - no card needed.",
       "",
-      "A few things to know:",
-      "  - Connect your Jumia Vendor Center first — we walk you through it.",
-      "  - The AI's suggestions need a quick eyeball before submit. It can miss.",
-      "  - Image polish + AI rebuild are credit-based after your free listings.",
+      `Start listing from WhatsApp: ${whatsappUrl}`,
+      `Start using the Chrome extension: ${CHROME_WEB_STORE_URL}`,
+      "",
+      "Two things worth knowing now:",
+      "  - Always tell us the price. We never guess it, and a product without one",
+      "    can't be submitted to Jumia.",
+      "  - The AI's suggestions need a quick eyeball before you submit. It can miss.",
+      "",
+      `Your dashboard: ${dashboardUrl}`,
+      `Pricing: ${pricingUrl}`,
       "",
       "Reply to this email if you get stuck. We read every message.",
     ].join("\n"),
@@ -191,6 +220,33 @@ function layout({ title, body }: { title: string; body: string }): string {
   </table>
 </body>
 </html>`;
+}
+
+/**
+ * Two buttons side by side.
+ *
+ * A table with two cells and a spacer, not flex or inline-block: Outlook
+ * renders email HTML through Word, which ignores both. The cells stack
+ * naturally on a narrow phone because the table has no fixed width.
+ *
+ * The second button is outlined rather than filled — they are not equal
+ * choices. WhatsApp is the one most sellers should start with, and two
+ * identical orange blocks would make the reader stop and compare instead
+ * of just tapping.
+ */
+function ctaButtonPair(
+  primary:   { label: string; href: string },
+  secondary: { label: string; href: string },
+): string {
+  return `<table cellpadding="0" cellspacing="0" border="0"><tr>
+    <td style="background:#f97316; border-radius:8px;">
+      <a href="${primary.href}" style="display:inline-block; padding:12px 20px; font-size:14px; font-weight:600; color:#ffffff; text-decoration:none;">${escapeHtml(primary.label)}</a>
+    </td>
+    <td style="width:10px;">&nbsp;</td>
+    <td style="border:1px solid #d4d4d8; border-radius:8px;">
+      <a href="${secondary.href}" style="display:inline-block; padding:11px 19px; font-size:14px; font-weight:600; color:#3f3f46; text-decoration:none;">${escapeHtml(secondary.label)}</a>
+    </td>
+  </tr></table>`;
 }
 
 function ctaButton(label: string, href: string): string {
