@@ -1,5 +1,5 @@
 import { createServerClient } from "@/lib/supabase/server";
-import { sendTextIfConfigured, sendCtaUrlIfConfigured, sendButtonsIfConfigured } from "@/lib/whatsapp/client";
+import { sendTextIfConfigured, sendCtaUrlIfConfigured, sendButtonsIfConfigured, sendListIfConfigured, LIST_MAX_ROWS } from "@/lib/whatsapp/client";
 import { ingestWhatsAppImage } from "@/lib/whatsapp/media";
 import {
   getOrCreateSession,
@@ -108,6 +108,18 @@ function replyButtons(to: string, bodyText: string, buttons: { id: string; title
 
 function replyCta(to: string, bodyText: string, buttonText: string, url: string): Promise<void> {
   return sendCtaUrlIfConfigured(to, bodyText, buttonText, url);
+}
+
+/** Up to 10 tappable rows in one message, where replyButtons holds three.
+ *  Same contract: the row id IS the command phrase, so a tapped row and a
+ *  typed phrase reach the identical parser. */
+function replyList(
+  to:         string,
+  bodyText:   string,
+  buttonText: string,
+  rows:       { id: string; title: string; description?: string }[],
+): Promise<void> {
+  return sendListIfConfigured(to, bodyText, buttonText, rows);
 }
 
 /**
@@ -1802,25 +1814,48 @@ export async function finalizeBatch(
   }
 
   // Every "Edit product N" link already went out live as each product
-  // finished — now that the whole batch has settled, send every ready
-  // product's "Submit product N" button as its own grouped pass (chunked
-  // to 3 per message, WhatsApp's per-message button cap) so edits and
-  // submits read as two separate blocks, not alternating pairs.
-  const readyToSubmitSeqs = listings
+  // finished — now that the whole batch has settled, offer every ready
+  // product's "Submit product N" in ONE pass, so edits and submits read as
+  // two separate blocks rather than alternating pairs.
+  const ready = listings
     .filter((l) => l.title && l.whatsapp_seq != null)
-    .map((l) => l.whatsapp_seq as number)
-    .sort((a, b) => a - b);
+    .sort((a, b) => (a.whatsapp_seq as number) - (b.whatsapp_seq as number));
+  const readyToSubmitSeqs = ready.map((l) => l.whatsapp_seq as number);
 
-  for (let i = 0; i < readyToSubmitSeqs.length; i += 3) {
-    const chunk = readyToSubmitSeqs.slice(i, i + 3);
-    // Only the first chunk introduces itself. A 4-product batch sends two
-    // messages, and giving both the identical "Submit a specific product:"
-    // header made the second look like the bot had repeated itself —
-    // visible in a seller's transcript on 2026-09-15.
+  // A list holds ten rows; a button message holds three. That difference
+  // is the whole point here.
+  //
+  // This block used to chunk into button messages, so a 10-product batch
+  // spent FOUR sends on it — on top of ten per-product drafted messages
+  // and the closing summary, roughly 25 sends to one recipient in about 30
+  // seconds. Meta throttles per business/consumer pair, and live on
+  // 2026-09-15 that batch lost its tail: submit buttons arrived for
+  // products 1–6 and the closing message never arrived at all. One list is
+  // one send.
+  //
+  // Three or fewer still uses buttons: they render inline, with no extra
+  // tap to open a sheet, and at that size there is no volume to save.
+  if (readyToSubmitSeqs.length > 3) {
+    for (let i = 0; i < ready.length; i += LIST_MAX_ROWS) {
+      const chunk = ready.slice(i, i + LIST_MAX_ROWS);
+      await replyList(
+        phoneNumber,
+        i === 0 ? "Submit a specific product:" : "…and the rest:",
+        "Pick a product",
+        chunk.map((l) => ({
+          id:          `submit ${l.whatsapp_seq}`,
+          title:       `Submit product ${l.whatsapp_seq}`,
+          // The row's own subtitle — a product number alone tells a seller
+          // nothing about which product it is.
+          description: l.title as string,
+        })),
+      );
+    }
+  } else if (readyToSubmitSeqs.length > 0) {
     await replyButtons(
       phoneNumber,
-      i === 0 ? "Submit a specific product:" : "…and the rest:",
-      chunk.map((seq) => ({ id: `submit ${seq}`, title: `Submit product ${seq}` })),
+      "Submit a specific product:",
+      readyToSubmitSeqs.map((seq) => ({ id: `submit ${seq}`, title: `Submit product ${seq}` })),
     );
   }
 

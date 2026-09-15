@@ -11,7 +11,7 @@
 import { FakeDb } from "./helpers/fake-supabase";
 
 const db = new FakeDb();
-const sent: { to: string; body: string; kind: string }[] = [];
+const sent: { to: string; body: string; kind: string; rows?: string[] }[] = [];
 
 jest.mock("@/lib/supabase/server", () => ({
   createServerClient: () => db,
@@ -21,6 +21,10 @@ jest.mock("@/lib/whatsapp/client", () => ({
   sendTextIfConfigured:    async (to: string, body: string) => { sent.push({ to, body, kind: "text" }); },
   sendButtonsIfConfigured: async (to: string, body: string) => { sent.push({ to, body, kind: "buttons" }); },
   sendCtaUrlIfConfigured:  async (to: string, body: string) => { sent.push({ to, body, kind: "cta" }); },
+  sendListIfConfigured:    async (to: string, body: string, _btn: string, rows: { id: string }[]) => {
+    sent.push({ to, body, kind: "list", rows: rows.map((r) => r.id) });
+  },
+  LIST_MAX_ROWS: 10,
   markReadWithTypingIfConfigured: async () => {},
 }));
 
@@ -398,5 +402,82 @@ describe("asking for a missing price in chat", () => {
     await finalizeBatch("batch-1", PHONE, 2);
 
     expect(session().awaiting_price_for).toBe("listing-2");
+  });
+});
+
+
+describe("message volume on a large batch", () => {
+  // The live failure: a 10-product batch sent roughly 25 messages to one
+  // recipient in about 30 seconds. Meta throttles per business/consumer
+  // pair, and the tail was dropped — submit buttons arrived for products
+  // 1–6 and the closing message never arrived at all. Four chunked button
+  // messages became one list.
+  const FULL = {
+    description: "A long enough description to clear the fifty-character minimum check.",
+    category_code: "1234",
+    brand: "Panasonic",
+    images: ["https://cdn.test/a.jpg"],
+    status: "draft",
+    selling_price: 150,
+  };
+
+  function seedDrafted(n: number) {
+    db.tables.listings = Array.from({ length: n }, (_, i) => ({
+      id: `listing-${i + 1}`,
+      user_id: USER,
+      whatsapp_batch_id: "batch-1",
+      whatsapp_seq: i + 1,
+      title: `Drafted product number ${i + 1}`,
+      ...FULL,
+    }));
+  }
+
+  it("offers ten products as ONE list instead of four button messages", async () => {
+    seedDrafted(10);
+    seedSession({ state: "awaiting_confirmation", batch_size: 10, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 10);
+
+    const lists = sent.filter((m) => m.kind === "list");
+    expect(lists).toHaveLength(1);
+    expect(lists[0].rows).toHaveLength(10);
+    // The row id IS the command phrase, so a tap reaches parseSubmitCommand
+    // exactly as typing it would.
+    expect(lists[0].rows).toContain("submit 7");
+    // And the closing message still goes out — it was the one lost live.
+    expect(sent.some((m) => m.body.includes("Done drafting your 10 products"))).toBe(true);
+  });
+
+  // Three or fewer render inline with no sheet to open, and there is no
+  // volume to save at that size.
+  it("keeps inline buttons for a small batch", async () => {
+    seedDrafted(3);
+    seedSession({ state: "awaiting_confirmation", batch_size: 3, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 3);
+
+    expect(sent.some((m) => m.kind === "list")).toBe(false);
+    expect(sent.some((m) => m.kind === "buttons" && m.body.includes("Submit a specific product"))).toBe(true);
+  });
+
+  // A product that never drafted has no title and no submit row — but it
+  // must still be named in the closing message, because its number is what
+  // the seller needs in order to retry it.
+  it("leaves failed products out of the list and names them in the summary", async () => {
+    seedDrafted(5);
+    db.tables.listings[2].title = null;
+    seedSession({ state: "awaiting_confirmation", batch_size: 5, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 5);
+
+    const list = sent.find((m) => m.kind === "list")!;
+    expect(list.rows).toEqual(["submit 1", "submit 2", "submit 4", "submit 5"]);
+    expect(sent.some((m) => m.body.includes("retry 3"))).toBe(true);
   });
 });
