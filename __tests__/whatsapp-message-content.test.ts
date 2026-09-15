@@ -1,4 +1,4 @@
-import { contentOf, type IncomingMessage } from "@/lib/whatsapp/message-content";
+import { contentOf, METAS_OWN_UNSUPPORTED_TYPE, type IncomingMessage } from "@/lib/whatsapp/message-content";
 
 function msg(overrides: Partial<IncomingMessage>): IncomingMessage {
   return { id: "wamid.1", from: "233241234567", type: "text", ...overrides };
@@ -57,5 +57,43 @@ describe("contentOf", () => {
     expect(contentOf(msg({ type: "image", image: { id: "m1" } }))).toEqual({ imageMediaId: "m1", text: undefined });
     expect(contentOf(msg({ type: "interactive", interactive: { button_reply: { id: "done", title: "Done" } } })))
       .toEqual({ text: "done" });
+  });
+  // Meta's OWN "unsupported" container is not a media type the seller
+  // chose — it is WhatsApp saying it could not represent the message at
+  // all (a poll, a view-once photo, or the envelope that rides along with
+  // a multi-photo album). Marked with platformError so intake can tell
+  // the two apart; see METAS_OWN_UNSUPPORTED_TYPE.
+  it("distinguishes Meta's own unsupported container and keeps its reason", () => {
+    const result = contentOf(
+      msg({
+        type: METAS_OWN_UNSUPPORTED_TYPE,
+        errors: [
+          {
+            code: 131051,
+            title: "Unsupported message type",
+            error_data: { details: "Message type is not currently supported" },
+          },
+        ],
+      }),
+    );
+    expect(result.unsupported).toBe("unsupported");
+    expect(result.platformError).toBe(
+      "131051 Unsupported message type: Message type is not currently supported",
+    );
+  });
+
+  it("still reports Meta's container when it supplies no error detail", () => {
+    expect(contentOf(msg({ type: METAS_OWN_UNSUPPORTED_TYPE }))).toEqual({
+      unsupported: "unsupported",
+      platformError: "no error detail supplied",
+    });
+  });
+
+  // A real media type must NOT pick up platformError — that flag is what
+  // buys silence during an album, and a video the seller deliberately sent
+  // still deserves an answer.
+  it("leaves platformError unset for media types the seller actually sent", () => {
+    expect(contentOf(msg({ type: "video" })).platformError).toBeUndefined();
+    expect(contentOf(msg({ type: "document" })).platformError).toBeUndefined();
   });
 });

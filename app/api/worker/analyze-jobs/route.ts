@@ -5,6 +5,7 @@ import {
   markJobFailed,
   isBatchSettled,
   claimBatchFinalization,
+  msUntilNextJobSettles,
   nudgeWorker,
   type AnalysisJob,
 } from "@/lib/whatsapp/analysis-queue";
@@ -53,10 +54,35 @@ export async function POST(req: NextRequest) {
   // indistinguishable from an idle queue — including in
   // net._http_response, which is where the health of this worker is
   // actually read from.
-  const { jobs, error: claimError } = await claimAnalysisJobs(CLAIM_LIMIT);
+  let { jobs, error: claimError } = await claimAnalysisJobs(CLAIM_LIMIT);
+
+  // An empty claim has two very different causes now that jobs serve a
+  // settle window (see 2026-09-15_analysis-settle-window.sql): the queue
+  // is genuinely idle, or it holds work that is a few seconds too young.
+  //
+  // Only the second one is worth waiting for, and it is worth waiting for
+  // precisely because of how this worker is triggered: the webhook nudges
+  // it the instant a batch is queued. Returning empty from that nudge
+  // would hand a single-product draft back to pg_cron's once-a-minute
+  // tick — a minute of "drafting your product…" for work that was ready
+  // in ten seconds, which is the regression nudgeWorker exists to stop.
+  //
+  // Bounded by the window itself and only ever entered on an idle tick,
+  // so this cannot eat into the 60s budget of a tick that has real work.
+  let settleWaitMs = 0;
+  if (jobs.length === 0 && !claimError) {
+    settleWaitMs = await msUntilNextJobSettles();
+    if (settleWaitMs > 0) {
+      // +250ms so the row is past the boundary rather than exactly on it.
+      await new Promise((resolve) => setTimeout(resolve, settleWaitMs + 250));
+      ({ jobs, error: claimError } = await claimAnalysisJobs(CLAIM_LIMIT));
+    }
+  }
+
   if (jobs.length === 0) {
     return NextResponse.json({
       claimed: 0, done: 0, failed: 0, batchesClosed: 0,
+      ...(settleWaitMs > 0 ? { settleWaitMs } : {}),
       ...(claimError ? { claimError } : {}),
       gemini: readGeminiTelemetry(),
     });
@@ -135,6 +161,7 @@ export async function POST(req: NextRequest) {
   }
   return NextResponse.json({
     claimed: jobs.length, done, failed, batchesClosed,
+    ...(settleWaitMs > 0 ? { settleWaitMs } : {}),
     ...(unrecorded > 0 ? { unrecorded } : {}),
     gemini,
   });

@@ -312,3 +312,51 @@ export function nudgeWorker(): void {
     // pg_cron will pick the jobs up within the minute.
   });
 }
+
+/**
+ * How long a freshly-enqueued job waits before claim_analysis_jobs will
+ * hand it out.
+ *
+ * MUST match the settle_after constant in
+ * supabase/migrations/2026-09-15_analysis-settle-window.sql — the database
+ * enforces the rule, this is only how the worker knows how long to wait
+ * for it. See that migration for why the window exists (an album's last
+ * photos landing after the AI has already read the row).
+ */
+export const SETTLE_WINDOW_MS = 10_000;
+
+/**
+ * Milliseconds until the oldest queued job becomes claimable, or 0 if
+ * there is nothing waiting on the settle window.
+ *
+ * Only worth asking after a claim came back empty, which is when "the
+ * queue is idle" and "the queue has work that is a few seconds too young"
+ * look identical to the worker — and getting that wrong costs a
+ * single-product seller a full minute waiting for pg_cron's next tick,
+ * which is exactly the regression nudgeWorker exists to prevent.
+ *
+ * Never throws and never blocks the tick: a failure here answers 0, which
+ * simply means this tick ends as it would have before.
+ */
+export async function msUntilNextJobSettles(): Promise<number> {
+  const db = createServerClient();
+  const { data, error } = await db
+    .from("analysis_jobs")
+    .select("created_at")
+    .eq("status", "queued")
+    .order("created_at", { ascending: true })
+    .limit(1);
+
+  if (error) {
+    console.warn(`[analysis-queue] settle-window lookup failed: ${error.message}`);
+    return 0;
+  }
+  const oldest = data?.[0]?.created_at as string | undefined;
+  if (!oldest) return 0;
+
+  const age = Date.now() - new Date(oldest).getTime();
+  const remaining = SETTLE_WINDOW_MS - age;
+  // Clamped: a clock skew between Postgres and this function must not turn
+  // into an unbounded sleep inside a 60s route.
+  return remaining > 0 ? Math.min(remaining, SETTLE_WINDOW_MS) : 0;
+}

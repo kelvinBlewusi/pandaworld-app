@@ -274,7 +274,7 @@ export async function handleLinkedMessage(
   userId: string,
   phoneNumber: string,
   messageId: string | undefined,
-  content: { text?: string; imageMediaId?: string; unsupported?: string },
+  content: { text?: string; imageMediaId?: string; unsupported?: string; platformError?: string },
 ): Promise<void> {
   const session = await getOrCreateSession(userId, phoneNumber);
 
@@ -289,8 +289,29 @@ export async function handleLinkedMessage(
   // State is deliberately left untouched: they can simply send a photo
   // next and carry on exactly where they were.
   if (content.unsupported) {
-    console.info(`[whatsapp intake] unsupported message type "${content.unsupported}" from ${phoneNumber}`);
-    await replyText(phoneNumber, unsupportedMediaMessage(content.unsupported));
+    console.info(
+      `[whatsapp intake] unsupported message type "${content.unsupported}" from ${phoneNumber}` +
+      (content.platformError ? ` — Meta says: ${content.platformError}` : ""),
+    );
+    // Meta's OWN "unsupported" container, arriving while the seller is
+    // sending photos, is album plumbing rather than anything they chose
+    // to send — see METAS_OWN_UNSUPPORTED_TYPE. Answering it with "send a
+    // photo instead" while their photos are visibly landing in the next
+    // message reads as the bot being broken. Confirmed live on
+    // 2026-09-15: two of these mid-album, both scolding a seller whose
+    // six photos all arrived fine.
+    //
+    // Narrow on purpose. Only Meta's container, and only in the two
+    // states where photos are in flight — where the per-product "got it
+    // (N photos)" confirmations already tell the seller exactly what
+    // landed, so silence here costs them nothing. Everywhere else, and
+    // for every real media type (video, voice note, document, sticker),
+    // the seller still gets an answer.
+    const midPhotoBurst =
+      session.state === "awaiting_photos" || session.state === "analyzing";
+    if (!(content.platformError && midPhotoBurst)) {
+      await replyText(phoneNumber, unsupportedMediaMessage(content.unsupported));
+    }
     if (messageId) await updateSession(phoneNumber, { lastMessageId: messageId });
     return;
   }
@@ -1544,16 +1565,38 @@ export async function finalizeBatch(
 
   for (let i = 0; i < readyToSubmitSeqs.length; i += 3) {
     const chunk = readyToSubmitSeqs.slice(i, i + 3);
+    // Only the first chunk introduces itself. A 4-product batch sends two
+    // messages, and giving both the identical "Submit a specific product:"
+    // header made the second look like the bot had repeated itself —
+    // visible in a seller's transcript on 2026-09-15.
     await replyButtons(
       phoneNumber,
-      "Submit a specific product:",
+      i === 0 ? "Submit a specific product:" : "…and the rest:",
       chunk.map((seq) => ({ id: `submit ${seq}`, title: `Submit product ${seq}` })),
     );
   }
 
+  // Report what actually drafted, not what was promised.
+  //
+  // A product whose analysis failed for good has no title, so it is
+  // already absent from the buttons above — but the closing line still
+  // announced the full batch size, so a seller who asked for 4 and got 3
+  // was congratulated on 4 and left to notice the gap themselves. Worse,
+  // the missing numbers are exactly the ones they need in order to ask
+  // for a retry.
+  const draftedCount = readyToSubmitSeqs.length;
+  const missingSeqs = Array.from({ length: batchSize }, (_, i) => i + 1)
+    .filter((seq) => !readyToSubmitSeqs.includes(seq));
+
+  const headline = missingSeqs.length === 0
+    ? `🎉 Done drafting your ${batchSize} products!`
+    : `Done drafting ${draftedCount} of your ${batchSize} products.\n` +
+      `⚠️ ${missingSeqs.length === 1 ? "Product" : "Products"} ${missingSeqs.join(", ")} ` +
+      `couldn't be drafted — reply *restart* to try ${missingSeqs.length === 1 ? "it" : "them"} again.`;
+
   await replyButtons(
     phoneNumber,
-    `🎉 Done drafting your ${batchSize} products! Check the messages above for each one, then reply *submit all* when ready — or tell me a product number (e.g. *submit 2*) to submit just one.`,
+    `${headline} Check the messages above for each one, then reply *submit all* when ready — or tell me a product number (e.g. *submit 2*) to submit just one.`,
     [
       { id: "submit all", title: "Submit all ✅" },
       { id: "restart",    title: "Restart 🔄" },
