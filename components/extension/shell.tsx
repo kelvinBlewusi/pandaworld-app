@@ -131,7 +131,10 @@ export function ExtensionShell({
   }, [open]);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-zinc-50">
+    // h-[100dvh] rather than h-screen — see the note in sidebar.tsx: on iOS
+    // Safari 100vh ignores the browser chrome, so the bottom of the app sat
+    // underneath it.
+    <div className="flex h-[100dvh] overflow-hidden bg-zinc-50">
       {/* Desktop sidebar */}
       <div className="hidden lg:flex">
         <ExtensionSidebar isAdmin={isAdmin} />
@@ -146,10 +149,17 @@ export function ExtensionShell({
         onClick={() => setOpen(false)}
         aria-hidden="true"
       />
+      {/* Mobile drawer — anchored RIGHT.
+          Requested by the user, and it suits the device: on a phone held in
+          one hand the right edge is where the thumb already is, while the
+          left edge is where iOS Safari's back-swipe lives, so a
+          left-anchored drawer competes with a system gesture. The menu
+          button below moves to the same side, so the control and the panel
+          it opens are not at opposite ends of the screen. */}
       <div
         className={[
-          "fixed inset-y-0 left-0 z-50 flex flex-col transition-transform duration-300 ease-in-out lg:hidden",
-          open ? "translate-x-0" : "-translate-x-full",
+          "fixed inset-y-0 right-0 z-50 flex flex-col transition-transform duration-300 ease-in-out lg:hidden",
+          open ? "translate-x-0" : "translate-x-full",
         ].join(" ")}
       >
         <ExtensionSidebar onClose={() => setOpen(false)} isAdmin={isAdmin} />
@@ -158,15 +168,17 @@ export function ExtensionShell({
       {/* Main content area */}
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Mobile top bar */}
-        <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-white px-4 lg:hidden">
+        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b bg-white px-4 lg:hidden">
+          <Wordmark size={20} />
+          {/* On the right, matching the drawer it opens. 44px square — the
+              minimum tap target, where this was 36. */}
           <button
             onClick={() => setOpen(true)}
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 transition-colors"
+            className="flex h-11 w-11 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900"
             aria-label="Open menu"
           >
             <Menu className="h-5 w-5" />
           </button>
-          <Wordmark size={20} />
         </header>
 
         {/* Utility bar — page title + greeting on the left (changes per

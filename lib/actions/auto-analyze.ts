@@ -1262,6 +1262,58 @@ export async function runAutoAnalyze(
     }
   }
 
+  // ── The same guard, on the COLUMNS ──────────────────────────────────────
+  //
+  // The loop above cleans dynamic_attributes. That is not where the bad
+  // value lives for a column-mapped attribute, and this is the miss that
+  // let "Fabric" reach Jumia again the day after the dynamic-attribute
+  // guard shipped:
+  //
+  //   material_family (column)             = "Fabric"     ← sent
+  //   dynamic_attributes.material_family    = null
+  //
+  // Pass A writes these columns directly via setField (see
+  // description.material_family above), never through dynamic_attributes,
+  // and buildAttributes reads the COLUMN for anything column-mapped. So a
+  // value cleaned out of the attribute copy still goes out from the column,
+  // and preflight drops it at push with a warning the seller has to read
+  // past — exactly what it did on 2026-09-15 at 13:16.
+  //
+  // Clearing rather than keeping, for the reason given above: an empty
+  // required field is surfaced by describeMissingFields and the seller is
+  // asked for it, while a wrong one looks finished until Jumia disagrees.
+  for (const field of attrs) {
+    if (field.allowed_values.length === 0) continue;
+    const col = columnFor(field.name);
+    if (!col || isUserEdited(col)) continue;
+
+    const pending  = updates[col];
+    const existing = (listing as Record<string, unknown>)[col];
+    const raw = String((pending ?? existing) ?? "").trim();
+    if (!raw) continue;
+
+    const parts = field.type === "multi"
+      ? raw.split(",").map((v) => v.trim()).filter(Boolean)
+      : [raw];
+    const kept = parts
+      .map((part) => snapToAllowed(part, field.allowed_values))
+      .filter((v): v is string => v !== null);
+
+    if (kept.length === 0) {
+      updates[col] = null;
+      console.info(
+        `[auto-analyze] listing=${listingId} cleared ${col}="${raw}" — ` +
+        `not a value category ${chosen.code} accepts`,
+      );
+      continue;
+    }
+    const snapped = kept.join(",");
+    if (snapped !== raw) {
+      updates[col] = snapped;
+      console.info(`[auto-analyze] listing=${listingId} snapped ${col}: "${raw}" -> "${snapped}"`);
+    }
+  }
+
   await db.from("listings").update({
     ...updates,
     category_code:       String(chosen.code),

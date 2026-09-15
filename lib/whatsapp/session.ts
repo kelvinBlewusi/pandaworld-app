@@ -92,7 +92,67 @@ export async function getOrCreateSession(
     .select("*")
     .eq("phone_number", phoneNumber)
     .maybeSingle();
-  if (existing) return fromRow(existing);
+
+  if (existing) {
+    // Same number, DIFFERENT account. The session row is keyed by phone
+    // number alone, so relinking a number to another PandaWorld account
+    // updated whatsapp_connections and left this row pointing at the old
+    // one — and this function returned it regardless of who was asking.
+    //
+    // Found live on 2026-09-15: phone 233550607231 had a
+    // whatsapp_connections row for one user and an active
+    // whatsapp_sessions row, mid-batch at awaiting_confirmation, for a
+    // different user whose Clerk account had since been deleted. The new
+    // owner of the number was inheriting the previous owner's session —
+    // its listingId, its batchId, and any notes parked against it. One
+    // seller resuming another seller's in-flight batch is a data leak,
+    // not a glitch.
+    //
+    // A change of owner ends the conversation. Everything batch-scoped is
+    // cleared rather than carried over: a half-finished batch belongs to
+    // the account that started it, and there is no sense in which the new
+    // owner asked to continue it.
+    if (existing.user_id !== userId) {
+      console.warn(
+        `[whatsapp session] ${phoneNumber} changed owner ` +
+        `(${existing.user_id} → ${userId}) — resetting the session rather than ` +
+        `handing over the previous account's batch`,
+      );
+      const { data: adopted } = await db
+        .from("whatsapp_sessions")
+        .update({
+          user_id:         userId,
+          state:           initialState,
+          listing_id:      null,
+          batch_id:        null,
+          batch_size:      null,
+          batch_seq:       null,
+          pending_app_id:  null,
+          pending_notes:   null,
+          last_image_at:   null,
+          last_message_id: null,
+          updated_at:      new Date().toISOString(),
+        })
+        .eq("phone_number", phoneNumber)
+        // Pinned to the owner we read, so two concurrent relinks cannot
+        // both believe they won.
+        .eq("user_id", existing.user_id)
+        .select("*")
+        .maybeSingle();
+
+      // A lost race means someone else adopted it first; re-read rather
+      // than assume either version.
+      if (adopted) return fromRow(adopted);
+      const { data: reread } = await db
+        .from("whatsapp_sessions")
+        .select("*")
+        .eq("phone_number", phoneNumber)
+        .maybeSingle();
+      if (reread) return fromRow(reread);
+    }
+
+    return fromRow(existing);
+  }
 
   const { data: created, error } = await db
     .from("whatsapp_sessions")
