@@ -1069,6 +1069,10 @@ async function handleAwaitingPhotos(
   const batchSize = session.batchSize ?? 1;
   const seq = session.batchSeq ?? 1;
   let listingId = session.listingId;
+  // How many photos this product holds AFTER this delivery. Declared out
+  // here because the confirmation that reports it is sent further down,
+  // in the shared text-handling path.
+  let imageCount = 0;
 
   // ── Photo, with or without a caption in the same message ────────────────
   if (content.imageMediaId) {
@@ -1125,8 +1129,22 @@ async function handleAwaitingPhotos(
       return;
     }
 
-    const next = [...current, url].slice(0, MAX_LISTING_IMAGES);
-    await db.from("listings").update({ images: next, updated_at: new Date().toISOString() }).eq("id", listingId);
+    // Atomic append — see 2026-09-15_atomic-image-append.sql.
+    //
+    // This was [...current, url] written back over the row, and it lost
+    // photos: an album's deliveries all read `images` before any of them
+    // wrote, each built a one-element array, and the last write won. A
+    // seller sent three photos of one product and one survived.
+    //
+    // The read above is still fine for the cap early-out — it saves
+    // ingesting an image that would be discarded — but it must not be
+    // what the write is based on.
+    const { data: appended } = await db.rpc("append_listing_image", {
+      p_listing_id: listingId,
+      p_url:        url,
+      p_max:        MAX_LISTING_IMAGES,
+    });
+    imageCount = (appended as { image_count: number }[] | null)?.[0]?.image_count ?? current.length + 1;
 
     // Falls through to the text handling below — a caption ("Price 40,
     // done") sent alongside this photo used to be silently dropped
@@ -1140,7 +1158,7 @@ async function handleAwaitingPhotos(
     if (content.imageMediaId) {
       await replyButtons(
         phoneNumber,
-        `📸 Product ${seq}: got it. Send more photos, or reply *done* once you're finished with this one.`,
+        `📸 Product ${seq}: got it (${imageCount} photo${imageCount === 1 ? "" : "s"}). Send more photos, or reply *done* once you're finished with this one.`,
         [{ id: "done", title: "Done ✅" }],
       );
     } else {
