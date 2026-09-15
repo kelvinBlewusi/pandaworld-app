@@ -1039,6 +1039,27 @@ async function claimBatchSlot(
   }
 }
 
+/**
+ * Hold a note until this product has a listing to attach it to.
+ *
+ * Appends rather than replaces: a second note before the photo arrives is
+ * the seller adding to or correcting the first, and keeping both is what
+ * they would expect. applyNotes caps what it stores, so an unbounded
+ * append cannot grow the listing's user_prompt past that.
+ */
+async function parkNotes(
+  phoneNumber: string,
+  session:     WhatsAppSession,
+  notes:       string,
+): Promise<void> {
+  const trimmed = notes.trim();
+  if (!trimmed) return;
+  const combined = session.pendingNotes
+    ? `${session.pendingNotes}\n${trimmed}`
+    : trimmed;
+  await updateSession(phoneNumber, { pendingNotes: combined.slice(0, 1000) });
+}
+
 async function handleAwaitingPhotos(
   userId: string,
   phoneNumber: string,
@@ -1048,6 +1069,10 @@ async function handleAwaitingPhotos(
   const batchSize = session.batchSize ?? 1;
   const seq = session.batchSeq ?? 1;
   let listingId = session.listingId;
+  // How many photos this product holds AFTER this delivery. Declared out
+  // here because the confirmation that reports it is sent further down,
+  // in the shared text-handling path.
+  let imageCount = 0;
 
   // ── Photo, with or without a caption in the same message ────────────────
   if (content.imageMediaId) {
@@ -1072,6 +1097,17 @@ async function handleAwaitingPhotos(
       }
       listingId = claimed.listingId;
       await updateSession(phoneNumber, { listingId });
+
+      // Flush a note that beat its own photo here. Separate webhook
+      // deliveries are not ordered, and a line of text routinely
+      // overtakes the image it was sent with — so without this the
+      // seller's price, variants and sale window are simply gone by the
+      // time there is a listing to put them on.
+      if (session.pendingNotes) {
+        await applyNotes(listingId, session.pendingNotes);
+        await updateSession(phoneNumber, { pendingNotes: null });
+        console.info(`[whatsapp] listing=${listingId} applied notes that arrived before the photo`);
+      }
     }
 
     const db = createServerClient();
@@ -1093,8 +1129,22 @@ async function handleAwaitingPhotos(
       return;
     }
 
-    const next = [...current, url].slice(0, MAX_LISTING_IMAGES);
-    await db.from("listings").update({ images: next, updated_at: new Date().toISOString() }).eq("id", listingId);
+    // Atomic append — see 2026-09-15_atomic-image-append.sql.
+    //
+    // This was [...current, url] written back over the row, and it lost
+    // photos: an album's deliveries all read `images` before any of them
+    // wrote, each built a one-element array, and the last write won. A
+    // seller sent three photos of one product and one survived.
+    //
+    // The read above is still fine for the cap early-out — it saves
+    // ingesting an image that would be discarded — but it must not be
+    // what the write is based on.
+    const { data: appended } = await db.rpc("append_listing_image", {
+      p_listing_id: listingId,
+      p_url:        url,
+      p_max:        MAX_LISTING_IMAGES,
+    });
+    imageCount = (appended as { image_count: number }[] | null)?.[0]?.image_count ?? current.length + 1;
 
     // Falls through to the text handling below — a caption ("Price 40,
     // done") sent alongside this photo used to be silently dropped
@@ -1108,7 +1158,7 @@ async function handleAwaitingPhotos(
     if (content.imageMediaId) {
       await replyButtons(
         phoneNumber,
-        `📸 Product ${seq}: got it. Send more photos, or reply *done* once you're finished with this one.`,
+        `📸 Product ${seq}: got it (${imageCount} photo${imageCount === 1 ? "" : "s"}). Send more photos, or reply *done* once you're finished with this one.`,
         [{ id: "done", title: "Done ✅" }],
       );
     } else {
@@ -1125,12 +1175,32 @@ async function handleAwaitingPhotos(
     if (notes && listingId) await applyNotes(listingId, notes);
 
     if (!listingId) {
-      await replyText(phoneNumber, `Send at least one photo for product ${seq} first, then reply *done*.`);
+      // The note is PARKED, not dropped. It used to be discarded right
+      // here — `if (notes && listingId)` above is false — and the seller
+      // was told to send a photo, with no hint that everything they had
+      // just typed was gone. Confirmed live: a product drafted with no
+      // price, no variants and no sale window under a note that gave all
+      // three.
+      if (notes) await parkNotes(phoneNumber, session, notes);
+      await replyText(
+        phoneNumber,
+        notes
+          ? `Got your notes for product ${seq} — I'll attach them to the photo. Send at least one photo, then reply *done*.`
+          : `Send at least one photo for product ${seq} first, then reply *done*.`,
+      );
       return;
     }
 
     if (seq < batchSize) {
-      await updateSession(phoneNumber, { state: "awaiting_photos", listingId: null, batchSeq: seq + 1 });
+      // pendingNotes cleared with the advance: anything still parked
+      // belongs to the product just finished, and carrying it forward
+      // would staple one product's price and variants onto the next.
+      await updateSession(phoneNumber, {
+        state:        "awaiting_photos",
+        listingId:    null,
+        batchSeq:     seq + 1,
+        pendingNotes: null,
+      });
       await replyText(
         phoneNumber,
         `✅ Product ${seq} saved. Now send photos for product ${seq + 1} of ${batchSize}, and tell me the price plus any other notes (variations, sizes, sale price etc.), then reply *done*.`,
@@ -1158,6 +1228,9 @@ async function handleAwaitingPhotos(
   } else {
     // No photo yet for this product — "done" isn't a real option, so no
     // button; the seller still needs to send at least one photo first.
+    // The note is parked so the photo that follows picks it up; saying
+    // "noted" while throwing it away was the worst of both.
+    await parkNotes(phoneNumber, session, text);
     await replyText(phoneNumber, `Got it — noted for product ${seq}. Send a photo to get started.`);
   }
 }
@@ -1744,7 +1817,12 @@ async function handleSubmit(
         try {
           const result = await pushListingToJumia(userId, listing.id);
           if (result.ok) {
-            messages[i] = `Product ${seq}: ✅ submitted — pending Jumia review.`;
+            // Name anything Jumia did not receive as written. A push that
+            // reports plain success while a value the seller typed was
+            // dropped is the quiet failure this whole pass is about.
+            messages[i] = result.adjustments?.length
+              ? `Product ${seq}: ✅ submitted — pending Jumia review.\n⚠️ ${result.adjustments.join("; ")}.`
+              : `Product ${seq}: ✅ submitted — pending Jumia review.`;
           } else if (result.code === "validation") {
             messages[i] = `Product ${seq}: ⚠️ ${result.message} Fix it at ${focusedEditorUrl(listing.id)} then reply submit again.`;
           } else if (result.needsReconnect) {
@@ -2001,7 +2079,12 @@ async function handleFixAndResubmit(
   const result = await pushListingToJumia(userId, listingId);
 
   if (result.ok) {
-    await replyText(phoneNumber, `✅ ${label}: resubmitted — pending Jumia review.`);
+    await replyText(
+      phoneNumber,
+      result.adjustments?.length
+        ? `✅ ${label}: resubmitted — pending Jumia review.\n⚠️ ${result.adjustments.join("; ")}.`
+        : `✅ ${label}: resubmitted — pending Jumia review.`,
+    );
     return;
   }
 

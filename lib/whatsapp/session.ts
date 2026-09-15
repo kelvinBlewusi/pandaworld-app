@@ -34,6 +34,14 @@ export interface WhatsAppSession {
   // has pasted it but not yet the Client Secret (or vice versa — see
   // lib/whatsapp/intake.ts's handleAwaitingJumiaCredentials).
   pendingAppId:  string | null;
+  /**
+   * A note the seller sent before the product had a listing to hang it
+   * on. WhatsApp does not order separate webhook deliveries, and a photo
+   * is a much bigger payload than a line of text, so the note routinely
+   * wins the race. Parked here rather than dropped; flushed the moment a
+   * listing exists.
+   */
+  pendingNotes:  string | null;
 }
 
 function fromRow(row: Record<string, unknown>): WhatsAppSession {
@@ -47,6 +55,7 @@ function fromRow(row: Record<string, unknown>): WhatsAppSession {
     batchSize:     (row.batch_size as number | null) ?? null,
     batchSeq:      (row.batch_seq as number | null) ?? null,
     pendingAppId:  (row.pending_app_id as string | null) ?? null,
+    pendingNotes:  (row.pending_notes as string | null) ?? null,
   };
 }
 
@@ -105,6 +114,7 @@ export async function updateSession(
     batchSize:     number | null;
     batchSeq:      number | null;
     pendingAppId:  string | null;
+    pendingNotes:  string | null;
   }>,
 ): Promise<void> {
   const db = createServerClient();
@@ -116,6 +126,7 @@ export async function updateSession(
   if (patch.batchSize     !== undefined) update.batch_size      = patch.batchSize;
   if (patch.batchSeq      !== undefined) update.batch_seq       = patch.batchSeq;
   if (patch.pendingAppId  !== undefined) update.pending_app_id  = patch.pendingAppId;
+  if (patch.pendingNotes  !== undefined) update.pending_notes   = patch.pendingNotes;
   await db.from("whatsapp_sessions").update(update).eq("phone_number", phoneNumber);
 }
 
@@ -132,5 +143,9 @@ export async function resetSession(phoneNumber: string): Promise<void> {
     batchId:   null,
     batchSize: null,
     batchSeq:  null,
+    // A note parked against the abandoned batch must not survive into the
+    // next one — restart means start over, and inheriting the old batch's
+    // price or variants is the opposite of that.
+    pendingNotes: null,
   });
 }

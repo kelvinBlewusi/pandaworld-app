@@ -134,6 +134,12 @@ const DYNAMIC_ALIAS_GROUPS: Record<string, string> = {
   box_contents:             "whats_in_the_box",
   in_the_box:               "whats_in_the_box",
   package_contents:         "whats_in_the_box",
+  // Singular. This is the name Jumia actually uses on at least category
+  // 1000254 ("What's in the box"), and its absence here meant a seller's
+  // own box contents were written under the canonical key, found not to
+  // be declared by the category, and dropped by the pre-flight — while
+  // the AI's guess, which happened to use the real name, was pushed.
+  package_content:          "whats_in_the_box",
   contents_of_the_box:      "whats_in_the_box",
   // ── From the manufacturer (descriptive text, not the brand value) ─────
   from_the_manufacturer:    "from_the_manufacturer",

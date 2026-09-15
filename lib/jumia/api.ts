@@ -14,7 +14,7 @@
 
 import { createServerClient } from "@/lib/supabase/server";
 import { columnFor, readAttributeValue } from "@/lib/jumia/attribute-mapping";
-import { preflightAttributes, summarisePreflight } from "@/lib/jumia/preflight";
+import { preflightAttributes, summarisePreflight, type PreflightNote } from "@/lib/jumia/preflight";
 import { refreshAccessToken, JUMIA_API_BASE } from "@/lib/jumia/oauth";
 import { mockCategories } from "@/lib/mock/categories";
 import { findBrandExact } from "@/lib/jumia/brands";
@@ -442,7 +442,14 @@ const CARRIED_OUTSIDE_ATTRIBUTES: string[] = [
   ...Array.from(PER_VARIANT_ATTRIBUTE_NAMES),
 ];
 
-function buildAttributes(listing: ListingRow, schema: JumiaCategoryAttribute[]): JumiaAttribute[] {
+function buildAttributes(
+  listing: ListingRow,
+  schema: JumiaCategoryAttribute[],
+  /** Collects every change made on the way out, already phrased for a
+   *  seller, so the caller can TELL them. Silent repair is still repair
+   *  happening behind their back. */
+  noteSink?: string[],
+): JumiaAttribute[] {
   const attrs: JumiaAttribute[] = [];
   const requiredNames = new Set(
     schema.filter((f) => f.required).map((f) => f.name.toLowerCase()),
@@ -556,6 +563,7 @@ function buildAttributes(listing: ListingRow, schema: JumiaCategoryAttribute[]):
   if (summary) {
     console.info(`[Jumia preflight] ${summary} — ${preflight.notes.map((n) => `${n.attribute}: ${n.detail}`).join("; ")}`);
   }
+  if (noteSink) noteSink.push(...describeAdjustments(preflight.notes));
   return preflight.attributes.map((a) => ({ name: a.name, value: a.value, translations: [] }));
 }
 
@@ -580,6 +588,7 @@ function buildBaseProduct(
   brand: { code: number; name: string },
   currency: string,
   schema: JumiaCategoryAttribute[] = [],
+  noteSink?: string[],
 ) {
   const category   = resolveCategoryCode(listing);
   const images     = (listing.images ?? [])
@@ -603,6 +612,11 @@ function buildBaseProduct(
     console.info(
       `[jumia push] stripped brand "${brand.name}" from title — was "${rawTitle.trim()}", now "${cleanedTitle}".`,
     );
+    // Jumia rejects a title repeating the brand, so stripping it is
+    // required — but the seller kept seeing their own title in the editor
+    // and never learnt that a different one went out. Required is not the
+    // same as invisible.
+    noteSink?.push(`the brand "${brand.name}" was removed from the title — Jumia rejects titles that repeat it, so it went as "${cleanedTitle}"`);
   }
   const safeTitle = cleanedTitle || rawTitle.trim();
 
@@ -669,7 +683,7 @@ function buildBaseProduct(
       } : {}),
     },
     stock:       listing.quantity ?? 1,
-    attributes:  buildAttributes(listing, schema),
+    attributes:  buildAttributes(listing, schema, noteSink),
     barcodeEan:  "",
     gtinBarcode: "",      // schema reference uses this name; harmless duplicate
     // additionalCategories: DEPRECATED per official spec (PDF page 5).
@@ -692,8 +706,10 @@ export function mapListingToJumiaProducts(
   // that don't have it handy (scripts, tests) — attributes pass through
   // unchecked in that case, same as before this existed.
   categoryAttributeSchema: JumiaCategoryAttribute[] = [],
+  /** Optional sink for changes made on the way out — see buildAttributes. */
+  noteSink?: string[],
 ): JumiaProduct[] {
-  const base = buildBaseProduct(listing, brand, currency, categoryAttributeSchema);
+  const base = buildBaseProduct(listing, brand, currency, categoryAttributeSchema, noteSink);
 
   if (!variants.length) {
     // No persisted variants → one product entry using the listing's own
@@ -828,6 +844,42 @@ function missingRequiredFor(
     .map((f) => f.label || f.name);
 }
 
+/**
+ * Turn the pre-flight's notes into sentences a seller can act on.
+ *
+ * Only what the seller can actually act on, which is a narrower set than
+ * "everything that changed":
+ *
+ *   snapped_enum   a spelling correction to the exact string Jumia
+ *                  accepts. The value survives; only its casing moved.
+ *   line_breaks    a formatting equivalence — a <br> renders as the line
+ *                  the seller typed.
+ *   not_in_schema  the field is not in this category's schema, so the
+ *                  editor never rendered it either. Nothing the seller
+ *                  can see changed, and this one is the reason the filter
+ *                  exists at all: the payload sprays a fixed set of
+ *                  universal fields (colour, warranty, country, product
+ *                  line...) at every listing, so a category declaring
+ *                  none of them produces TWENTY of these on a perfectly
+ *                  good push. A list that long on every submit is a list
+ *                  sellers learn to scroll past, which would cost the two
+ *                  below their only chance of being read.
+ *
+ * What is left is content the seller CAN see in the editor and that Jumia
+ * did not receive as written.
+ */
+function describeAdjustments(notes: PreflightNote[]): string[] {
+  const out: string[] = [];
+  for (const n of notes) {
+    if (n.reason === "invalid_enum") {
+      out.push(`${n.label}: ${n.detail}, so it wasn't sent`);
+    } else if (n.reason === "truncated") {
+      out.push(`${n.label} was ${n.detail}`);
+    }
+  }
+  return out;
+}
+
 export interface JumiaPushResult {
   success:   boolean;
   jumia_ref: string | null;  // feedId — poll GET /feeds/{id} for status
@@ -842,6 +894,18 @@ export interface JumiaPushResult {
   blocked?:  "missing_required";
   /** Schema-required attribute labels that were empty, for the message. */
   missing?:  string[];
+  /**
+   * What the pre-flight CHANGED on the way out, in the seller's terms.
+   *
+   * These repairs were always happening and were only ever written to a
+   * log line. That means a seller could type a value, submit, and have
+   * something else reach Jumia with no way to find out — a colour snapped
+   * to the schema's spelling, an attribute dropped because the category
+   * doesn't declare it, a description trimmed to a length cap. Reporting
+   * them is the difference between a system that corrects you and one
+   * that corrects you behind your back.
+   */
+  adjustments?: string[];
 }
 
 /**
@@ -881,9 +945,10 @@ export async function pushProductsToJumia(
   // 2. Build the products payload. Can throw if the listing lacks a real
   //    numeric category — surface that as a structured push error rather
   //    than a 500.
+  const preflightNotes: string[] = [];
   let products: ReturnType<typeof mapListingToJumiaProducts>;
   try {
-    products = mapListingToJumiaProducts(listing, variants, brand, currency, categoryAttributeSchema);
+    products = mapListingToJumiaProducts(listing, variants, brand, currency, categoryAttributeSchema, preflightNotes);
   } catch (e) {
     const msg = (e as Error).message ?? "Failed to build payload";
     return { success: false, jumia_ref: null, raw: null, error: msg };
@@ -947,12 +1012,12 @@ export async function pushProductsToJumia(
   if (res.ok) {
     const feedId = extractFeedId(raw);
     console.info("[Jumia API] ✅ Feed created, feedId:", feedId);
-    return { success: true, jumia_ref: feedId, raw };
+    return { success: true, jumia_ref: feedId, raw, adjustments: preflightNotes };
   }
 
   const errorMsg = extractError(raw, res.status);
   console.error("[Jumia API] ❌ Error:", res.status, raw);
-  return { success: false, jumia_ref: null, raw, error: errorMsg };
+  return { success: false, jumia_ref: null, raw, error: errorMsg, adjustments: preflightNotes };
 }
 
 /**

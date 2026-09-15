@@ -151,7 +151,24 @@ export function WhatsAppFocusedEditor({
   const [collapsedVariants, setCollapsedVariants] = useState<Set<string>>(new Set());
   const [schemaAxes, setSchemaAxes]     = useState<JumiaCategoryAttribute[]>([]);
 
-  const multiVariant = variants.length > 1 || axesDef.length > 0;
+  // Whether the seller has deliberately opened the variants section.
+  //
+  // This used to be inferred purely from `variants.length > 1`, and that
+  // one line caused both halves of a reported bug. A simple product holds
+  // ONE synthetic "Default" row (Jumia requires a non-empty variation even
+  // for a single-variant product), and at length 1 that row is hidden
+  // behind the plain Price/Stock form. So:
+  //
+  //   tap "Add a variation" → length 2 → the hidden row APPEARS alongside
+  //   the new one, and one tap looks like it created two fields.
+  //
+  //   delete one → length 1 → the whole section vanishes, which reads as
+  //   having deleted everything rather than one row.
+  //
+  // Sticky now: once opened it stays open, so the count never silently
+  // decides what the seller is looking at.
+  const [variantsOpen, setVariantsOpen] = useState(false);
+  const multiVariant = variantsOpen || variants.length > 1 || axesDef.length > 0;
 
   useEffect(() => {
     if (!categoryCode || isNaN(Number(categoryCode))) return;
@@ -216,16 +233,33 @@ export function WhatsAppFocusedEditor({
     setVariants((p) => p.filter((v) => v.id !== id));
   };
   const addVariation = () => {
-    const newId  = `v-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    const suffix = String(variants.length + 1).padStart(2, "0");
-    setVariants((prev) => [
-      ...prev,
-      {
-        id: newId, axes: {}, variation: "", sellerSku: `${listing.sku}-${suffix}`,
-        gtin: "", quantity: "1", globalPrice: prev[0]?.globalPrice ?? "",
-        salePrice: "", saleStartDate: "", saleEndDate: "",
-      },
-    ]);
+    // Opening is explicit, and separate from the row count — see
+    // variantsOpen. Without this the first tap reveals the hidden
+    // synthetic row too, and looks like it added two.
+    setVariantsOpen(true);
+    setVariants((prev) => {
+      // Suffix from the highest one ALREADY in use, not from the row
+      // count. Counting breaks as soon as a middle row is deleted: two
+      // rows ending -01 and -03, delete -03, add → count says -02, and a
+      // -02 may well be sitting right there. Jumia rejects the feed on a
+      // duplicate seller SKU, so this has to be unique, not merely tidy.
+      const used = new Set(prev.map((v) => v.sellerSku));
+      let n = prev.reduce((max, v) => {
+        const m = /-(\d+)$/.exec(v.sellerSku);
+        return m ? Math.max(max, Number(m[1])) : max;
+      }, prev.length);
+      let sku = "";
+      do { n += 1; sku = `${listing.sku}-${String(n).padStart(2, "0")}`; } while (used.has(sku));
+      return [
+        ...prev,
+        {
+          id: `v-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          axes: {}, variation: "", sellerSku: sku,
+          gtin: "", quantity: "1", globalPrice: prev[0]?.globalPrice ?? "",
+          salePrice: "", saleStartDate: "", saleEndDate: "",
+        },
+      ];
+    });
   };
   const addAxis = (attr: JumiaCategoryAttribute) => {
     if (axesDef.find((a) => a.name === attr.name)) return;
@@ -356,7 +390,16 @@ export function WhatsAppFocusedEditor({
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setStatus("pending_approval");
-        setMessage({ type: "ok", text: "Submitted — pending Jumia review." });
+        // Name anything Jumia did not receive as written. Silently
+        // "succeeding" while a value the seller typed was dropped is the
+        // failure mode this exists to end.
+        const adjusted = (data.adjustments ?? []) as string[];
+        setMessage({
+          type: "ok",
+          text: adjusted.length > 0
+            ? `Submitted — pending Jumia review. Note: ${adjusted.join("; ")}.`
+            : "Submitted — pending Jumia review.",
+        });
       } else {
         setMessage({ type: "error", text: data.error ?? data.message ?? "Push failed." });
       }

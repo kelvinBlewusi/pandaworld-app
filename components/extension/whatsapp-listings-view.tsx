@@ -296,7 +296,16 @@ function WhatsAppListingRow({ listing }: { listing: ListingRow }) {
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setStatus("pending_approval");
-        setMessage({ type: "ok", text: "Submitted — pending Jumia review." });
+        // Name anything Jumia did not receive as written. Silently
+        // "succeeding" while a value the seller typed was dropped is the
+        // failure mode this exists to end.
+        const adjusted = (data.adjustments ?? []) as string[];
+        setMessage({
+          type: "ok",
+          text: adjusted.length > 0
+            ? `Submitted — pending Jumia review. Note: ${adjusted.join("; ")}.`
+            : "Submitted — pending Jumia review.",
+        });
       } else {
         setMessage({ type: "error", text: data.error ?? data.message ?? "Push failed." });
       }

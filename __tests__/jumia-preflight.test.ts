@@ -173,3 +173,49 @@ describe("preflightAttributes — carriedElsewhere", () => {
     expect(r.missingRequired.map((n) => n.attribute)).toEqual(["product_weight"]);
   });
 });
+
+describe("preflightAttributes — line breaks in long text", () => {
+  // Confirmed live, side by side: our editor showed "What's in the box"
+  // as three lines, Vendor Center showed it as one unbroken run. Jumia
+  // renders the field as HTML, where a newline is only whitespace.
+  const longText: JumiaCategoryAttribute[] = [
+    attr({ name: "package_content", label: "What's in the box", type: "textarea" }),
+    attr({ name: "model",           label: "Model",            type: "string" }),
+  ];
+
+  const BOX = "1x Gas Stove with Oven\n1x User manual\n1x Original packaging";
+
+  it("turns newlines into <br> so Jumia keeps them", () => {
+    const r = preflightAttributes([{ name: "package_content", value: BOX }], longText);
+    expect(r.attributes[0].value)
+      .toBe("1x Gas Stove with Oven<br>1x User manual<br>1x Original packaging");
+    expect(r.notes.find((n) => n.reason === "line_breaks")).toBeTruthy();
+  });
+
+  it("handles \\r\\n as well as \\n", () => {
+    const r = preflightAttributes([{ name: "package_content", value: "a\r\nb" }], longText);
+    expect(r.attributes[0].value).toBe("a<br>b");
+  });
+
+  it("leaves a value that already carries markup alone", () => {
+    // That came from the rich-text editor, where the breaks are real
+    // <p>/<br> already — converting again would double-space it.
+    const html = "<p>1x Gas Stove</p>\n<p>1x User manual</p>";
+    const r = preflightAttributes([{ name: "package_content", value: html }], longText);
+    expect(r.attributes[0].value).toBe(html);
+    expect(r.notes.find((n) => n.reason === "line_breaks")).toBeUndefined();
+  });
+
+  it("does NOT touch a short-text field", () => {
+    // Only long text is rendered as HTML by Jumia; a <br> in a plain
+    // string field would be shown literally.
+    const r = preflightAttributes([{ name: "model", value: "KS\n400" }], longText);
+    expect(r.attributes[0].value).toBe("KS\n400");
+  });
+
+  it("leaves a single-line value untouched and unflagged", () => {
+    const r = preflightAttributes([{ name: "package_content", value: "1x Gas Stove" }], longText);
+    expect(r.attributes[0].value).toBe("1x Gas Stove");
+    expect(r.notes).toEqual([]);
+  });
+});

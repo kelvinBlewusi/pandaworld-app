@@ -70,6 +70,11 @@ export async function POST(req: NextRequest) {
       jumia_ref:   result.jumiaRef,
       sku:         result.sku,
       sku_changed: result.skuChanged,
+      // What Jumia did NOT receive as written. The push succeeded, but a
+      // value the seller typed may have been dropped or shortened on the
+      // way out, and they are the only one who can judge whether that
+      // matters. Previously this only ever reached a log line.
+      adjustments: result.adjustments ?? [],
       message:     "Listing submitted to Jumia. It will appear as Pending Approval.",
     });
   }
