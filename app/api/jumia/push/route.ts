@@ -37,6 +37,11 @@ const CODE_TO_STATUS: Record<string, number> = {
   jumia_reconnect_required:  401,
   jumia_no_shop_id:          403,
   credentials_error:         500,
+  // 409, not 422: the request is well-formed and the listing is fine. It
+  // is the state that conflicts — the listing is already at Jumia, or a
+  // push for it is in flight — so a client that retries on 5xx must not
+  // retry this one.
+  already_submitted:         409,
   push_failed:               502,
 };
 

@@ -1866,6 +1866,14 @@ async function handleSubmit(
             messages[i] = result.adjustments?.length
               ? `Product ${seq}: ✅ submitted — pending Jumia review.\n⚠️ ${result.adjustments.join("; ")}.`
               : `Product ${seq}: ✅ submitted — pending Jumia review.`;
+          } else if (result.code === "already_submitted") {
+            // Not a failure, and not the seller's mistake — they tapped
+            // "Submit all" twice, or a webhook retry replayed it. Saying
+            // "❌" here would send them chasing a problem that does not
+            // exist, and the thing that WOULD be a problem (a duplicate
+            // product on their storefront) is precisely what was just
+            // prevented.
+            messages[i] = `Product ${seq}: ℹ️ ${result.message}`;
           } else if (result.code === "validation") {
             messages[i] = `Product ${seq}: ⚠️ ${result.message} Fix it at ${focusedEditorUrl(listing.id)} then reply submit again.`;
           } else if (result.needsReconnect) {

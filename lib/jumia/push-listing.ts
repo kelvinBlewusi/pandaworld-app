@@ -20,7 +20,7 @@ import {
   getFeedProductDetails,
   type FeedProductInfo,
 } from "@/lib/jumia/api";
-import type { ListingRow, VariantRow } from "@/lib/supabase/types";
+import type { ListingRow, ListingStatus, VariantRow } from "@/lib/supabase/types";
 
 export interface PushListingVariantInput {
   variation:      string;
@@ -83,6 +83,54 @@ export function missingFieldLabels(row: ListingRow): string[] {
   return missing;
 }
 
+/**
+ * Statuses a listing may be pushed to Jumia FROM.
+ *
+ * An allow-list rather than a deny-list of the two in-flight states, so a
+ * status added later refuses to push rather than pushing twice. The two
+ * that are deliberately absent:
+ *
+ *   processing        — a push is in flight for this row right now
+ *   pending_approval  — already at Jumia, waiting on their review
+ *
+ * "live" stays pushable because the existing retry path (which mints a
+ * fresh parentSku) is what "Fix & resubmit" relies on after a partial
+ * rejection. Note that re-pushing a fully live listing therefore creates a
+ * SECOND Jumia product rather than updating the first — that predates this
+ * change and is left alone here rather than altered as a side effect; the
+ * in-place edit path is /api/jumia/update.
+ */
+const PUSHABLE_STATUSES: ListingStatus[] = ["draft", "awaiting_review", "failed", "live"];
+
+/**
+ * Hand back a push claim taken by the conditional UPDATE in
+ * pushListingToJumia, for the paths where nothing reached Jumia.
+ *
+ * Without this the row stays at 'processing' forever: the feed cron only
+ * ever looks at 'pending_approval', so nothing else would move it, and the
+ * claim itself would refuse every later attempt. Best-effort — a failure
+ * here is logged, never thrown, because the caller is already on its way
+ * to reporting a more useful error to the seller.
+ */
+async function releaseClaim(
+  db: ReturnType<typeof createServerClient>,
+  listingId: string,
+  previousStatus: ListingStatus,
+): Promise<void> {
+  const back: ListingStatus = PUSHABLE_STATUSES.includes(previousStatus) ? previousStatus : "draft";
+  const { error } = await db
+    .from("listings")
+    .update({ status: back, updated_at: new Date().toISOString() })
+    .eq("id", listingId)
+    .eq("status", "processing");
+  if (error) {
+    console.error(
+      `[push] could not release the push claim on ${listingId} (${error.message}) — ` +
+      `it will stay at 'processing' and refuse further submissions until corrected.`,
+    );
+  }
+}
+
 export type PushListingResult =
   | {
       ok: true; jumiaRef: string | null; sku: string; skuChanged: boolean;
@@ -105,6 +153,7 @@ export type PushListingResult =
         | "jumia_reconnect_required"
         | "jumia_no_shop_id"
         | "credentials_error"
+        | "already_submitted"
         | "push_failed";
       message: string;
       needsReconnect?: boolean;
@@ -332,13 +381,65 @@ export async function pushListingToJumia(
     console.info(`[push] Retry detected — parentSku ${oldPrefix} → ${newSku}, realigned ${variants.length} variant SKU(s)`);
   }
 
-  await db
+  // ── Claim the right to push, exactly once ─────────────────────────────────
+  //
+  // This used to be an unconditional write of status = 'processing'. Two
+  // taps of "Submit all", a double-clicked button, or a WhatsApp webhook
+  // retry that slipped past the message-id dedupe would each run the whole
+  // function, and BOTH would reach Jumia. Worse, the second one is read as
+  // a retry (isRetry fires on jumia_synced_at != null), so it is given a
+  // fresh parentSku — which means Jumia cannot reject it as a duplicate
+  // either. The seller ends up with two live products for one item, and is
+  // charged for both.
+  //
+  // A single conditional UPDATE closes it: Postgres decides the winner,
+  // and the loser gets no row back. Same pattern as claimBatchFinalization
+  // in lib/whatsapp/analysis-queue.ts.
+  //
+  // PUSHABLE_STATUSES is a deliberate allow-list, not a deny-list of the
+  // two in-flight states. A status nobody has thought of yet should refuse
+  // to push rather than push twice.
+  const { data: claimed, error: claimError } = await db
     .from("listings")
     .update({ status: "processing", sku: row.sku, updated_at: new Date().toISOString() })
-    .eq("id", listingId);
+    .eq("id", listingId)
+    .in("status", PUSHABLE_STATUSES)
+    .select("id");
+
+  if (claimError) {
+    return { ok: false, code: "credentials_error", message: `Could not start the submission: ${claimError.message}` };
+  }
+  if (!claimed || claimed.length === 0) {
+    // Nothing was changed, so the row is in a state this must not push
+    // from. Read it back rather than guessing, so the seller is told which
+    // one — "already being submitted" and "already on Jumia" need
+    // different actions from them.
+    const { data: now } = await db.from("listings").select("status").eq("id", listingId).maybeSingle();
+    const current = (now?.status as string | undefined) ?? row.status;
+    return {
+      ok: false,
+      code: "already_submitted",
+      message: current === "pending_approval"
+        ? "This listing is already with Jumia and waiting on their review — submitting again would create a duplicate product."
+        : current === "processing"
+          ? "This listing is being submitted right now. Give it a moment."
+          : `This listing can't be submitted from its current state (${current}).`,
+    };
+  }
 
   // ── Push to Jumia API (brand resolution + payload mapping done internally) ─
-  const result = await pushProductsToJumia(accessToken, shopId, row, variants, currency);
+  //
+  // Wrapped because the claim above is now load-bearing: before it, an
+  // exception here left a row at 'processing' that a later attempt could
+  // still push. Now it would be stranded for good, so the claim is handed
+  // back on the way out.
+  let result: Awaited<ReturnType<typeof pushProductsToJumia>>;
+  try {
+    result = await pushProductsToJumia(accessToken, shopId, row, variants, currency);
+  } catch (e) {
+    await releaseClaim(db, listingId, row.status);
+    throw e;
+  }
 
   if (result.success) {
     await db
@@ -365,6 +466,14 @@ export async function pushListingToJumia(
   // as a missing price, so it comes back the same way: a validation error
   // naming the fields, with the draft left intact to fix.
   if (result.blocked === "missing_required") {
+    // Hand the claim back. Nothing reached Jumia, so the listing must
+    // return to a state it can be pushed from once the seller fills the
+    // gaps — otherwise it sits at 'processing' forever: the feed cron only
+    // looks at 'pending_approval', so nothing would ever move it again,
+    // and with the claim above in place it could never be submitted a
+    // second time either. Latent before this change; unrecoverable after
+    // it, which is why it is fixed in the same commit.
+    await releaseClaim(db, listingId, row.status);
     return { ok: false, code: "validation", message: result.error ?? "This category needs more attributes." };
   }
 

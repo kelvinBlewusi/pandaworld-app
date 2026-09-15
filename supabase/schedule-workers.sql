@@ -133,6 +133,37 @@ select cron.schedule(
   $$
 );
 
+-- ── 4. Watchdog every 5 minutes ─────────────────────────────────────────────
+-- Counts the states that mean something is stuck (see
+-- app/api/cron/health-check/route.ts) and logs loudly when any is non-zero.
+-- Sentry captures console.error as an event, so a breach becomes an alert
+-- with no further wiring.
+--
+-- Five minutes rather than every minute: nothing it watches for changes
+-- faster than that, and a watchdog that cries every 60s gets muted, which
+-- defeats the point.
+select cron.schedule(
+  'platform-health-check',
+  '*/5 * * * *',
+  $$
+  select net.http_get(
+    url     := 'https://pandaworldai.site/api/cron/health-check',
+    headers := jsonb_build_object(
+      'Authorization', 'Bearer ' || (
+        select decrypted_secret from vault.decrypted_secrets where name = 'cron_secret'
+      )
+    )
+  );
+  $$
+);
+
+-- To read the last few results straight from SQL:
+--   select created, status_code, content::jsonb
+--   from net._http_response
+--   where content::jsonb ? 'thresholds'
+--   order by created desc limit 10;
+
 -- ── Undo ────────────────────────────────────────────────────────────────────
 --   select cron.unschedule('analyze-jobs-worker');
 --   select cron.unschedule('jumia-feed-poll');
+--   select cron.unschedule('platform-health-check');

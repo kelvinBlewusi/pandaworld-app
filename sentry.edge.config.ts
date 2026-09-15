@@ -12,6 +12,12 @@ import * as Sentry from "@sentry/nextjs";
 if (process.env.SENTRY_DSN) {
   Sentry.init({
     dsn: process.env.SENTRY_DSN,
+
+    // Same console capture as sentry.server.config.ts — see the long
+    // rationale there. In short: almost nothing in this codebase throws,
+    // so without this Sentry never sees the failures that actually cost
+    // money.
+    integrations: [Sentry.captureConsoleIntegration({ levels: ["error", "warn"] })],
     tracesSampleRate: process.env.NODE_ENV === "production" ? 0.1 : 1.0,
     environment: process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "development",
   });
