@@ -40,19 +40,80 @@ function requireConfig(): { token: string; phoneNumberId: string } {
   return { token, phoneNumberId };
 }
 
+/**
+ * Meta's own throttle codes, as opposed to anything wrong with the message.
+ *
+ *   130429  — "Rate limit hit": too many messages from this phone number id
+ *   131056  — "(Business Account, Consumer Account) pair rate limit hit":
+ *             too many messages to THIS ONE recipient in a short window
+ *   133016  — the number is temporarily rate-limited after a bulk send
+ *
+ * 131056 is the one that bites here. A 10-product batch is a burst to a
+ * single seller, and Meta throttles per business/consumer PAIR — so the
+ * send that gets dropped is always one of the last, which is exactly the
+ * shape seen live on 2026-09-15: a 10-product batch whose submit buttons
+ * arrived for products 1–6 and whose closing message never arrived at all.
+ */
+const THROTTLE_CODES = new Set([130429, 131056, 133016]);
+
+/** How long to wait before each retry. Two attempts, deliberately short:
+ *  this runs inside a serverless invocation with the next product's
+ *  analysis queued behind it, so a long backoff would trade a dropped
+ *  message for a stalled batch. */
+const RETRY_DELAYS_MS = [1_000, 3_000];
+
+function throttleCodeOf(body: string): number | null {
+  try {
+    const parsed = JSON.parse(body) as { error?: { code?: number } };
+    const code = parsed.error?.code;
+    return typeof code === "number" && THROTTLE_CODES.has(code) ? code : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * POST one message to the Graph API, retrying a throttle or a transient
+ * upstream failure.
+ *
+ * Every caller in this codebase sends through a try/catch that logs and
+ * moves on, so before this retry existed a throttled message was simply
+ * GONE: no error surfaced to the seller, no second attempt, and the
+ * conversation carried on as though the message had been delivered. A
+ * dropped "Submit product 7" button is indistinguishable, from the
+ * seller's side, from the product never having drafted.
+ *
+ * Only throttles and 5xx are retried. A 400 means the message itself is
+ * malformed — sending it again just fails again, more slowly.
+ */
 async function callGraphApi(body: Record<string, unknown>): Promise<void> {
   const { token, phoneNumberId } = requireConfig();
-  const res = await fetch(`https://graph.facebook.com/${GRAPH_API_VERSION}/${phoneNumberId}/messages`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ messaging_product: "whatsapp", ...body }),
-  });
-  if (!res.ok) {
+
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`https://graph.facebook.com/${GRAPH_API_VERSION}/${phoneNumberId}/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ messaging_product: "whatsapp", ...body }),
+    });
+    if (res.ok) return;
+
     const text = await res.text().catch(() => "");
-    throw new Error(`WhatsApp send failed (${res.status}): ${text}`);
+    const throttled = res.status === 429 || throttleCodeOf(text) != null;
+    const transient = throttled || res.status >= 500;
+
+    if (!transient || attempt >= RETRY_DELAYS_MS.length) {
+      throw new Error(`WhatsApp send failed (${res.status}): ${text}`);
+    }
+
+    const wait = RETRY_DELAYS_MS[attempt];
+    console.warn(
+      `[whatsapp] send ${throttled ? "throttled" : `failed (${res.status})`} — ` +
+      `retrying in ${wait}ms (attempt ${attempt + 2}/${RETRY_DELAYS_MS.length + 1})`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, wait));
   }
 }
 
@@ -121,6 +182,72 @@ export async function sendButtonsIfConfigured(
     return;
   }
   await sendButtons(to, bodyText, buttons);
+}
+
+/** Meta's hard caps on an interactive list. Exceeding any of them is a
+ *  400 from the Graph API, not a truncation. */
+export const LIST_MAX_ROWS       = 10;
+const LIST_MAX_BUTTON_CHARS      = 20;
+const LIST_MAX_ROW_TITLE_CHARS   = 24;
+const LIST_MAX_ROW_DESC_CHARS    = 72;
+
+/**
+ * Up to 10 tappable rows in ONE message (Meta's interactive "list" type),
+ * against sendButtons' three.
+ *
+ * This is the message-volume fix, not a cosmetic one. A 10-product batch's
+ * "Submit product N" block used to go out as four separate button messages
+ * (3 + 3 + 3 + 1) on top of ten per-product drafted messages and a closing
+ * summary — ~25 sends to one recipient inside about 30 seconds. Meta
+ * throttles per business/consumer pair, and live on 2026-09-15 that batch
+ * lost its last four sends: submit buttons appeared for products 1–6 and
+ * the closing message never arrived. One list replaces all four.
+ *
+ * A tap comes back as `interactive.list_reply`, handled alongside
+ * `button_reply` in lib/whatsapp/message-content.ts — so, exactly like a
+ * button, a row id IS the command phrase and flows through the same
+ * deterministic parsers as typed text.
+ */
+export async function sendList(
+  to:         string,
+  bodyText:   string,
+  buttonText: string,
+  rows:       { id: string; title: string; description?: string }[],
+): Promise<void> {
+  if (rows.length === 0 || rows.length > LIST_MAX_ROWS) {
+    throw new Error(`sendList: expected 1-${LIST_MAX_ROWS} rows, got ${rows.length}`);
+  }
+  await callGraphApi({
+    to,
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: bodyText },
+      action: {
+        button: buttonText.slice(0, LIST_MAX_BUTTON_CHARS),
+        sections: [{
+          rows: rows.map((r) => ({
+            id:    r.id,
+            title: r.title.slice(0, LIST_MAX_ROW_TITLE_CHARS),
+            ...(r.description ? { description: r.description.slice(0, LIST_MAX_ROW_DESC_CHARS) } : {}),
+          })),
+        }],
+      },
+    },
+  });
+}
+
+export async function sendListIfConfigured(
+  to:         string,
+  bodyText:   string,
+  buttonText: string,
+  rows:       { id: string; title: string; description?: string }[],
+): Promise<void> {
+  if (!isWhatsAppConfigured()) {
+    console.warn(`[whatsapp] not configured — would have sent a list to ${to}: ${bodyText}`);
+    return;
+  }
+  await sendList(to, bodyText, buttonText, rows);
 }
 
 /**

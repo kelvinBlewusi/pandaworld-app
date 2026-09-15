@@ -12,7 +12,13 @@ export interface IncomingMessage {
   text?: { body: string };
   image?: { id: string; mime_type?: string; caption?: string };
   button?: { text: string; payload: string };
-  interactive?: { button_reply?: { id: string; title: string } };
+  interactive?: {
+    button_reply?: { id: string; title: string };
+    /** A tapped row from an interactive list (sendList) — up to 10 rows in
+     *  one message, where a button message holds three. Carries the same
+     *  { id, title } shape as button_reply, so it routes identically. */
+    list_reply?:   { id: string; title: string; description?: string };
+  };
   /** Present on Meta's own `type: "unsupported"` container — see
    *  METAS_OWN_UNSUPPORTED_TYPE below. */
   errors?: { code?: number; title?: string; message?: string; error_data?: { details?: string } }[];
@@ -41,8 +47,8 @@ export const METAS_OWN_UNSUPPORTED_TYPE = "unsupported";
  * A WhatsApp image can carry a caption in the SAME message (e.g. a seller
  * attaching "Price 40, done" to a photo) — surfaced as `text` alongside
  * `imageMediaId` so intake.ts sees both instead of silently dropping the
- * caption. A tapped reply button (interactive.button_reply) surfaces as
- * `text` too, using the button's id — see lib/whatsapp/commands.ts's
+ * caption. A tapped reply button (interactive.button_reply) or list row
+ * (interactive.list_reply) surfaces as `text` too, using the tapped id — see lib/whatsapp/commands.ts's
  * design note: button ids ARE the canonical command phrases ("done",
  * "resend", "submit all", ...), so a tap flows through the exact same
  * deterministic parsers already used for typed text, with no new parsing
@@ -89,8 +95,14 @@ export function contentOf(msg: IncomingMessage): MessageContent {
   if (msg.type === "image" && msg.image?.id) {
     return { imageMediaId: msg.image.id, text: msg.image.caption };
   }
-  if (msg.type === "interactive" && msg.interactive?.button_reply?.id) {
-    return { text: msg.interactive.button_reply.id };
+  if (msg.type === "interactive") {
+    // Button tap and list-row tap are the same thing to everything
+    // downstream: the id IS the command phrase. Handled together so a
+    // command can move between a button and a list row — as "submit N"
+    // did, once ten of them stopped fitting in button messages — without
+    // touching a single parser.
+    const tapped = msg.interactive?.button_reply?.id ?? msg.interactive?.list_reply?.id;
+    if (tapped) return { text: tapped };
   }
   if (msg.text?.body) return { text: msg.text.body };
   if (msg.type === METAS_OWN_UNSUPPORTED_TYPE) {

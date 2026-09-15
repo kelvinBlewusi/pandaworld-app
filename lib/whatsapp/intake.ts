@@ -1,5 +1,5 @@
 import { createServerClient } from "@/lib/supabase/server";
-import { sendTextIfConfigured, sendCtaUrlIfConfigured, sendButtonsIfConfigured } from "@/lib/whatsapp/client";
+import { sendTextIfConfigured, sendCtaUrlIfConfigured, sendButtonsIfConfigured, sendListIfConfigured, LIST_MAX_ROWS } from "@/lib/whatsapp/client";
 import { ingestWhatsAppImage } from "@/lib/whatsapp/media";
 import {
   getOrCreateSession,
@@ -108,6 +108,18 @@ function replyButtons(to: string, bodyText: string, buttons: { id: string; title
 
 function replyCta(to: string, bodyText: string, buttonText: string, url: string): Promise<void> {
   return sendCtaUrlIfConfigured(to, bodyText, buttonText, url);
+}
+
+/** Up to 10 tappable rows in one message, where replyButtons holds three.
+ *  Same contract: the row id IS the command phrase, so a tapped row and a
+ *  typed phrase reach the identical parser. */
+function replyList(
+  to:         string,
+  bodyText:   string,
+  buttonText: string,
+  rows:       { id: string; title: string; description?: string }[],
+): Promise<void> {
+  return sendListIfConfigured(to, bodyText, buttonText, rows);
 }
 
 /**
@@ -1634,6 +1646,121 @@ export async function runQueuedAnalysis(job: AnalysisJob): Promise<void> {
 }
 
 /**
+ * Ask, in chat, for the price of the next drafted product that hasn't got
+ * one — and park that listing on the session so a bare "150" can be read
+ * as its price.
+ *
+ * "No price" is the commonest reason a drafted product never reaches
+ * Jumia. In a real 10-product session on 2026-09-15, five were blocked on
+ * it; each one had photos, a title, a category and a brand, and each one
+ * needed the seller to leave WhatsApp for the review page to type a single
+ * number. Asking here closes that loop where they already are.
+ *
+ * Asks about ONE product at a time, chained: the answer to this question
+ * carries the next one. A batch missing four prices therefore costs four
+ * messages spread across the seller's replies, not four at once — message
+ * volume right after drafting is already the busiest moment in the
+ * conversation.
+ *
+ * `after` resumes the walk past a product the seller skipped, by position
+ * rather than by product number, so a listing with no whatsapp_seq can't
+ * make the walk ask about the same one forever. Returns false (and clears
+ * the pointer) when there is nothing left to ask about, so the caller can
+ * close the conversation off instead of leaving the seller mid-question.
+ */
+async function askForNextMissingPrice(
+  phoneNumber: string,
+  batchId:     string,
+  opts: { after?: string; prefix?: string } = {},
+): Promise<boolean> {
+  const listings = await getBatchListings(batchId);
+  // findIndex returning -1 lands on 0 — an id that isn't in this batch
+  // restarts the walk rather than skipping the whole thing.
+  const startAt = opts.after ? listings.findIndex((l) => l.id === opts.after) + 1 : 0;
+  // A product with no title never drafted at all; its own failure message
+  // already covers it, and a price would not make it submittable.
+  const next = listings.slice(startAt).find((l) => l.title && !l.selling_price);
+
+  if (!next) {
+    await updateSession(phoneNumber, { awaitingPriceFor: null });
+    return false;
+  }
+
+  await updateSession(phoneNumber, { awaitingPriceFor: next.id });
+
+  const who = listings.length > 1 && next.whatsapp_seq != null
+    ? `Product ${next.whatsapp_seq} — ${next.title}`
+    : next.title;
+
+  await replyButtons(
+    phoneNumber,
+    `${opts.prefix ? `${opts.prefix}\n\n` : ""}💰 *${who}*\n\n` +
+    `What price are you selling it at? Reply with just the number in cedis — e.g. *150*.\n\n` +
+    `Jumia won't accept a product without one.`,
+    [{ id: "skip price", title: "Skip for now" }],
+  );
+  return true;
+}
+
+/** The "Skip for now" button's id, and the word a seller would type. */
+const PRICE_SKIP_RE = /^skip( price)?[.!]?$/i;
+
+/**
+ * Save a price the seller sent in answer to askForNextMissingPrice, then
+ * move the walk on to the next product missing one.
+ *
+ * Written straight to the column rather than through applyNotes: the
+ * seller is answering a question about ONE field, and applyNotes would
+ * also overwrite user_prompt with "150", losing the note their product was
+ * actually drafted from.
+ */
+async function applyChatPrice(
+  phoneNumber: string,
+  batchId:     string,
+  listingId:   string,
+  price:       number,
+): Promise<void> {
+  const db = createServerClient();
+  const { error } = await db
+    .from("listings")
+    .update({ selling_price: price, updated_at: new Date().toISOString() })
+    .eq("id", listingId);
+
+  if (error) {
+    console.error(`[whatsapp intake] chat price for listing ${listingId} failed: ${error.message}`);
+    // The pointer stays set on purpose — the seller answered correctly and
+    // it was us that failed, so their next attempt should still be read as
+    // a price rather than as chit-chat.
+    await replyError(phoneNumber, "⚠️ I couldn't save that price just now — send the number again in a moment.");
+    return;
+  }
+
+  const listings = await getBatchListings(batchId);
+  const saved = listings.find((l) => l.id === listingId);
+  const label = listings.length > 1 && saved?.whatsapp_seq != null
+    ? `product ${saved.whatsapp_seq}`
+    : (saved?.title ?? "your product");
+
+  // Say what is STILL missing in the same breath. A seller who has just
+  // answered the one question we asked will otherwise assume the product
+  // is ready, and only find out at submit time that it isn't.
+  const stillMissing = await missingFieldsFor(listingId);
+  const confirmation = stillMissing.length === 0
+    ? `✅ Price set to GHS ${price} for ${label} — ready to submit.`
+    : `✅ Price set to GHS ${price} for ${label}.\n⚠️ Still needs: ${stillMissing.join(", ")} — tap *Edit product ${saved?.whatsapp_seq ?? ""}*.`.trimEnd();
+
+  // The confirmation rides along with the next question rather than going
+  // out as its own message — one send per answer, not two.
+  const asked = await askForNextMissingPrice(phoneNumber, batchId, { prefix: confirmation });
+  if (!asked) {
+    await replyButtons(phoneNumber, `${confirmation}\n\nThat's every price filled in.`, [
+      { id: "submit all", title: "Submit all ✅" },
+      { id: "restart",    title: "Restart 🔄" },
+    ]);
+  }
+}
+
+/**
  * Close out a batch once every job has settled — the tail of what used to
  * be startBatchAnalysis, called by the worker that finished the last job.
  *
@@ -1675,6 +1802,11 @@ export async function finalizeBatch(
           { id: "restart",    title: "Restart 🔄" },
         ],
       );
+      // A missing price is the one gap worth a follow-up question rather
+      // than a warning: it is the commonest reason a draft never reaches
+      // Jumia, and it is the only missing field a seller can supply in a
+      // single word without opening the editor.
+      await askForNextMissingPrice(phoneNumber, batchId);
     }
     // else: the product's own failure message (sent by runQueuedAnalysis)
     // already covers what happened — nothing to add.
@@ -1682,25 +1814,48 @@ export async function finalizeBatch(
   }
 
   // Every "Edit product N" link already went out live as each product
-  // finished — now that the whole batch has settled, send every ready
-  // product's "Submit product N" button as its own grouped pass (chunked
-  // to 3 per message, WhatsApp's per-message button cap) so edits and
-  // submits read as two separate blocks, not alternating pairs.
-  const readyToSubmitSeqs = listings
+  // finished — now that the whole batch has settled, offer every ready
+  // product's "Submit product N" in ONE pass, so edits and submits read as
+  // two separate blocks rather than alternating pairs.
+  const ready = listings
     .filter((l) => l.title && l.whatsapp_seq != null)
-    .map((l) => l.whatsapp_seq as number)
-    .sort((a, b) => a - b);
+    .sort((a, b) => (a.whatsapp_seq as number) - (b.whatsapp_seq as number));
+  const readyToSubmitSeqs = ready.map((l) => l.whatsapp_seq as number);
 
-  for (let i = 0; i < readyToSubmitSeqs.length; i += 3) {
-    const chunk = readyToSubmitSeqs.slice(i, i + 3);
-    // Only the first chunk introduces itself. A 4-product batch sends two
-    // messages, and giving both the identical "Submit a specific product:"
-    // header made the second look like the bot had repeated itself —
-    // visible in a seller's transcript on 2026-09-15.
+  // A list holds ten rows; a button message holds three. That difference
+  // is the whole point here.
+  //
+  // This block used to chunk into button messages, so a 10-product batch
+  // spent FOUR sends on it — on top of ten per-product drafted messages
+  // and the closing summary, roughly 25 sends to one recipient in about 30
+  // seconds. Meta throttles per business/consumer pair, and live on
+  // 2026-09-15 that batch lost its tail: submit buttons arrived for
+  // products 1–6 and the closing message never arrived at all. One list is
+  // one send.
+  //
+  // Three or fewer still uses buttons: they render inline, with no extra
+  // tap to open a sheet, and at that size there is no volume to save.
+  if (readyToSubmitSeqs.length > 3) {
+    for (let i = 0; i < ready.length; i += LIST_MAX_ROWS) {
+      const chunk = ready.slice(i, i + LIST_MAX_ROWS);
+      await replyList(
+        phoneNumber,
+        i === 0 ? "Submit a specific product:" : "…and the rest:",
+        "Pick a product",
+        chunk.map((l) => ({
+          id:          `submit ${l.whatsapp_seq}`,
+          title:       `Submit product ${l.whatsapp_seq}`,
+          // The row's own subtitle — a product number alone tells a seller
+          // nothing about which product it is.
+          description: l.title as string,
+        })),
+      );
+    }
+  } else if (readyToSubmitSeqs.length > 0) {
     await replyButtons(
       phoneNumber,
-      i === 0 ? "Submit a specific product:" : "…and the rest:",
-      chunk.map((seq) => ({ id: `submit ${seq}`, title: `Submit product ${seq}` })),
+      "Submit a specific product:",
+      readyToSubmitSeqs.map((seq) => ({ id: `submit ${seq}`, title: `Submit product ${seq}` })),
     );
   }
 
@@ -1740,6 +1895,8 @@ export async function finalizeBatch(
       { id: "restart",    title: "Restart 🔄" },
     ],
   );
+
+  await askForNextMissingPrice(phoneNumber, batchId);
 }
 
 async function handleAwaitingBatchConfirmation(
@@ -1799,6 +1956,39 @@ async function handleAwaitingBatchConfirmation(
   if (categoryMatch) {
     await handleCategoryCorrection(userId, phoneNumber, categoryMatch[1], parseInt(categoryMatch[2], 10));
     return;
+  }
+
+  // An answer to askForNextMissingPrice's question. Sits below the button
+  // ids above (none of which extractPrice can match) and above
+  // parseEditCommand, which would otherwise swallow a bare number as an
+  // edit instruction for a 1-product batch.
+  //
+  // Anything that ISN'T a price drops the pointer and carries on being
+  // handled normally — the seller moving on is the answer "no". That keeps
+  // the state self-correcting: there is no reply that can strand the
+  // conversation waiting for a number.
+  if (session.awaitingPriceFor) {
+    const priceFor = session.awaitingPriceFor;
+    const price = extractPrice(text);
+    if (price != null && price > 0) {
+      await applyChatPrice(phoneNumber, batchId, priceFor, price);
+      return;
+    }
+    if (PRICE_SKIP_RE.test(text)) {
+      const asked = await askForNextMissingPrice(phoneNumber, batchId, { after: priceFor });
+      if (!asked) {
+        await replyButtons(
+          phoneNumber,
+          "No problem — you can set prices on the review page any time. Jumia won't accept a product without one.",
+          [
+            { id: "submit all", title: "Submit all ✅" },
+            { id: "restart",    title: "Restart 🔄" },
+          ],
+        );
+      }
+      return;
+    }
+    await updateSession(phoneNumber, { awaitingPriceFor: null });
   }
 
   const editCmd = parseEditCommand(text, batchSize);
@@ -2123,10 +2313,19 @@ async function handleSubmit(
       // the next command from the result text alone. Short, fixed body
       // here (not the result text) so this one's always well under the
       // button-message length limit.
-      await replyButtons(phoneNumber, "What's next?", [
-        { id: "submit all", title: "Submit all ✅" },
-        { id: "restart", title: "Restart 🔄" },
-      ]);
+      //
+      // This message fires ONLY when something did not go through, so it
+      // names the actual next step rather than asking an open question:
+      // the Edit buttons are already sitting above it, one per unsent
+      // product, and Submit all is the button right underneath.
+      await replyButtons(
+        phoneNumber,
+        "What's next?\nEdit to fix all un-submitted products and tap *Submit all*.",
+        [
+          { id: "submit all", title: "Submit all ✅" },
+          { id: "restart", title: "Restart 🔄" },
+        ],
+      );
     }
   } catch (e) {
     console.error(`[whatsapp intake] handleSubmit failed for batch ${batchId}: ${(e as Error).message}`);

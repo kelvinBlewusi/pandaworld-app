@@ -29,6 +29,18 @@ describe("contentOf", () => {
     ).toEqual({ text: "done" });
   });
 
+  // A list row and a button carry the same contract — the id IS the
+  // command phrase — so "submit 7" must reach the parser identically
+  // whichever one the seller tapped. Ten submit rows only fit in a list.
+  it("surfaces a tapped list-row's id as text, exactly like a button", () => {
+    expect(
+      contentOf(msg({
+        type: "interactive",
+        interactive: { list_reply: { id: "submit 7", title: "Submit product 7", description: "Sony Headphones" } },
+      })),
+    ).toEqual({ text: "submit 7" });
+  });
+
   // This used to return {} for anything unreadable, and the message then
   // fell through the whole state machine in silence: a seller sends a
   // video of their product, sees it delivered, and nothing ever comes

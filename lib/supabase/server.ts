@@ -100,7 +100,45 @@ export function createServerClient() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     key!,
-    { auth: { persistSession: false } }
+    {
+      auth: { persistSession: false },
+      // ── Never serve a database read from Next's Data Cache ──────────────
+      //
+      // THIS IS NOT A MICRO-OPTIMISATION. It is the fix for a read that had
+      // been lying for days.
+      //
+      // Next 14's App Router patches global fetch and caches GET requests
+      // by default, keyed on the URL. supabase-js issues every select as a
+      // GET, so any query whose URL does not change is answered from the
+      // cache after the first call — forever, with a 200 and no error.
+      //
+      // /api/cron/jumia-feeds runs the SAME query every minute:
+      //
+      //   GET /rest/v1/listings?select=…&status=eq.pending_approval
+      //                                 &jumia_ref=not.is.null
+      //
+      // The first call landed when nothing was pending, cached [], and
+      // replayed it on every tick afterwards. Eight listings sat at
+      // pending_approval — verified directly in SQL — while the route
+      // logged "Checking 0 pending Jumia feeds" once a minute and the
+      // sellers' statuses never moved. The same empty answer came back
+      // three minutes after two rows were deliberately set to pending as a
+      // test, which is what finally gave it away.
+      //
+      // Note what this defeated: `export const dynamic = "force-dynamic"`
+      // opts the ROUTE out of static rendering, but says nothing about
+      // fetch caching inside it. And the error-surfacing added earlier
+      // could never have caught this, because a cache hit is not an error.
+      //
+      // The blast radius was every server-side read in the app, not just
+      // that cron — any repeated query with a stable URL was liable to be
+      // stale. Writes were never affected; PostgREST takes those as POST
+      // and PATCH, which Next does not cache.
+      global: {
+        fetch: (input: RequestInfo | URL, init?: RequestInit) =>
+          fetch(input, { ...init, cache: "no-store" }),
+      },
+    },
   );
 }
 
