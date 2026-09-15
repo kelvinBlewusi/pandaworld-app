@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerClient } from "@/lib/supabase/server";
+import { createServerClient, serviceKeyRole } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -239,6 +239,22 @@ export async function GET(req: NextRequest) {
     console.warn(`[health] could not probe ${probeFailures.length} object(s): ${probeFailures.join("; ")}`);
   }
 
+  // ── Credentials ─────────────────────────────────────────────────────────
+  //
+  // Checked here because it is the one misconfiguration this whole route
+  // would otherwise MISREPORT rather than miss: with the wrong key, every
+  // count above reads 0 and every probe reads "missing", so a completely
+  // blind deploy would report itself perfectly healthy and schema-drifted.
+  const keyRole = serviceKeyRole();
+  const keyOk = keyRole === "service_role";
+  if (!keyOk) {
+    console.error(
+      `[health] SUPABASE KEY: expected service_role, got ${keyRole ?? "unrecognised"} — ` +
+      `RLS filters every query to empty instead of refusing it, so the counts ` +
+      `and probes in this response cannot be trusted.`,
+    );
+  }
+
   const unreadable = checks.filter((c) => c.error);
   const breached   = checks.filter((c) => !c.error && c.count > 0);
 
@@ -257,7 +273,7 @@ export async function GET(req: NextRequest) {
       "[health] STUCK: " +
       breached.map((c) => `${c.count} ${c.detail}`).join("; "),
     );
-  } else if (unreadable.length === 0 && drift.length === 0) {
+  } else if (unreadable.length === 0 && drift.length === 0 && keyOk) {
     // Logged on the healthy path too, so "the watchdog is fine" and "the
     // watchdog is not running" cannot look the same — the exact mistake
     // that hid the feed-poll outage.
@@ -265,7 +281,8 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json({
-    ok: breached.length === 0 && unreadable.length === 0 && drift.length === 0,
+    ok: breached.length === 0 && unreadable.length === 0 && drift.length === 0 && keyOk,
+    serviceKeyRole: keyRole,
     checks: Object.fromEntries(
       checks.map((c) => [c.name, c.error ? { error: c.error } : c.count]),
     ),
