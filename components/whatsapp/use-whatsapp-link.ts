@@ -24,6 +24,48 @@ export interface WhatsAppLinkState {
   reset: () => void;
 }
 
+/**
+ * Open the bot chat, surviving a popup blocker.
+ *
+ * WHY THIS IS NOT JUST window.open: the link code is minted by an awaited
+ * fetch, so by the time we have a URL the browser no longer considers this
+ * a user gesture. Safari — iOS Safari in particular — blocks a
+ * window.open() that isn't inside a direct gesture handler, and it blocks
+ * it SILENTLY: no error, no prompt, the tap simply does nothing.
+ *
+ * Reported on 2026-09-15: both dashboard buttons did nothing on a seller's
+ * test phone while working on the developer's own, and the Settings page
+ * button worked everywhere. Settings is the tell — it renders the wa.me
+ * URL as a real <a href> that the seller taps directly, so there is no
+ * async gap and nothing to block.
+ *
+ * Navigating the CURRENT tab is never popup-blocked, so that is the
+ * fallback. It is only a fallback because on desktop a new tab is nicer —
+ * the seller keeps the dashboard they were on.
+ *
+ * Note the missing "noopener": with it, window.open returns null even on
+ * SUCCESS in browsers that implement the spec, which would make the
+ * blocked-check fire every time and always navigate away. The opener is
+ * severed on the handle instead, which gets the same protection with a
+ * usable return value.
+ */
+function openWhatsApp(url: string): void {
+  let opened: Window | null = null;
+  try {
+    opened = window.open(url, "_blank");
+  } catch {
+    opened = null;
+  }
+
+  if (opened) {
+    // Same protection "noopener" would have given, applied after the fact.
+    try { opened.opener = null; } catch { /* cross-origin — already severed */ }
+    return;
+  }
+
+  window.location.href = url;
+}
+
 export function useWhatsAppLink(): WhatsAppLinkState {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +83,7 @@ export function useWhatsAppLink(): WhatsAppLinkState {
         return;
       }
       if (data?.waLink) {
-        window.open(data.waLink, "_blank", "noopener,noreferrer");
+        openWhatsApp(data.waLink);
       } else if (data?.code) {
         setManualCode({ code: data.code, message: data.message ?? `LINK-${data.code}` });
       } else {
