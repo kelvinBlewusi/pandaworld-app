@@ -1039,6 +1039,27 @@ async function claimBatchSlot(
   }
 }
 
+/**
+ * Hold a note until this product has a listing to attach it to.
+ *
+ * Appends rather than replaces: a second note before the photo arrives is
+ * the seller adding to or correcting the first, and keeping both is what
+ * they would expect. applyNotes caps what it stores, so an unbounded
+ * append cannot grow the listing's user_prompt past that.
+ */
+async function parkNotes(
+  phoneNumber: string,
+  session:     WhatsAppSession,
+  notes:       string,
+): Promise<void> {
+  const trimmed = notes.trim();
+  if (!trimmed) return;
+  const combined = session.pendingNotes
+    ? `${session.pendingNotes}\n${trimmed}`
+    : trimmed;
+  await updateSession(phoneNumber, { pendingNotes: combined.slice(0, 1000) });
+}
+
 async function handleAwaitingPhotos(
   userId: string,
   phoneNumber: string,
@@ -1072,6 +1093,17 @@ async function handleAwaitingPhotos(
       }
       listingId = claimed.listingId;
       await updateSession(phoneNumber, { listingId });
+
+      // Flush a note that beat its own photo here. Separate webhook
+      // deliveries are not ordered, and a line of text routinely
+      // overtakes the image it was sent with — so without this the
+      // seller's price, variants and sale window are simply gone by the
+      // time there is a listing to put them on.
+      if (session.pendingNotes) {
+        await applyNotes(listingId, session.pendingNotes);
+        await updateSession(phoneNumber, { pendingNotes: null });
+        console.info(`[whatsapp] listing=${listingId} applied notes that arrived before the photo`);
+      }
     }
 
     const db = createServerClient();
@@ -1125,12 +1157,32 @@ async function handleAwaitingPhotos(
     if (notes && listingId) await applyNotes(listingId, notes);
 
     if (!listingId) {
-      await replyText(phoneNumber, `Send at least one photo for product ${seq} first, then reply *done*.`);
+      // The note is PARKED, not dropped. It used to be discarded right
+      // here — `if (notes && listingId)` above is false — and the seller
+      // was told to send a photo, with no hint that everything they had
+      // just typed was gone. Confirmed live: a product drafted with no
+      // price, no variants and no sale window under a note that gave all
+      // three.
+      if (notes) await parkNotes(phoneNumber, session, notes);
+      await replyText(
+        phoneNumber,
+        notes
+          ? `Got your notes for product ${seq} — I'll attach them to the photo. Send at least one photo, then reply *done*.`
+          : `Send at least one photo for product ${seq} first, then reply *done*.`,
+      );
       return;
     }
 
     if (seq < batchSize) {
-      await updateSession(phoneNumber, { state: "awaiting_photos", listingId: null, batchSeq: seq + 1 });
+      // pendingNotes cleared with the advance: anything still parked
+      // belongs to the product just finished, and carrying it forward
+      // would staple one product's price and variants onto the next.
+      await updateSession(phoneNumber, {
+        state:        "awaiting_photos",
+        listingId:    null,
+        batchSeq:     seq + 1,
+        pendingNotes: null,
+      });
       await replyText(
         phoneNumber,
         `✅ Product ${seq} saved. Now send photos for product ${seq + 1} of ${batchSize}, and tell me the price plus any other notes (variations, sizes, sale price etc.), then reply *done*.`,
@@ -1158,6 +1210,9 @@ async function handleAwaitingPhotos(
   } else {
     // No photo yet for this product — "done" isn't a real option, so no
     // button; the seller still needs to send at least one photo first.
+    // The note is parked so the photo that follows picks it up; saying
+    // "noted" while throwing it away was the worst of both.
+    await parkNotes(phoneNumber, session, text);
     await replyText(phoneNumber, `Got it — noted for product ${seq}. Send a photo to get started.`);
   }
 }
