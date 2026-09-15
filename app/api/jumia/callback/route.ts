@@ -27,18 +27,100 @@ export async function GET(req: NextRequest) {
   const error    = searchParams.get("error");
 
   const origin  = req.nextUrl.origin;
-  // Reassigned below once state decodes successfully with a returnTo (see
+  // Reassigned as soon as state decodes with a returnTo (see
   // lib/jumia/return-to.ts) — a connect started from /extension/settings
   // should send failures back there too, not always to the old dashboard's
-  // Settings → Integrations. The two checks above state decoding can't know
-  // returnTo yet (there's nothing to decode it from), so they keep the
-  // default.
+  // Settings → Integrations. State is now decoded before ANY failure path,
+  // so every one of them honours it.
   let failUrl = `${origin}/settings/integrations?jumia_error=`;
 
-  // ── User denied access ─────────────────────────────────────────────────────
+  // ── Decode state FIRST ────────────────────────────────────────────────────
+  //
+  // Before the error branch, not after it, and that ordering is the fix for
+  // a real bug: an error from Jumia used to redirect to the DEFAULT failUrl
+  // (/settings/integrations) because returnTo had not been read yet. That
+  // page lives in the (main) route group, whose layout bounces anyone
+  // without an active Jumia connection to /onboarding/connect — so a seller
+  // who started from WhatsApp and hit any OAuth error was thrown into the
+  // exact web onboarding the chat flow exists to spare them.
+  //
+  // OAuth servers echo `state` on error responses too, so there is normally
+  // something to decode. Best-effort: a missing or corrupt state is not
+  // itself worth failing over when we already have a more specific error to
+  // report.
+  let userId: string | undefined;
+  let storeName: string = "";
+  let returnTo: string | undefined;
+  if (stateRaw) {
+    try {
+      const decoded = JSON.parse(Buffer.from(stateRaw, "base64url").toString("utf-8"));
+      userId    = typeof decoded.userId === "string" ? decoded.userId : undefined;
+      storeName = decoded.storeName ?? "";
+      returnTo  = sanitizeReturnTo(decoded.returnTo);
+      if (returnTo) failUrl = `${origin}${returnTo}?jumia_error=`;
+    } catch (e) {
+      console.error("[Jumia OAuth] Invalid state param:", e);
+    }
+  }
+
+  // ── An error came back from Jumia ─────────────────────────────────────────
   if (error) {
-    console.warn("[Jumia OAuth] User denied access or error from Jumia:", error);
-    return NextResponse.redirect(`${failUrl}${encodeURIComponent(error)}`);
+    // The whole OAuth error triple, not just `error`. The description is
+    // the part that says WHY, and dropping it is what made "auth request
+    // not found" undiagnosable.
+    const description = searchParams.get("error_description") ?? "";
+    console.warn(
+      `[Jumia OAuth] error from Jumia for user=${userId ?? "unknown"}: ` +
+      `${error}${description ? ` — ${description}` : ""}`,
+    );
+
+    // Is the seller ALREADY connected?
+    //
+    // Reported on 2026-09-15: connecting from the WhatsApp link showed
+    // "auth request not found" while the connection itself worked fine.
+    // Jumia's authorize request is single-use, so loading that URL a second
+    // time — a reload, a back-navigation, or WhatsApp's in-app browser
+    // handing the link to Safari after already opening it — answers exactly
+    // that. The first load had already completed the connection.
+    //
+    // So a stale authorize request is not a failure worth alarming anyone
+    // about. If the connection is live, say it is. Only a seller who is
+    // genuinely NOT connected sees an error.
+    if (userId) {
+      const dbCheck = createServerClient();
+      const { data: existing } = await dbCheck
+        .from("jumia_connections")
+        .select("status, access_token, store_name")
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      const alreadyConnected =
+        existing?.status === "active" &&
+        typeof existing.access_token === "string" &&
+        existing.access_token.length > 0 &&
+        existing.access_token !== "credential_auth";
+
+      if (alreadyConnected) {
+        console.info(`[Jumia OAuth] stale authorize request for user=${userId} — already connected, treating as success`);
+        const store = (existing.store_name as string | null) ?? storeName ?? "Jumia Store";
+        return NextResponse.redirect(
+          `${origin}/onboarding/done?store=${encodeURIComponent(store)}` +
+          (returnTo ? `&return_to=${encodeURIComponent(returnTo)}` : ""),
+        );
+      }
+    }
+
+    // Jumia's own wording, translated. "auth request not found" means
+    // nothing to a seller, and pasting it into the URL taught them nothing
+    // they could act on.
+    const readable =
+      /auth request not found|invalid[_ ]request/i.test(`${error} ${description}`)
+        ? "That Jumia sign-in link had already been used — ask the bot for a fresh one, or tap Connect again."
+        : /access[_ ]denied/i.test(error)
+          ? "You cancelled the Jumia sign-in. Tap Connect again when you're ready."
+          : description || error;
+
+    return NextResponse.redirect(`${failUrl}${encodeURIComponent(readable)}`);
   }
 
   if (!code || !stateRaw) {
@@ -47,21 +129,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // ── Decode state → recover userId ─────────────────────────────────────────
-  let userId: string;
-  let storeName: string = "";
-  let returnTo: string | undefined;
-  try {
-    const decoded = JSON.parse(
-      Buffer.from(stateRaw, "base64url").toString("utf-8")
-    );
-    userId = decoded.userId;
-    storeName = decoded.storeName ?? "";
-    returnTo = sanitizeReturnTo(decoded.returnTo);
-    if (returnTo) failUrl = `${origin}${returnTo}?jumia_error=`;
-    if (!userId) throw new Error("No userId in state");
-  } catch (e) {
-    console.error("[Jumia OAuth] Invalid state param:", e);
+  if (!userId) {
     return NextResponse.redirect(
       `${failUrl}${encodeURIComponent("Invalid state parameter — please try again")}`
     );
@@ -97,10 +165,42 @@ export async function GET(req: NextRequest) {
       redirectUri,
     );
   } catch (e) {
+    const detail = (e as Error).message ?? "";
     console.error("[Jumia OAuth] Token exchange failed:", e);
-    return NextResponse.redirect(
-      `${failUrl}${encodeURIComponent("Token exchange failed — check your Jumia app credentials")}`
-    );
+
+    // Same stale-request case as the error branch above, arriving by the
+    // other door: a second load of the authorize URL produces a second
+    // callback carrying a code Jumia has already consumed, and the exchange
+    // fails. If the first callback already connected this seller, the
+    // connection is fine and there is nothing to report.
+    const { data: existing } = await db
+      .from("jumia_connections")
+      .select("status, access_token, store_name")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (
+      existing?.status === "active" &&
+      typeof existing.access_token === "string" &&
+      existing.access_token.length > 0 &&
+      existing.access_token !== "credential_auth"
+    ) {
+      console.info(`[Jumia OAuth] exchange failed for user=${userId} but the connection is already active — treating as success`);
+      const store = (existing.store_name as string | null) ?? storeName ?? "Jumia Store";
+      return NextResponse.redirect(
+        `${origin}/onboarding/done?store=${encodeURIComponent(store)}` +
+        (returnTo ? `&return_to=${encodeURIComponent(returnTo)}` : ""),
+      );
+    }
+
+    // Only NOW is "check your credentials" fair. Sending a seller to
+    // re-enter credentials that are perfectly correct is worse than saying
+    // nothing — it is a wrong instruction that costs them real time.
+    const readable = /auth request not found|invalid[_ ]grant|expired/i.test(detail)
+      ? "That Jumia sign-in had already been used or expired — ask the bot for a fresh link, or tap Connect again."
+      : "Couldn't finish connecting to Jumia — check your app credentials and try again.";
+
+    return NextResponse.redirect(`${failUrl}${encodeURIComponent(readable)}`);
   }
 
   // ── Fetch seller profile (best-effort) ────────────────────────────────────
