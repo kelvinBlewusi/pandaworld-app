@@ -33,7 +33,7 @@ import {
   proseLength,
   CONTENT_LENGTH_FLOORS,
 } from "@/lib/ai/content-style-rules";
-import { canonicalKey } from "@/lib/jumia/attribute-mapping";
+import { canonicalKey, columnFor } from "@/lib/jumia/attribute-mapping";
 import { aiReadNoteIntent } from "@/lib/actions/ai";
 import { verifyNoteIntent, type NoteIntent } from "@/lib/whatsapp/note-intent";
 import {
@@ -881,6 +881,70 @@ export async function runAutoAnalyze(
     // silently on push if the category doesn't recognise it; the local
     // review UI may also drop it but at least the data is preserved.
     return intent;
+  }
+
+  // ── Mirror column-mapped attributes into their empty columns ───────────
+  //
+  // Pass A and the category fill can disagree, and the seller only ever
+  // sees one of them. Pass A is told to return null for a weight it can't
+  // confidently infer; the category fill sees product_weight declared
+  // REQUIRED and fills it anyway. So the weight_kg COLUMN stayed empty
+  // while dynamic_attributes carried a number.
+  //
+  // Nothing noticed until the required-attribute fallback started sending
+  // the dynamic copy to Jumia rather than losing the feed over a missing
+  // column. Correct on its own, but it made the disagreement invisible in
+  // the worst way: confirmed live, four listings showed a blank Weight
+  // field in the editor while Jumia was sent 0.5, 0.2 and 50 kg. A value
+  // the seller cannot see is one they cannot correct, and an
+  // under-declared weight is shipping cost they pay.
+  //
+  // Writing it to the column is the fix rather than teaching the editor
+  // to read the fallback too: the column is the canonical store for a
+  // column-mapped attribute, so what the seller sees, what they edit, and
+  // what is pushed all become the same value.
+  const BACKFILLABLE_COLUMNS = new Set([
+    "weight_kg", "size_l", "size_w", "size_h",
+    "color", "color_family", "main_material", "material_family",
+    "model", "product_line", "production_country",
+    "warranty_duration", "warranty_type", "warranty_text", "warranty_address",
+  ]);
+  const NUMERIC_COLUMNS = new Set(["weight_kg", "size_l", "size_w", "size_h"]);
+  // Deliberately absent: selling_price (seller-owned everywhere in this
+  // codebase and never AI-filled), brand (asserting one the seller did
+  // not confirm is a legal/commercial risk, and setField already gates
+  // it), and certifications (an array column — a comma-joined string
+  // would land as one nonsense element).
+
+  for (const [attrName, rawValue] of Object.entries(filled.dynamic_attributes)) {
+    const col = columnFor(attrName);
+    if (!col || !BACKFILLABLE_COLUMNS.has(col)) continue;
+    const value = String(rawValue ?? "").trim();
+    if (!value) continue;
+
+    // Only ever fills a hole. An existing column value — whether the
+    // seller's or an earlier pass's — outranks the attribute copy, which
+    // is the same precedence the push path applies.
+    const pending  = updates[col];
+    const existing = (listing as Record<string, unknown>)[col];
+    const alreadySet = (pending ?? existing) != null && String(pending ?? existing).trim() !== "";
+    if (alreadySet) continue;
+    if (isUserEdited(col)) continue;
+
+    if (NUMERIC_COLUMNS.has(col)) {
+      const n = parseFloat(value.replace(/[^\d.]/g, ""));
+      if (!Number.isFinite(n) || n <= 0) continue;
+      updates[col] = n;
+    } else {
+      updates[col] = value;
+    }
+    newSources[col] = "ai";
+    newConfidence[col] = {
+      confidence: 0.7,
+      source:     "inferred",
+      reasoning:  `Filled from the category attribute "${attrName}", which the schema requires.`,
+    };
+    console.info(`[auto-analyze] listing=${listingId} mirrored ${attrName} -> ${col}=${updates[col]}`);
   }
 
   const finalDynamicAttrs: Record<string, string> = { ...filled.dynamic_attributes };
