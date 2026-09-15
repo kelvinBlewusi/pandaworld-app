@@ -52,6 +52,22 @@ export interface WhatsAppSession {
    * quiet for the rest. Null means no burst in progress.
    */
   lastImageAt:   string | null;
+  /**
+   * The listing the bot has just asked the seller, in chat, to give a
+   * price for. Null whenever no such question is outstanding.
+   *
+   * A bare number is the single most ambiguous thing a seller can send —
+   * it could be a price, a quantity, a size, or a product number — so the
+   * bot only reads one as a price while this pointer is set, and drops the
+   * pointer the moment they say anything else. See
+   * askForNextMissingPrice in lib/whatsapp/intake.ts.
+   *
+   * Exists because "no price" was the single commonest reason a drafted
+   * product never reached Jumia: in one real 10-product session on
+   * 2026-09-15, five products were blocked on it, and the only way to fix
+   * that was to leave WhatsApp for the review page.
+   */
+  awaitingPriceFor: string | null;
 }
 
 function fromRow(row: Record<string, unknown>): WhatsAppSession {
@@ -67,6 +83,7 @@ function fromRow(row: Record<string, unknown>): WhatsAppSession {
     pendingAppId:  (row.pending_app_id as string | null) ?? null,
     pendingNotes:  (row.pending_notes as string | null) ?? null,
     lastImageAt:   (row.last_image_at as string | null) ?? null,
+    awaitingPriceFor: (row.awaiting_price_for as string | null) ?? null,
   };
 }
 
@@ -131,6 +148,7 @@ export async function getOrCreateSession(
           pending_notes:   null,
           last_image_at:   null,
           last_message_id: null,
+          awaiting_price_for: null,
           updated_at:      new Date().toISOString(),
         })
         .eq("phone_number", phoneNumber)
@@ -187,6 +205,7 @@ export async function updateSession(
     pendingAppId:  string | null;
     pendingNotes:  string | null;
     lastImageAt:   string | null;
+    awaitingPriceFor: string | null;
   }>,
 ): Promise<void> {
   const db = createServerClient();
@@ -200,6 +219,7 @@ export async function updateSession(
   if (patch.pendingAppId  !== undefined) update.pending_app_id  = patch.pendingAppId;
   if (patch.pendingNotes  !== undefined) update.pending_notes   = patch.pendingNotes;
   if (patch.lastImageAt   !== undefined) update.last_image_at   = patch.lastImageAt;
+  if (patch.awaitingPriceFor !== undefined) update.awaiting_price_for = patch.awaitingPriceFor;
   await db.from("whatsapp_sessions").update(update).eq("phone_number", phoneNumber);
 }
 
@@ -248,5 +268,9 @@ export async function resetSession(phoneNumber: string): Promise<void> {
     // No burst in progress in a fresh batch — otherwise the first photo of
     // the NEXT product could be silenced by the last one of the old batch.
     lastImageAt: null,
+    // An unanswered price question dies with the batch it was asked
+    // about — otherwise the first number of the NEXT batch (the product
+    // count, "3") would be banked as the old batch's price.
+    awaitingPriceFor: null,
   });
 }

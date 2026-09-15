@@ -1634,6 +1634,121 @@ export async function runQueuedAnalysis(job: AnalysisJob): Promise<void> {
 }
 
 /**
+ * Ask, in chat, for the price of the next drafted product that hasn't got
+ * one — and park that listing on the session so a bare "150" can be read
+ * as its price.
+ *
+ * "No price" is the commonest reason a drafted product never reaches
+ * Jumia. In a real 10-product session on 2026-09-15, five were blocked on
+ * it; each one had photos, a title, a category and a brand, and each one
+ * needed the seller to leave WhatsApp for the review page to type a single
+ * number. Asking here closes that loop where they already are.
+ *
+ * Asks about ONE product at a time, chained: the answer to this question
+ * carries the next one. A batch missing four prices therefore costs four
+ * messages spread across the seller's replies, not four at once — message
+ * volume right after drafting is already the busiest moment in the
+ * conversation.
+ *
+ * `after` resumes the walk past a product the seller skipped, by position
+ * rather than by product number, so a listing with no whatsapp_seq can't
+ * make the walk ask about the same one forever. Returns false (and clears
+ * the pointer) when there is nothing left to ask about, so the caller can
+ * close the conversation off instead of leaving the seller mid-question.
+ */
+async function askForNextMissingPrice(
+  phoneNumber: string,
+  batchId:     string,
+  opts: { after?: string; prefix?: string } = {},
+): Promise<boolean> {
+  const listings = await getBatchListings(batchId);
+  // findIndex returning -1 lands on 0 — an id that isn't in this batch
+  // restarts the walk rather than skipping the whole thing.
+  const startAt = opts.after ? listings.findIndex((l) => l.id === opts.after) + 1 : 0;
+  // A product with no title never drafted at all; its own failure message
+  // already covers it, and a price would not make it submittable.
+  const next = listings.slice(startAt).find((l) => l.title && !l.selling_price);
+
+  if (!next) {
+    await updateSession(phoneNumber, { awaitingPriceFor: null });
+    return false;
+  }
+
+  await updateSession(phoneNumber, { awaitingPriceFor: next.id });
+
+  const who = listings.length > 1 && next.whatsapp_seq != null
+    ? `Product ${next.whatsapp_seq} — ${next.title}`
+    : next.title;
+
+  await replyButtons(
+    phoneNumber,
+    `${opts.prefix ? `${opts.prefix}\n\n` : ""}💰 *${who}*\n\n` +
+    `What price are you selling it at? Reply with just the number in cedis — e.g. *150*.\n\n` +
+    `Jumia won't accept a product without one.`,
+    [{ id: "skip price", title: "Skip for now" }],
+  );
+  return true;
+}
+
+/** The "Skip for now" button's id, and the word a seller would type. */
+const PRICE_SKIP_RE = /^skip( price)?[.!]?$/i;
+
+/**
+ * Save a price the seller sent in answer to askForNextMissingPrice, then
+ * move the walk on to the next product missing one.
+ *
+ * Written straight to the column rather than through applyNotes: the
+ * seller is answering a question about ONE field, and applyNotes would
+ * also overwrite user_prompt with "150", losing the note their product was
+ * actually drafted from.
+ */
+async function applyChatPrice(
+  phoneNumber: string,
+  batchId:     string,
+  listingId:   string,
+  price:       number,
+): Promise<void> {
+  const db = createServerClient();
+  const { error } = await db
+    .from("listings")
+    .update({ selling_price: price, updated_at: new Date().toISOString() })
+    .eq("id", listingId);
+
+  if (error) {
+    console.error(`[whatsapp intake] chat price for listing ${listingId} failed: ${error.message}`);
+    // The pointer stays set on purpose — the seller answered correctly and
+    // it was us that failed, so their next attempt should still be read as
+    // a price rather than as chit-chat.
+    await replyError(phoneNumber, "⚠️ I couldn't save that price just now — send the number again in a moment.");
+    return;
+  }
+
+  const listings = await getBatchListings(batchId);
+  const saved = listings.find((l) => l.id === listingId);
+  const label = listings.length > 1 && saved?.whatsapp_seq != null
+    ? `product ${saved.whatsapp_seq}`
+    : (saved?.title ?? "your product");
+
+  // Say what is STILL missing in the same breath. A seller who has just
+  // answered the one question we asked will otherwise assume the product
+  // is ready, and only find out at submit time that it isn't.
+  const stillMissing = await missingFieldsFor(listingId);
+  const confirmation = stillMissing.length === 0
+    ? `✅ Price set to GHS ${price} for ${label} — ready to submit.`
+    : `✅ Price set to GHS ${price} for ${label}.\n⚠️ Still needs: ${stillMissing.join(", ")} — tap *Edit product ${saved?.whatsapp_seq ?? ""}*.`.trimEnd();
+
+  // The confirmation rides along with the next question rather than going
+  // out as its own message — one send per answer, not two.
+  const asked = await askForNextMissingPrice(phoneNumber, batchId, { prefix: confirmation });
+  if (!asked) {
+    await replyButtons(phoneNumber, `${confirmation}\n\nThat's every price filled in.`, [
+      { id: "submit all", title: "Submit all ✅" },
+      { id: "restart",    title: "Restart 🔄" },
+    ]);
+  }
+}
+
+/**
  * Close out a batch once every job has settled — the tail of what used to
  * be startBatchAnalysis, called by the worker that finished the last job.
  *
@@ -1675,6 +1790,11 @@ export async function finalizeBatch(
           { id: "restart",    title: "Restart 🔄" },
         ],
       );
+      // A missing price is the one gap worth a follow-up question rather
+      // than a warning: it is the commonest reason a draft never reaches
+      // Jumia, and it is the only missing field a seller can supply in a
+      // single word without opening the editor.
+      await askForNextMissingPrice(phoneNumber, batchId);
     }
     // else: the product's own failure message (sent by runQueuedAnalysis)
     // already covers what happened — nothing to add.
@@ -1740,6 +1860,8 @@ export async function finalizeBatch(
       { id: "restart",    title: "Restart 🔄" },
     ],
   );
+
+  await askForNextMissingPrice(phoneNumber, batchId);
 }
 
 async function handleAwaitingBatchConfirmation(
@@ -1799,6 +1921,39 @@ async function handleAwaitingBatchConfirmation(
   if (categoryMatch) {
     await handleCategoryCorrection(userId, phoneNumber, categoryMatch[1], parseInt(categoryMatch[2], 10));
     return;
+  }
+
+  // An answer to askForNextMissingPrice's question. Sits below the button
+  // ids above (none of which extractPrice can match) and above
+  // parseEditCommand, which would otherwise swallow a bare number as an
+  // edit instruction for a 1-product batch.
+  //
+  // Anything that ISN'T a price drops the pointer and carries on being
+  // handled normally — the seller moving on is the answer "no". That keeps
+  // the state self-correcting: there is no reply that can strand the
+  // conversation waiting for a number.
+  if (session.awaitingPriceFor) {
+    const priceFor = session.awaitingPriceFor;
+    const price = extractPrice(text);
+    if (price != null && price > 0) {
+      await applyChatPrice(phoneNumber, batchId, priceFor, price);
+      return;
+    }
+    if (PRICE_SKIP_RE.test(text)) {
+      const asked = await askForNextMissingPrice(phoneNumber, batchId, { after: priceFor });
+      if (!asked) {
+        await replyButtons(
+          phoneNumber,
+          "No problem — you can set prices on the review page any time. Jumia won't accept a product without one.",
+          [
+            { id: "submit all", title: "Submit all ✅" },
+            { id: "restart",    title: "Restart 🔄" },
+          ],
+        );
+      }
+      return;
+    }
+    await updateSession(phoneNumber, { awaitingPriceFor: null });
   }
 
   const editCmd = parseEditCommand(text, batchSize);

@@ -161,8 +161,46 @@ export function extractPrice(text: string): number | null {
   if (labeled) return parseFloat(labeled[1]);
   const currency = text.match(/(?:GH[SC]?|GH₵|₵)\s*(\d+(?:\.\d+)?)/i) ?? text.match(/(\d+(?:\.\d+)?)\s*ced[ei]s/i);
   if (currency) return parseFloat(currency[1]);
+
+  // Number BEFORE the currency: "110 ghs", "110GHC", "110 ₵".
+  //
+  // Only "N cedis" was handled in this direction, so "110 ghs sold in
+  // singles" read as no price at all — the seller stated it plainly and
+  // the listing was still blocked at submit with "price is required".
+  // Seen live on 2026-09-15.
+  // The \b rides on the LETTER forms only. A word boundary needs a
+  // word/non-word transition, and ₵ is already non-word, so "200 ₵"
+  // matched nothing at all with the boundary on the outside.
+  const trailingCurrency = text.match(/(\d+(?:\.\d+)?)\s*(?:GH[SC]\b|GH₵|₵)/i);
+  if (trailingCurrency) return parseFloat(trailingCurrency[1]);
+
   const bare = text.trim().match(/^(\d+(?:\.\d+)?)$/);
   if (bare) return parseFloat(bare[1]);
+
+  // A number alone on its own LINE, when the message says nothing else
+  // numeric about money.
+  //
+  // The whole-message rule above only fires when the message is nothing
+  // but a number. Sellers routinely put the price on one line and notes on
+  // the next:
+  //
+  //   210
+  //   The colors available are Blue and Red
+  //
+  // which lost the price entirely. Both real cases on 2026-09-15 put it on
+  // its own line, one at the top and one at the bottom.
+  //
+  // Guarded hard, because a bare number is the most ambiguous thing a
+  // seller can type: EXACTLY ONE such line may exist. Two or more and this
+  // returns null rather than picking, which is the same "null beats wrong"
+  // rule the rest of this file follows — a size and a price on separate
+  // lines must not become a coin flip.
+  const bareLines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^\d+(?:\.\d+)?$/.test(line));
+  if (bareLines.length === 1) return parseFloat(bareLines[0]);
+
   return null;
 }
 

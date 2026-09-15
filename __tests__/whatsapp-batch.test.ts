@@ -190,6 +190,34 @@ describe("extractPrice", () => {
     expect(extractPrice("the price was 99.50")).toBe(99.5);
     expect(extractPrice("Variation is red\nThe price is 150\nDone")).toBe(150);
   });
+
+  // Every one of these is a note a real seller actually sent on
+  // 2026-09-15. All eight products stated a price; three of them were
+  // still pushed to Jumia with "price is required", because the number
+  // came BEFORE the currency or sat alone on its own line.
+  it("reads the number before the currency — confirmed live failure", () => {
+    expect(extractPrice("110 ghs sold in singles")).toBe(110);
+    expect(extractPrice("46GHC")).toBe(46);
+    expect(extractPrice("200 ₵")).toBe(200);
+  });
+
+  it("reads a number alone on its own line — confirmed live failure", () => {
+    expect(extractPrice("210\nThe colors available are Blue and Red")).toBe(210);
+    expect(extractPrice("Panasonic kettle, 1.7 litres\n200")).toBe(200);
+  });
+
+  // The guard that makes the line rule safe. A bare number is the most
+  // ambiguous thing a seller can type, so two of them is a refusal, not a
+  // coin flip: "42" here is a shoe size and "10" is stock.
+  it("refuses to pick when more than one line is a bare number", () => {
+    expect(extractPrice("Size\n42\nQuantity\n10")).toBeNull();
+  });
+
+  // Still extractSalePrice's territory — widening the shapes must not
+  // widen what counts as the regular price.
+  it("still leaves a lone sale price alone", () => {
+    expect(extractPrice("Sale price is 150")).toBeNull();
+  });
 });
 
 describe("extractStock", () => {

@@ -249,3 +249,154 @@ describe("tapping done while the album is still arriving", () => {
     expect(String(listings()[0].user_prompt ?? "")).toContain("250");
   });
 });
+
+describe("asking for a missing price in chat", () => {
+  // The reported shape: a real 10-product session where 5 products were
+  // drafted perfectly and never reached Jumia, every one of them for the
+  // same reason — no price — and the only way to supply one was to leave
+  // WhatsApp for the review page.
+  const FULL = {
+    description: "A long enough description to clear the fifty-character minimum check.",
+    category_code: "1234",
+    brand: "Panasonic",
+    images: ["https://cdn.test/a.jpg"],
+    status: "draft",
+  };
+
+  function seedBatch(rows: { seq: number; title: string; price?: number }[]) {
+    db.tables.listings = rows.map((r) => ({
+      id: `listing-${r.seq}`,
+      user_id: USER,
+      whatsapp_batch_id: "batch-1",
+      whatsapp_seq: r.seq,
+      title: r.title,
+      selling_price: r.price ?? null,
+      ...FULL,
+    }));
+  }
+
+  function confirming(patch: Record<string, unknown> = {}) {
+    seedSession({ state: "awaiting_confirmation", batch_size: 2, batch_seq: null, ...patch });
+  }
+
+  it("asks about the first product with no price once the batch closes", async () => {
+    seedBatch([
+      { seq: 1, title: "Panasonic Electric Kettle 1.7L" },
+      { seq: 2, title: "Sony Wireless Over-Ear Headphones", price: 210 },
+    ]);
+    confirming();
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 2);
+
+    const ask = sent.find((m) => m.body.includes("What price are you selling it at?"));
+    expect(ask).toBeDefined();
+    expect(ask!.body).toContain("Product 1 — Panasonic Electric Kettle 1.7L");
+    expect(session().awaiting_price_for).toBe("listing-1");
+  });
+
+  it("says nothing when every drafted product already has a price", async () => {
+    seedBatch([
+      { seq: 1, title: "Panasonic Electric Kettle 1.7L", price: 150 },
+      { seq: 2, title: "Sony Wireless Over-Ear Headphones", price: 210 },
+    ]);
+    confirming();
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 2);
+
+    expect(sent.some((m) => m.body.includes("What price"))).toBe(false);
+    expect(session().awaiting_price_for ?? null).toBeNull();
+  });
+
+  it("banks a bare number as that product's price and moves to the next one", async () => {
+    seedBatch([
+      { seq: 1, title: "Panasonic Electric Kettle 1.7L" },
+      { seq: 2, title: "Sony Wireless Over-Ear Headphones" },
+    ]);
+    confirming({ awaiting_price_for: "listing-1" });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "150" });
+
+    expect(listings()[0].selling_price).toBe(150);
+    const reply = sent.find((m) => m.body.includes("Price set to GHS 150"));
+    expect(reply).toBeDefined();
+    // Confirmation and the next question share one send — message volume
+    // right after drafting is already the busiest point in the flow.
+    expect(reply!.body).toContain("Product 2 — Sony Wireless Over-Ear Headphones");
+    expect(session().awaiting_price_for).toBe("listing-2");
+  });
+
+  it("closes the loop with the submit buttons after the last price", async () => {
+    seedBatch([{ seq: 1, title: "Panasonic Electric Kettle 1.7L" }]);
+    confirming({ batch_size: 1, awaiting_price_for: "listing-1" });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "GHS 150" });
+
+    expect(listings()[0].selling_price).toBe(150);
+    expect(sent.some((m) => m.body.includes("That's every price filled in"))).toBe(true);
+    expect(session().awaiting_price_for).toBeNull();
+  });
+
+  // Without this, "submit all" typed in answer to the price question would
+  // be banked as a price of nothing, or worse, swallowed entirely.
+  it("drops the question the moment the seller says anything else", async () => {
+    seedBatch([{ seq: 1, title: "Panasonic Electric Kettle 1.7L" }]);
+    confirming({ batch_size: 1, awaiting_price_for: "listing-1" });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "what is this" });
+
+    expect(listings()[0].selling_price).toBeNull();
+    expect(session().awaiting_price_for).toBeNull();
+  });
+
+  // Skipping must walk FORWARD. Re-offering the product just declined is
+  // the one way this loop could trap a seller.
+  it("skips to the next product rather than re-asking the skipped one", async () => {
+    seedBatch([
+      { seq: 1, title: "Panasonic Electric Kettle 1.7L" },
+      { seq: 2, title: "Sony Wireless Over-Ear Headphones" },
+    ]);
+    confirming({ awaiting_price_for: "listing-1" });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "skip price" });
+
+    expect(session().awaiting_price_for).toBe("listing-2");
+    const ask = sent.find((m) => m.body.includes("What price"));
+    expect(ask!.body).toContain("Product 2");
+  });
+
+  it("stops asking when the last product is skipped", async () => {
+    seedBatch([{ seq: 1, title: "Panasonic Electric Kettle 1.7L" }]);
+    confirming({ batch_size: 1, awaiting_price_for: "listing-1" });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "skip price" });
+
+    expect(session().awaiting_price_for).toBeNull();
+    expect(sent.some((m) => m.body.includes("What price"))).toBe(false);
+    expect(sent.some((m) => m.body.includes("review page"))).toBe(true);
+  });
+
+  // A product that never drafted has no title; a price would not make it
+  // submittable, and asking for one implies it would.
+  it("never asks about a product that failed to draft", async () => {
+    db.tables.listings = [
+      { id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: null, selling_price: null, ...FULL },
+      { id: "listing-2", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 2, title: "Sony Wireless Over-Ear Headphones", selling_price: null, ...FULL },
+    ];
+    confirming();
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 2);
+
+    expect(session().awaiting_price_for).toBe("listing-2");
+  });
+});
