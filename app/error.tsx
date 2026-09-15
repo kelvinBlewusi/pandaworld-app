@@ -22,6 +22,7 @@ import { useEffect } from "react";
 import Link from "next/link";
 import * as Sentry from "@sentry/nextjs";
 import { Button } from "@/components/ui/button";
+import { APP_HOME } from "@/lib/constants/routes";
 
 export default function RootError({
   error,
@@ -66,7 +67,7 @@ export default function RootError({
                 Try again
               </Button>
               <Button variant="outline" className="w-full sm:w-auto" asChild>
-                <Link href="/dashboard">Back to dashboard</Link>
+                <Link href={APP_HOME}>Back to dashboard</Link>
               </Button>
             </div>
 

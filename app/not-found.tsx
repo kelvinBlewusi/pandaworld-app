@@ -4,10 +4,15 @@
  * Same visual language as app/error.tsx so a seller who mistypes a
  * URL doesn't bounce to Next.js's default. Two recovery actions:
  * dashboard for authenticated sellers, sign-in / landing for visitors.
+ *
+ * The dashboard link goes to APP_HOME, not /dashboard — see
+ * lib/constants/routes.ts. A 404 cannot know whether the seller has
+ * connected Jumia, and /dashboard bounces anyone who hasn't.
  */
 
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { APP_HOME } from "@/lib/constants/routes";
 
 export default function NotFound() {
   return (
@@ -31,7 +36,7 @@ export default function NotFound() {
             className="w-full bg-orange-500 hover:bg-orange-600 text-white sm:w-auto"
             asChild
           >
-            <Link href="/dashboard">Open dashboard</Link>
+            <Link href={APP_HOME}>Open dashboard</Link>
           </Button>
           <Button variant="outline" className="w-full sm:w-auto" asChild>
             <Link href="/">Back to home</Link>
