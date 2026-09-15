@@ -129,6 +129,13 @@ describe("an album arriving as several webhook deliveries", () => {
     await handleLinkedMessage(USER, PHONE, "m1", photo("a"));
     await handleLinkedMessage(USER, PHONE, "m2", photo("b"));
     await handleLinkedMessage(USER, PHONE, "m3", photo("c"));
+
+    // Age the row past the settle window. Tapping done the instant a photo
+    // lands is now held on purpose — see "tapping done while the album is
+    // still arriving" below — and this test is about the COUNT, not the
+    // hold, so it puts the seller in the state of having paused first.
+    listings()[0].updated_at = new Date(Date.now() - 60_000).toISOString();
+
     await handleLinkedMessage(USER, PHONE, "m4", { text: "done" });
 
     expect(sent.some((m) => m.body.includes("3 photos"))).toBe(true);
@@ -187,5 +194,58 @@ describe("webhook retries", () => {
     await handleLinkedMessage(USER, PHONE, "same-id", photo("a"));
 
     expect(listings()[0].images).toEqual(before);
+  });
+});
+
+describe("tapping done while the album is still arriving", () => {
+  // The reported failure: 7 photos of one pair of headphones, 5 landed on
+  // it and 2 landed on the NEXT product, which had been sent no photos at
+  // all. Nothing was lost — every photo reached the database — but two of
+  // them described the wrong product, which is worse than losing them:
+  // the listing looks complete and is wrong.
+  it("holds the advance instead of letting stragglers start the next product", async () => {
+    seedSession({ batch_size: 2, batch_seq: 1 });
+
+    await handleLinkedMessage(USER, PHONE, "m1", photo("a"));
+    await handleLinkedMessage(USER, PHONE, "m2", photo("b"));
+    sent.length = 0;
+
+    // "done" arrives while the row was stamped moments ago.
+    await handleLinkedMessage(USER, PHONE, "m3", { text: "done" });
+
+    expect(sent.some((m) => m.body.includes("Still receiving your photos"))).toBe(true);
+    // Still on product 1 — no advance, so a straggler cannot be
+    // misattributed to product 2.
+    expect(session().batch_seq).toBe(1);
+    expect(session().listing_id).not.toBeNull();
+  });
+
+  it("advances once the photos have settled", async () => {
+    seedSession({ batch_size: 2, batch_seq: 1 });
+    await handleLinkedMessage(USER, PHONE, "m1", photo("a"));
+
+    // Age the row past the settle window, as a real pause would.
+    const listing = listings()[0];
+    listing.updated_at = new Date(Date.now() - 60_000).toISOString();
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "done" });
+
+    expect(sent.some((m) => m.body.includes("Product 1 saved"))).toBe(true);
+    expect(session().batch_seq).toBe(2);
+    expect(session().listing_id).toBeNull();
+  });
+
+  // The hold must not swallow what the seller typed alongside "done" —
+  // they will not retype a price.
+  it("still saves notes sent with the done that got held", async () => {
+    seedSession({ batch_size: 2, batch_seq: 1 });
+    await handleLinkedMessage(USER, PHONE, "m1", photo("a"));
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "250\nDone" });
+
+    expect(sent.some((m) => m.body.includes("Still receiving your photos"))).toBe(true);
+    expect(String(listings()[0].user_prompt ?? "")).toContain("250");
   });
 });
