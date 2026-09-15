@@ -95,7 +95,23 @@ export function ExtensionSidebar({ onClose, isAdmin = false }: { onClose?: () =>
   const { user } = useUser();
 
   return (
-    <aside className="flex h-screen w-64 flex-col border-r bg-white">
+    // h-[100dvh], not h-screen. On iOS Safari 100vh is the height of the
+    // viewport WITHOUT the browser chrome, so the last ~90px of this panel
+    // sat underneath the address bar and the tab strip — which is exactly
+    // where the account row lives. The seller reported never seeing it, and
+    // "Push Listings from here" was visibly sliced in half above it. dvh
+    // tracks the real, currently-visible viewport.
+    //
+    // The safe-area padding is the second half: on a notched iPhone the
+    // home indicator overlays the bottom edge, so even a correctly-sized
+    // panel needs to keep its last row clear of it.
+    <aside
+      // Border follows the side the panel is on: the mobile drawer now
+      // slides in from the RIGHT, so its edge faces left; the desktop
+      // sidebar is still on the left and keeps its right edge.
+      className="flex h-[100dvh] w-64 flex-col border-l border-zinc-200 bg-white lg:border-l-0 lg:border-r"
+      style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+    >
       <div className="flex items-center justify-between gap-2 border-b px-4 py-4">
         <Link href="/extension" aria-label="pandaworld home">
           <Wordmark size={22} />
@@ -132,7 +148,7 @@ export function ExtensionSidebar({ onClose, isAdmin = false }: { onClose?: () =>
         <NavItem {...settingsItem} />
       </nav>
 
-      <div className="px-3 pb-4">
+      <div className="shrink-0 px-3 pb-4">
         {/* Explicit, opt-in bridge into the classic Jumia-OAuth flow — greyed
             out for regular sellers (2026-09-13) while WhatsApp + the
             extension are the focus, but left live for admins (see
@@ -154,13 +170,16 @@ export function ExtensionSidebar({ onClose, isAdmin = false }: { onClose?: () =>
           </div>
         )}
 
-        <div className="mt-3 flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-zinc-50">
-          <UserButton appearance={{ elements: { avatarBox: "h-7 w-7" } }} />
+        {/* Sized for a thumb: 44px is Apple's minimum tap target, and the
+            avatar was 28px in a row that measured about 34. The text steps
+            up with it — 10px email on a phone is decorative, not legible. */}
+        <div className="mt-3 flex min-h-[44px] items-center gap-2.5 rounded-lg border border-zinc-100 px-2 py-2 hover:bg-zinc-50">
+          <UserButton appearance={{ elements: { avatarBox: "h-8 w-8 md:h-7 md:w-7" } }} />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-medium text-zinc-800">
+            <p className="truncate text-sm font-medium text-zinc-800 md:text-xs">
               {user?.firstName ?? user?.username ?? "You"}
             </p>
-            <p className="truncate text-[10px] text-zinc-400">
+            <p className="truncate text-xs text-zinc-500 md:text-[10px]">
               {user?.primaryEmailAddress?.emailAddress ?? ""}
             </p>
           </div>

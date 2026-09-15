@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth, clerkClient } from "@clerk/nextjs/server";
 import * as Sentry from "@sentry/nextjs";
-import { createServerClient } from "@/lib/supabase/server";
-import { revokeToken } from "@/lib/jumia/oauth";
-import { decrypt } from "@/lib/security/token-crypto";
+import { purgeUserData } from "@/lib/account/purge";
 
 // ─── POST /api/account/delete ────────────────────────────────────────────────
 //
@@ -21,13 +19,10 @@ import { decrypt } from "@/lib/security/token-crypto";
 //     leaving stale rows.
 //
 // Order of operations (matters if any step throws partway):
-//   1. Revoke Jumia OAuth tokens (so a leaked DB after this point
-//      can't be used against the seller's vendor center).
-//   2. Cancel Paystack subscription (stops the recurring charge).
-//   3. Delete Supabase storage objects (product images).
-//   4. Delete database rows (variants → listings → jumia_connections
-//      → subscriptions → app_users).
-//   5. Delete Clerk user (signs the seller out everywhere).
+//   1-4. purgeUserData() — revoke Jumia tokens, delete storage objects,
+//        then delete every user-scoped row (see lib/account/purge.ts for
+//        the table list and why it is shared with the Clerk webhook).
+//   5.   Delete the Clerk user (signs the seller out everywhere).
 //
 // Each step is wrapped so a partial failure still progresses the
 // rest — losing the chance to revoke a token is bad, but losing
@@ -55,107 +50,19 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const db = createServerClient();
-  const errors: string[] = [];
-
-  // ── 1. Revoke Jumia tokens ───────────────────────────────────────────────
-  try {
-    const { data: conn } = await db
-      .from("jumia_connections")
-      .select("access_token, refresh_token")
-      .eq("user_id", userId)
-      .maybeSingle();
-
-    if (conn?.access_token && conn.access_token !== "credential_auth") {
-      try { await revokeToken(decrypt(conn.access_token as string)); }
-      catch (e) { errors.push(`jumia access-token revoke: ${(e as Error).message}`); }
-    }
-    if (conn?.refresh_token) {
-      try { await revokeToken(decrypt(conn.refresh_token as string)); }
-      catch (e) { errors.push(`jumia refresh-token revoke: ${(e as Error).message}`); }
-    }
-  } catch (e) {
-    errors.push(`jumia revoke lookup: ${(e as Error).message}`);
-  }
-
-  // ── 2. Cancel Paystack subscription ──────────────────────────────────────
-  try {
-    const { data: sub } = await db
-      .from("subscriptions")
-      .select("paystack_subscription_code, paystack_email_token")
-      .eq("user_id", userId)
-      .maybeSingle();
-
-    if (sub?.paystack_subscription_code && process.env.PAYSTACK_SECRET_KEY) {
-      const res = await fetch("https://api.paystack.co/subscription/disable", {
-        method:  "POST",
-        headers: {
-          Authorization:   `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-          "Content-Type":  "application/json",
-        },
-        body: JSON.stringify({
-          code:  sub.paystack_subscription_code,
-          token: sub.paystack_email_token,
-        }),
-      });
-      if (!res.ok) {
-        errors.push(`paystack disable: HTTP ${res.status}`);
-      }
-    }
-  } catch (e) {
-    errors.push(`paystack cancel: ${(e as Error).message}`);
-  }
-
-  // ── 3. Delete storage objects ────────────────────────────────────────────
-  // List then delete — Supabase storage doesn't support delete-by-prefix
-  // in a single call. We page in 1000s because that's what list returns
-  // per request.
-  try {
-    let offset = 0;
-    while (true) {
-      const { data: files, error: listError } = await db.storage
-        .from("product-images")
-        .list(userId, { limit: 1000, offset, sortBy: { column: "created_at", order: "asc" } });
-      if (listError) {
-        errors.push(`storage list: ${listError.message}`);
-        break;
-      }
-      if (!files || files.length === 0) break;
-      const paths = files.map((f) => `${userId}/${f.name}`);
-      const { error: deleteError } = await db.storage.from("product-images").remove(paths);
-      if (deleteError) {
-        errors.push(`storage delete: ${deleteError.message}`);
-        break;
-      }
-      if (files.length < 1000) break;
-      offset += 1000;
-    }
-  } catch (e) {
-    errors.push(`storage cleanup: ${(e as Error).message}`);
-  }
-
-  // ── 4. Delete database rows ──────────────────────────────────────────────
-  // Order matters because of foreign keys: child rows first, then parents.
-  // We collect errors but DO NOT abort — better to leave a few orphan
-  // rows than to leave a Clerk user without their data deleted.
-  const tablesInOrder = [
-    "variants",          // FK → listings
-    "listings",          // FK → app_users
-    "jumia_connections", // FK → app_users
-    "subscriptions",     // FK → app_users
-    "app_users",         // parent
-  ];
-
-  for (const table of tablesInOrder) {
-    try {
-      const { error } = await db.from(table).delete().eq("user_id", userId);
-      if (error && !/relation.*does not exist/i.test(error.message)) {
-        errors.push(`db delete ${table}: ${error.message}`);
-      }
-    } catch (e) {
-      errors.push(`db delete ${table}: ${(e as Error).message}`);
-    }
-  }
+  // ── 1-4. Erase every trace from Supabase ─────────────────────────────────
+  //
+  // One shared implementation with the user.deleted webhook — see
+  // lib/account/purge.ts. Keeping two lists was how this one came to name
+  // a table that does not exist (`app_users`, silently skipped) while
+  // missing eleven that do, among them whatsapp_connections and
+  // extension_api_keys: a phone link and an API key that both went on
+  // working after the account was gone.
+  //
+  // Token revocation and storage cleanup happen inside the purge, in that
+  // order, for the same reason they did here: revoke before the rows
+  // holding the tokens are deleted.
+  const { errors } = await purgeUserData(userId);
 
   // ── 5. Delete the Clerk user ─────────────────────────────────────────────
   // Has to happen LAST so the auth() check at the top of this route

@@ -4,17 +4,29 @@ import * as Sentry from "@sentry/nextjs";
 import { sendEmail } from "@/lib/email/send";
 import { welcomeEmail } from "@/lib/email/templates";
 import { getOrCreateCreditBalance } from "@/lib/billing/extension-credits";
+import { purgeUserData } from "@/lib/account/purge";
 
 // ─── POST /api/webhooks/clerk ────────────────────────────────────────────────
 //
-// Receives signed webhook events from Clerk — currently we only care
-// about user.created so we can fire the welcome email. Future events
-// (user.deleted, user.updated for email-change) can be added here.
+// Receives signed webhook events from Clerk.
+//
+//   user.created — fire the welcome email, pre-warm the credit ledger
+//   user.deleted — erase the seller's data from Supabase
+//
+// user.deleted is NOT optional, and treating it as such caused a real
+// incident. Clerk is the only place a user exists — this project has no
+// users table, every row is keyed by a Clerk user_id string, and there are
+// no foreign keys. So deleting a user in the Clerk dashboard removed the
+// identity and left every row behind. Confirmed on 2026-09-15: an account
+// was deleted in Clerk and the WhatsApp bot kept serving that number
+// normally, because whatsapp_connections — the phone → account link the bot
+// resolves through — was still there, along with the seller's listings,
+// their Jumia tokens, and their extension API key.
 //
 // Required setup in Clerk dashboard:
 //   Webhooks → Add Endpoint
 //   URL:    https://<your-domain>/api/webhooks/clerk
-//   Events: user.created
+//   Events: user.created, user.deleted        ← both
 //   Copy the Signing Secret into Vercel env var:
 //     CLERK_WEBHOOK_SECRET = whsec_…
 //
@@ -56,11 +68,10 @@ export async function POST(req: NextRequest) {
   try {
     if (event.type === "user.created") {
       await handleUserCreated(event.data);
+    } else if (event.type === "user.deleted") {
+      await handleUserDeleted(event.data);
     }
-    // Other event types we might handle later (out of scope for now):
-    //   - user.deleted: belt + braces — our /api/account/delete already
-    //     deletes from Clerk, but if a Clerk dashboard admin deletes
-    //     a user directly we'd want to clean up our DB rows here.
+    // Still unhandled:
     //   - user.updated: rotate cached email/name if a seller changes it.
   } catch (e) {
     // Log and capture, but return 200 so Clerk doesn't retry forever
@@ -107,13 +118,39 @@ async function handleUserCreated(user: ClerkUserData): Promise<void> {
   });
 }
 
+// ─── user.deleted handler ────────────────────────────────────────────────────
+
+async function handleUserDeleted(user: ClerkUserData): Promise<void> {
+  if (!user.id) {
+    console.warn("[clerk-webhook] user.deleted with no id — nothing to purge");
+    return;
+  }
+
+  const { deleted, errors } = await purgeUserData(user.id);
+
+  // Reported to Sentry rather than thrown: the account is gone from Clerk
+  // either way, and throwing would make Clerk retry the whole delivery
+  // while the rows that DID delete stay deleted. What matters is that a
+  // survivor is visible to us, because a leftover credential is the part
+  // that has security weight.
+  if (errors.length > 0) {
+    Sentry.captureMessage(`Partial purge for deleted user ${user.id}`, {
+      level: "error",
+      tags:  { surface: "clerk-webhook", event: "user.deleted" },
+      extra: { deleted, errors },
+    });
+  }
+}
+
 // ─── Minimal types for the bits of the Clerk webhook payload we use ──────────
 
 interface ClerkUserData {
+  // Optional on purpose: a user.deleted payload is far thinner than
+  // user.created, and only carries an id and a deleted flag.
   id: string;
-  first_name: string | null;
-  last_name:  string | null;
-  email_addresses: Array<{ email_address: string }>;
+  first_name?: string | null;
+  last_name?:  string | null;
+  email_addresses?: Array<{ email_address: string }>;
 }
 
 interface ClerkWebhookEvent {
