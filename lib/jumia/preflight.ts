@@ -44,7 +44,10 @@ export type PreflightReason =
   | "truncated"
   /** Required by the schema and empty. Cannot be repaired here — needs an
    *  AI fill or the seller. */
-  | "missing_required";
+  | "missing_required"
+  /** Newlines in a long-text field rewritten as <br>, which is the only
+   *  form Jumia's rich-text rendering preserves. */
+  | "line_breaks";
 
 export interface PreflightNote {
   attribute: string;
@@ -155,6 +158,29 @@ export function preflightAttributes(
 
     let value = attr.value.trim();
     if (!value) continue;
+
+    // A long-text field is rendered by Jumia as HTML, where a newline is
+    // just whitespace. So a "What's in the box" written as three lines
+    //
+    //   1x Gas Stove with Oven
+    //   1x User manual
+    //   1x Original packaging
+    //
+    // arrived in Vendor Center as one unbroken run. Confirmed live,
+    // side by side with our own editor showing it correctly.
+    //
+    // Only for values carrying no markup of their own: a value that
+    // already has tags came from the rich-text editor, where the line
+    // breaks are real <p>/<br> and adding more would double-space it.
+    if (field.type === "textarea" && /\r?\n/.test(value) && !/<[a-z][^>]*>/i.test(value)) {
+      value = value.replace(/\r?\n/g, "<br>");
+      notes.push({
+        attribute: attr.name,
+        label:     field.label,
+        reason:    "line_breaks",
+        detail:    "line breaks converted to <br> so Jumia keeps them",
+      });
+    }
 
     if (field.allowed_values.length > 0) {
       const parts = field.type === "multi" ? splitMulti(value) : [value];

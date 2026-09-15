@@ -33,6 +33,7 @@ import {
   proseLength,
   CONTENT_LENGTH_FLOORS,
 } from "@/lib/ai/content-style-rules";
+import { canonicalKey } from "@/lib/jumia/attribute-mapping";
 import { aiReadNoteIntent } from "@/lib/actions/ai";
 import { verifyNoteIntent, type NoteIntent } from "@/lib/whatsapp/note-intent";
 import {
@@ -773,9 +774,26 @@ export async function runAutoAnalyze(
     // key the SchemaForm already groups its aliases under, so it lands in
     // the right field wherever the category does declare one.
     if (intent.whats_in_the_box?.value) {
-      filled.dynamic_attributes["whats_in_the_box"] = intent.whats_in_the_box.value;
-      newSources["whats_in_the_box"] = "user";
-      newConfidence["whats_in_the_box"] = { confidence: 1, source: "seller-required" };
+      // Write it under the name THIS category declares, not the canonical
+      // one. Jumia spells the field differently per category
+      // ("package_content" on 1000254), and the pre-flight drops anything
+      // the category doesn't declare — so writing the canonical key threw
+      // the seller's own box contents away and left the AI's guess, which
+      // happened to use the real name, to be pushed instead. Confirmed
+      // live: the seller wrote 'WHAT IS IN THE BOX IS "1x Gas Stove"' and
+      // Jumia received a three-line list they never typed.
+      const target = attrs.find((a) => canonicalKey(a.name) === "whats_in_the_box")?.name;
+      if (target) {
+        filled.dynamic_attributes[target] = intent.whats_in_the_box.value;
+        newSources[target] = "user";
+        newConfidence[target] = { confidence: 1, source: "seller-required" };
+      } else {
+        // No such field in this category. Saying so beats writing a key
+        // that will be silently discarded downstream.
+        console.info(
+          `[auto-analyze] listing=${listingId} seller gave box contents but category ${chosen.code} has no such field`,
+        );
+      }
     }
   }
 
