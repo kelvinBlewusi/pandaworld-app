@@ -21,6 +21,7 @@ import { Wordmark } from "@/components/marketing/wordmark";
 import { DonateModal } from "./donate-modal";
 import { GoogleIcon } from "./google-icon";
 import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
+import { WhatsAppBotButton } from "@/components/whatsapp/whatsapp-bot-button";
 import type { CreditTransaction } from "@/lib/billing/extension-credits";
 import {
   DropdownMenu,
@@ -243,6 +244,7 @@ export function ExtensionShell({
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
+            <WhatsAppBotButton />
             <a
               href={CHROME_WEB_STORE_URL}
               target="_blank"

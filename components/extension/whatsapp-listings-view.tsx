@@ -352,7 +352,7 @@ function WhatsAppListingRow({ listing }: { listing: ListingRow }) {
               value={price}
               onChange={(e) => setPrice(e.target.value)}
               placeholder="0.00"
-              className={cn("h-8 w-28 text-sm", needsPrice && "border-amber-300")}
+              className={cn("h-10 w-28 text-base md:h-8 md:text-sm", needsPrice && "border-amber-300")}
             />
           </div>
           <div>
@@ -362,15 +362,15 @@ function WhatsAppListingRow({ listing }: { listing: ListingRow }) {
               value={stock}
               onChange={(e) => setStock(e.target.value)}
               placeholder="1"
-              className="h-8 w-20 text-sm"
+              className="h-10 w-20 text-base md:h-8 md:text-sm"
             />
           </div>
-          <Button variant="outline" size="sm" className="h-8" onClick={handleSave} disabled={saving}>
+          <Button variant="outline" size="sm" className="h-10 md:h-8" onClick={handleSave} disabled={saving}>
             {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             Save
           </Button>
           {canPush && (
-            <Button size="sm" className="h-8 gap-1.5" onClick={handlePush} disabled={pushing}>
+            <Button size="sm" className="h-10 gap-1.5 md:h-8" onClick={handlePush} disabled={pushing}>
               {pushing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
               Push to Jumia
             </Button>

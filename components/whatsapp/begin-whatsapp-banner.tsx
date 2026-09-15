@@ -10,42 +10,13 @@
  */
 
 import { WhatsAppIcon } from "@/components/whatsapp/whatsapp-icon";
-import { useState } from "react";
-import {Loader2, Copy} from "lucide-react";
+import { Loader2, Copy } from "lucide-react";
+import { useWhatsAppLink } from "@/components/whatsapp/use-whatsapp-link";
 
 export function BeginWhatsAppBanner() {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // Set only when the code was generated but WHATSAPP_BOT_NUMBER isn't
-  // configured (so there's no wa.me link to open automatically) — same
-  // degraded case WhatsAppCard handles by showing the code as text
-  // instead of a button. Not an error: the code is real and usable.
-  const [manualCode, setManualCode] = useState<{ code: string; message: string } | null>(null);
-
-  async function handleClick() {
-    setLoading(true);
-    setError(null);
-    setManualCode(null);
-    try {
-      const res = await fetch("/api/whatsapp/generate-link", { method: "POST" });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        setError(data?.error ?? `Couldn't generate a link (HTTP ${res.status}). Try again.`);
-        return;
-      }
-      if (data?.waLink) {
-        window.open(data.waLink, "_blank", "noopener,noreferrer");
-      } else if (data?.code) {
-        setManualCode({ code: data.code, message: data.message ?? `LINK-${data.code}` });
-      } else {
-        setError("Couldn't generate a link — try again.");
-      }
-    } catch {
-      setError("Network error — check your connection and try again.");
-    } finally {
-      setLoading(false);
-    }
-  }
+  // Shared with the dashboard header's WhatsApp Bot button — see
+  // useWhatsAppLink for why this isn't duplicated.
+  const { loading, error, manualCode, open: handleClick } = useWhatsAppLink();
 
   return (
     <div className="space-y-3">
