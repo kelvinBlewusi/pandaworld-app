@@ -83,7 +83,13 @@ export function missingFieldLabels(row: ListingRow): string[] {
 }
 
 export type PushListingResult =
-  | { ok: true; jumiaRef: string | null; sku: string; skuChanged: boolean }
+  | {
+      ok: true; jumiaRef: string | null; sku: string; skuChanged: boolean;
+      /** Values the pre-flight dropped or shortened on the way out. The
+       *  push succeeded, but Jumia did not receive these as written, and
+       *  the seller is the only one who can decide whether that matters. */
+      adjustments?: string[];
+    }
   | {
       ok: false;
       // Mirrors the distinct error branches the route used to return as
@@ -261,7 +267,10 @@ export async function pushListingToJumia(
       })
       .eq("id", listingId);
 
-    return { ok: true, jumiaRef: result.jumia_ref, sku: row.sku, skuChanged: isRetry };
+    return {
+      ok: true, jumiaRef: result.jumia_ref, sku: row.sku, skuChanged: isRetry,
+      ...(result.adjustments?.length ? { adjustments: result.adjustments } : {}),
+    };
   }
 
   // Refused locally — nothing reached Jumia. Recording it as a rejection

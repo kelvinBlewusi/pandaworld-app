@@ -575,3 +575,103 @@ describe("Jumia /feeds/products/create payload conformance", () => {
     });
   });
 });
+
+describe("what the seller is told about what was sent", () => {
+  // The audit behind this: every place the payload differs from what the
+  // editor shows. Each of these was applied silently and written only to
+  // a server log, so a seller could type a value, submit, see "success",
+  // and have Jumia receive something else with no way to find out.
+
+  it("stays SILENT about a field the category doesn't declare", () => {
+    // Caught by this test before it shipped: the payload sprays a fixed
+    // set of universal fields at every listing, so a category declaring
+    // none of them produced TWENTY notes on a perfectly good push. The
+    // editor never rendered those fields either, so nothing the seller
+    // can see changed — and a list that long on every submit is one they
+    // learn to scroll past, costing the real findings their only chance
+    // of being read.
+    const schema: JumiaCategoryAttribute[] = [
+      { name: "material_family", label: "Material family", type: "multi",
+        allowed_values: ["Metal"], required: false, is_variant: false },
+    ];
+    const notes: string[] = [];
+    mapListingToJumiaProducts(
+      { ...sampleListing, main_material: "Aluminium", material_family: "Metal" },
+      [], brand, currency, schema, notes,
+    );
+    expect(notes.join(" ")).not.toContain("main_material");
+  });
+
+  it("reports a value the category rejects outright", () => {
+    const schema: JumiaCategoryAttribute[] = [
+      { name: "material_family", label: "Material family", type: "multi",
+        allowed_values: ["Metal", "Wood"], required: false, is_variant: false },
+    ];
+    const notes: string[] = [];
+    mapListingToJumiaProducts(
+      { ...sampleListing, material_family: "Fabric" },
+      [], brand, currency, schema, notes,
+    );
+    // "Fabric" is the value that once cost a whole feed.
+    expect(notes.join(" ")).toContain("Material family");
+  });
+
+  it("reports a value trimmed to the category's length cap", () => {
+    const schema: JumiaCategoryAttribute[] = [
+      { name: "model", label: "Model", type: "string",
+        allowed_values: [], required: false, is_variant: false, max_length: 5 },
+    ];
+    const notes: string[] = [];
+    mapListingToJumiaProducts(
+      { ...sampleListing, model: "A very long model name" },
+      [], brand, currency, schema, notes,
+    );
+    expect(notes.join(" ")).toMatch(/Model was .*5/);
+  });
+
+  it("reports the brand being stripped from the title", () => {
+    // Required — Jumia rejects a title repeating the brand — but the
+    // seller kept seeing their own title and never learnt a different one
+    // went out.
+    const notes: string[] = [];
+    mapListingToJumiaProducts(
+      { ...sampleListing, title: "Sony WH-1000XM5 Wireless Headphones", brand: "Sony" },
+      [], { code: 1, name: "Sony" }, currency, [], notes,
+    );
+    expect(notes.join(" ")).toContain("Sony");
+    expect(notes.join(" ")).toContain("removed from the title");
+  });
+
+  it("says NOTHING when the payload matches what the seller typed", () => {
+    // The counterweight. A list that cries wolf is one sellers learn to
+    // scroll past, so a clean push has to stay silent.
+    const schema: JumiaCategoryAttribute[] = [
+      { name: "material_family", label: "Material family", type: "multi",
+        allowed_values: ["Metal"], required: false, is_variant: false },
+    ];
+    const notes: string[] = [];
+    mapListingToJumiaProducts(
+      { ...sampleListing, material_family: "Metal", main_material: null, model: null,
+        title: "Plain Product Title Here", brand: "Generic" },
+      [], { code: 1, name: "Generic" }, currency, schema, notes,
+    );
+    expect(notes).toEqual([]);
+  });
+
+  it("does not report a spelling snap or a line-break rewrite", () => {
+    // Both are equivalences, not losses: "metal" -> "Metal" is the exact
+    // string Jumia accepts, and a <br> renders as the line the seller
+    // typed. Listing them would train people to ignore the list.
+    const schema: JumiaCategoryAttribute[] = [
+      { name: "material_family", label: "Material family", type: "multi",
+        allowed_values: ["Metal"], required: false, is_variant: false },
+    ];
+    const notes: string[] = [];
+    mapListingToJumiaProducts(
+      { ...sampleListing, material_family: "metal", main_material: null, model: null,
+        title: "Plain Product Title Here", brand: "Generic" },
+      [], { code: 1, name: "Generic" }, currency, schema, notes,
+    );
+    expect(notes).toEqual([]);
+  });
+});

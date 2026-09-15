@@ -1817,7 +1817,12 @@ async function handleSubmit(
         try {
           const result = await pushListingToJumia(userId, listing.id);
           if (result.ok) {
-            messages[i] = `Product ${seq}: ✅ submitted — pending Jumia review.`;
+            // Name anything Jumia did not receive as written. A push that
+            // reports plain success while a value the seller typed was
+            // dropped is the quiet failure this whole pass is about.
+            messages[i] = result.adjustments?.length
+              ? `Product ${seq}: ✅ submitted — pending Jumia review.\n⚠️ ${result.adjustments.join("; ")}.`
+              : `Product ${seq}: ✅ submitted — pending Jumia review.`;
           } else if (result.code === "validation") {
             messages[i] = `Product ${seq}: ⚠️ ${result.message} Fix it at ${focusedEditorUrl(listing.id)} then reply submit again.`;
           } else if (result.needsReconnect) {
@@ -2074,7 +2079,12 @@ async function handleFixAndResubmit(
   const result = await pushListingToJumia(userId, listingId);
 
   if (result.ok) {
-    await replyText(phoneNumber, `✅ ${label}: resubmitted — pending Jumia review.`);
+    await replyText(
+      phoneNumber,
+      result.adjustments?.length
+        ? `✅ ${label}: resubmitted — pending Jumia review.\n⚠️ ${result.adjustments.join("; ")}.`
+        : `✅ ${label}: resubmitted — pending Jumia review.`,
+    );
     return;
   }
 
