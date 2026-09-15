@@ -3,7 +3,7 @@ import { claimOnboarding, redeemLinkCode, getUserIdForPhoneNumber } from "@/lib/
 import { welcomeMessage, HOW_IT_WORKS_BUTTON } from "@/lib/whatsapp/onboarding";
 import { sendButtonsIfConfigured, sendCtaUrlIfConfigured, markReadWithTypingIfConfigured } from "@/lib/whatsapp/client";
 import { verifyWhatsAppSignature, extractLinkCode } from "@/lib/whatsapp/webhook-verify";
-import { contentOf, type IncomingMessage } from "@/lib/whatsapp/message-content";
+import { contentOf, METAS_OWN_UNSUPPORTED_TYPE, type IncomingMessage } from "@/lib/whatsapp/message-content";
 import { handleLinkedMessage } from "@/lib/whatsapp/intake";
 import { COUNT_QUICK_PICKS } from "@/lib/whatsapp/batch";
 import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
@@ -101,7 +101,15 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
   // download, AI analyze, Jumia push) can take several seconds. Never
   // let a slow/failed typing-indicator call hold up real message
   // handling — see markReadWithTypingIfConfigured's own error handling.
-  void markReadWithTypingIfConfigured(msg.id);
+  //
+  // Meta's own "unsupported" container is the exception: it carries a
+  // wamid that does not name a real message, and marking it read answers
+  // 400 "(#100) Invalid parameter — Message ID ... does not exist" every
+  // single time. Two of those in one seller's album on 2026-09-15. The
+  // call can never succeed, so not making it is the whole fix.
+  if (msg.type !== METAS_OWN_UNSUPPORTED_TYPE) {
+    void markReadWithTypingIfConfigured(msg.id);
+  }
 
   const linkCode = extractLinkCode(msg.text?.body);
 

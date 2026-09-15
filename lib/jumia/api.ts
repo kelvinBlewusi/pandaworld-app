@@ -581,6 +581,30 @@ function t(value: string) {
  */
 const MISSING_VARIANT_VARIATION = "Default";
 
+/**
+ * Is this colour string a single colour, or a list of them?
+ *
+ * A single-SKU product takes its detected colour as its `variation` label,
+ * which is strictly more useful to a buyer than the literal "Default" —
+ * but only while the colour names ONE thing. When the AI sees a product
+ * photographed in several colourways it stores them all
+ * ("Black, Silver, White"), and that string went straight out as the
+ * variation of a single SKU. Observed live on 2026-09-15: a pair of
+ * headphones shipped to Jumia as one product whose variation read
+ * "Black, Silver, White" — a label no buyer can choose from, on a listing
+ * that only ever had one SKU behind it.
+ *
+ * A list means the seller has variants they have not set up yet, not a
+ * name for this one. "Default" is the honest answer there, and it leaves
+ * the real colours visible in the colour attribute where they belong.
+ */
+function isSingleColour(value: string): boolean {
+  if (!value) return false;
+  // "&" sits in the character class rather than the word-boundary
+  // alternation: \b& never matches, since & is not a word character.
+  return !/[,/|&]|\band\b/i.test(value);
+}
+
 export type JumiaProduct = ReturnType<typeof buildBaseProduct>;
 
 function buildBaseProduct(
@@ -640,7 +664,7 @@ function buildBaseProduct(
   // which Jumia dedup-rejected. The push route validates upstream (empty
   // variation → 422) so the seller is told to type a label instead.
   const colorVariation   = (listing.color ?? listing.color_family ?? "").trim();
-  const defaultVariation = colorVariation || "Default";
+  const defaultVariation = isSingleColour(colorVariation) ? colorVariation : "Default";
 
   // Match Jumia Postman spec exactly:
   //   POST /feeds/products/create

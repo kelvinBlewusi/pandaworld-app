@@ -15,6 +15,7 @@
  * the result to JSON.
  */
 
+import { snapToAllowed } from "@/lib/jumia/preflight";
 import { createServerClient } from "@/lib/supabase/server";
 import {
   aiPassA_describeProduct,
@@ -1201,6 +1202,63 @@ export async function runAutoAnalyze(
       console.info(`[auto-analyze] description-expand ms=${Date.now() - tExpand}`);
     } catch (e) {
       console.warn(`[auto-analyze] description-expand failed (non-fatal): ${(e as Error).message}`);
+    }
+  }
+
+  // ── Drop AI enum values this category will never accept ─────────────────
+  //
+  // Observed live on 2026-09-15, twice in one batch:
+  //
+  //   [Jumia preflight] material_family: "Fabric" isn't a value this
+  //   category accepts
+  //   [Jumia preflight] age_group: "25-64 Years" isn't a value this
+  //   category accepts
+  //
+  // Both were stored on the listing, shown to the seller as filled, and
+  // then silently dropped at push time with a warning they had to read
+  // past. A value the category cannot accept is worse than an empty
+  // field, because an empty REQUIRED field is surfaced by
+  // describeMissingFields and the seller gets asked for it — whereas a
+  // wrong one looks done until Jumia disagrees.
+  //
+  // aiFillGaps already validates its own output this way; the earlier
+  // passes (A and combined B+C) never did, which is where these came from.
+  // Same snapping rules as the push path, reusing snapToAllowed so the two
+  // cannot drift: casing and singular/plural are repaired, genuine
+  // mismatches are dropped, and anything ambiguous is dropped rather than
+  // guessed.
+  //
+  // Seller-typed values are left exactly as written. If someone insists on
+  // a value Jumia rejects, that is their call to see through to the push,
+  // where preflight names it — quietly rewriting what a human typed is a
+  // different and worse failure.
+  for (const [attrName, rawValue] of Object.entries(finalDynamicAttrs)) {
+    if (isUserEdited(attrName)) continue;
+    const field = attrs.find((a) => a.name.toLowerCase() === attrName.toLowerCase());
+    if (!field || field.allowed_values.length === 0) continue;
+
+    const value = String(rawValue ?? "").trim();
+    if (!value) continue;
+
+    const parts = field.type === "multi"
+      ? value.split(",").map((v) => v.trim()).filter(Boolean)
+      : [value];
+    const kept = parts
+      .map((part) => snapToAllowed(part, field.allowed_values))
+      .filter((v): v is string => v !== null);
+
+    if (kept.length === 0) {
+      delete finalDynamicAttrs[attrName];
+      console.info(
+        `[auto-analyze] listing=${listingId} dropped ${attrName}="${value}" — ` +
+        `not a value this category accepts`,
+      );
+      continue;
+    }
+    const snapped = kept.join(",");
+    if (snapped !== value) {
+      finalDynamicAttrs[attrName] = snapped;
+      console.info(`[auto-analyze] listing=${listingId} snapped ${attrName}: "${value}" -> "${snapped}"`);
     }
   }
 

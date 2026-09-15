@@ -13,7 +13,29 @@ export interface IncomingMessage {
   image?: { id: string; mime_type?: string; caption?: string };
   button?: { text: string; payload: string };
   interactive?: { button_reply?: { id: string; title: string } };
+  /** Present on Meta's own `type: "unsupported"` container — see
+   *  METAS_OWN_UNSUPPORTED_TYPE below. */
+  errors?: { code?: number; title?: string; message?: string; error_data?: { details?: string } }[];
 }
+
+/**
+ * Meta's own catch-all container, as distinct from a media type WE can't
+ * read.
+ *
+ * A video the seller actually sent arrives as `type: "video"`. THIS type
+ * means WhatsApp itself could not represent the message over the Cloud
+ * API at all — a poll, a view-once photo, an edited message, or the
+ * grouping envelope that rides along with a multi-photo album. There is no
+ * media id, no caption, and no wamid that can be marked read.
+ *
+ * The distinction is not academic. Confirmed in production on 2026-09-15:
+ * two of these arrived in the middle of a seller's album (02:27:08 and
+ * 02:29:01), and each one told them "📷 I can't read that kind of
+ * message — send a photo instead" while their photos were landing
+ * perfectly well in the very next message. Advice that contradicts what
+ * the seller can plainly see is worse than saying nothing.
+ */
+export const METAS_OWN_UNSUPPORTED_TYPE = "unsupported";
 
 /**
  * A WhatsApp image can carry a caption in the SAME message (e.g. a seller
@@ -42,6 +64,25 @@ export interface MessageContent {
    * still gets an answer instead of the void.
    */
   unsupported?: string;
+  /**
+   * Meta's own explanation, present only for METAS_OWN_UNSUPPORTED_TYPE.
+   * Its presence is what tells intake.ts this is a platform artifact
+   * rather than something the seller chose to send; its content is what
+   * tells US which artifact, since Meta's error code is the only signal
+   * that distinguishes an album envelope from a poll.
+   *
+   * Always logged. Nothing decides a seller-visible reply from its text —
+   * the codes are undocumented and Meta adds to them freely.
+   */
+  platformError?: string;
+}
+
+function describeError(msg: IncomingMessage): string {
+  const err = msg.errors?.[0];
+  if (!err) return "no error detail supplied";
+  const code = err.code != null ? `${err.code} ` : "";
+  const detail = err.error_data?.details ?? err.message ?? "";
+  return `${code}${err.title ?? "unknown"}${detail ? `: ${detail}` : ""}`;
 }
 
 export function contentOf(msg: IncomingMessage): MessageContent {
@@ -52,6 +93,9 @@ export function contentOf(msg: IncomingMessage): MessageContent {
     return { text: msg.interactive.button_reply.id };
   }
   if (msg.text?.body) return { text: msg.text.body };
+  if (msg.type === METAS_OWN_UNSUPPORTED_TYPE) {
+    return { unsupported: msg.type, platformError: describeError(msg) };
+  }
   // An image whose media id never arrived is a delivery problem, not an
   // unreadable type — treated as unsupported all the same, since the
   // seller still needs to hear something back.

@@ -232,6 +232,33 @@ describe("Jumia /feeds/products/create payload conformance", () => {
       expect(products[0].variation).toBe("Navy Blue");
     });
 
+    // A single SKU cannot have three colours. When the AI sees a product
+    // photographed in several colourways it stores them all, and that
+    // string used to ship as the variation: observed live on 2026-09-15 as
+    // one product whose variation read "Black, Silver, White", which no
+    // buyer can choose from. A list means variants the seller hasn't set
+    // up yet, not a name for this one.
+    it.each([
+      "Black, Silver, White",
+      "Black and White",
+      "Red & Blue",
+      "Red/Blue",
+    ])("variation falls back to 'Default' rather than shipping the list %p", (color) => {
+      const multi: ListingRow = { ...sampleListing, color, color_family: color };
+      const ps = mapListingToJumiaProducts(multi, [], brand, currency);
+      expect(ps[0].variation).toBe("Default");
+    });
+
+    // The guard must not swallow legitimate multi-word colour names.
+    it.each(["Navy Blue", "Rose Gold", "Off White", "Sandstone"])(
+      "keeps %p, which is one colour that happens to have two words",
+      (color) => {
+        const single: ListingRow = { ...sampleListing, color, color_family: color };
+        const ps = mapListingToJumiaProducts(single, [], brand, currency);
+        expect(ps[0].variation).toBe(color);
+      },
+    );
+
     it("includes a listing-level sale price when set — the only place one can live with zero variant rows", () => {
       const onSale: ListingRow = { ...sampleListing, sale_price: 1799, sale_start_date: "2026-09-20", sale_end_date: "2026-09-30" };
       const ps = mapListingToJumiaProducts(onSale, [], brand, currency);

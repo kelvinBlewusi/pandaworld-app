@@ -1,7 +1,13 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { sendTextIfConfigured, sendCtaUrlIfConfigured, sendButtonsIfConfigured } from "@/lib/whatsapp/client";
 import { ingestWhatsAppImage } from "@/lib/whatsapp/media";
-import { getOrCreateSession, updateSession, resetSession, type WhatsAppSession } from "@/lib/whatsapp/session";
+import {
+  getOrCreateSession,
+  updateSession,
+  resetSession,
+  claimPhotoConfirmation,
+  type WhatsAppSession,
+} from "@/lib/whatsapp/session";
 import { createListingForUser } from "@/lib/listings/create";
 import { runAutoAnalyze } from "@/lib/actions/auto-analyze";
 import { getOrCreateCreditBalance, deductCredits } from "@/lib/billing/extension-credits";
@@ -274,7 +280,7 @@ export async function handleLinkedMessage(
   userId: string,
   phoneNumber: string,
   messageId: string | undefined,
-  content: { text?: string; imageMediaId?: string; unsupported?: string },
+  content: { text?: string; imageMediaId?: string; unsupported?: string; platformError?: string },
 ): Promise<void> {
   const session = await getOrCreateSession(userId, phoneNumber);
 
@@ -289,8 +295,29 @@ export async function handleLinkedMessage(
   // State is deliberately left untouched: they can simply send a photo
   // next and carry on exactly where they were.
   if (content.unsupported) {
-    console.info(`[whatsapp intake] unsupported message type "${content.unsupported}" from ${phoneNumber}`);
-    await replyText(phoneNumber, unsupportedMediaMessage(content.unsupported));
+    console.info(
+      `[whatsapp intake] unsupported message type "${content.unsupported}" from ${phoneNumber}` +
+      (content.platformError ? ` — Meta says: ${content.platformError}` : ""),
+    );
+    // Meta's OWN "unsupported" container, arriving while the seller is
+    // sending photos, is album plumbing rather than anything they chose
+    // to send — see METAS_OWN_UNSUPPORTED_TYPE. Answering it with "send a
+    // photo instead" while their photos are visibly landing in the next
+    // message reads as the bot being broken. Confirmed live on
+    // 2026-09-15: two of these mid-album, both scolding a seller whose
+    // six photos all arrived fine.
+    //
+    // Narrow on purpose. Only Meta's container, and only in the two
+    // states where photos are in flight — where the per-product "got it
+    // (N photos)" confirmations already tell the seller exactly what
+    // landed, so silence here costs them nothing. Everywhere else, and
+    // for every real media type (video, voice note, document, sticker),
+    // the seller still gets an answer.
+    const midPhotoBurst =
+      session.state === "awaiting_photos" || session.state === "analyzing";
+    if (!(content.platformError && midPhotoBurst)) {
+      await replyText(phoneNumber, unsupportedMediaMessage(content.unsupported));
+    }
     if (messageId) await updateSession(phoneNumber, { lastMessageId: messageId });
     return;
   }
@@ -1060,6 +1087,19 @@ async function parkNotes(
   await updateSession(phoneNumber, { pendingNotes: combined.slice(0, 1000) });
 }
 
+/** How many photos this listing currently holds. Best-effort: a failure
+ *  answers 0, which simply omits the count from the reply rather than
+ *  holding up the seller's "done". */
+async function countListingImages(listingId: string): Promise<number> {
+  const db = createServerClient();
+  const { data, error } = await db.from("listings").select("images").eq("id", listingId).maybeSingle();
+  if (error) {
+    console.warn(`[whatsapp intake] photo count failed for listing ${listingId}: ${error.message}`);
+    return 0;
+  }
+  return ((data?.images ?? []) as string[]).filter(Boolean).length;
+}
+
 async function handleAwaitingPhotos(
   userId: string,
   phoneNumber: string,
@@ -1069,10 +1109,6 @@ async function handleAwaitingPhotos(
   const batchSize = session.batchSize ?? 1;
   const seq = session.batchSeq ?? 1;
   let listingId = session.listingId;
-  // How many photos this product holds AFTER this delivery. Declared out
-  // here because the confirmation that reports it is sent further down,
-  // in the shared text-handling path.
-  let imageCount = 0;
 
   // ── Photo, with or without a caption in the same message ────────────────
   if (content.imageMediaId) {
@@ -1139,12 +1175,11 @@ async function handleAwaitingPhotos(
     // The read above is still fine for the cap early-out — it saves
     // ingesting an image that would be discarded — but it must not be
     // what the write is based on.
-    const { data: appended } = await db.rpc("append_listing_image", {
+    await db.rpc("append_listing_image", {
       p_listing_id: listingId,
       p_url:        url,
       p_max:        MAX_LISTING_IMAGES,
     });
-    imageCount = (appended as { image_count: number }[] | null)?.[0]?.image_count ?? current.length + 1;
 
     // Falls through to the text handling below — a caption ("Price 40,
     // done") sent alongside this photo used to be silently dropped
@@ -1156,11 +1191,26 @@ async function handleAwaitingPhotos(
 
   if (!text) {
     if (content.imageMediaId) {
-      await replyButtons(
-        phoneNumber,
-        `📸 Product ${seq}: got it (${imageCount} photo${imageCount === 1 ? "" : "s"}). Send more photos, or reply *done* once you're finished with this one.`,
-        [{ id: "done", title: "Done ✅" }],
-      );
+      // One confirmation per burst, not one per photo.
+      //
+      // A six-photo album produced six of these, each with its own Done
+      // button, in the space of about four seconds — see
+      // 2026-09-15_session-last-image-at.sql for the transcript. Each is a
+      // billable send, and the repetition pushes the seller's own photos
+      // off screen at the exact moment they are deciding whether this
+      // thing works.
+      //
+      // The running count goes with it, deliberately. It was added so a
+      // seller could see nothing had been dropped, and it still does that
+      // — once, on "done", where it reports the real total instead of a
+      // number that was already stale by the time it was sent.
+      if (await claimPhotoConfirmation(phoneNumber)) {
+        await replyButtons(
+          phoneNumber,
+          `📸 Product ${seq}: got it. Send more photos, or reply *done* once you're finished with this one.`,
+          [{ id: "done", title: "Done ✅" }],
+        );
+      }
     } else {
       await replyText(phoneNumber, `Send a photo for product ${seq} (or reply *done* once you've sent its photos).`);
     }
@@ -1191,6 +1241,13 @@ async function handleAwaitingPhotos(
       return;
     }
 
+    // The photo count the seller was promised, delivered once and
+    // accurate. Read from the row rather than carried along: the delivery
+    // that handles "done" is a different invocation from the ones that
+    // appended the photos, and on an album it may not even be the last.
+    const photoCount = listingId ? await countListingImages(listingId) : 0;
+    const photoNote = photoCount > 0 ? ` (${photoCount} photo${photoCount === 1 ? "" : "s"})` : "";
+
     if (seq < batchSize) {
       // pendingNotes cleared with the advance: anything still parked
       // belongs to the product just finished, and carrying it forward
@@ -1200,12 +1257,24 @@ async function handleAwaitingPhotos(
         listingId:    null,
         batchSeq:     seq + 1,
         pendingNotes: null,
+        // Ends the burst with the product. Without this the first photo of
+        // product N+1 could be silenced by the last photo of product N.
+        lastImageAt:  null,
       });
       await replyText(
         phoneNumber,
-        `✅ Product ${seq} saved. Now send photos for product ${seq + 1} of ${batchSize}, and tell me the price plus any other notes (variations, sizes, sale price etc.), then reply *done*.`,
+        `✅ Product ${seq} saved${photoNote}. Now send photos for product ${seq + 1} of ${batchSize}, and tell me the price plus any other notes (variations, sizes, sale price etc.), then reply *done*.`,
       );
       return;
+    }
+
+    // The last product gets the same one-line count as every other one.
+    // Without this it is the ONE product whose photo total the seller never
+    // hears — and for a single-product batch, that is every listing they
+    // make. It costs one short message and replaces the several
+    // intermediate confirmations the burst debounce removed.
+    if (photoCount > 0) {
+      await replyText(phoneNumber, `✅ Product ${seq} saved${photoNote}.`);
     }
 
     await startBatchAnalysis(phoneNumber, userId, session);
@@ -1544,16 +1613,48 @@ export async function finalizeBatch(
 
   for (let i = 0; i < readyToSubmitSeqs.length; i += 3) {
     const chunk = readyToSubmitSeqs.slice(i, i + 3);
+    // Only the first chunk introduces itself. A 4-product batch sends two
+    // messages, and giving both the identical "Submit a specific product:"
+    // header made the second look like the bot had repeated itself —
+    // visible in a seller's transcript on 2026-09-15.
     await replyButtons(
       phoneNumber,
-      "Submit a specific product:",
+      i === 0 ? "Submit a specific product:" : "…and the rest:",
       chunk.map((seq) => ({ id: `submit ${seq}`, title: `Submit product ${seq}` })),
     );
   }
 
+  // Report what actually drafted, not what was promised.
+  //
+  // A product whose analysis failed for good has no title, so it is
+  // already absent from the buttons above — but the closing line still
+  // announced the full batch size, so a seller who asked for 4 and got 3
+  // was congratulated on 4 and left to notice the gap themselves. Worse,
+  // the missing numbers are exactly the ones they need in order to ask
+  // for a retry.
+  const draftedCount = readyToSubmitSeqs.length;
+  const missingSeqs = Array.from({ length: batchSize }, (_, i) => i + 1)
+    .filter((seq) => !readyToSubmitSeqs.includes(seq));
+
+  // Points at *retry N*, not *restart*. They are not interchangeable:
+  // retry re-drafts just the products that failed, on the photos already
+  // sent; restart throws the whole batch away, including the products that
+  // drafted perfectly well, and makes the seller send everything again.
+  // Naming the numbers matters for the same reason — "retry 3" is only
+  // usable if you know it was 3 that failed.
+  const retryHint = missingSeqs.length === 1
+    ? `reply *retry ${missingSeqs[0]}*`
+    : `reply *retry ${missingSeqs[0]}* (and the same for ${missingSeqs.slice(1).join(", ")})`;
+
+  const headline = missingSeqs.length === 0
+    ? `🎉 Done drafting your ${batchSize} products!`
+    : `Done drafting ${draftedCount} of your ${batchSize} products.\n` +
+      `⚠️ ${missingSeqs.length === 1 ? "Product" : "Products"} ${missingSeqs.join(", ")} ` +
+      `couldn't be drafted — ${retryHint} to try again on the photos you already sent.`;
+
   await replyButtons(
     phoneNumber,
-    `🎉 Done drafting your ${batchSize} products! Check the messages above for each one, then reply *submit all* when ready — or tell me a product number (e.g. *submit 2*) to submit just one.`,
+    `${headline} Check the messages above for each one, then reply *submit all* when ready — or tell me a product number (e.g. *submit 2*) to submit just one.`,
     [
       { id: "submit all", title: "Submit all ✅" },
       { id: "restart",    title: "Restart 🔄" },
@@ -1823,6 +1924,14 @@ async function handleSubmit(
             messages[i] = result.adjustments?.length
               ? `Product ${seq}: ✅ submitted — pending Jumia review.\n⚠️ ${result.adjustments.join("; ")}.`
               : `Product ${seq}: ✅ submitted — pending Jumia review.`;
+          } else if (result.code === "already_submitted") {
+            // Not a failure, and not the seller's mistake — they tapped
+            // "Submit all" twice, or a webhook retry replayed it. Saying
+            // "❌" here would send them chasing a problem that does not
+            // exist, and the thing that WOULD be a problem (a duplicate
+            // product on their storefront) is precisely what was just
+            // prevented.
+            messages[i] = `Product ${seq}: ℹ️ ${result.message}`;
           } else if (result.code === "validation") {
             messages[i] = `Product ${seq}: ⚠️ ${result.message} Fix it at ${focusedEditorUrl(listing.id)} then reply submit again.`;
           } else if (result.needsReconnect) {

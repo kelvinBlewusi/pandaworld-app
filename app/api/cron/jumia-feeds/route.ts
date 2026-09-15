@@ -7,8 +7,14 @@ import { refreshAccessToken } from "@/lib/jumia/oauth";
 import { refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
 
 // ─── GET /api/cron/jumia-feeds ────────────────────────────────────────────────
-// Vercel cron — runs every 5 minutes (see vercel.json)
 // Checks all pending_approval listings across all users and updates statuses.
+//
+// Scheduled by pg_cron every minute (supabase/schedule-workers.sql, job
+// 'jumia-feed-poll'), NOT by vercel.json — the Hobby plan caps its own cron
+// at once a DAY, which is what left listings sitting at "pending Jumia
+// review" for up to 24 hours in the first place. The vercel.json entry is
+// kept only as a daily backstop; the comment here used to claim five
+// minutes, which was never true on this plan.
 //
 // Security: Vercel sets the Authorization: Bearer <CRON_SECRET> header.
 // CRON_SECRET is REQUIRED — fail-secure if missing. The previous check
@@ -30,17 +36,43 @@ export async function GET(req: NextRequest) {
   const db = createServerClient();
 
   // ── Fetch all pending listings with a feedId ──────────────────────────────
-  const { data: pending } = await db
+  //
+  // The error is READ, not discarded. It used to be `const { data: pending }`
+  // with no error binding, and that one omission hid a total outage of this
+  // route: a failed query answers `data: null`, which is indistinguishable
+  // from "nothing is pending", so the route took the early-out below and
+  // returned 200 {checked: 0} — every minute, for as long as it was broken.
+  //
+  // How that looked in production on 2026-09-15: four listings sat at
+  // pending_approval from 02:31, this cron ran and returned 200 every
+  // minute for the next 26 minutes, and not one line of output was logged,
+  // because the first console.info sat AFTER the early-out. The seller's
+  // status only ever moved when they opened /extension/whatsapp-listings,
+  // whose own refresh does the same work user-scoped. Same lesson the
+  // worker's claimError already learned: an empty result and a failure
+  // must never look alike.
+  const { data: pending, error: pendingError } = await db
     .from("listings")
     .select("id, user_id, jumia_ref, title, whatsapp_batch_id")
     .eq("status", "pending_approval")
     .not("jumia_ref", "is", null);
 
+  if (pendingError) {
+    console.error(
+      `[Cron] Could not list pending feeds: ${pendingError.message} — ` +
+      `no listing statuses were refreshed this run.`,
+    );
+    return NextResponse.json({ checked: 0, updated: 0, error: pendingError.message }, { status: 500 });
+  }
+
+  // Logged unconditionally, INCLUDING the zero case. A route that says
+  // nothing when idle cannot be told apart from a route that is not
+  // running at all — which is exactly how this went unnoticed.
+  console.info(`[Cron] Checking ${pending?.length ?? 0} pending Jumia feeds`);
+
   if (!pending || pending.length === 0) {
     return NextResponse.json({ checked: 0, updated: 0 });
   }
-
-  console.info(`[Cron] Checking ${pending.length} pending Jumia feeds`);
 
   // ── Group by user so we only fetch each token once ────────────────────────
   const byUser = new Map<string, typeof pending>();
