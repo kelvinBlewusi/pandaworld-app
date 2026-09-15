@@ -1,14 +1,5 @@
-import {
-  Chrome,
-  KeyRound,
-  UploadCloud,
-  Wand2,
-  MessageCircle,
-  ListOrdered,
-  Camera,
-  CheckCircle2,
-  Megaphone,
-} from "lucide-react";
+import { WhatsAppIcon } from "@/components/whatsapp/whatsapp-icon";
+import {Chrome, KeyRound, UploadCloud, Wand2, ListOrdered, Camera, CheckCircle2, Megaphone} from "lucide-react";
 import { auth } from "@clerk/nextjs/server";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { ExtensionHeroBackdrop } from "@/components/marketing/extension-hero-backdrop";
@@ -83,7 +74,7 @@ const STEPS = [
 
 const WHATSAPP_STEPS = [
   {
-    Icon: MessageCircle,
+    Icon: WhatsAppIcon,
     title: "Link your WhatsApp",
     body: "Grab a connect code from your PandaWorld dashboard and send it to our number. Takes a few seconds.",
   },
@@ -104,8 +95,13 @@ const WHATSAPP_STEPS = [
   },
 ];
 
+/** Any icon that takes a className — lucide's, or one of our own brand
+ *  marks. It was `typeof Chrome`, which pinned it to lucide's exact
+ *  ForwardRef shape and rejected the WhatsApp glyph outright. */
+type IconComponent = (props: { className?: string }) => React.ReactNode;
+
 interface Step {
-  Icon: typeof Chrome;
+  Icon: IconComponent;
   title: string;
   body: string;
   href?: string;
@@ -116,7 +112,7 @@ interface Step {
  *  extension, WhatsApp) so both sit side by side instead of the single
  *  4-up card grid this section used to be, which only had room for one
  *  flow at a time. */
-function HowItWorksTrack({ icon: TrackIcon, label, steps }: { icon: typeof Chrome; label: string; steps: Step[] }) {
+function HowItWorksTrack({ icon: TrackIcon, label, steps }: { icon: IconComponent; label: string; steps: Step[] }) {
   return (
     <div>
       <div className="flex items-center gap-2.5">
@@ -247,7 +243,7 @@ export async function ExtensionPage() {
               steps={STEPS}
             />
             <HowItWorksTrack
-              icon={MessageCircle}
+              icon={WhatsAppIcon}
               label="From WhatsApp"
               steps={WHATSAPP_STEPS}
             />

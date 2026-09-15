@@ -11,27 +11,18 @@
  * sellers skip. Every link here has to stay outside that group.
  */
 
+import { WhatsAppIcon } from "@/components/whatsapp/whatsapp-icon";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { UserButton, useUser } from "@clerk/nextjs";
-import {
-  LayoutDashboard,
-  Calculator,
-  ListChecks,
-  MessageCircle,
-  HelpCircle,
-  BookOpen,
-  Settings,
-  ArrowRight,
-  X,
-} from "lucide-react";
+import {LayoutDashboard, Calculator, ListChecks, HelpCircle, BookOpen, Settings, ArrowRight, X} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Wordmark } from "@/components/marketing/wordmark";
 import { COMMUNITY_WHATSAPP_URL } from "@/lib/constants/support";
 
 const primaryNav = [
   { href: "/extension/dashboard",  label: "Extension Dashboard", icon: LayoutDashboard },
-  { href: "/extension/whatsapp-listings", label: "List from WhatsApp", icon: MessageCircle },
+  { href: "/extension/whatsapp-listings", label: "List from WhatsApp", icon: WhatsAppIcon },
   { href: "/extension/calculator", label: "Calculator",  icon: Calculator },
   { href: "/extension/listings",   label: "Autofill Activity", icon: ListChecks },
 ];
