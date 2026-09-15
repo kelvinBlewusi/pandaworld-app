@@ -37,6 +37,18 @@ export async function createListingForUser(userId: string, input: {
   category_path?: string;
   category_code?: string;
   commission_rate?: number;
+  /**
+   * The chat batch this listing belongs to, and its position in it.
+   *
+   * Set at INSERT rather than in a follow-up update, because a partial
+   * unique index on the pair is what stops a WhatsApp album — several
+   * photos delivered as separate webhooks within the same second — from
+   * racing and producing one listing per photo. Tagging afterwards
+   * leaves a window where two concurrent deliveries both see no listing
+   * for the slot and both create one.
+   */
+  whatsapp_batch_id?: string | null;
+  whatsapp_seq?: number | null;
 }): Promise<ListingRow> {
   const db = createServerClient();
 
@@ -82,6 +94,8 @@ export async function createListingForUser(userId: string, input: {
     sale_price: null,
     sale_start_date: null,
     sale_end_date: null,
+    whatsapp_batch_id: input.whatsapp_batch_id ?? null,
+    whatsapp_seq: input.whatsapp_seq ?? null,
   };
 
   const { data, error } = await db

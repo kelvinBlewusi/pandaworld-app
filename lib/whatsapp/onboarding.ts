@@ -71,7 +71,24 @@ export function guideHowToListMessage(): string {
   return [
     "📦 *How listing works*",
     "",
-    `1. I ask how many products — reply with a number (up to ${MAX_BATCH_SIZE}).`,
+    // Concatenation, not `${MAX_BATCH_SIZE}` — and that is load-bearing.
+    //
+    // A seller saw this line arrive as the literal text
+    // "📦 *How listing works*". The minifier constant-folds an
+    // array of literals plus one interpolation into a single TEMPLATE
+    // literal, and escaping an astral emoji into a template literal
+    // doubles the backslash, so 📦 ships as its own escape sequence.
+    // Confirmed by reading the built chunk: this function came out as
+    //   return `\\uD83D\\uDCE6 *How listing works*...`
+    // while welcomeMessage (no interpolation, folds to a plain string)
+    // came out as "👋 *Welcome...", correct, and
+    // guideControlsMessage (calls commandLines(), so it cannot fold at
+    // all) kept its array and was also correct.
+    //
+    // Concatenating keeps every element a plain string, so the fold
+    // produces a plain string — the case that works. Don't reintroduce an
+    // interpolation into an array that also holds an astral emoji.
+    "1. I ask how many products — reply with a number (up to " + MAX_BATCH_SIZE + ").",
     "2. For each product, send its photos and type the price plus any notes.",
     "3. Reply *done* when that product is finished.",
     "4. I draft them all, then you review and submit to Jumia.",

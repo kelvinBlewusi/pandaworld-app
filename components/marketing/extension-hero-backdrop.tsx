@@ -339,22 +339,45 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
             >
               Automate your <span style={{ color: JUMIA_COLOR }}>Jumia</span> Listings with AI
             </h1>
-            {/* Shortened from the original 48-word/3-sentence version and given
-                text-balance (Tailwind 3.4+, degrades gracefully to normal wrap
-                on older browsers) — centered body text at this width otherwise
-                wraps to ragged, uneven lines (a lone "Jumia asks for." orphan
-                line, a trailing "before it goes live."), which read as messy
-                on both phone and desktop. Balancing keeps line lengths even
-                at any viewport width. */}
+            {/* text-balance (Tailwind 3.4+, degrades gracefully to normal wrap
+                on older browsers) — centred body text at this width otherwise
+                wraps to ragged, uneven lines, with a short orphan on the last
+                one, which reads as messy on both phone and desktop. Balancing
+                keeps line lengths even at any viewport width, and matters more
+                now the copy names both products rather than summarising them.
+
+                The two product names are the links. Inline rather than another
+                pill: the CTA row below already carries the primary actions,
+                and a third and fourth button there would flatten the one that
+                matters. */}
             <p
               className="mt-6 max-w-[500px] text-balance text-[17px] font-light leading-relaxed"
               style={{ color: "rgba(239,236,230,0.88)" }}
             >
-              PandaWorld&apos;s AI writes your Jumia listing from one photo: title,
-              description, every attribute{" "}
-              <span style={{ color: JUMIA_COLOR, fontWeight: 500 }}>Jumia</span> asks for.
-              Use the Chrome extension in Vendor Center, or just send photos on WhatsApp.
-              Either way, you check it before it goes live.
+              PandaWorld&apos;s AI automates your{" "}
+              <span style={{ color: JUMIA_COLOR, fontWeight: 500 }}>Jumia</span> listings and
+              helps sellers spend less time listing products to{" "}
+              <span style={{ color: JUMIA_COLOR, fontWeight: 500 }}>Jumia</span>. The listing
+              tool works in two ways; the first is automating listings by uploading products
+              on{" "}
+              {/* Sign-up, not a wa.me link. The bot can't answer anyone who
+                  hasn't linked an account yet — linking needs a per-seller
+                  code generated after sign-up — so a raw chat link would
+                  drop a prospective seller into a conversation nothing
+                  replies to. */}
+              <Link href={signUpHref} className="font-medium underline underline-offset-4 transition-colors hover:text-white">
+                WhatsApp
+              </Link>{" "}
+              and second, a dedicated{" "}
+              <a
+                href={CHROME_WEB_STORE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium underline underline-offset-4 transition-colors hover:text-white"
+              >
+                Chrome extension
+              </a>
+              .
             </p>
             {/* Stacked full-width on phones, inline row from sm up: three
                 pills wrapping at phone width left a ragged 2-then-1 layout

@@ -33,6 +33,8 @@ import {
   proseLength,
   CONTENT_LENGTH_FLOORS,
 } from "@/lib/ai/content-style-rules";
+import { aiReadNoteIntent } from "@/lib/actions/ai";
+import { verifyNoteIntent, type NoteIntent } from "@/lib/whatsapp/note-intent";
 import {
   extractVariantClaim,
   reconcileVariants,
@@ -112,7 +114,7 @@ export async function runAutoAnalyze(
   // ── Load listing + verify ownership ───────────────────────────────────────
   const { data: listing } = await db
     .from("listings")
-    .select("id, user_id, sku, images, title, brand, description, highlights, selling_price, quantity, dynamic_attributes, field_sources, field_confidence, user_prompt")
+    .select("id, user_id, sku, images, title, brand, description, highlights, selling_price, sale_price, quantity, dynamic_attributes, field_sources, field_confidence, user_prompt")
     .eq("id", listingId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -669,6 +671,39 @@ export async function runAutoAnalyze(
   // where the draft actually contradicts one — a more specific value
   // ("Stainless Steel" for "steel") is left alone rather than replaced
   // with the seller's shorter word.
+  // ── The seller's note, read by intent rather than by pattern ───────────
+  //
+  // The regex layer covers the phrasings someone thought of. Two live
+  // notes minutes apart expressed nine intentions and it caught two:
+  // "It costs 300Ghs" is not "price is", and a note with no full stops
+  // let a colour capture run to the end of the message. A pattern per
+  // phrasing does not converge.
+  //
+  // Safe because verifyNoteIntent makes inventing impossible — every
+  // value carries a verbatim span of the note and that span has to be in
+  // it. The model gets latitude over phrasing and none over facts. See
+  // lib/whatsapp/note-intent.ts.
+  //
+  // Fills GAPS only. Anything the deterministic pass already set is left
+  // exactly as it was: a labelled regex match is the strongest evidence
+  // there is, and this must be able to add without ever regressing.
+  let intent: NoteIntent = {};
+  if (userContext && userContext.trim()) {
+    const tIntent = Date.now();
+    const verified = verifyNoteIntent(await aiReadNoteIntent(userContext), userContext);
+    intent = verified.intent;
+    const got = Object.keys(intent);
+    if (got.length > 0 || verified.rejected.length > 0) {
+      console.info(
+        `[auto-analyze] listing=${listingId} note-intent ms=${Date.now() - tIntent} ` +
+        `read=${got.join(",") || "none"}` +
+        (verified.rejected.length > 0
+          ? ` rejected=${verified.rejected.map((r) => `${r.field}(${r.reason})`).join("; ")}`
+          : ""),
+      );
+    }
+  }
+
   const assertions = extractNoteAssertions(userContext);
   if (assertions.length > 0) {
     const checks = checkAssertions(assertions, {
@@ -696,6 +731,54 @@ export async function runAutoAnalyze(
       );
     }
   }
+  // Apply the note intent. Gap-filling only — `??` throughout, so a value
+  // the deterministic pass already wrote is never touched.
+  //
+  // Everything here landed with source "user": the seller stated it in
+  // writing, which outranks an AI reading of a photo and is protected
+  // from a later re-run by the existing isUserEdited guard. That is the
+  // same rule the note-assertion corrections below follow — it IS a
+  // seller edit, written in chat instead of a form.
+  if (Object.keys(intent).length > 0) {
+    const fromNote = (field: string, value: unknown) => {
+      if (value == null || value === "") return;
+      updates[field] = value;
+      newSources[field] = "user";
+      newConfidence[field] = { confidence: 1, source: "seller-required" };
+    };
+
+    // Price and stock stay seller-owned, exactly as before. The
+    // difference is only HOW the seller's own figure is read, never
+    // whether one may be inferred when they didn't give it.
+    if (listing.selling_price == null && updates.selling_price == null) {
+      fromNote("selling_price", intent.selling_price?.value);
+    }
+    if (listing.sale_price == null && updates.sale_price == null) {
+      fromNote("sale_price", intent.sale_price?.value);
+      fromNote("sale_start_date", intent.sale_start_date?.value);
+      fromNote("sale_end_date", intent.sale_end_date?.value);
+    }
+    if (intent.quantity && listing.quantity == null) {
+      fromNote("quantity", intent.quantity.value);
+    }
+
+    for (const field of ["brand", "color", "main_material", "model"] as const) {
+      const v = intent[field]?.value;
+      if (v && !isUserEdited(field)) fromNote(field, v);
+    }
+    if (intent.warranty?.value) fromNote("warranty_text", intent.warranty.value);
+
+    // "What is in the box" has no column — it is a category attribute,
+    // and only some categories declare it. Written under the canonical
+    // key the SchemaForm already groups its aliases under, so it lands in
+    // the right field wherever the category does declare one.
+    if (intent.whats_in_the_box?.value) {
+      filled.dynamic_attributes["whats_in_the_box"] = intent.whats_in_the_box.value;
+      newSources["whats_in_the_box"] = "user";
+      newConfidence["whats_in_the_box"] = { confidence: 1, source: "seller-required" };
+    }
+  }
+
   setField("material_family", description.material_family, { confidence: 0.8,  source: "inferred" });
 
   // ── AI-defaulted fields (May 2026) — were seller-required before, now
