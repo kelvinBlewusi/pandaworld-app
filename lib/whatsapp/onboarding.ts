@@ -52,7 +52,7 @@ export function welcomeMessage(): string {
   return [
     "👋 *Welcome to PandaWorld!*",
     "",
-    "The short version: tell me how many products, send each one's photos with its price and any notes, then reply *done*. I write the listing, you submit it to Jumia.",
+    "Tell me how many products, send each one's photos with its price and any notes, then reply *done*. I write the listing, you submit it to Jumia.",
     "",
     "One rule worth knowing now: *always tell me the price* — I never guess it, and a product without one can't be pushed.",
     "",

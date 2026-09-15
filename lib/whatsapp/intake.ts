@@ -1910,6 +1910,11 @@ async function handleSubmit(
     // time against SUBMIT_DEADLINE_MS.
     const PUSH_CONCURRENCY = 3;
     const messages: string[] = new Array(targets.length);
+    // Products that did NOT reach Jumia. Collected rather than just
+    // described, because a line of text is not an action: the seller needs
+    // to be able to open the one that failed and fix it, and hunting for
+    // the right product on the site is the step where they give up.
+    const notSent: { seq: number | null; listingId: string }[] = [];
     let cursor = 0;
     const pushWorker = async (): Promise<void> => {
       for (let i = cursor++; i < targets.length; i = cursor++) {
@@ -1918,11 +1923,18 @@ async function handleSubmit(
         try {
           const result = await pushListingToJumia(userId, listing.id);
           if (result.ok) {
-            // Name anything Jumia did not receive as written. A push that
-            // reports plain success while a value the seller typed was
-            // dropped is the quiet failure this whole pass is about.
+            // "submitted — pending Jumia review" is reserved for a listing
+            // that genuinely reached Jumia and is now waiting on their
+            // review. Nothing else may claim it.
+            //
+            // Anything Jumia did not receive as written is still named,
+            // because a push that reports plain success while a value the
+            // seller typed was dropped is the quiet failure this whole pass
+            // is about — but it is phrased as what it is: the LISTING went,
+            // one of its fields did not.
             messages[i] = result.adjustments?.length
-              ? `Product ${seq}: ✅ submitted — pending Jumia review.\n⚠️ ${result.adjustments.join("; ")}.`
+              ? `Product ${seq}: ✅ submitted — pending Jumia review.\n` +
+                `⚠️ The listing went, but ${result.adjustments.join("; ")}. Edit and resubmit if that matters.`
               : `Product ${seq}: ✅ submitted — pending Jumia review.`;
           } else if (result.code === "already_submitted") {
             // Not a failure, and not the seller's mistake — they tapped
@@ -1933,7 +1945,8 @@ async function handleSubmit(
             // prevented.
             messages[i] = `Product ${seq}: ℹ️ ${result.message}`;
           } else if (result.code === "validation") {
-            messages[i] = `Product ${seq}: ⚠️ ${result.message} Fix it at ${focusedEditorUrl(listing.id)} then reply submit again.`;
+            notSent.push({ seq, listingId: listing.id });
+            messages[i] = `Product ${seq}: ⚠️ Not submitted — ${result.message}`;
           } else if (result.needsReconnect) {
             // Same one-time-link mechanism as lib/whatsapp/jumia-connect.ts's
             // promptJumiaConnection, used inline here rather than through it —
@@ -1944,7 +1957,8 @@ async function handleSubmit(
             const token = await createConnectToken(userId);
             messages[i] = `Product ${seq}: ⚠️ Jumia needs to be reconnected — tap here: ${jumiaConnectLink(token)}, then reply submit again.`;
           } else {
-            messages[i] = `Product ${seq}: ❌ ${result.message}`;
+            notSent.push({ seq, listingId: listing.id });
+            messages[i] = `Product ${seq}: ❌ Not submitted — ${result.message}`;
           }
         } catch (e) {
           // One product's push throwing must never sink the rest of the
@@ -1952,7 +1966,8 @@ async function handleSubmit(
           // seller gets zero reply and no way to tell what happened (this
           // had no per-listing catch at all before).
           console.error(`[whatsapp intake] product ${seq} submit threw: ${(e as Error).message}`);
-          messages[i] = `Product ${seq}: ❌ Unexpected error — reply submit again to retry.`;
+          notSent.push({ seq, listingId: listing.id });
+          messages[i] = `Product ${seq}: ❌ Not submitted — something went wrong on our side.`;
         }
       }
     };
@@ -1986,6 +2001,37 @@ async function handleSubmit(
     // send here would look like "submitting failed" even though every
     // product actually went through.
     await replyText(phoneNumber, [...alreadySubmittedMessages, ...raceResult].join("\n"));
+
+    // One tappable way back in per product that did not reach Jumia.
+    //
+    // The summary above says WHAT happened; this is what the seller does
+    // about it. Previously a failure was a line of text ending in a bare
+    // URL, and the only products that got a link at all were validation
+    // failures — a push that failed for any other reason left the seller
+    // to find it on the site themselves.
+    //
+    // Sent as its own message per product because a cta_url button belongs
+    // to one URL, and the whole point is that the button opens THAT
+    // product. Capped so a batch where everything failed cannot turn into
+    // twenty messages; past the cap they get the batch page instead.
+    const NOT_SENT_LINK_CAP = 5;
+    if (notSent.length > 0 && notSent.length <= NOT_SENT_LINK_CAP) {
+      for (const item of notSent) {
+        await replyCta(
+          phoneNumber,
+          `Product ${item.seq} wasn't sent to Jumia. Review it and push it from the site.`,
+          `Edit product ${item.seq}`,
+          focusedEditorUrl(item.listingId),
+        );
+      }
+    } else if (notSent.length > NOT_SENT_LINK_CAP) {
+      await replyCta(
+        phoneNumber,
+        `${notSent.length} products weren't sent to Jumia. Review them and push them from the site.`,
+        "Review listings",
+        whatsappListingsUrl(batchId),
+      );
+    }
 
     const refreshed = await getBatchListings(batchId);
     const allSubmitted = refreshed.every((l) => l.status !== "draft" && l.status !== "failed");

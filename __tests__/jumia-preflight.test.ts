@@ -219,3 +219,46 @@ describe("preflightAttributes — line breaks in long text", () => {
     expect(r.notes).toEqual([]);
   });
 });
+
+// Real values, read off category 1029710 (women's heels) on 2026-09-15,
+// after "Fabric" reached Jumia twice and was dropped at push both times.
+// snapToAllowed is what both the push path and the draft-time guard in
+// lib/actions/auto-analyze.ts use, so these cases pin the behaviour for
+// both at once.
+describe("snapToAllowed against a real Jumia material_family list", () => {
+  const MATERIAL_FAMILY = [
+    "Canvas", "Cotton", "Denim", "Leather", "Linen", "Mesh", "Metal",
+    "Nylon", "Other", "Polyester", "Rubber", "Satin", "Silk", "Suède",
+    "Synthetic", "Textile", "Velvet", "Waterproof Fabric", "Wool",
+  ];
+
+  it('refuses "Fabric" rather than guessing at "Waterproof Fabric"', () => {
+    // The whole incident. "Fabric" is not an accepted value and the two
+    // nearest entries mean different things — snapping to either would be
+    // inventing a material the seller never stated.
+    expect(snapToAllowed("Fabric", MATERIAL_FAMILY)).toBeNull();
+  });
+
+  it("still repairs the drift it is meant to repair", () => {
+    expect(snapToAllowed("textile", MATERIAL_FAMILY)).toBe("Textile");
+    expect(snapToAllowed("  Leather  ", MATERIAL_FAMILY)).toBe("Leather");
+    // Plural handling is a single trailing "s" only — "Canvases" does NOT
+    // reduce to "Canvas", and deliberately so: anything cleverer starts
+    // guessing at word stems.
+    expect(snapToAllowed("Rubbers", MATERIAL_FAMILY)).toBe("Rubber");
+    expect(snapToAllowed("Canvases", MATERIAL_FAMILY)).toBeNull();
+  });
+
+  it("prefers an exact spelling over a plural guess", () => {
+    // "Silks" is itself an accepted value, so it is taken as written
+    // rather than being reduced to "Silk".
+    expect(snapToAllowed("silks", ["Silk", "Silks"])).toBe("Silks");
+  });
+
+  it("refuses when more than one value could be meant", () => {
+    // Two entries that differ only by case leave nothing to choose
+    // between, and a confidently wrong attribute is worse than an empty
+    // one — the same rule the variant reconciler follows.
+    expect(snapToAllowed("metal", ["Metal", "METAL"])).toBeNull();
+  });
+});
