@@ -14,18 +14,9 @@
  * right place even when they open the email on a different device.
  */
 
-import { PLANS } from "@/lib/billing/plans";
+import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 
 const BRAND = "PandaWorld";
-
-/**
- * The free plan's monthly listing allowance, read from the plan config
- * rather than written out — the welcome email used to claim "2 free
- * listings", which matched neither the plan (5/month) nor anything else
- * the site says. Deriving it means the email can't drift again when the
- * allowance changes.
- */
-const FREE_MONTHLY_LISTINGS = PLANS.free.monthly_listings;
 
 interface RenderResult {
   subject: string;
@@ -57,8 +48,9 @@ export function welcomeEmail(opts: {
       body: `
         <p style="margin:0 0 16px;">${greeting}</p>
         <p style="margin:0 0 16px;">
-          Welcome aboard. PandaWorld writes your Jumia listings for you, and
-          there are two ways to use it — pick whichever suits how you work.
+          Welcome aboard. PandaWorld writes your Jumia listings for you, sends
+          them to your Jumia shop and saves you time — and there are two ways
+          to use it, so pick whichever suits how you work.
         </p>
         <p style="margin:0 0 8px; font-size:15px;"><strong>1. From WhatsApp</strong></p>
         <p style="margin:0 0 16px; font-size:14px; color:#3f3f46;">
@@ -74,10 +66,12 @@ export function welcomeEmail(opts: {
           you while you sit on the page.
         </p>
         <p style="margin:0 0 24px;">
-          You&rsquo;ve got <strong>${FREE_MONTHLY_LISTINGS} free listings every
-          month</strong> to try things out — no card needed.
+          <strong>Start for free</strong> — no card needed.
         </p>
-        ${ctaButton("Start listing from WhatsApp", whatsappUrl)}
+        ${ctaButtonPair(
+          { label: "Start listing from WhatsApp", href: whatsappUrl },
+          { label: "Start using Chrome extension", href: CHROME_WEB_STORE_URL },
+        )}
         <p style="margin:24px 0 8px; font-size:13px; color:#52525b;">
           Two things worth knowing now:
         </p>
@@ -99,7 +93,7 @@ export function welcomeEmail(opts: {
     text: [
       greeting,
       "",
-      "Welcome to PandaWorld. We write your Jumia listings for you, and there are two ways to use it.",
+      "Welcome to PandaWorld. We write your Jumia listings for you, send them to your Jumia shop and save you time - and there are two ways to use it, so pick whichever suits how you work.",
       "",
       "1. From WhatsApp",
       "   Send the bot your product photos and a line about each one - the price,",
@@ -111,9 +105,10 @@ export function welcomeEmail(opts: {
       "   Already filling in Jumia's own form? The extension fills it for you",
       "   while you sit on the page.",
       "",
-      `You've got ${FREE_MONTHLY_LISTINGS} free listings every month to try - no card needed.`,
+      "Start for free - no card needed.",
       "",
       `Start listing from WhatsApp: ${whatsappUrl}`,
+      `Start using the Chrome extension: ${CHROME_WEB_STORE_URL}`,
       "",
       "Two things worth knowing now:",
       "  - Always tell us the price. We never guess it, and a product without one",
@@ -225,6 +220,33 @@ function layout({ title, body }: { title: string; body: string }): string {
   </table>
 </body>
 </html>`;
+}
+
+/**
+ * Two buttons side by side.
+ *
+ * A table with two cells and a spacer, not flex or inline-block: Outlook
+ * renders email HTML through Word, which ignores both. The cells stack
+ * naturally on a narrow phone because the table has no fixed width.
+ *
+ * The second button is outlined rather than filled — they are not equal
+ * choices. WhatsApp is the one most sellers should start with, and two
+ * identical orange blocks would make the reader stop and compare instead
+ * of just tapping.
+ */
+function ctaButtonPair(
+  primary:   { label: string; href: string },
+  secondary: { label: string; href: string },
+): string {
+  return `<table cellpadding="0" cellspacing="0" border="0"><tr>
+    <td style="background:#f97316; border-radius:8px;">
+      <a href="${primary.href}" style="display:inline-block; padding:12px 20px; font-size:14px; font-weight:600; color:#ffffff; text-decoration:none;">${escapeHtml(primary.label)}</a>
+    </td>
+    <td style="width:10px;">&nbsp;</td>
+    <td style="border:1px solid #d4d4d8; border-radius:8px;">
+      <a href="${secondary.href}" style="display:inline-block; padding:11px 19px; font-size:14px; font-weight:600; color:#3f3f46; text-decoration:none;">${escapeHtml(secondary.label)}</a>
+    </td>
+  </tr></table>`;
 }
 
 function ctaButton(label: string, href: string): string {
