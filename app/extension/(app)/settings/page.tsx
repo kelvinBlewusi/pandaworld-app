@@ -1,6 +1,6 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
-import { Settings as SettingsIcon, KeyRound } from "lucide-react";
+import { KeyRound } from "lucide-react";
 import { listExtensionApiKeys } from "@/lib/security/extension-keys";
 import { RegenerateKeyButton } from "@/components/extension/regenerate-key-button";
 import { WhatsAppCard } from "@/components/whatsapp/whatsapp-card";
@@ -25,10 +25,11 @@ export default async function ExtensionSettingsPage() {
 
   return (
     <div className="mx-auto max-w-2xl">
-      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-orange-600">
-        <SettingsIcon className="h-3.5 w-3.5" /> Settings
-      </div>
-      <h1 className="mt-2 text-2xl font-bold tracking-tight sm:text-3xl">Account</h1>
+      {/* The orange "SETTINGS" eyebrow that used to sit here is gone. The
+          sidebar already names the page, so it was the word Settings
+          twice on one screen — and in a colour this page uses nowhere
+          else, which made the duplicate the loudest thing on it. */}
+      <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Account</h1>
 
       <div className="mt-6 rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
         <h2 className="text-sm font-semibold text-zinc-700">Your details</h2>

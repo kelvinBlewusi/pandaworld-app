@@ -19,11 +19,15 @@ const buttonVariants = cva(
         ghost: "hover:bg-accent hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
       },
+      // Sized for a thumb below md, for a mouse above it. 44px is
+      // Apple's HIG tap-target floor; h-9 (36px) and especially h-8
+      // (32px) are comfortable to click and fiddly to tap. Each reverts
+      // at md so the desktop UI keeps its density.
       size: {
-        default: "h-9 px-4 py-2",
-        sm: "h-8 rounded-md px-3 text-xs",
-        lg: "h-10 rounded-lg px-8",
-        icon: "h-9 w-9",
+        default: "h-11 px-4 py-2 md:h-9",
+        sm: "h-10 rounded-md px-3 text-sm md:h-8 md:text-xs",
+        lg: "h-12 rounded-lg px-8 md:h-10",
+        icon: "h-11 w-11 md:h-9 md:w-9",
       },
     },
     defaultVariants: {
