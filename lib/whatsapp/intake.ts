@@ -2123,10 +2123,19 @@ async function handleSubmit(
       // the next command from the result text alone. Short, fixed body
       // here (not the result text) so this one's always well under the
       // button-message length limit.
-      await replyButtons(phoneNumber, "What's next?", [
-        { id: "submit all", title: "Submit all ✅" },
-        { id: "restart", title: "Restart 🔄" },
-      ]);
+      //
+      // This message fires ONLY when something did not go through, so it
+      // names the actual next step rather than asking an open question:
+      // the Edit buttons are already sitting above it, one per unsent
+      // product, and Submit all is the button right underneath.
+      await replyButtons(
+        phoneNumber,
+        "What's next?\nEdit to fix all un-submitted products and tap *Submit all*.",
+        [
+          { id: "submit all", title: "Submit all ✅" },
+          { id: "restart", title: "Restart 🔄" },
+        ],
+      );
     }
   } catch (e) {
     console.error(`[whatsapp intake] handleSubmit failed for batch ${batchId}: ${(e as Error).message}`);
