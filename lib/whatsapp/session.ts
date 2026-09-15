@@ -42,6 +42,16 @@ export interface WhatsAppSession {
    * listing exists.
    */
   pendingNotes:  string | null;
+  /**
+   * When the most recent photo for the current product landed.
+   *
+   * WhatsApp delivers an album as several independent webhook deliveries,
+   * and the bot used to answer every one — five "got it (N photos)"
+   * messages, each with its own Done button, for one album. This is the
+   * burst marker that lets handleAwaitingPhotos confirm the first and stay
+   * quiet for the rest. Null means no burst in progress.
+   */
+  lastImageAt:   string | null;
 }
 
 function fromRow(row: Record<string, unknown>): WhatsAppSession {
@@ -56,6 +66,7 @@ function fromRow(row: Record<string, unknown>): WhatsAppSession {
     batchSeq:      (row.batch_seq as number | null) ?? null,
     pendingAppId:  (row.pending_app_id as string | null) ?? null,
     pendingNotes:  (row.pending_notes as string | null) ?? null,
+    lastImageAt:   (row.last_image_at as string | null) ?? null,
   };
 }
 
@@ -115,6 +126,7 @@ export async function updateSession(
     batchSeq:      number | null;
     pendingAppId:  string | null;
     pendingNotes:  string | null;
+    lastImageAt:   string | null;
   }>,
 ): Promise<void> {
   const db = createServerClient();
@@ -127,7 +139,33 @@ export async function updateSession(
   if (patch.batchSeq      !== undefined) update.batch_seq       = patch.batchSeq;
   if (patch.pendingAppId  !== undefined) update.pending_app_id  = patch.pendingAppId;
   if (patch.pendingNotes  !== undefined) update.pending_notes   = patch.pendingNotes;
+  if (patch.lastImageAt   !== undefined) update.last_image_at   = patch.lastImageAt;
   await db.from("whatsapp_sessions").update(update).eq("phone_number", phoneNumber);
+}
+
+/**
+ * Win the right to send ONE "got it (N photos)" confirmation for the burst
+ * of photos arriving right now. True means send it; false means another
+ * delivery in the same album already did.
+ *
+ * Atomic on purpose — see claim_photo_confirmation in
+ * 2026-09-15_session-last-image-at.sql. Album deliveries run as separate
+ * serverless invocations that all read the session before any writes, so
+ * only the row lock can decide this.
+ *
+ * Fails OPEN: if the claim itself errors, the seller gets the confirmation
+ * they would have got before. A duplicate message is noise; a missing one
+ * looks like their photo was dropped, which is the thing this whole
+ * confirmation exists to disprove.
+ */
+export async function claimPhotoConfirmation(phoneNumber: string): Promise<boolean> {
+  const db = createServerClient();
+  const { data, error } = await db.rpc("claim_photo_confirmation", { p_phone: phoneNumber });
+  if (error) {
+    console.warn(`[whatsapp session] photo-confirmation claim failed for ${phoneNumber}: ${error.message}`);
+    return true;
+  }
+  return data === true;
 }
 
 /**
@@ -147,5 +185,8 @@ export async function resetSession(phoneNumber: string): Promise<void> {
     // next one — restart means start over, and inheriting the old batch's
     // price or variants is the opposite of that.
     pendingNotes: null,
+    // No burst in progress in a fresh batch — otherwise the first photo of
+    // the NEXT product could be silenced by the last one of the old batch.
+    lastImageAt: null,
   });
 }

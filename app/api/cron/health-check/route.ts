@@ -59,6 +59,62 @@ const STUCK_AFTER = {
   pendingHours:       24,
 } as const;
 
+/**
+ * Database objects the CODE requires, each probed through the same
+ * interface the app uses.
+ *
+ * This is the migration ledger, and it is executable on purpose. Migrations
+ * here are applied by hand, and nothing recorded which had actually landed
+ * — so the repository and production could disagree indefinitely with no
+ * signal at all. A checked-in list of "migrations we believe are applied"
+ * would rot the first time someone forgot to update it; a probe cannot,
+ * because it asks the database.
+ *
+ * A missing object is reported the same way a stuck queue is: loudly, once
+ * every five minutes, until someone runs the migration. That is the whole
+ * point — shipping code whose migration was never applied should be noisy
+ * within minutes, not discovered by a seller weeks later.
+ *
+ * Each probe must be harmless to run repeatedly against production, so they
+ * either read, or write against a key that cannot exist.
+ */
+const SCHEMA_PROBES: { object: string; migration: string; probe: (db: ReturnType<typeof createServerClient>) => PromiseLike<{ error: { message: string; code?: string } | null }> }[] = [
+  {
+    object:    "whatsapp_sessions.last_image_at",
+    migration: "2026-09-15_session-last-image-at.sql",
+    probe:     (db) => db.from("whatsapp_sessions").select("last_image_at").limit(1),
+  },
+  {
+    object:    "claim_photo_confirmation()",
+    migration: "2026-09-15_session-last-image-at.sql",
+    // A phone number that cannot exist: the function returns false and
+    // writes nothing, so this is safe on every tick.
+    probe:     (db) => db.rpc("claim_photo_confirmation", { p_phone: "__healthcheck__" }),
+  },
+  {
+    object:    "append_listing_image()",
+    migration: "2026-09-15_atomic-image-append.sql",
+    // An all-zero uuid matches no listing, so the function no-ops.
+    probe:     (db) => db.rpc("append_listing_image", {
+      p_listing_id: "00000000-0000-0000-0000-000000000000",
+      p_url:        "https://healthcheck.invalid/probe.jpg",
+      p_max:        1,
+    }),
+  },
+  {
+    object:    "claim_analysis_jobs()",
+    migration: "2026-09-13_analysis-jobs-queue.sql",
+    // claim_limit 0 claims nothing.
+    probe:     (db) => db.rpc("claim_analysis_jobs", { claim_limit: 0 }),
+  },
+];
+
+/** PostgREST's codes for "that object does not exist", as distinct from a
+ *  transient failure. Only these mean a migration is missing; anything else
+ *  is reported as unreadable rather than as drift, because calling a
+ *  timeout "schema drift" would send someone to the wrong problem. */
+const MISSING_OBJECT_CODES = new Set(["PGRST202", "PGRST204", "42883", "42703"]);
+
 interface Check {
   name:   string;
   count:  number;
@@ -142,6 +198,30 @@ export async function GET(req: NextRequest) {
     ),
   ]);
 
+  // ── Schema drift ────────────────────────────────────────────────────────
+  const drift: string[] = [];
+  const probeFailures: string[] = [];
+  await Promise.all(SCHEMA_PROBES.map(async (p) => {
+    try {
+      const { error } = await p.probe(db);
+      if (!error) return;
+      if (error.code && MISSING_OBJECT_CODES.has(error.code)) {
+        drift.push(`${p.object} is missing — run ${p.migration}`);
+      } else {
+        probeFailures.push(`${p.object} (${error.message})`);
+      }
+    } catch (e) {
+      probeFailures.push(`${p.object} (${(e as Error).message})`);
+    }
+  }));
+
+  if (drift.length > 0) {
+    console.error(`[health] SCHEMA DRIFT: ${drift.join("; ")}`);
+  }
+  if (probeFailures.length > 0) {
+    console.warn(`[health] could not probe ${probeFailures.length} object(s): ${probeFailures.join("; ")}`);
+  }
+
   const unreadable = checks.filter((c) => c.error);
   const breached   = checks.filter((c) => !c.error && c.count > 0);
 
@@ -160,7 +240,7 @@ export async function GET(req: NextRequest) {
       "[health] STUCK: " +
       breached.map((c) => `${c.count} ${c.detail}`).join("; "),
     );
-  } else if (unreadable.length === 0) {
+  } else if (unreadable.length === 0 && drift.length === 0) {
     // Logged on the healthy path too, so "the watchdog is fine" and "the
     // watchdog is not running" cannot look the same — the exact mistake
     // that hid the feed-poll outage.
@@ -168,10 +248,11 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json({
-    ok: breached.length === 0 && unreadable.length === 0,
+    ok: breached.length === 0 && unreadable.length === 0 && drift.length === 0,
     checks: Object.fromEntries(
       checks.map((c) => [c.name, c.error ? { error: c.error } : c.count]),
     ),
+    ...(drift.length ? { schemaDrift: drift } : {}),
     thresholds: STUCK_AFTER,
   });
 }
