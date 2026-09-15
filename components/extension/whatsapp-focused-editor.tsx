@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Loader2, Send, Plus, Check, ChevronRight, AlertCircle } from "lucide-react";
+import { ArrowLeft, Loader2, Send, Plus, Check, ChevronRight, AlertCircle, Eye, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -42,6 +42,27 @@ import type { VariantRow, AxisDef } from "@/lib/jumia/variant-types";
  * Price/Stock + Save + Push pattern, extended with a SchemaForm block for
  * the category-specific fields that view doesn't show.
  */
+/** The shape /api/jumia/preview returns — the real payload, not a
+ *  description of it. */
+interface JumiaPreview {
+  products: {
+    name?:        { value?: string };
+    description?: { value?: string };
+    parentSku?:   string;
+    sellerSku?:   string;
+    variation?:   string;
+    brand?:       { code?: number; name?: string };
+    category?:    { code?: number; name?: string };
+    images?:      { url: string; primary?: boolean }[];
+    price?:       { value?: number; currency?: string };
+    stock?:       number;
+    attributes?:  { name: string; value: string }[];
+  }[];
+  adjustments:      string[];
+  missing_required: string[];
+  blockers:         string[];
+}
+
 export function WhatsAppFocusedEditor({
   listing: initialListing,
   initialVariants = [],
@@ -208,6 +229,8 @@ export function WhatsAppFocusedEditor({
 
   const [saving, setSaving] = useState(false);
   const [pushing, setPushing] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [preview, setPreview] = useState<JumiaPreview | null>(null);
   const [message, setMessage] = useState<{ type: "ok" | "error"; text: string } | null>(null);
 
   function handleFieldChange(attributeName: string, value: string) {
@@ -357,6 +380,47 @@ export function WhatsAppFocusedEditor({
     setSaving(false);
   }
 
+  /** The variant payload, exactly as a push would send it. Shared with
+   *  the preview so the two can never describe different states. */
+  function currentVariantPayload() {
+    return variants.map((v) => ({
+      variation:     v.variation?.trim()  || "",
+      sellerSku:     v.sellerSku?.trim()  || `${listing.sku}-${v.id.slice(0, 4)}`,
+      gtin:          v.gtin?.trim()       || null,
+      quantity:      Math.max(0, parseInt(v.quantity || "1", 10) || 1),
+      globalPrice:   v.globalPrice ? parseFloat(v.globalPrice) : null,
+      salePrice:     v.salePrice   ? parseFloat(v.salePrice)   : null,
+      saleStartDate: v.saleStartDate || null,
+      saleEndDate:   v.saleEndDate   || null,
+    }));
+  }
+
+  async function handlePreview() {
+    setPreviewing(true);
+    setMessage(null);
+    try {
+      // Sends the LIVE form state, unsaved edits included — previewing
+      // what is on screen is the whole point, and making the seller save
+      // first would mean the preview answers a question about a different
+      // version than the one they are looking at.
+      const res = await fetch("/api/jumia/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ listingId: listing.id, variants: currentVariantPayload() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMessage({ type: "error", text: data.error ?? "Couldn't build the preview." });
+        return;
+      }
+      setPreview(data as JumiaPreview);
+    } catch {
+      setMessage({ type: "error", text: "Network error — please try again." });
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
   async function handlePush() {
     setPushing(true);
     setMessage(null);
@@ -372,16 +436,7 @@ export function WhatsAppFocusedEditor({
       // Send variants from local UI state, same guarantee the full editor
       // makes: what's on screen at click time is what reaches Jumia,
       // regardless of any DB persistence timing.
-      const pushVariants = variants.map((v) => ({
-        variation:     v.variation?.trim()  || "",
-        sellerSku:     v.sellerSku?.trim()  || `${listing.sku}-${v.id.slice(0, 4)}`,
-        gtin:          v.gtin?.trim()       || null,
-        quantity:      Math.max(0, parseInt(v.quantity || "1", 10) || 1),
-        globalPrice:   v.globalPrice ? parseFloat(v.globalPrice) : null,
-        salePrice:     v.salePrice   ? parseFloat(v.salePrice)   : null,
-        saleStartDate: v.saleStartDate || null,
-        saleEndDate:   v.saleEndDate   || null,
-      }));
+      const pushVariants = currentVariantPayload();
       const res = await fetch("/api/jumia/push", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -610,6 +665,15 @@ export function WhatsAppFocusedEditor({
           {saving && <Loader2 className="h-4 w-4 animate-spin" />}
           Save
         </Button>
+        {/* Before, not after. Everything else in this product tells the
+            seller about a difference once it has already happened — a
+            rejection, an adjustment note, a value that turned out not to
+            have arrived. This is the one place to look while it can still
+            change the outcome. */}
+        <Button variant="outline" onClick={handlePreview} disabled={saving || pushing || previewing} className="gap-1.5">
+          {previewing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
+          Preview what Jumia gets
+        </Button>
         {canPush && (
           <Button onClick={handlePush} disabled={saving || pushing} className="gap-1.5">
             {pushing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
@@ -618,12 +682,141 @@ export function WhatsAppFocusedEditor({
         )}
       </div>
 
+      {preview && <JumiaPreviewPanel preview={preview} onClose={() => setPreview(null)} />}
+
       <CategoryDrawer
         open={showCategoryPicker}
         onClose={() => setShowCategoryPicker(false)}
         onSelect={handleCategoryChange}
         initialPath={categoryPath ?? undefined}
       />
+    </div>
+  );
+}
+
+/**
+ * The payload, rendered as fields rather than JSON.
+ *
+ * Shows what Jumia RECEIVES, which is deliberately not the same view as
+ * the form above it. The form is where a seller expresses intent; this is
+ * where they check it survived — a title with the brand stripped out, a
+ * "What's in the box" whose line breaks became <br>, an attribute the
+ * category dropped. Rendering raw JSON would technically be the same
+ * information and would be read by nobody.
+ */
+function JumiaPreviewPanel({ preview, onClose }: { preview: JumiaPreview; onClose: () => void }) {
+  const first = preview.products[0];
+  // Both kinds of "this won't go through" in one list. A seller doesn't
+  // care that one comes from our own validation and the other from the
+  // category schema — they care what to fix.
+  const problems = [
+    ...preview.blockers,
+    ...preview.missing_required.map((label) => `${label} is required by this category`),
+  ];
+
+  return (
+    <div className="mt-4 rounded-2xl border border-zinc-200 bg-white shadow-sm">
+      <div className="flex items-center justify-between border-b border-zinc-100 px-5 py-3">
+        <div>
+          <h3 className="text-sm font-semibold text-zinc-900">What Jumia gets</h3>
+          <p className="text-xs text-zinc-400">
+            Built by the same code that submits — not a summary of it.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close preview"
+          className="rounded-md p-1 text-zinc-400 transition-colors hover:bg-zinc-50 hover:text-zinc-700"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="space-y-4 px-5 py-4">
+        {problems.length > 0 && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+            <p className="text-xs font-semibold text-amber-800">This would not be accepted yet</p>
+            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-amber-700">
+              {problems.map((p, i) => <li key={i}>{p}</li>)}
+            </ul>
+          </div>
+        )}
+
+        {preview.adjustments.length > 0 && (
+          <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2">
+            <p className="text-xs font-semibold text-zinc-700">Changed on the way out</p>
+            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-zinc-600">
+              {preview.adjustments.map((a, i) => <li key={i}>{a}</li>)}
+            </ul>
+          </div>
+        )}
+
+        {!first ? (
+          <p className="text-sm text-zinc-400">Nothing to send yet.</p>
+        ) : (
+          <>
+            <PreviewRow label="Title"    value={first.name?.value} />
+            <PreviewRow label="Brand"    value={first.brand?.name} />
+            <PreviewRow label="Category" value={first.category?.name} />
+            <PreviewRow
+              label="Price"
+              value={first.price?.value != null ? `${first.price.value} ${first.price.currency ?? ""}`.trim() : undefined}
+            />
+            <PreviewRow label="Stock" value={first.stock != null ? String(first.stock) : undefined} />
+            <PreviewRow label="Images" value={`${first.images?.length ?? 0} photo${(first.images?.length ?? 0) === 1 ? "" : "s"}`} />
+
+            {preview.products.length > 1 && (
+              <PreviewRow
+                label="Variants"
+                value={preview.products.map((p) => p.variation).filter(Boolean).join(", ")}
+              />
+            )}
+
+            <div>
+              <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">Description</p>
+              {/* The description is HTML by the time it reaches here, and
+                  seeing it RENDERED is the point — a seller checking
+                  whether their line breaks survived learns nothing from
+                  reading the tags. */}
+              <div
+                className="prose prose-sm mt-1 max-w-none rounded-lg border border-zinc-100 bg-zinc-50 p-3 text-sm text-zinc-700"
+                dangerouslySetInnerHTML={{ __html: first.description?.value ?? "" }}
+              />
+            </div>
+
+            {(first.attributes?.length ?? 0) > 0 && (
+              <div>
+                <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">
+                  Attributes ({first.attributes!.length})
+                </p>
+                <dl className="mt-1 divide-y divide-zinc-100 rounded-lg border border-zinc-100">
+                  {first.attributes!.map((a) => (
+                    <div key={a.name} className="flex gap-3 px-3 py-1.5 text-sm">
+                      <dt className="w-1/3 shrink-0 truncate text-zinc-500">{a.name}</dt>
+                      <dd
+                        className="min-w-0 flex-1 text-zinc-800"
+                        dangerouslySetInnerHTML={{ __html: a.value }}
+                      />
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PreviewRow({ label, value }: { label: string; value?: string }) {
+  return (
+    <div className="flex gap-3 text-sm">
+      <span className="w-1/3 shrink-0 text-[11px] font-medium uppercase tracking-wide text-zinc-400">{label}</span>
+      <span className={cn("min-w-0 flex-1", value ? "text-zinc-800" : "text-zinc-300")}>
+        {value || "— empty"}
+      </span>
     </div>
   );
 }

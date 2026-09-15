@@ -9,8 +9,9 @@
  * branch) — once linked, the seller's next step is chat, not this page.
  */
 
+import { WhatsAppIcon } from "@/components/whatsapp/whatsapp-icon";
 import { useState } from "react";
-import { Loader2, MessageCircle, Copy } from "lucide-react";
+import {Loader2, Copy} from "lucide-react";
 
 export function BeginWhatsAppBanner() {
   const [loading, setLoading] = useState(false);
@@ -55,7 +56,7 @@ export function BeginWhatsAppBanner() {
         className="w-full rounded-2xl bg-gradient-to-r from-emerald-500 to-emerald-600 p-8 text-center text-white shadow-lg shadow-emerald-500/20 transition-colors hover:from-emerald-600 hover:to-emerald-700 disabled:opacity-70"
       >
         <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white/20">
-          {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : <MessageCircle className="h-6 w-6" />}
+          {loading ? <Loader2 className="h-6 w-6 animate-spin" /> : <WhatsAppIcon className="h-6 w-6" />}
         </div>
         <p className="text-lg font-bold">Begin listing from WhatsApp</p>
         <p className="mt-1 text-sm text-emerald-50">

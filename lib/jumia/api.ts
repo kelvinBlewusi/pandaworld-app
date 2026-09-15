@@ -908,6 +908,56 @@ export interface JumiaPushResult {
   adjustments?: string[];
 }
 
+/** Exactly what a push would send, without sending it. */
+export interface JumiaPayloadBuild {
+  products:        JumiaProduct[];
+  /** Phrased for a seller — see describeAdjustments. */
+  adjustments:     string[];
+  /** Schema-required attribute labels with no value, by their Jumia label. */
+  missingRequired: string[];
+  /** Set when the payload could not be built at all (no valid category). */
+  error?:          string;
+}
+
+/**
+ * Build the feed payload — the whole of a push except the POST.
+ *
+ * Extracted so a PREVIEW can show the seller the real thing rather than a
+ * reconstruction. Two code paths producing "what Jumia gets" would drift,
+ * and a preview that drifts is worse than none: it would be believed.
+ * pushProductsToJumia calls this and then sends the result, so what the
+ * preview renders and what Jumia receives are the same object by
+ * construction.
+ */
+export async function buildJumiaPayload(
+  accessToken: string,
+  listing:     ListingRow,
+  variants:    VariantRow[],
+  currency:    string = "GHS",
+): Promise<JumiaPayloadBuild> {
+  const brand = await resolveBrand(accessToken, listing.brand);
+
+  // Cheap local DB read, no Jumia call — see the note in the push below.
+  let schema: JumiaCategoryAttribute[] = [];
+  try {
+    const { code } = resolveCategoryCode(listing);
+    schema = await getCategoryAttributes(code);
+  } catch {
+    // No valid category — mapListingToJumiaProducts reports it properly.
+  }
+
+  const adjustments: string[] = [];
+  try {
+    const products = mapListingToJumiaProducts(listing, variants, brand, currency, schema, adjustments);
+    return { products, adjustments, missingRequired: missingRequiredFor(products, schema) };
+  } catch (e) {
+    return {
+      products: [], adjustments, missingRequired: [],
+      error: (e as Error).message ?? "Failed to build payload",
+    };
+  }
+}
+
 /**
  * POST https://vendor-api.jumia.com/feeds/products/create
  *
@@ -921,49 +971,19 @@ export async function pushProductsToJumia(
   variants:    VariantRow[],
   currency:    string = "GHS"
 ): Promise<JumiaPushResult> {
-  // 1. Resolve brand code (calls /catalog/brands)
-  const brand = await resolveBrand(accessToken, listing.brand);
-
-  // 1b. Fetch the resolved category's attribute schema (cheap local DB
-  // read, no Jumia call) so mapListingToJumiaProducts can drop/trim any
-  // attribute value that isn't actually one of THIS category's allowed
-  // values — confirmed live: material_family="Fabric" sailed through with
-  // no such check and got the whole feed rejected. Best-effort: an
-  // invalid/unresolvable category here is the same condition
-  // mapListingToJumiaProducts's own resolveCategoryCode call below will
-  // hit and report properly, so this just degrades to no schema (attrs
-  // pass through unchecked, same as before this existed) rather than
-  // failing the push twice over.
-  let categoryAttributeSchema: JumiaCategoryAttribute[] = [];
-  try {
-    const { code } = resolveCategoryCode(listing);
-    categoryAttributeSchema = await getCategoryAttributes(code);
-  } catch {
-    // No valid category — mapListingToJumiaProducts reports this properly.
+  const built = await buildJumiaPayload(accessToken, listing, variants, currency);
+  if (built.error) {
+    return { success: false, jumia_ref: null, raw: null, error: built.error };
   }
+  const products        = built.products;
+  const preflightNotes  = built.adjustments;
+  const missingRequired = built.missingRequired;
 
-  // 2. Build the products payload. Can throw if the listing lacks a real
-  //    numeric category — surface that as a structured push error rather
-  //    than a 500.
-  const preflightNotes: string[] = [];
-  let products: ReturnType<typeof mapListingToJumiaProducts>;
-  try {
-    products = mapListingToJumiaProducts(listing, variants, brand, currency, categoryAttributeSchema, preflightNotes);
-  } catch (e) {
-    const msg = (e as Error).message ?? "Failed to build payload";
-    return { success: false, jumia_ref: null, raw: null, error: msg };
-  }
-
-  // 2b. Refuse a payload the category schema already says Jumia will
-  //     reject. Jumia bins the ENTIRE feed over one missing required
-  //     attribute ("The column [product_weight] is missing from the
-  //     file"), so sending it costs the seller the product, a round trip,
-  //     and a listing left sitting at "failed" for a problem we could see
-  //     before the request left the building.
-  //
-  //     The pre-flight has computed this list since #98 and only logged
-  //     it. Logging was never going to stop a rejection.
-  const missingRequired = missingRequiredFor(products, categoryAttributeSchema);
+  // Refuse a payload the category schema already says Jumia will reject.
+  // Jumia bins the ENTIRE feed over one missing required attribute ("The
+  // column [product_weight] is missing from the file"), so sending it
+  // costs the seller the product, a round trip, and a listing left at
+  // "failed" for a problem visible before the request left the building.
   if (missingRequired.length > 0) {
     const labels = missingRequired.join(", ");
     console.warn(`[Jumia API] ⛔ not sending — category requires ${labels}`);
@@ -980,7 +1000,7 @@ export async function pushProductsToJumia(
   const url  = `${JUMIA_API_BASE}/feeds/products/create`;
   const body = JSON.stringify({ shopId, products });
 
-  console.info(`[Jumia API] POST ${url} — shopId=${shopId}, products=${products.length}, brand=${JSON.stringify(brand)}`);
+  console.info(`[Jumia API] POST ${url} — shopId=${shopId}, products=${products.length}, brand=${JSON.stringify(products[0]?.brand)}`);
   console.info("[Jumia API] Payload:", body.slice(0, 500));
 
   let res: Response;

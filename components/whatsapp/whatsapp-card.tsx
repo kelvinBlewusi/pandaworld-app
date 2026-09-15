@@ -19,8 +19,9 @@
  * identically in both places.
  */
 
+import { WhatsAppIcon } from "@/components/whatsapp/whatsapp-icon";
 import { useState, useEffect } from "react";
-import { CheckCircle2, Loader2, Unlink, MessageCircle, Copy, AlertTriangle } from "lucide-react";
+import {CheckCircle2, Loader2, Unlink, Copy, AlertTriangle} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
@@ -115,7 +116,7 @@ export function WhatsAppCard() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
-            <MessageCircle className="h-5 w-5" />
+            <WhatsAppIcon className="h-5 w-5" />
           </div>
           <div>
             <p className="font-semibold text-zinc-900">WhatsApp</p>
@@ -223,7 +224,7 @@ export function WhatsAppCard() {
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-2 rounded-md bg-emerald-500 px-4 py-2 text-white font-semibold hover:bg-emerald-600"
                   >
-                    <MessageCircle className="h-4 w-4" />
+                    <WhatsAppIcon className="h-4 w-4" />
                     Open WhatsApp to link
                   </a>
                 </>
@@ -250,7 +251,7 @@ export function WhatsAppCard() {
           ) : (
             <div className="space-y-2">
               <Button onClick={handleGenerateLink} disabled={generating} className="gap-2 bg-emerald-500 hover:bg-emerald-600">
-                {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircle className="h-4 w-4" />}
+                {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <WhatsAppIcon className="h-4 w-4" />}
                 {generating ? "Generating…" : "Connect WhatsApp"}
               </Button>
               {linkError && <p className="text-sm text-red-600">{linkError}</p>}

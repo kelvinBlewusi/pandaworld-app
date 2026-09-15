@@ -1,7 +1,8 @@
+import { WhatsAppIcon } from "@/components/whatsapp/whatsapp-icon";
 import { Suspense } from "react";
 import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
-import { MessageCircle } from "lucide-react";
+
 import { createServerClient } from "@/lib/supabase/server";
 import { getWhatsAppConnection } from "@/lib/whatsapp/link";
 import { refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
@@ -125,7 +126,7 @@ export default async function WhatsAppListingsPage() {
           {wa.connected ? (
             <div className="rounded-2xl border border-dashed bg-white py-16 text-center">
               <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
-                <MessageCircle className="h-5 w-5" />
+                <WhatsAppIcon className="h-5 w-5" />
               </div>
               <p className="text-sm font-medium text-zinc-600">You&apos;re connected — no listings yet</p>
               <p className="mx-auto mt-1 max-w-sm text-xs text-zinc-400">

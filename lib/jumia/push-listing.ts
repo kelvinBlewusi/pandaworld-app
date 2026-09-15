@@ -14,6 +14,7 @@ import { createServerClient } from "@/lib/supabase/server";
 import {
   getValidJumiaCredentials,
   pushProductsToJumia,
+  buildJumiaPayload,
   markNeedsReconnect,
   getFeedStatus,
   getFeedProductDetails,
@@ -109,6 +110,90 @@ export type PushListingResult =
       needsReconnect?: boolean;
       raw?: unknown;
     };
+
+export type PreviewPayloadResult =
+  | {
+      ok: true;
+      /** The exact products array a push would POST. */
+      products: unknown[];
+      /** Values Jumia will not receive as written. */
+      adjustments: string[];
+      /** Schema-required attributes with no value — a push would refuse. */
+      missingRequired: string[];
+      /** Everything validateListingForPush would reject on first. */
+      blockers: string[];
+    }
+  | { ok: false; code: "not_found" | "not_connected" | "build_failed"; message: string };
+
+/**
+ * What a push WOULD send, without sending it.
+ *
+ * Runs the same validation and the same builder the real push runs —
+ * buildJumiaPayload is literally the function pushProductsToJumia calls
+ * before its POST. A preview assembled separately would drift from the
+ * push, and a drifting preview is worse than no preview at all, because
+ * it would be believed.
+ *
+ * Read-only: resolveBrand hits Jumia's catalogue and the schema comes
+ * from our own cache. Nothing is written and no feed is created.
+ */
+export async function previewListingPayload(
+  userId:       string,
+  listingId:    string,
+  bodyVariants?: PushListingVariantInput[] | null,
+): Promise<PreviewPayloadResult> {
+  const db = createServerClient();
+
+  const { data: listing } = await db
+    .from("listings").select("*").eq("id", listingId).eq("user_id", userId).maybeSingle();
+  if (!listing) return { ok: false, code: "not_found", message: "Listing not found" };
+  const row = listing as ListingRow;
+
+  // Reported, not thrown. A seller previewing a half-finished draft wants
+  // to SEE what is missing — refusing to render anything until it is
+  // perfect would make the preview useless exactly when it is most
+  // wanted.
+  const blockers = validateListingForPush(row);
+
+  let variants: VariantRow[];
+  if (bodyVariants && bodyVariants.length > 0) {
+    variants = bodyVariants.map((v, i) => ({
+      id: `body-${i}`, listing_id: listingId,
+      variation: v.variation, seller_sku: v.sellerSku,
+      gtin: v.gtin ?? null, quantity: v.quantity ?? 1,
+      global_price: v.globalPrice ?? null, sale_price: v.salePrice ?? null,
+      sale_start_date: v.saleStartDate ?? null, sale_end_date: v.saleEndDate ?? null,
+      created_at: new Date().toISOString(),
+    }));
+  } else {
+    const { data } = await db.from("variants").select("*").eq("listing_id", listingId);
+    variants = (data ?? []) as VariantRow[];
+  }
+
+  let accessToken: string;
+  let currency: string;
+  try {
+    ({ accessToken, currency } = await getValidJumiaCredentials(userId));
+  } catch (e) {
+    return {
+      ok: false, code: "not_connected",
+      message: (e as Error).message === "JUMIA_NOT_CONNECTED"
+        ? "Connect your Jumia account to preview what gets sent."
+        : "Your Jumia connection needs attention before this can be previewed.",
+    };
+  }
+
+  const built = await buildJumiaPayload(accessToken, row, variants, currency);
+  if (built.error) return { ok: false, code: "build_failed", message: built.error };
+
+  return {
+    ok: true,
+    products:        built.products,
+    adjustments:     built.adjustments,
+    missingRequired: built.missingRequired,
+    blockers,
+  };
+}
 
 /**
  * Push `listingId` (owned by `userId`) to Jumia. `bodyVariants`, when given,

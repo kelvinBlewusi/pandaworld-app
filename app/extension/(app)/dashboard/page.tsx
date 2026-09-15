@@ -1,8 +1,9 @@
+import { WhatsAppIcon } from "@/components/whatsapp/whatsapp-icon";
 import { Suspense } from "react";
 import Link from "next/link";
 import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
-import { Gauge, Wand2, Clock, Chrome, KeyRound, UploadCloud, ScanSearch, MessageCircle, ArrowRight } from "lucide-react";
+import {Gauge, Wand2, Clock, Chrome, KeyRound, UploadCloud, ScanSearch, ArrowRight} from "lucide-react";
 import { getOrCreateExtensionApiKey, countRecentFills } from "@/lib/security/extension-keys";
 import { getOrCreateCreditBalance } from "@/lib/billing/extension-credits";
 import { StatCard } from "@/components/ui/stat-card";
@@ -60,7 +61,7 @@ export default async function ExtensionDashboardPage() {
         className="mb-6 flex items-center gap-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 p-5 text-white shadow-sm transition-transform hover:scale-[1.01]"
       >
         <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/20">
-          <MessageCircle className="h-5 w-5" />
+          <WhatsAppIcon className="h-5 w-5" />
         </div>
         <div className="flex-1">
           <p className="font-semibold">Push listings from WhatsApp</p>
