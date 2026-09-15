@@ -44,7 +44,7 @@ import {
 } from "@/lib/whatsapp/batch";
 import { splitCredentialTokens, identifyCredentials, looksLikeCredential, isResendCommand, jumiaConnectLink, promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
 import { classifyBatchIntent, looksActionable } from "@/lib/whatsapp/intent";
-import { pickStory } from "@/lib/whatsapp/waiting-stories";
+import { pickJoke } from "@/lib/whatsapp/waiting-jokes";
 import type { ListingRow } from "@/lib/supabase/types";
 import { enqueueAnalysisJobs, nudgeWorker, isBatchSettled, type AnalysisJob } from "@/lib/whatsapp/analysis-queue";
 
@@ -713,7 +713,7 @@ async function sendStatusReply(
 /**
  * Fallback while startBatchAnalysis's Promise.all is still running — the
  * seller can't submit/edit anything yet (nothing's drafted), but a big
- * batch (10+, see startBatchAnalysis) can take a while, so "tell_story"
+ * batch (10+, see startBatchAnalysis) can take a while, so "tell_joke"
  * (tapped from the button startBatchAnalysis sends for a batch that size,
  * or typed as a close variant of the phrase) gives them something to do
  * besides repeatedly checking status. Re-offers the same button afterward
@@ -725,15 +725,18 @@ async function handleAnalyzingMessage(
   content: { text?: string },
 ): Promise<void> {
   const text = content.text?.trim().toLowerCase() ?? "";
-  if (text === "tell_story" || /\btell me a( nice)? story\b/.test(text)) {
-    await replyButtons(phoneNumber, pickStory(), [{ id: "tell_story", title: "📖 Another one" }]);
+  if (text === "tell_joke" || /\btell me a( nice)? (joke|story)\b/.test(text)) {
+    // "story" still matches on purpose: the button used to say that, and a
+    // seller mid-batch may be replying to an older message still on their
+    // screen. Costs one alternation, saves a dead end.
+    await replyButtons(phoneNumber, pickJoke(), [{ id: "tell_joke", title: "😄 Another one" }]);
     return;
   }
   if ((session.batchSize ?? 1) >= BIG_BATCH_SIZE) {
     await replyButtons(
       phoneNumber,
       "⏳ Still drafting your products — hang tight.",
-      [{ id: "tell_story", title: "📖 Tell me a story" }],
+      [{ id: "tell_joke", title: "😄 Tell me a joke" }],
     );
     return;
   }
@@ -804,7 +807,7 @@ async function describeStatus(
     case "analyzing":
       return {
         text: "Drafting your products right now — this can take up to a minute.",
-        buttons: (session.batchSize ?? 1) >= BIG_BATCH_SIZE ? [{ id: "tell_story", title: "📖 Tell me a story" }] : undefined,
+        buttons: (session.batchSize ?? 1) >= BIG_BATCH_SIZE ? [{ id: "tell_joke", title: "😄 Tell me a joke" }] : undefined,
       };
     case "awaiting_confirmation": {
       const batchId = session.batchId;
@@ -1087,6 +1090,33 @@ async function parkNotes(
   await updateSession(phoneNumber, { pendingNotes: combined.slice(0, 1000) });
 }
 
+/**
+ * How long a photo burst has to be quiet before "done" is taken at face
+ * value.
+ *
+ * Measured on a real album: six deliveries spanned under four seconds end
+ * to end. Six is comfortably clear of that while still being a wait a
+ * seller barely notices — and it is only ever waited out by someone who
+ * tapped Done while photos were mid-flight.
+ */
+const PHOTO_SETTLE_MS = 6_000;
+
+/**
+ * Milliseconds since this listing's last photo landed, using the row's own
+ * updated_at — append_listing_image stamps it (see
+ * 2026-09-15_atomic-image-append.sql), so no extra column is needed.
+ *
+ * Answers Infinity when unknown, which reads as "long ago" and lets the
+ * caller proceed. A failure here must never wedge a seller's "done".
+ */
+async function msSinceLastPhoto(listingId: string): Promise<number> {
+  const db = createServerClient();
+  const { data, error } = await db.from("listings").select("updated_at").eq("id", listingId).maybeSingle();
+  if (error || !data?.updated_at) return Infinity;
+  const at = Date.parse(data.updated_at as string);
+  return Number.isFinite(at) ? Date.now() - at : Infinity;
+}
+
 /** How many photos this listing currently holds. Best-effort: a failure
  *  answers 0, which simply omits the count from the reply rather than
  *  holding up the seller's "done". */
@@ -1218,6 +1248,15 @@ async function handleAwaitingPhotos(
   }
 
   if (endsWithDoneSignal(text)) {
+    // How long ago the last photo actually landed, read FIRST.
+    //
+    // applyNotes below writes to the same row and stamps updated_at, which
+    // is the very column this reads. Taking it afterwards would make every
+    // "250\nDone" look like a photo had just arrived, and the settle hold
+    // further down would fire on the most common message in the whole flow
+    // — a price and a done in one breath.
+    const lastPhotoAgeMs = listingId ? await msSinceLastPhoto(listingId) : Infinity;
+
     // The done-signal can be the WHOLE message ("done") or trail a
     // caption/note ("Price 40\nDone") — strip it so anything before it
     // still gets saved instead of discarded.
@@ -1247,6 +1286,47 @@ async function handleAwaitingPhotos(
     // appended the photos, and on an album it may not even be the last.
     const photoCount = listingId ? await countListingImages(listingId) : 0;
     const photoNote = photoCount > 0 ? ` (${photoCount} photo${photoCount === 1 ? "" : "s"})` : "";
+
+    // ── Don't advance while the album is still arriving ──────────────────
+    //
+    // Reported 2026-09-15: a seller sent 7 photos of one pair of
+    // headphones; 5 landed on it and 2 landed on the NEXT product, which
+    // they had sent no photos for at all. The transcript shows exactly how:
+    //
+    //   "Product 2 saved (2 photos). Now send photos for product 3…"
+    //   "📸 Product 2: got it…"        ← a straggler, AFTER the advance
+    //   "Product 3 saved (2 photos)"   ← product 3's photos were product 2's
+    //
+    // WhatsApp delivers an album as N independent webhook deliveries and
+    // does not order them. Tapping Done on the first confirmation closes
+    // the product while the rest are still in the air, and every one that
+    // lands afterwards is attributed to whatever product is current by
+    // then. Nothing is lost — all 7 reached the database — but 2 of them
+    // describe the wrong product, which is worse than losing them: the
+    // listing looks complete and is wrong.
+    //
+    // WhatsApp gives us no album id, so there is no way to know which
+    // product a late photo belongs to. What we DO know is whether photos
+    // are still arriving. So instead of guessing, the advance waits: if
+    // the last photo landed moments ago, the album is still landing, and
+    // "done" is almost certainly early.
+    //
+    // A hold, not a heuristic reassignment. Guessing that a straggler
+    // belongs to the previous product would misfire the moment a seller
+    // genuinely starts the next one quickly — and a wrong guess here is
+    // the exact failure being fixed. Asking costs one tap; guessing costs
+    // a wrong listing.
+    //
+    // Notes are already saved above, so nothing the seller typed is at
+    // risk while they wait.
+    if (listingId && lastPhotoAgeMs < PHOTO_SETTLE_MS) {
+      await replyButtons(
+        phoneNumber,
+        `📸 Still receiving your photos for product ${seq} — give it a couple of seconds, then tap *Done*.`,
+        [{ id: "done", title: "Done ✅" }],
+      );
+      return;
+    }
 
     if (seq < batchSize) {
       // pendingNotes cleared with the advance: anything still parked
@@ -1408,7 +1488,7 @@ async function startBatchAnalysis(
     await replyButtons(
       phoneNumber,
       "This is a bigger batch, so drafting may take a little while. Want something to pass the time?",
-      [{ id: "tell_story", title: "📖 Tell me a story" }],
+      [{ id: "tell_joke", title: "😄 Tell me a joke" }],
     );
   }
 

@@ -171,6 +171,11 @@ export class FakeDb {
       // the row lock rather than writing back a list read earlier.
       if (images.length < (args.p_max as number)) images.push(args.p_url as string);
       row.images = images;
+      // The real function stamps updated_at (see
+      // 2026-09-15_atomic-image-append.sql), and intake.ts reads it to tell
+      // whether an album is still landing. A double that skipped it would
+      // let that logic pass a test it would fail in production.
+      row.updated_at = new Date().toISOString();
       return { data: [{ image_count: images.length }], error: null };
     }
 

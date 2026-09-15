@@ -672,7 +672,7 @@ export function WhatsAppFocusedEditor({
             change the outcome. */}
         <Button variant="outline" onClick={handlePreview} disabled={saving || pushing || previewing} className="gap-1.5">
           {previewing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
-          Preview what Jumia gets
+          Preview what goes to Vendor Center
         </Button>
         {canPush && (
           <Button onClick={handlePush} disabled={saving || pushing} className="gap-1.5">
@@ -697,7 +697,7 @@ export function WhatsAppFocusedEditor({
 /**
  * The payload, rendered as fields rather than JSON.
  *
- * Shows what Jumia RECEIVES, which is deliberately not the same view as
+ * Shows what lands in Vendor Center, which is deliberately not the same view as
  * the form above it. The form is where a seller expresses intent; this is
  * where they check it survived — a title with the brand stripped out, a
  * "What's in the box" whose line breaks became <br>, an attribute the
@@ -717,12 +717,7 @@ function JumiaPreviewPanel({ preview, onClose }: { preview: JumiaPreview; onClos
   return (
     <div className="mt-4 rounded-2xl border border-zinc-200 bg-white shadow-sm">
       <div className="flex items-center justify-between border-b border-zinc-100 px-5 py-3">
-        <div>
-          <h3 className="text-sm font-semibold text-zinc-900">What Jumia gets</h3>
-          <p className="text-xs text-zinc-400">
-            Built by the same code that submits — not a summary of it.
-          </p>
-        </div>
+        <h3 className="text-sm font-semibold text-zinc-900">What you will see on Vendor Center</h3>
         <button
           type="button"
           onClick={onClose}
