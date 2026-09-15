@@ -354,9 +354,8 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
               className="mt-6 max-w-[500px] text-balance text-[17px] font-light leading-relaxed"
               style={{ color: "rgba(239,236,230,0.88)" }}
             >
-              PandaWorld&apos;s AI automates your{" "}
-              <span style={{ color: JUMIA_COLOR, fontWeight: 500 }}>Jumia</span> listings and
-              helps sellers spend less time listing products to{" "}
+              PandaWorld&apos;s AI automates your Jumia listings and helps sellers spend less
+              time listing products to{" "}
               <span style={{ color: JUMIA_COLOR, fontWeight: 500 }}>Jumia</span>. The listing
               tool works in two ways; the first is automating listings by uploading products
               on{" "}
@@ -364,8 +363,17 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
                   hasn't linked an account yet — linking needs a per-seller
                   code generated after sign-up — so a raw chat link would
                   drop a prospective seller into a conversation nothing
-                  replies to. */}
-              <Link href={signUpHref} className="font-medium underline underline-offset-4 transition-colors hover:text-white">
+                  replies to.
+
+                  No underline, by request. The affordance is carried by
+                  weight and a brighter ink than the body text instead —
+                  without one of the two these read as plain prose and
+                  nobody discovers they're tappable. */}
+              <Link
+                href={signUpHref}
+                className="font-medium transition-colors hover:text-white"
+                style={{ color: "#f7f4ee" }}
+              >
                 WhatsApp
               </Link>{" "}
               and second, a dedicated{" "}
@@ -373,15 +381,20 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
                 href={CHROME_WEB_STORE_URL}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-medium underline underline-offset-4 transition-colors hover:text-white"
+                className="font-medium transition-colors hover:text-white"
+                style={{ color: "#f7f4ee" }}
               >
                 Chrome extension
               </a>
               .
             </p>
-            {/* Stacked full-width on phones, inline row from sm up: three
-                pills wrapping at phone width left a ragged 2-then-1 layout
-                with the odd one out floating centred under the pair. */}
+            {/* Stacked full-width on phones, inline row from sm up: pills
+                wrapping at phone width left a ragged layout with the odd
+                one out floating centred under the rest. Four of them now,
+                so the wrap on narrow desktops matters more than it did —
+                flex-wrap with justify-center keeps whatever lands on the
+                second line centred under the first rather than
+                left-stranded. */}
             <div className="mt-9 flex w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:justify-center sm:gap-3.5">
               <Link
                 href={ctaHref}
@@ -396,13 +409,18 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
                 {ctaLabel}
                 <ArrowRight className="h-4 w-4" />
               </Link>
-              <a
-                href="#how-it-works"
+              {/* The two ways in, side by side and in the order the copy
+                  above introduces them. "See how it works" moves last: it
+                  explains the product rather than starting anyone on it,
+                  and sitting between the two channels it split a pair that
+                  reads as a choice. */}
+              <Link
+                href={signUpHref}
                 className="inline-flex items-center justify-center gap-2 rounded-full border px-6 py-3.5 text-sm transition-colors hover:!border-white/45 hover:!text-white"
                 style={{ borderColor: "rgba(255,255,255,0.18)", color: "rgba(239,236,230,0.85)" }}
               >
-                See how it works
-              </a>
+                List from WhatsApp
+              </Link>
               <a
                 href={CHROME_WEB_STORE_URL}
                 target="_blank"
@@ -411,6 +429,13 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
                 style={{ borderColor: "rgba(255,255,255,0.18)", color: "rgba(239,236,230,0.85)" }}
               >
                 Add to Chrome
+              </a>
+              <a
+                href="#how-it-works"
+                className="inline-flex items-center justify-center gap-2 rounded-full border px-6 py-3.5 text-sm transition-colors hover:!border-white/45 hover:!text-white"
+                style={{ borderColor: "rgba(255,255,255,0.18)", color: "rgba(239,236,230,0.85)" }}
+              >
+                See how it works
               </a>
             </div>
           </div>
