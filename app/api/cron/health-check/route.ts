@@ -109,6 +109,23 @@ const SCHEMA_PROBES: { object: string; migration: string; probe: (db: ReturnType
   },
 ];
 
+/**
+ * Statuses a listing can sit in where NOTHING will ever move it again.
+ *
+ * 'processing' is set the moment a push claims a row, and the feed poll
+ * only ever looks at 'pending_approval' — so a push that claims the row and
+ * then returns without restoring it leaves the listing invisible to every
+ * scheduled path there is. Two real listings were found in exactly this
+ * state on 2026-09-15, both after a "Fix & resubmit" whose re-push bailed:
+ * they had a valid jumia_ref and a real Jumia rejection recorded against
+ * them, and would have sat there indefinitely.
+ *
+ * Counted separately from the other thresholds because it is the one stuck
+ * state with no recovery path at all — the others are slow, this one is
+ * permanent.
+ */
+const TERMINALLY_STUCK_STATUS = "processing";
+
 /** PostgREST's codes for "that object does not exist", as distinct from a
  *  transient failure. Only these mean a migration is missing; anything else
  *  is reported as unreadable rather than as drift, because calling a
