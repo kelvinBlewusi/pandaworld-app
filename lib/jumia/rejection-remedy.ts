@@ -4,20 +4,30 @@
  * A rejection message used to be a dead end: the seller was told what
  * Jumia said ("The column [product_weight] is missing from the file") and
  * left to work out what that meant and where to fix it. Most of these
- * fall into a small number of shapes, and one of them the system can
- * genuinely repair on its own.
+ * fall into a small number of shapes, and most of them the system can
+ * genuinely repair on its own by re-running the draft.
  *
  * Deliberately conservative about what counts as auto-fixable. Telling a
  * seller "I fixed it" and re-pushing the same broken payload is worse than
  * telling them plainly that only they can supply the missing price.
  *
- * "Fixable by refill" has one concrete meaning in this codebase:
- * refillAttributesForCategory (lib/jumia/refill-attributes.ts) re-derives
- * dynamic_attributes — the category-specific schema fields — and nothing
- * else. It never touches title, description, brand, price, stock, images,
- * or category choice. A message about any of those is never "refill", no
- * matter how much it resembles one — classifying it that way spends a
- * Gemini call and a push attempt on a field refill cannot change, then
+ * "Fixable by rerun" means calling runAutoAnalyze() again on the same
+ * images (lib/actions/auto-analyze.ts) — the exact pipeline that drafted
+ * the listing the first time, given the rejection reason as extra
+ * context. That's a genuinely different (and much more capable) repair
+ * than the single-purpose attribute refill this classifier used to be
+ * scoped to: a full rerun re-derives title, description, category AND
+ * dynamic_attributes from the images, so it can fix a title that repeats
+ * the brand name, a category that turned out too broad, or a description
+ * that was too short — not just an invalid attribute value.
+ *
+ * What a rerun categorically CANNOT do — because runAutoAnalyze never
+ * touches these fields, by the same seller-owns-commercial-terms rule
+ * this codebase applies everywhere else — is invent a price, a stock
+ * count, a sale-price date, a barcode, or a re-uploaded image file. A
+ * message about any of those stays "seller" no matter how much it
+ * resembles something rerunnable: classifying it otherwise spends a
+ * Gemini call and a push attempt on fields a rerun cannot change, then
  * fails identically and tells the seller "I fixed it" a moment before
  * proving it didn't. That shape — auto-fix promised, same rejection
  * returned — is worse for trust than saying up front that this one needs
@@ -32,16 +42,17 @@
  */
 
 export type RemedyKind =
-  /** Category attributes are missing or invalid — re-filling the schema
-   *  from the category and pushing again is a real fix. */
-  | "refill"
+  /** Worth a full re-draft (runAutoAnalyze) informed by the rejection —
+   *  a bad title, an over-broad category, a short description, or a
+   *  category-attribute value the schema rejects. */
+  | "rerun"
   /** Jumia already has this SKU. The push path generates a fresh suffix
    *  on the next attempt, so simply pushing again resolves it. */
   | "repush"
-  /** Only the seller can supply this — a price, a longer description, a
-   *  more specific category. Never pretend to fix it. */
+  /** Only the seller can supply this — a price, a barcode, a re-uploaded
+   *  image. Never pretend to fix it. */
   | "seller"
-  /** Unrecognised. Worth one automatic attempt (refill + push) because
+  /** Unrecognised. Worth one automatic attempt (rerun + push) because
    *  attribute problems are by far the most common cause, but say so
    *  honestly rather than claiming to know. */
   | "unknown";
@@ -71,24 +82,32 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
     return { kind: "seller", explanation: "Two of the variants on this product have the same variation value (e.g. both marked the same size or colour) — Jumia needs them to differ." };
   }
 
-  // ── The product's name/title, never something refill touches ──────────
+  // ── The product's name/title — a rerun rewrites this from scratch ─────
   //
-  // refillAttributesForCategory only ever rewrites dynamic_attributes.
-  // Every one of these is about the top-level product name, so an
-  // automatic refill-and-resubmit would push the identical title again.
+  // runAutoAnalyze regenerates the title on every pass, so a rejection
+  // about what the CURRENT title says is exactly the shape a fresh draft
+  // fixes — as long as the rerun is told what went wrong (see
+  // buildRerunContext in lib/whatsapp/intake.ts), so it doesn't just
+  // regenerate the identical mistake.
   if (/product name.{0,40}(contains|has).{0,10}(brand|seller|company) name/.test(msg)
     || /product name.{0,40}prohibited character/.test(msg)) {
-    return { kind: "seller", explanation: "The product title itself is the problem — it can't repeat the brand, seller or company name, or use characters Jumia blocks. Edit the title directly." };
+    return { kind: "rerun", explanation: "The title repeats the brand, seller or company name (or uses a blocked character) — redrafting the title should clear this." };
   }
   if (/trademark.{0,80}protected.{0,80}brand/.test(msg)) {
-    return { kind: "seller", explanation: "Jumia sees a trademarked term in the title or description but the brand field doesn't match it — set the brand to the actual trademark owner, or reword the title." };
+    return { kind: "rerun", explanation: "Jumia sees a trademarked term without a matching brand — redrafting should set the brand correctly or reword the title." };
   }
 
   if (/description/.test(msg) && /(short|50|length|characters)/.test(msg)) {
-    return { kind: "seller", explanation: "The description is too short for Jumia — it needs at least 50 characters." };
+    return { kind: "rerun", explanation: "The description was too short for Jumia — redrafting will write a longer one." };
   }
+  // "You can't list products in this category" is checked here — before
+  // "category not found" further down — because it's about the SAME
+  // category still resolving but being too broad, whereas "not found"
+  // means the code itself is stale. Both are rerunnable (a fresh
+  // category pick either way), but kept as separate branches since they
+  // read differently to a seller watching the messages go by.
   if (/can'?t list products in this category|more specific|leaf/.test(msg)) {
-    return { kind: "seller", explanation: "Jumia won't accept this category — it needs a more specific one." };
+    return { kind: "rerun", explanation: "Jumia won't accept this category — redrafting will pick a more specific one." };
   }
 
   // ── Price, stock: seller-owned everywhere else in this codebase ───────
@@ -97,8 +116,8 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
   // Stock is mandatory...", "The Global Price is mandatory...") and
   // doesn't overlap with "required|missing|invalid|must" at all — a real
   // gap that let both fall through to "unknown" and waste an automatic
-  // refill+resubmit cycle that could never have supplied a price or a
-  // stock count either way.
+  // rerun+resubmit cycle that could never have supplied a price or a
+  // stock count either way — runAutoAnalyze never touches either field.
   if (/\bprice\b/.test(msg) && /(required|missing|invalid|must|mandatory)/.test(msg)) {
     return { kind: "seller", explanation: "Jumia needs a price on this product, and I never set prices myself." };
   }
@@ -109,7 +128,8 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
   // ── Sale price / global price business rules ───────────────────────────
   //
   // All genuinely seller decisions — a date range, a discount, a currency
-  // choice. None of them are dynamic_attributes, so none are refillable.
+  // choice. None of them are fields runAutoAnalyze sets, so none are
+  // rerunnable.
   if (/(global )?sale price/.test(msg) && /(startat|endat|before|after|bigger than the current date)/.test(msg)) {
     return { kind: "seller", explanation: "The sale price's start/end dates don't work — they need to be in the future, and the start date has to come before the end date." };
   }
@@ -133,10 +153,8 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
 
   // ── Images ──────────────────────────────────────────────────────────────
   //
-  // Broadened past the original (invalid|size|resolution|missing|failed)
-  // set to also catch a download timeout, an out-of-range dimension, and
-  // a blocked file extension — all seen in Jumia's own error catalogue,
-  // none matching the original set of words.
+  // A rerun can't fix a FILE — it drafts text and attributes from the
+  // images already uploaded, it doesn't re-upload or re-encode them.
   if (/main ?image.{0,20}(mandatory|cannot be empty)/.test(msg)) {
     return { kind: "seller", explanation: "This product has no main image — Jumia won't accept a listing without one." };
   }
@@ -150,16 +168,24 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
     return { kind: "seller", explanation: "Jumia rejected the images — they may need re-uploading." };
   }
 
-  // ── Category / attribute-set lookup failures ───────────────────────────
+  // ── A category code that no longer resolves ────────────────────────────
   //
-  // Distinct from an attribute VALUE being wrong (that's refillable,
-  // below) — here the category itself can no longer be resolved, so
-  // refilling attributes for it would fail the exact same way. Needs a
-  // different category picked, or the catalogue re-synced.
-  if (/category not found by code/.test(msg)
-    || /category attribute set not found/.test(msg)
-    || /(attribute list than category|use the same category as the product set)/.test(msg)) {
-    return { kind: "seller", explanation: "Jumia doesn't recognise this product's category anymore — open the editor and pick the category again." };
+  // Different from "too broad" above: the stored code itself is stale
+  // (deleted, renumbered). A rerun never reuses the old code — it always
+  // re-derives a category from scratch — so this self-heals the same way.
+  //
+  // The Product-Set / cross-variant case is kept separate and NOT
+  // rerunnable: "Selected primary category has a different attribute list
+  // than Category X — use the same category as the Product Set" is about
+  // this listing's SIBLING variants under one parentSku, which
+  // runAutoAnalyze has no visibility into. Rerunning this listing alone
+  // could pick a category that disagrees with its siblings even more,
+  // not less — that one needs a human coordinating across the set.
+  if (/category not found by code/.test(msg) || /category attribute set not found/.test(msg)) {
+    return { kind: "rerun", explanation: "Jumia doesn't recognise this product's category anymore — redrafting will pick a live one." };
+  }
+  if (/(attribute list than category|use the same category as the product set)/.test(msg)) {
+    return { kind: "seller", explanation: "This product's category doesn't match its sibling variants — they need to share one category, which needs you to coordinate across the set." };
   }
 
   // ── Locked after approval ───────────────────────────────────────────────
@@ -179,7 +205,7 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
   //
   // Jumia's own wording ("Please contact the support team", "missing
   // validations associated") says this isn't about the payload — it's
-  // their attribute-set metadata. Resubmitting, refilling, or editing
+  // their attribute-set metadata. Resubmitting, rerunning, or editing
   // anything on our side fails identically every time.
   if (/missing validations associated/.test(msg)) {
     return { kind: "seller", explanation: "Jumia's own setup for this attribute looks broken on their side — this needs Jumia seller support, not an edit here." };
@@ -198,13 +224,17 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
   //
   // "Required field [Product.Brand.Code] is missing or null." Checked
   // BEFORE the attribute pattern below — it also contains "required" and
-  // "missing", and would otherwise be misread as a refillable
-  // dynamic_attributes problem. Product.Brand.Code is a top-level field;
-  // refilling the category schema never touches it.
+  // "missing", and would otherwise be misread as a rerunnable
+  // dynamic_attributes problem. Brand IS something a rerun sets (it's
+  // part of every draft pass), so a path naming it gets a rerun; any
+  // other top-level field a rerun doesn't touch stays seller-owned.
   const namedField = msg.match(/required field \[([\w.]+)\] is missing or null/);
   if (namedField) {
+    if (/brand/i.test(namedField[1])) {
+      return { kind: "rerun", explanation: "The brand wasn't resolved to something Jumia recognises — redrafting will try again." };
+    }
     const field = namedField[1].split(".").pop() ?? namedField[1];
-    return { kind: "seller", explanation: `Jumia needs ${field.toLowerCase()} set on this product — that's not something refilling the category fields can supply.` };
+    return { kind: "seller", explanation: `Jumia needs ${field.toLowerCase()} set on this product — that's not something a redraft can supply.` };
   }
 
   // ── Attribute problems — the common, genuinely fixable case ────────────
@@ -225,7 +255,7 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
     (/missing/.test(msg) && /(field|attribute|column)/.test(msg)) ||
     /required/.test(msg)
   ) {
-    return { kind: "refill", explanation: "Some category fields Jumia wants are missing or invalid." };
+    return { kind: "rerun", explanation: "Some category fields Jumia wants are missing or invalid." };
   }
 
   return { kind: "unknown", explanation: "I'm not certain what Jumia objected to." };
@@ -234,7 +264,7 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
 /** True when the system should attempt an automatic repair rather than
  *  handing straight back to the seller. */
 export function isAutoFixable(kind: RemedyKind): boolean {
-  return kind === "refill" || kind === "repush" || kind === "unknown";
+  return kind === "rerun" || kind === "repush" || kind === "unknown";
 }
 
 /**
@@ -261,4 +291,33 @@ export function extractRejectedAttributeName(raw: string | null | undefined): st
   // An unfilled template placeholder ("[{0}]") is not a real name.
   if (name && /^\{.*\}$/.test(name)) return null;
   return name;
+}
+
+/**
+ * Reduce a stored jumia_error value to plain, human-readable text.
+ *
+ * The column holds a JSON-stringified Jumia error object most of the
+ * time, but plain text is also possible depending on which push path
+ * wrote it (see lib/jumia/push-listing.ts). classifyJumiaRejection's own
+ * regexes tolerate either shape well enough (the JSON's punctuation
+ * rarely breaks a keyword match), but anything that hands this text
+ * onward — a rerun's AI prompt, a seller-facing message — needs the
+ * clean form, not a blob of braces and quotes.
+ */
+export function extractRejectionText(raw: string | null | undefined): string {
+  if (!raw) return "";
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === "string") return parsed;
+    const candidates = [
+      parsed?.message,
+      parsed?.errorMessage,
+      parsed?.error,
+      Array.isArray(parsed?.errors) ? parsed.errors[0] : undefined,
+    ];
+    const first = candidates.find((c) => typeof c === "string");
+    return (first as string | undefined) ?? JSON.stringify(parsed);
+  } catch {
+    return raw;
+  }
 }

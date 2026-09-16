@@ -53,6 +53,37 @@ jest.mock("@/lib/whatsapp/analysis-queue", () => ({
   isBatchSettled: async () => false,
 }));
 
+// Fix & resubmit's rerun path — controllable per test, never the real
+// (Gemini-calling) pipeline.
+type AutoAnalyzeMockResult = { ok: true } | { ok: false; message: string };
+let autoAnalyzeResult: AutoAnalyzeMockResult = { ok: true };
+const autoAnalyzeCalls: { listingId: string; userPromptOverride: string | null }[] = [];
+jest.mock("@/lib/actions/auto-analyze", () => ({
+  runAutoAnalyze: async (_userId: string, listingId: string, userPromptOverride: string | null) => {
+    autoAnalyzeCalls.push({ listingId, userPromptOverride });
+    return autoAnalyzeResult.ok
+      ? {
+          ok: true, title: "Rerun Title", brand: "Rerun Brand",
+          category: { code: 1, name: "x", path: "x", confidence: 0.9 },
+          alternates: [], needsUserConfirmation: false, timings: {},
+          description: {}, candidates_considered: 0, attributes_in_schema: 0,
+          attributes_filled: 0, variations_detected: 0,
+        }
+        : { ok: false, code: "describe_failed", message: autoAnalyzeResult.message };
+  },
+}));
+
+// pushListingToJumia is mocked; missingFieldLabels (used by intake.ts's own
+// missingFieldsFor gate) stays real — it's pure, and Fix & resubmit's
+// "seller still needs to supply X" test depends on its actual logic.
+type PushMockResult = { ok: true; adjustments?: string[] } | { ok: false; message: string };
+let pushResult: PushMockResult = { ok: true };
+let pushCallCount = 0;
+jest.mock("@/lib/jumia/push-listing", () => ({
+  ...jest.requireActual("@/lib/jumia/push-listing"),
+  pushListingToJumia: async () => { pushCallCount++; return pushResult; },
+}));
+
 import { handleLinkedMessage } from "@/lib/whatsapp/intake";
 
 const USER  = "user_1";
@@ -652,5 +683,114 @@ describe("quiet batch mode", () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+describe("Fix & resubmit", () => {
+  const REJECTED_ID = "11111111-1111-1111-1111-111111111111";
+
+  function seedRejectedListing(overrides: Record<string, unknown> = {}) {
+    db.tables.listings = [{
+      id: REJECTED_ID,
+      user_id: USER,
+      whatsapp_seq: 1,
+      title: "Electric Kettle - Stainless Steel, 1.8L Capacity",
+      description: "A long enough description to clear the fifty-character minimum check easily.",
+      category_code: "1234",
+      category_path: "Home > Kitchen > Kettles",
+      brand: "Generic",
+      images: ["https://cdn.test/a.jpg"],
+      selling_price: 150,
+      status: "failed",
+      user_prompt: "It's stainless steel, 1.8 litres.",
+      jumia_error: "You can't list products in this category. Please choose a different (more specific) category and try again.",
+      ...overrides,
+    }];
+  }
+
+  beforeEach(() => {
+    autoAnalyzeCalls.length = 0;
+    autoAnalyzeResult = { ok: true };
+    pushResult = { ok: true };
+    pushCallCount = 0;
+  });
+
+  // The exact live case: category rejected as too broad. This used to be
+  // "seller"-only because refillAttributesForCategory could never change
+  // the category — a full rerun can.
+  it("reruns the full draft for a category rejection instead of just handing it back", async () => {
+    seedRejectedListing();
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
+
+    expect(autoAnalyzeCalls).toHaveLength(1);
+    expect(autoAnalyzeCalls[0].listingId).toBe(REJECTED_ID);
+    // Told which category NOT to repeat...
+    expect(autoAnalyzeCalls[0].userPromptOverride).toContain("Home > Kitchen > Kettles");
+    // ...and the seller's own original note survives into the rerun.
+    expect(autoAnalyzeCalls[0].userPromptOverride).toContain("1.8 litres");
+    expect(sent.some((m) => m.body.includes("Fixing and resubmitting"))).toBe(true);
+    expect(sent.some((m) => m.body.includes("resubmitted"))).toBe(true);
+    expect(pushCallCount).toBe(1);
+  });
+
+  // Never fixed by a redraft — no amount of rerunning invents a price.
+  it("still refuses to auto-fix a price/stock rejection", async () => {
+    seedRejectedListing({ jumia_error: "The Global Price is mandatory in order to create a Product." });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
+
+    expect(autoAnalyzeCalls).toHaveLength(0);
+    expect(pushCallCount).toBe(0);
+    expect(sent.some((m) => m.body.includes("needs you"))).toBe(true);
+  });
+
+  // Never fixed by a redraft — a rerun can't re-upload a file.
+  it("still refuses to auto-fix an image-format rejection", async () => {
+    seedRejectedListing({ jumia_error: "Product Image [a.gif] extension [gif] is not allowed." });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
+
+    expect(autoAnalyzeCalls).toHaveLength(0);
+    expect(pushCallCount).toBe(0);
+  });
+
+  it("reports a failed rerun rather than pushing a stale draft", async () => {
+    seedRejectedListing();
+    autoAnalyzeResult = { ok: false, message: "no confident category" };
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
+
+    expect(sent.some((m) => m.body.includes("couldn't redraft it"))).toBe(true);
+    expect(pushCallCount).toBe(0);
+  });
+
+  // The rerun succeeded but Jumia still isn't happy — say so plainly
+  // rather than looping the same automatic fix forever.
+  it("reports a second rejection instead of retrying silently", async () => {
+    seedRejectedListing();
+    pushResult = { ok: false, message: "You can't list products in this category. Please choose a different (more specific) category and try again." };
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
+
+    expect(autoAnalyzeCalls).toHaveLength(1);
+    expect(sent.some((m) => m.body.includes("still isn't happy"))).toBe(true);
+  });
+
+  // A price the seller still hasn't supplied blocks the whole flow before
+  // any AI call, regardless of what Jumia's own error text says.
+  it("checks for missing seller-owned fields before spending an AI call", async () => {
+    seedRejectedListing({ selling_price: null });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
+
+    expect(autoAnalyzeCalls).toHaveLength(0);
+    expect(sent.some((m) => m.body.includes("still needs"))).toBe(true);
   });
 });

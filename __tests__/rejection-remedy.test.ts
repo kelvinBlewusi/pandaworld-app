@@ -1,21 +1,26 @@
-import { classifyJumiaRejection, isAutoFixable, extractRejectedAttributeName } from "@/lib/jumia/rejection-remedy";
+import {
+  classifyJumiaRejection,
+  isAutoFixable,
+  extractRejectedAttributeName,
+  extractRejectionText,
+} from "@/lib/jumia/rejection-remedy";
 
 // Real rejection strings from this account's failed pushes.
 describe("classifyJumiaRejection", () => {
-  it("treats a missing column as fixable by refilling the category schema", () => {
+  it("treats a missing column as fixable by a rerun of the draft", () => {
     // The exact message from a live rejection.
     const r = classifyJumiaRejection("The column [product_weight] is missing from the file.");
-    expect(r.kind).toBe("refill");
+    expect(r.kind).toBe("rerun");
     expect(isAutoFixable(r.kind)).toBe(true);
   });
 
   it("treats a not-visible attribute as fixable", () => {
     const r = classifyJumiaRejection("Attribute [color_family] is not visible for category [Laptops].");
-    expect(r.kind).toBe("refill");
+    expect(r.kind).toBe("rerun");
   });
 
   it("treats an invalid enum value as fixable", () => {
-    expect(classifyJumiaRejection("Attribute [material_family] with invalid value [Fabric].").kind).toBe("refill");
+    expect(classifyJumiaRejection("Attribute [material_family] with invalid value [Fabric].").kind).toBe("rerun");
   });
 
   // The important half: never claim to fix what only the seller can.
@@ -26,16 +31,21 @@ describe("classifyJumiaRejection", () => {
     expect(r.explanation).toMatch(/price/i);
   });
 
-  it("never auto-fixes a too-short description", () => {
+  // A rerun rewrites the description from scratch, so an over-short one
+  // IS fixable now — this is the opposite of the old assumption
+  // (attribute-refill-only), which could never touch it.
+  it("reruns a too-short description rather than handing it to the seller", () => {
     const r = classifyJumiaRejection("Description must be at least 50 characters.");
-    expect(r.kind).toBe("seller");
-    expect(isAutoFixable(r.kind)).toBe(false);
+    expect(r.kind).toBe("rerun");
+    expect(isAutoFixable(r.kind)).toBe(true);
   });
 
-  it("never auto-fixes an unlistable category", () => {
+  // Same reasoning: a rerun picks a fresh category, so a too-broad one is
+  // rerunnable now, not seller-only.
+  it("reruns an unlistable category rather than handing it to the seller", () => {
     const r = classifyJumiaRejection("You can't list products in this category. Please choose a different (more specific) category and try again.");
-    expect(r.kind).toBe("seller");
-    expect(isAutoFixable(r.kind)).toBe(false);
+    expect(r.kind).toBe("rerun");
+    expect(isAutoFixable(r.kind)).toBe(true);
   });
 
   it("never auto-fixes an image problem", () => {
@@ -86,10 +96,12 @@ describe("classifyJumiaRejection", () => {
 });
 
 // Every message below is quoted verbatim from Jumia's own published error
-// catalogue (2026-09-16). refillAttributesForCategory only ever rewrites
-// dynamic_attributes — never title, description, brand, price, stock,
-// images, or category — so anything about those fields must never come
-// back "refill", no matter how much it resembles one.
+// catalogue (2026-09-16). runAutoAnalyze — the rerun a "rerun" kind
+// triggers — regenerates title, description, category AND
+// dynamic_attributes from the images, so it can fix any of those; it
+// never touches price, stock, a sale-price date, a barcode, or a
+// re-uploaded image file, so a message about THOSE must never come back
+// "rerun" no matter how much it resembles one.
 describe("classifyJumiaRejection — the full Jumia error catalogue", () => {
   it("catches a duplicate VARIATION before the generic duplicate/repush rule", () => {
     // Contains the word "duplicate", which the SKU rule below would
@@ -100,7 +112,7 @@ describe("classifyJumiaRejection — the full Jumia error catalogue", () => {
     expect(isAutoFixable(r.kind)).toBe(false);
   });
 
-  it("never lets a title/brand-name problem look refillable", () => {
+  it("reruns a title/brand-name problem instead of stopping at the seller", () => {
     for (const msg of [
       "Product name or translations [Red Nike Shoe] contains Brand name [Nike].",
       "Product name or translations [John's Shop Special] contains Seller name [John] or Company name [John Ltd].",
@@ -108,20 +120,21 @@ describe("classifyJumiaRejection — the full Jumia error catalogue", () => {
       "Product Name [Ch3ap Phone] has prohibited characters [3] not allowed for language [en].",
     ]) {
       const r = classifyJumiaRejection(msg);
-      expect(r.kind).toBe("seller");
+      expect(r.kind).toBe("rerun");
     }
   });
 
-  it("never lets a trademark problem look refillable", () => {
+  it("reruns a trademark/brand mismatch", () => {
     const r = classifyJumiaRejection("You have referred to a trademark that is protected, but you have not accurately specified the corresponding brand of the product.");
-    expect(r.kind).toBe("seller");
+    expect(r.kind).toBe("rerun");
   });
 
   it("catches 'mandatory' price/stock wording the original 'required|missing|invalid|must' set missed", () => {
     // Jumia's own word for these two doesn't overlap with the original
     // seller-check vocabulary at all — both fell through to "unknown"
-    // and wasted an automatic refill+resubmit that could never have
-    // supplied a price or a stock count.
+    // and wasted an automatic rerun+resubmit that could never have
+    // supplied a price or a stock count — runAutoAnalyze doesn't touch
+    // either field.
     expect(classifyJumiaRejection("The Global Price is mandatory in order to create a Product.").kind).toBe("seller");
     expect(classifyJumiaRejection("The initial Stock is mandatory in order to create a Product.").kind).toBe("seller");
   });
@@ -162,15 +175,26 @@ describe("classifyJumiaRejection — the full Jumia error catalogue", () => {
     expect(classifyJumiaRejection("The [MainImage] is mandatory and cannot be empty.").kind).toBe("seller");
   });
 
-  it("sends a stale category back to the seller instead of refilling a category that no longer resolves", () => {
+  // A rerun never reuses the old category code — it always re-derives one
+  // from scratch — so a stale code self-heals the same way a too-broad
+  // category does.
+  it("reruns a category code that no longer resolves", () => {
     for (const msg of [
       "Category not found by Code [12345]",
       "Category Attribute Set not found using Category code 12345 and name Laptops",
-      "Selected primary category [Laptops] has a different attribute list than Category [Phones]. Please use the same category as the Product Set.",
     ]) {
       const r = classifyJumiaRejection(msg);
-      expect(r.kind).toBe("seller");
+      expect(r.kind).toBe("rerun");
     }
+  });
+
+  // Different from the two above: this is about SIBLING variants under one
+  // parentSku disagreeing, which a single-listing rerun has no visibility
+  // into and could make worse, not better.
+  it("sends a cross-variant category mismatch to the seller, not a rerun", () => {
+    const r = classifyJumiaRejection("Selected primary category [Laptops] has a different attribute list than Category [Phones]. Please use the same category as the Product Set.");
+    expect(r.kind).toBe("seller");
+    expect(isAutoFixable(r.kind)).toBe(false);
   });
 
   it("never re-pushes a field Jumia has locked after approval", () => {
@@ -195,7 +219,7 @@ describe("classifyJumiaRejection — the full Jumia error catalogue", () => {
     expect(r.explanation).toMatch(/jumia/i);
   });
 
-  it("still treats genuine attribute-value problems as refillable, including the unfilled {n} template shape", () => {
+  it("still treats genuine attribute-value problems as rerunnable, including the unfilled {n} template shape", () => {
     for (const msg of [
       "Attribute [{0}] not found on payload",
       "The attribute [{0}] with the value [{1}] is a not valid number.",
@@ -207,19 +231,24 @@ describe("classifyJumiaRejection — the full Jumia error catalogue", () => {
       "The attribute [{0}] with value [{1}] should be in accordance to the format [{2}]",
       "Attribute [{0}] with value [{1}] should be a boolean.",
       // A restricted word INSIDE an attribute value (as opposed to the
-      // product title) is genuinely refillable — Gemini regenerating that
+      // product title) is genuinely rerunnable — Gemini regenerating that
       // one field's value has a real chance of avoiding the flagged word.
       "The Attribute [material] contains the restricted words : [banned_word];",
     ]) {
       const r = classifyJumiaRejection(msg);
-      expect(r.kind).toBe("refill");
+      expect(r.kind).toBe("rerun");
     }
   });
 
-  it("names the field in a generic 'required field missing' rejection without claiming refill can supply it", () => {
+  it("reruns a generic 'required field missing' rejection when it names the brand", () => {
     const r = classifyJumiaRejection("Required field [Product.Brand.Code] is missing or null.");
+    expect(r.kind).toBe("rerun");
+  });
+
+  it("still hands an unrecognised named field to the seller", () => {
+    const r = classifyJumiaRejection("Required field [Product.WarrantyAddress] is missing or null.");
     expect(r.kind).toBe("seller");
-    expect(r.explanation.toLowerCase()).toContain("code");
+    expect(r.explanation.toLowerCase()).toContain("warrantyaddress");
   });
 
   it("treats a missing variation on the product itself as seller-owned", () => {
@@ -227,7 +256,7 @@ describe("classifyJumiaRejection — the full Jumia error catalogue", () => {
     // Still falls through every specific rule to a safe default; assert
     // it is at least never wrongly promised a fix that can't apply here.
     const r = classifyJumiaRejection("The product [abc] does not have defined a valid variation.");
-    expect(isAutoFixable(r.kind) ? r.kind !== "refill" : true).toBe(true);
+    expect(isAutoFixable(r.kind) ? r.kind !== "rerun" : true).toBe(true);
   });
 });
 
@@ -252,5 +281,38 @@ describe("extractRejectedAttributeName", () => {
     expect(extractRejectedAttributeName("The Global Price should not be zero.")).toBeNull();
     expect(extractRejectedAttributeName(null)).toBeNull();
     expect(extractRejectedAttributeName(undefined)).toBeNull();
+  });
+});
+
+describe("extractRejectionText", () => {
+  it("returns plain text unchanged", () => {
+    expect(extractRejectionText("You can't list products in this category.")).toBe("You can't list products in this category.");
+  });
+
+  it("unwraps a JSON object down to its message field", () => {
+    expect(extractRejectionText(JSON.stringify({ message: "Description too short." }))).toBe("Description too short.");
+  });
+
+  it("falls back through errorMessage, then error, then the first of errors[]", () => {
+    expect(extractRejectionText(JSON.stringify({ errorMessage: "A" }))).toBe("A");
+    expect(extractRejectionText(JSON.stringify({ error: "B" }))).toBe("B");
+    expect(extractRejectionText(JSON.stringify({ errors: ["C", "D"] }))).toBe("C");
+  });
+
+  it("unwraps a JSON-encoded plain string", () => {
+    expect(extractRejectionText(JSON.stringify("Just a string"))).toBe("Just a string");
+  });
+
+  it("falls back to the raw text when JSON parsing fails", () => {
+    expect(extractRejectionText("not json at all")).toBe("not json at all");
+  });
+
+  it("stringifies the object when none of the known keys are present", () => {
+    expect(extractRejectionText(JSON.stringify({ code: 42 }))).toBe(JSON.stringify({ code: 42 }));
+  });
+
+  it("returns empty string for null/undefined", () => {
+    expect(extractRejectionText(null)).toBe("");
+    expect(extractRejectionText(undefined)).toBe("");
   });
 });
