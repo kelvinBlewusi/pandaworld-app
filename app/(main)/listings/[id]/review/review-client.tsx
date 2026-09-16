@@ -50,6 +50,7 @@ import { getQuotaSummaryForCurrentUser } from "@/lib/actions/subscription";
 import { MultiSelectDropdown } from "@/components/ui/multi-select";
 import { SchemaForm } from "@/components/jumia/SchemaForm";
 import { STATIC_FIELDS, universalInfoFields } from "@/lib/jumia/universal-fields";
+import { extractRejectedAttributeName } from "@/lib/jumia/rejection-remedy";
 import {
   columnFor,
   fieldChangeToUpdate,
@@ -693,6 +694,7 @@ function AiAssistCard({
   analyzePrompt,
   onAnalyzePromptChange,
   onAnalyzeStart,
+  onSeeRejectedField,
 }: {
   listing:          ListingRow;
   router:           ReturnType<typeof useRouter>;
@@ -705,6 +707,9 @@ function AiAssistCard({
   analyzePrompt:    string;
   onAnalyzePromptChange: (v: string) => void;
   onAnalyzeStart:   () => void;
+  /** Scrolls to and briefly highlights the named schema field. Undefined
+   *  when the rejection didn't name a specific attribute. */
+  onSeeRejectedField?: (name: string) => void;
 }) {
   const [working,    setWorking]    = useState(false);
   const [fixError,   setFixError]   = useState<string | null>(null);
@@ -807,6 +812,12 @@ function AiAssistCard({
       }
     })();
 
+    // The specific schema attribute Jumia named, if it named one — never
+    // set for a title/brand/price/category-level rejection, since those
+    // fields aren't in the schema form (see extractRejectedAttributeName's
+    // own doc comment for why that's deliberate, not a gap).
+    const rejectedFieldName = extractRejectedAttributeName(rejectionText);
+
     return (
       <div className="rounded-md border border-red-200 bg-red-50 p-4 space-y-3">
         <div className="flex items-start gap-3">
@@ -834,6 +845,15 @@ function AiAssistCard({
               ? <><Loader2 className="h-3 w-3 animate-spin" /> Resolving with AI…</>
               : <><Sparkles className="h-3 w-3" /> Resolve with AI</>}
           </button>
+          {rejectedFieldName && onSeeRejectedField && (
+            <button
+              type="button"
+              onClick={() => onSeeRejectedField(rejectedFieldName)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 shadow-sm transition-colors hover:bg-red-50"
+            >
+              See Rejected Field
+            </button>
+          )}
           <span className="text-[11px] text-red-700/80">
             AI reads the rejection, updates the fields, and resets the listing to draft.
           </span>
@@ -1788,6 +1808,33 @@ export function ReviewClient({
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
+  /**
+   * "See Rejected Field" — scrolls straight to the specific attribute
+   * Jumia named in the rejection, instead of leaving the seller to scan a
+   * form that can run to dozens of fields.
+   *
+   * Looks the element up by id rather than through a ref map: the field
+   * lives inside SchemaForm, which owns its own field list and renders
+   * whichever attributes the category schema returns — there's no ref
+   * this component could hold in advance for a name it only learns at
+   * render time from listing.jumia_error.
+   */
+  const jumpToField = (name: string) => {
+    const el = document.getElementById(`jumia-field-${name}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("ring-2", "ring-red-400", "ring-offset-2", "rounded-md");
+    setTimeout(() => {
+      el.classList.remove("ring-2", "ring-red-400", "ring-offset-2", "rounded-md");
+    }, 2500);
+  };
+
+  // The specific field a live rejection named, if any — passed to the
+  // Product Specification SchemaForm's forceVisibleNames so "See Rejected
+  // Field" can never scroll to a field sitting collapsed behind "N fields
+  // look good".
+  const rejectedAttrName = extractRejectedAttributeName(listing.jumia_error as string | null);
+
   // ── Save handler ──────────────────────────────────────────────────────────
   // Field-level validation matching Jumia API constraints — every check here
   // mirrors a known Jumia rejection reason. We surface them BEFORE submitting
@@ -2170,6 +2217,7 @@ export function ReviewClient({
               analyzePrompt={analyzePrompt}
               onAnalyzePromptChange={setAnalyzePrompt}
               onAnalyzeStart={handleAutoAnalyze}
+              onSeeRejectedField={jumpToField}
             />
             {publishedRef && (
               <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 space-y-1">
@@ -2490,6 +2538,7 @@ export function ReviewClient({
                 onFillWithAI={handleFillWithAI}
                 fillWithAILoading={refillingAttributes}
                 collapseHighConfidence
+                forceVisibleNames={rejectedAttrName ? [rejectedAttrName] : undefined}
                 renderConfidenceDot={({ source, confidence }) =>
                   source ? (
                     <ConfidenceDot

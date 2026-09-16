@@ -240,6 +240,26 @@ describe("tapping done while the album is still arriving", () => {
     expect(session().listing_id).toBeNull();
   });
 
+  // The full "send photos, tell me the price..." instructions already went
+  // out once at the very start of the batch (handleAwaitingCount) — a
+  // 10-product batch used to repeat that whole paragraph nine more times,
+  // one per product transition, with nothing new in it. Audited from a
+  // real chat export on 2026-09-16.
+  it("gives a short transition after the first product, not the full instructions again", async () => {
+    seedSession({ batch_size: 3, batch_seq: 1 });
+    await handleLinkedMessage(USER, PHONE, "m1", photo("a"));
+    const listing = listings()[0];
+    listing.updated_at = new Date(Date.now() - 60_000).toISOString();
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "done" });
+
+    const transition = sent.find((m) => m.body.includes("Product 1 saved"))!;
+    expect(transition.body).toContain("Next: product 2 of 3");
+    // Not the old repeated paragraph.
+    expect(transition.body).not.toMatch(/tell me the price plus any other notes/);
+  });
+
   // The hold must not swallow what the seller typed alongside "done" —
   // they will not retype a price.
   it("still saves notes sent with the done that got held", async () => {

@@ -67,3 +67,18 @@ describe("mapAttrType — legacy numeric codes", () => {
     expect(mapAttrType(undefined, false)).toBe("string");
   });
 });
+
+describe("mapAttrType — NUMBER_FLOAT", () => {
+  // Missing from the original Postman spec entirely. Before this, a
+  // category attribute typed NUMBER_FLOAT matched none of the switch
+  // cases, fell through the legacy-numeric-code branch too (Number("NUMBER_FLOAT")
+  // is NaN), and landed on the string default — rendering as a free-text
+  // box with no numeric handling at all.
+  it("maps the string form to number", () => {
+    expect(mapAttrType("NUMBER_FLOAT", false)).toBe("number");
+  });
+
+  it("is case-insensitive, like every other string code", () => {
+    expect(mapAttrType("number_float", false)).toBe("number");
+  });
+});

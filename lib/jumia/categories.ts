@@ -462,20 +462,26 @@ export async function fetchCategoriesFromJumia(accessToken: string): Promise<Jum
  */
 /** The documented string codes. Anything else gets logged once per sync. */
 const KNOWN_RAW_ATTR_TYPES = new Set([
-  "BOOLEAN", "DATE", "DATE_TIME", "NUMBER",
+  "BOOLEAN", "DATE", "DATE_TIME", "NUMBER", "NUMBER_FLOAT",
   "MULTI_SELECTION", "SELECTION", "TEXT_AREA", "TEXT",
 ]);
 
 export function mapAttrType(rawType: unknown, hasOptions: boolean): JumiaAttrType {
   // The API may return either a numeric legacy code OR the official string code
   // documented in Postman: BOOLEAN, DATE, DATE_TIME, MULTI_SELECTION, NUMBER,
-  // SELECTION, TEXT, TEXT_AREA.
+  // NUMBER_FLOAT, SELECTION, TEXT, TEXT_AREA.
   const s = String(rawType ?? "").toUpperCase().trim();
   switch (s) {
     case "BOOLEAN":         return "boolean";
     case "DATE":            return "date";
     case "DATE_TIME":       return "datetime";
     case "NUMBER":          return "number";
+    // Missing from the original Postman spec entirely — a category
+    // attribute typed NUMBER_FLOAT (a fractional quantity, e.g. a ratio or
+    // a measurement with a decimal) matched none of the cases here and
+    // fell all the way through to the string-typed default at the bottom,
+    // rendering as a free-text box with no numeric handling at all.
+    case "NUMBER_FLOAT":    return "number";
     case "MULTI_SELECTION": return "multi";
     case "SELECTION":       return "enum";
     case "TEXT_AREA":       return "textarea";
@@ -495,20 +501,47 @@ export function mapAttrType(rawType: unknown, hasOptions: boolean): JumiaAttrTyp
  * Fetches attribute schema for one category using its attributeSet sid.
  * Correct endpoint: GET /catalog/attribute-sets/{sid}
  *
- * Per official Postman spec, each attribute object is:
+ * Per Jumia's own corrected doc (2026-09-16 changelog — the Postman spec
+ * this was originally written against was wrong on every point below),
+ * each attribute object is:
  *   {
  *     code:         <number>,
  *     name:         <string>,           // API field name e.g. "battery_capacity"
  *     description:  <string>,
- *     type:         <string>,           // BOOLEAN | DATE | DATE_TIME | MULTI_SELECTION |
- *                                       // NUMBER | SELECTION | TEXT | TEXT_AREA
+ *     type:         <number>,           // NOT a string — see mapAttrType's
+ *                                       // legacy-numeric-code branch, which
+ *                                       // already exists for this reason.
+ *                                       // The corresponding string names
+ *                                       // are BOOLEAN | DATE | DATE_TIME |
+ *                                       // MULTI_SELECTION | NUMBER |
+ *                                       // NUMBER_FLOAT | SELECTION | TEXT |
+ *                                       // TEXT_AREA — NUMBER_FLOAT was
+ *                                       // missing from the original spec.
  *     mandatory:    <boolean>,
  *     variation:    <boolean>,          // ← NOT "variant" or "is_variant"
  *     translatable: <boolean>,
  *     sid:          <uuid>,
  *     translations: [{ languageCode, translation, languageId }],
- *     options:      [{ id, name, position, isDefault }],   // ← option label is "name"
- *     validations:  [{ MinLength, MaxLength, DecimalPlaces, ... }]
+ *     options:      [{ id, name, position, isDefault, status, translations }],
+ *                                       // ← option label is "name". `id` is
+ *                                       // a NUMBER; the uuid is a separate
+ *                                       // `sid` field. We never send option
+ *                                       // ids back to Jumia (only the name
+ *                                       // string, as the attribute VALUE),
+ *                                       // so this has no effect on us.
+ *     validations:  { minLength, maxLength, dateFormat, selectedByDefault,
+ *                     decimalPlaces, percentage, notZeroOrNegative }
+ *                                       // ← a single OBJECT, not an array,
+ *                                       // and every key lowercase. This was
+ *                                       // documented as an array of
+ *                                       // capitalised keys (MinLength,
+ *                                       // MaxLength, ...) that the live API
+ *                                       // never actually returns — meaning
+ *                                       // min_length/max_length below have
+ *                                       // been silently null since this was
+ *                                       // written. Read defensively (both
+ *                                       // shapes) rather than assume the
+ *                                       // correction is itself exhaustive.
  *   }
  */
 export async function fetchAttributesFromJumia(
@@ -521,7 +554,23 @@ export async function fetchAttributesFromJumia(
   if (res.status === 401 || res.status === 403) {
     throw new Error(`JUMIA_AUTH_FAILED: GET /catalog/attribute-sets returned ${res.status}`);
   }
-  if (!res.ok) return [];
+  if (!res.ok) {
+    // THROW rather than return []. This used to return [] for every
+    // non-auth failure — a 500, a timeout Jumia turned into a 502, an sid
+    // that no longer resolves — which made the caller (fetchAndCacheCategoryTree)
+    // read a transient API failure as "this category genuinely has zero
+    // attributes" and silently DOWNGRADE it: null out attribute_set_sid,
+    // remove it from the picker, as if Jumia had told us the category
+    // can't be listed. It hadn't; the request had simply failed.
+    //
+    // Catalog is one of the three error shapes the corrected doc
+    // distinguishes: { code, message } — not the { data: [...] } wrapper
+    // this endpoint was originally documented with, and not the
+    // { timestamp, status, error, path } shape the Feeds/Shops services use.
+    const body = await res.json().catch(() => null) as { code?: string | number; message?: string } | null;
+    const detail = body?.message ? ` — ${body.message}${body.code != null ? ` (${body.code})` : ""}` : "";
+    throw new Error(`GET /catalog/attribute-sets/${attributeSetSid} returned ${res.status}${detail}`);
+  }
 
   const raw  = await res.json() as Record<string, unknown>;
   const list = (Array.isArray(raw) ? raw : (raw.attributes ?? [])) as Record<string, unknown>[];
@@ -571,11 +620,26 @@ export async function fetchAttributesFromJumia(
         enTranslation?.translation ?? attr.description ?? attr.name ?? ""
       ).trim();
 
-      // Validations array — typically has one entry. Extract length bounds.
-      const validations = (attr.validations ?? []) as Record<string, unknown>[];
-      const firstVal    = validations[0] ?? {};
-      const minLength = firstVal.MinLength != null ? Number(firstVal.MinLength) : null;
-      const maxLength = firstVal.MaxLength != null ? Number(firstVal.MaxLength) : null;
+      // `validations` is a single OBJECT, not an array — the original spec
+      // documented `[{ MinLength, MaxLength, ... }]` and neither part of
+      // that was right. Reading `validations[0]` off an object read
+      // `undefined[0]` → undefined every time, so minLength/maxLength have
+      // been silently null since this was written; preflightAttributes'
+      // max_length truncation (lib/jumia/preflight.ts) has never actually
+      // had a bound to enforce.
+      //
+      // Read both casings rather than trust the correction blindly — the
+      // capitalised keys are what a second source of drift would look
+      // like, and this costs nothing to guard against.
+      const validations = (Array.isArray(attr.validations)
+        ? ((attr.validations as Record<string, unknown>[])[0] ?? {})
+        : (attr.validations ?? {})) as Record<string, unknown>;
+      const readNum = (lower: string, upper: string): number | null => {
+        const v = validations[lower] ?? validations[upper];
+        return v != null ? Number(v) : null;
+      };
+      const minLength = readNum("minLength", "MinLength");
+      const maxLength = readNum("maxLength", "MaxLength");
 
       return {
         name:           String(attr.name ?? ""),
