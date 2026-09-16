@@ -68,6 +68,13 @@ export interface WhatsAppSession {
    * that was to leave WhatsApp for the review page.
    */
   awaitingPriceFor: string | null;
+  /**
+   * True when the seller picked "just send it all" at the how-many-
+   * products step instead of the default step-by-step flow. Nothing sent
+   * back for any product but the last — see handleQuietBatchText in
+   * lib/whatsapp/intake.ts.
+   */
+  batchQuiet: boolean;
 }
 
 function fromRow(row: Record<string, unknown>): WhatsAppSession {
@@ -84,6 +91,7 @@ function fromRow(row: Record<string, unknown>): WhatsAppSession {
     pendingNotes:  (row.pending_notes as string | null) ?? null,
     lastImageAt:   (row.last_image_at as string | null) ?? null,
     awaitingPriceFor: (row.awaiting_price_for as string | null) ?? null,
+    batchQuiet: (row.batch_quiet as boolean | null) ?? false,
   };
 }
 
@@ -149,6 +157,7 @@ export async function getOrCreateSession(
           last_image_at:   null,
           last_message_id: null,
           awaiting_price_for: null,
+          batch_quiet:     false,
           updated_at:      new Date().toISOString(),
         })
         .eq("phone_number", phoneNumber)
@@ -206,6 +215,7 @@ export async function updateSession(
     pendingNotes:  string | null;
     lastImageAt:   string | null;
     awaitingPriceFor: string | null;
+    batchQuiet: boolean;
   }>,
 ): Promise<void> {
   const db = createServerClient();
@@ -220,6 +230,7 @@ export async function updateSession(
   if (patch.pendingNotes  !== undefined) update.pending_notes   = patch.pendingNotes;
   if (patch.lastImageAt   !== undefined) update.last_image_at   = patch.lastImageAt;
   if (patch.awaitingPriceFor !== undefined) update.awaiting_price_for = patch.awaitingPriceFor;
+  if (patch.batchQuiet !== undefined) update.batch_quiet = patch.batchQuiet;
   await db.from("whatsapp_sessions").update(update).eq("phone_number", phoneNumber);
 }
 
@@ -272,5 +283,9 @@ export async function resetSession(phoneNumber: string): Promise<void> {
     // about — otherwise the first number of the NEXT batch (the product
     // count, "3") would be banked as the old batch's price.
     awaitingPriceFor: null,
+    // A mode choice belongs to the batch it was made for. Without this,
+    // restarting after a quiet batch would silently carry quiet mode into
+    // the next one before the seller ever gets asked again.
+    batchQuiet: false,
   });
 }

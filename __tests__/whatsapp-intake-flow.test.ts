@@ -501,3 +501,156 @@ describe("message volume on a large batch", () => {
     expect(sent.some((m) => m.body.includes("retry 3"))).toBe(true);
   });
 });
+
+describe("quiet batch mode", () => {
+  function seedCountStep() {
+    seedSession({ state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null, listing_id: null });
+    db.tables.jumia_connections = [{ user_id: USER, status: "active", access_token: "real-token" }];
+  }
+
+  it("offers a mode choice only when the batch has more than one product", async () => {
+    seedCountStep();
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "3" });
+
+    const choice = sent.find((m) => m.body.includes("How do you want to send them"));
+    expect(choice).toBeDefined();
+    expect(choice!.kind).toBe("buttons");
+    expect(session().batch_quiet ?? false).toBe(false); // unset until they actually pick one
+  });
+
+  it("skips the mode choice for a single product — there's no 'in between' to skip", async () => {
+    seedCountStep();
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "1" });
+
+    expect(sent.some((m) => m.body.includes("How do you want to send them"))).toBe(false);
+    expect(sent.some((m) => m.body.includes("Let's go"))).toBe(true);
+  });
+
+  it("sets batchQuiet and sends the rule message when quiet mode is picked", async () => {
+    seedSession({ batch_size: 3, batch_seq: 1 });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "batch_mode:quiet" });
+
+    expect(session().batch_quiet).toBe(true);
+    const rule = sent.find((m) => m.body.includes("Rule for this batch"));
+    expect(rule).toBeDefined();
+    expect(rule!.body).toContain("*1*");
+  });
+
+  it("picking 'guide me each step' leaves the existing interactive flow untouched", async () => {
+    seedSession({ batch_size: 3, batch_seq: 1 });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "batch_mode:interactive" });
+
+    expect(session().batch_quiet).toBe(false);
+    expect(sent.some((m) => m.body.includes("Let's go — product 1 of 3"))).toBe(true);
+  });
+
+  it("stays fully silent between products, closed by each product's own number", async () => {
+    seedSession({ batch_size: 3, batch_seq: 1, batch_quiet: true });
+    sent.length = 0;
+
+    // Product 1: photo, then a note combined with the closing number —
+    // same "Price 40\nDone" shape the interactive flow supports, just
+    // with the number instead of the word.
+    await handleLinkedMessage(USER, PHONE, "m1", photo("p1a"));
+    // Age BEFORE the closing marker — the settle check runs during the
+    // marker's own call, not after it returns.
+    listings()[0].updated_at = new Date(Date.now() - 60_000).toISOString();
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "Price 100\n1" });
+    expect(sent).toHaveLength(0);
+    expect(session().batch_seq).toBe(2);
+    expect(session().listing_id).toBeNull();
+    expect(String(listings()[0].user_prompt)).toContain("Price 100");
+
+    // Product 2.
+    await handleLinkedMessage(USER, PHONE, "m3", photo("p2a"));
+    listings()[1].updated_at = new Date(Date.now() - 60_000).toISOString();
+    await handleLinkedMessage(USER, PHONE, "m4", { text: "2" });
+    expect(sent).toHaveLength(0);
+    expect(session().batch_seq).toBe(3);
+
+    // Product 3 — the LAST one.
+    await handleLinkedMessage(USER, PHONE, "m5", photo("p3a"));
+    listings()[2].updated_at = new Date(Date.now() - 60_000).toISOString();
+    await handleLinkedMessage(USER, PHONE, "m6", { text: "3" });
+
+    // Quiet mode's one reply — the SAME "got everything, drafting now"
+    // message the interactive flow already sends once all N products'
+    // photos are in, via the shared startBatchAnalysis. Nothing product-
+    // specific went out at any of the three closes above.
+    expect(sent.some((m) => m.body.includes("Got everything for all 3 products"))).toBe(true);
+    expect(session().state).toBe("analyzing");
+    expect(enqueued.map((e) => e.seq).sort()).toEqual([1, 2, 3]);
+  });
+
+  it("treats a number that doesn't match the current product as a note, not an advance", async () => {
+    seedSession({ batch_size: 3, batch_seq: 1, batch_quiet: true });
+    await handleLinkedMessage(USER, PHONE, "m1", photo("p1a"));
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "5" });
+
+    expect(sent).toHaveLength(0);
+    expect(session().batch_seq).toBe(1);
+    expect(session().listing_id).not.toBeNull();
+    expect(String(listings()[0].user_prompt)).toContain("5");
+  });
+
+  it("also closes on 'done', not just the number", async () => {
+    seedSession({ batch_size: 2, batch_seq: 1, batch_quiet: true });
+    await handleLinkedMessage(USER, PHONE, "m1", photo("p1a"));
+    listings()[0].updated_at = new Date(Date.now() - 60_000).toISOString();
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "done" });
+
+    expect(sent).toHaveLength(0);
+    expect(session().batch_seq).toBe(2);
+  });
+
+  it("never advances a product with no photo yet — the marker just waits", async () => {
+    seedSession({ batch_size: 2, batch_seq: 1, batch_quiet: true });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "1" });
+
+    expect(sent).toHaveLength(0);
+    expect(session().batch_seq).toBe(1);
+    expect(listings()).toHaveLength(0);
+  });
+
+  it("holds a close marker out until a fresh photo settles, exactly like the interactive flow's guard", async () => {
+    jest.useFakeTimers({ doNotFake: ["nextTick"] });
+    try {
+      seedSession({ batch_size: 1, batch_seq: 1, batch_quiet: true });
+      await handleLinkedMessage(USER, PHONE, "m1", photo("p1a"));
+      // Photo just landed — updated_at is "now", well inside the settle
+      // window. Fire the close marker without aging it first.
+      sent.length = 0;
+
+      const closing = handleLinkedMessage(USER, PHONE, "m2", { text: "1" });
+      let settled = false;
+      closing.then(() => { settled = true; });
+
+      await Promise.resolve();
+      expect(settled).toBe(false); // still waiting out the window
+
+      jest.advanceTimersByTime(6_000);
+      await Promise.resolve();
+      await Promise.resolve();
+      await closing;
+
+      expect(settled).toBe(true);
+      expect(sent.some((m) => m.body.includes("Got everything"))).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
