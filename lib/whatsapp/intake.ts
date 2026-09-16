@@ -902,9 +902,27 @@ async function handleAwaitingCount(
     batchSeq:  1,
     listingId: null,
   });
-  await replyText(
+
+  // A single product has no "in between" for quiet mode to skip — the
+  // choice would be a tap that changes nothing, so it's only offered for
+  // an actual batch.
+  if (count === 1) {
+    await replyText(
+      phoneNumber,
+      `Let's go — send its photos, and tell me the price plus any other notes (variations, sizes, sale price etc.), then reply *done*.`,
+    );
+    return;
+  }
+
+  await replyButtons(
     phoneNumber,
-    `Let's go — product 1 of ${count}.\n\nSend its photos, and tell me the price plus any other notes (variations, sizes, sale price etc.), then reply *done*.`,
+    `Got it — ${count} products. How do you want to send them?\n\n` +
+    `*Just send everything*: send all ${count} products' photos back to back — price and notes as a caption on one of each product's photos — closing each one by replying with just its number (1, 2, 3…). I'll stay quiet until the last one, then start drafting everything at once.\n\n` +
+    `*Guide me each step*: I'll confirm as you go, the way I do today.`,
+    [
+      { id: "batch_mode:quiet",       title: "Just send everything" },
+      { id: "batch_mode:interactive", title: "Guide me each step" },
+    ],
   );
 }
 
@@ -1142,6 +1160,222 @@ async function countListingImages(listingId: string): Promise<number> {
   return ((data?.images ?? []) as string[]).filter(Boolean).length;
 }
 
+/**
+ * Claims a batch slot on first photo and atomically appends one image to
+ * it — the one piece of photo-handling both the interactive and quiet
+ * batch flows share verbatim. Extracted so quiet mode doesn't duplicate
+ * (and risk drifting from) the album-race protections already proven out
+ * in the interactive flow.
+ *
+ * The MAX_LISTING_IMAGES-reached notice is the only reply here that quiet
+ * mode suppresses (`quiet: true`) — it's routine overflow guidance, not
+ * something wrong. A claim failure or a photo that won't ingest is a real
+ * problem happening right now, in both modes: silently losing a photo is
+ * worse than one message breaking the quiet rule to say so.
+ */
+async function appendPhotoToListing(
+  userId:      string,
+  phoneNumber: string,
+  session:     WhatsAppSession,
+  seq:         number,
+  listingId:   string | null,
+  imageMediaId: string,
+  quiet:       boolean,
+): Promise<{ ok: true; listingId: string } | { ok: false }> {
+  if (!listingId) {
+    // CLAIM the (batch, position) slot rather than just creating a row.
+    //
+    // WhatsApp delivers an album as several webhook messages within the
+    // same second. Each ran this block, each saw session.listingId still
+    // null, and each created a listing — so photos of ONE product became
+    // one listing per photo. Confirmed live: two "4 Burner Gas ..."
+    // listings 115ms apart, one holding the seller's note and the other
+    // an orphan with photos and nothing else.
+    //
+    // Reading first narrows the window; only the unique index closes it
+    // (see 2026-09-14_one-listing-per-batch-slot.sql), because the losing
+    // INSERT has to fail for the loser to know to adopt the winner's row.
+    // So: look, then claim, then on collision look again.
+    const claimed = await claimBatchSlot(userId, session.batchId, seq);
+    if (!claimed.ok) {
+      await replyError(phoneNumber, `⚠️ Couldn't start product ${seq}: ${claimed.message}`);
+      return { ok: false };
+    }
+    listingId = claimed.listingId;
+    await updateSession(phoneNumber, { listingId });
+
+    // Flush a note that beat its own photo here. Separate webhook
+    // deliveries are not ordered, and a line of text routinely
+    // overtakes the image it was sent with — so without this the
+    // seller's price, variants and sale window are simply gone by the
+    // time there is a listing to put them on.
+    if (session.pendingNotes) {
+      await applyNotes(listingId, session.pendingNotes);
+      await updateSession(phoneNumber, { pendingNotes: null });
+      console.info(`[whatsapp] listing=${listingId} applied notes that arrived before the photo`);
+    }
+  }
+
+  const db = createServerClient();
+  const { data: row } = await db.from("listings").select("images").eq("id", listingId).maybeSingle();
+  const current = (row?.images ?? []) as string[];
+
+  if (current.length >= MAX_LISTING_IMAGES) {
+    if (!quiet) {
+      await replyButtons(
+        phoneNumber,
+        `You've already sent ${MAX_LISTING_IMAGES} photos (the max) for product ${seq} — reply *done* when you're finished with this one.`,
+        [{ id: "done", title: "Done ✅" }],
+      );
+    }
+    return { ok: false };
+  }
+
+  const url = await ingestWhatsAppImage(imageMediaId, userId);
+  if (!url) {
+    await replyError(phoneNumber, "⚠️ That photo didn't come through cleanly (unsupported format or too large) — try another one.");
+    return { ok: false };
+  }
+
+  // Atomic append — see 2026-09-15_atomic-image-append.sql.
+  //
+  // This was [...current, url] written back over the row, and it lost
+  // photos: an album's deliveries all read `images` before any of them
+  // wrote, each built a one-element array, and the last write won. A
+  // seller sent three photos of one product and one survived.
+  //
+  // The read above is still fine for the cap early-out — it saves
+  // ingesting an image that would be discarded — but it must not be
+  // what the write is based on.
+  await db.rpc("append_listing_image", {
+    p_listing_id: listingId,
+    p_url:        url,
+    p_max:        MAX_LISTING_IMAGES,
+  });
+
+  return { ok: true, listingId };
+}
+
+/**
+ * Waits out any remaining photo-settle window before quiet mode silently
+ * closes a product, in place of the interactive flow's "still receiving
+ * photos, tap Done again" hold — quiet mode has no reply to send in
+ * between, so it blocks the remainder out instead.
+ *
+ * A straggler that lands DURING the wait is a perfectly ordinary,
+ * independent webhook delivery — it reads session.listingId, finds this
+ * product's slot still open (we haven't advanced yet), and appends to it
+ * exactly as if no wait were happening. That's what makes waiting BEFORE
+ * advancing safe: nothing about the wait itself has to detect or react
+ * to the straggler, it only has to not have moved the goalposts yet.
+ *
+ * Bounded to 3 rounds (≤3×PHOTO_SETTLE_MS ≈ 18s worst case, comfortably
+ * inside Vercel's 60s function ceiling) rather than looping forever — a
+ * seller who keeps trickling photos in one at a time forever isn't a case
+ * worth blocking a whole invocation over indefinitely.
+ */
+async function settlePhotosBeforeClose(listingId: string): Promise<void> {
+  for (let i = 0; i < 3; i++) {
+    const age = await msSinceLastPhoto(listingId);
+    if (!Number.isFinite(age) || age >= PHOTO_SETTLE_MS) return;
+    await new Promise((resolve) => setTimeout(resolve, PHOTO_SETTLE_MS - age));
+  }
+}
+
+/**
+ * Quiet batch mode: the seller sends every product's photos back to back
+ * with no per-product confirmations, closing each one by replying with
+ * just its number (or "done") — see the rule message sent when the mode
+ * is chosen, in handleAwaitingPhotos above.
+ *
+ * Design constraint: a bare number is otherwise a price everywhere else
+ * in this flow (extractPrice's bare-number rule, awaitingPriceFor).
+ * Deliberately narrow to avoid that collision: ONLY the string form of
+ * the CURRENT product's own sequence number closes it. Anything else —
+ * including a number that doesn't match, which is far more likely to be
+ * a miscount than a deliberate signal — falls through to being parked as
+ * an ordinary note on whatever product is currently open, same as free
+ * text always has been. Nothing is ever silently discarded; a mismatched
+ * marker just doesn't get to skip the settle-window safety.
+ */
+async function handleQuietBatchMessage(
+  userId:      string,
+  phoneNumber: string,
+  session:     WhatsAppSession,
+  content:     { text?: string; imageMediaId?: string },
+  seq:         number,
+  batchSize:   number,
+): Promise<void> {
+  let listingId = session.listingId;
+
+  if (content.imageMediaId) {
+    const appended = await appendPhotoToListing(userId, phoneNumber, session, seq, listingId, content.imageMediaId, true);
+    if (!appended.ok) return;
+    listingId = appended.listingId;
+  }
+
+  const text = content.text?.trim();
+  if (!text) return; // a bare photo (or one that failed to ingest above) — silence either way.
+
+  // The close signal can be the WHOLE message ("1", "done") or trail a
+  // caption/note ("Price 40\n1"), mirroring endsWithDoneSignal/
+  // stripDoneSignal's own "done" handling — a seller combining a note
+  // with the number the same natural way they'd combine one with "done"
+  // must not lose the note.
+  const tokens = text.split(/\s+/);
+  const lastToken = (tokens[tokens.length - 1] ?? "").replace(/[.,!]+$/, "");
+  const isCloseMarker = Boolean(listingId) && (lastToken === String(seq) || /^done$/i.test(lastToken));
+  if (!isCloseMarker) {
+    // Free text that isn't this product's closing signal — park it as a
+    // note on whatever's open, exactly like the interactive flow, just
+    // without the "got it" reply.
+    if (listingId) await applyNotes(listingId, text);
+    else await parkNotes(phoneNumber, session, text);
+    return;
+  }
+
+  if (!listingId) {
+    // Closing a product that never got a photo. Under the interactive
+    // flow this gets an immediate "send at least one photo first" — quiet
+    // mode stays quiet and simply doesn't advance, so the seller's next
+    // photo lands on this same still-open slot instead of a phantom next
+    // product. The gap surfaces in the missing-photos warning once the
+    // batch actually finishes.
+    return;
+  }
+
+  // Settle BEFORE applying any combined note — applyNotes stamps this
+  // same listing's updated_at, and reading the age afterward would make
+  // every "Price 40\n1" look like a photo had just landed, holding up a
+  // close that was never actually racing an album. Same ordering bug the
+  // interactive flow's own "done" handling already had to learn once.
+  await settlePhotosBeforeClose(listingId);
+
+  const notes = tokens.slice(0, -1).join(" ").trim();
+  if (notes) await applyNotes(listingId, notes);
+
+  if (seq < batchSize) {
+    // pendingNotes cleared with the advance: anything still parked
+    // belongs to the product just finished, and carrying it forward would
+    // staple one product's price and variants onto the next — same rule
+    // the interactive advance follows.
+    await updateSession(phoneNumber, {
+      state:        "awaiting_photos",
+      listingId:    null,
+      batchSeq:     seq + 1,
+      pendingNotes: null,
+      lastImageAt:  null,
+    });
+    return; // still silent — this is quiet mode's entire point.
+  }
+
+  // The LAST product's closing signal — the one moment quiet mode replies.
+  // startBatchAnalysis reads batchId/batchSize straight off `session`,
+  // neither of which this function has touched, so it's safe to hand the
+  // same object off unchanged.
+  await startBatchAnalysis(phoneNumber, userId, session);
+}
+
 async function handleAwaitingPhotos(
   userId: string,
   phoneNumber: string,
@@ -1152,76 +1386,34 @@ async function handleAwaitingPhotos(
   const seq = session.batchSeq ?? 1;
   let listingId = session.listingId;
 
+  // ── Mode choice from handleAwaitingCount's buttons ───────────────────────
+  //
+  // Arrives as ordinary text (button ids ARE command phrases, same design
+  // as every other reply-button in this file) before the seller has sent
+  // any photo, so it's safe to check first without touching listingId.
+  if (content.text === "batch_mode:quiet" || content.text === "batch_mode:interactive") {
+    const quiet = content.text === "batch_mode:quiet";
+    await updateSession(phoneNumber, { batchQuiet: quiet });
+    await replyText(
+      phoneNumber,
+      quiet
+        ? `Rule for this batch: send product ${seq}'s photos, with the price and any notes as a caption on one of them, then reply with just *${seq}* once you're done with it. Repeat for each product — on product ${batchSize}'s number, I'll start drafting everything, and I won't reply in between.`
+        : `Let's go — product 1 of ${batchSize}.\n\nSend its photos, and tell me the price plus any other notes (variations, sizes, sale price etc.), then reply *done*.`,
+    );
+    return;
+  }
+
+  // ── Quiet mode: no per-product confirmations, closed by a number ────────
+  if (session.batchQuiet) {
+    await handleQuietBatchMessage(userId, phoneNumber, session, content, seq, batchSize);
+    return;
+  }
+
   // ── Photo, with or without a caption in the same message ────────────────
   if (content.imageMediaId) {
-    if (!listingId) {
-      // CLAIM the (batch, position) slot rather than just creating a row.
-      //
-      // WhatsApp delivers an album as several webhook messages within the
-      // same second. Each ran this block, each saw session.listingId still
-      // null, and each created a listing — so photos of ONE product became
-      // one listing per photo. Confirmed live: two "4 Burner Gas ..."
-      // listings 115ms apart, one holding the seller's note and the other
-      // an orphan with photos and nothing else.
-      //
-      // Reading first narrows the window; only the unique index closes it
-      // (see 2026-09-14_one-listing-per-batch-slot.sql), because the losing
-      // INSERT has to fail for the loser to know to adopt the winner's row.
-      // So: look, then claim, then on collision look again.
-      const claimed = await claimBatchSlot(userId, session.batchId, seq);
-      if (!claimed.ok) {
-        await replyError(phoneNumber, `⚠️ Couldn't start product ${seq}: ${claimed.message}`);
-        return;
-      }
-      listingId = claimed.listingId;
-      await updateSession(phoneNumber, { listingId });
-
-      // Flush a note that beat its own photo here. Separate webhook
-      // deliveries are not ordered, and a line of text routinely
-      // overtakes the image it was sent with — so without this the
-      // seller's price, variants and sale window are simply gone by the
-      // time there is a listing to put them on.
-      if (session.pendingNotes) {
-        await applyNotes(listingId, session.pendingNotes);
-        await updateSession(phoneNumber, { pendingNotes: null });
-        console.info(`[whatsapp] listing=${listingId} applied notes that arrived before the photo`);
-      }
-    }
-
-    const db = createServerClient();
-    const { data: row } = await db.from("listings").select("images").eq("id", listingId).maybeSingle();
-    const current = (row?.images ?? []) as string[];
-
-    if (current.length >= MAX_LISTING_IMAGES) {
-      await replyButtons(
-        phoneNumber,
-        `You've already sent ${MAX_LISTING_IMAGES} photos (the max) for product ${seq} — reply *done* when you're finished with this one.`,
-        [{ id: "done", title: "Done ✅" }],
-      );
-      return;
-    }
-
-    const url = await ingestWhatsAppImage(content.imageMediaId, userId);
-    if (!url) {
-      await replyError(phoneNumber, "⚠️ That photo didn't come through cleanly (unsupported format or too large) — try another one.");
-      return;
-    }
-
-    // Atomic append — see 2026-09-15_atomic-image-append.sql.
-    //
-    // This was [...current, url] written back over the row, and it lost
-    // photos: an album's deliveries all read `images` before any of them
-    // wrote, each built a one-element array, and the last write won. A
-    // seller sent three photos of one product and one survived.
-    //
-    // The read above is still fine for the cap early-out — it saves
-    // ingesting an image that would be discarded — but it must not be
-    // what the write is based on.
-    await db.rpc("append_listing_image", {
-      p_listing_id: listingId,
-      p_url:        url,
-      p_max:        MAX_LISTING_IMAGES,
-    });
+    const appended = await appendPhotoToListing(userId, phoneNumber, session, seq, listingId, content.imageMediaId, false);
+    if (!appended.ok) return;
+    listingId = appended.listingId;
 
     // Falls through to the text handling below — a caption ("Price 40,
     // done") sent alongside this photo used to be silently dropped
