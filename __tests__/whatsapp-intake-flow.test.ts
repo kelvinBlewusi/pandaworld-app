@@ -514,7 +514,7 @@ describe("quiet batch mode", () => {
 
     await handleLinkedMessage(USER, PHONE, "m1", { text: "3" });
 
-    const choice = sent.find((m) => m.body.includes("How do you want to send them"));
+    const choice = sent.find((m) => m.body.includes("You can send all 3 in two ways"));
     expect(choice).toBeDefined();
     expect(choice!.kind).toBe("buttons");
     expect(session().batch_quiet ?? false).toBe(false); // unset until they actually pick one
@@ -537,7 +537,7 @@ describe("quiet batch mode", () => {
     await handleLinkedMessage(USER, PHONE, "m1", { text: "batch_mode:quiet" });
 
     expect(session().batch_quiet).toBe(true);
-    const rule = sent.find((m) => m.body.includes("Rule for this batch"));
+    const rule = sent.find((m) => m.body.includes("send product 1's photos"));
     expect(rule).toBeDefined();
     expect(rule!.body).toContain("*1*");
   });
