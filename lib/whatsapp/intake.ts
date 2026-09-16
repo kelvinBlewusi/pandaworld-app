@@ -1353,9 +1353,17 @@ async function handleAwaitingPhotos(
         // product N+1 could be silenced by the last photo of product N.
         lastImageAt:  null,
       });
+      // The full instructions ("Send its photos, and tell me the price
+      // plus any other notes...") already went out once, in
+      // handleAwaitingCount's very first reply — every product after that
+      // repeated the entire paragraph verbatim, so a 10-product batch said
+      // the same three sentences nine times. Audited from a real chat
+      // export on 2026-09-16: pure repetition, no new information after
+      // the first time. What IS new each time is the photo count just
+      // confirmed and which product comes next — that's what stays.
       await replyText(
         phoneNumber,
-        `✅ Product ${seq} saved${photoNote}. Now send photos for product ${seq + 1} of ${batchSize}, and tell me the price plus any other notes (variations, sizes, sale price etc.), then reply *done*.`,
+        `✅ Product ${seq} saved${photoNote}. Next: product ${seq + 1} of ${batchSize} — photos + price/notes, then *done*.`,
       );
       return;
     }

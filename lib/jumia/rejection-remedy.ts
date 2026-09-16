@@ -10,6 +10,25 @@
  * Deliberately conservative about what counts as auto-fixable. Telling a
  * seller "I fixed it" and re-pushing the same broken payload is worse than
  * telling them plainly that only they can supply the missing price.
+ *
+ * "Fixable by refill" has one concrete meaning in this codebase:
+ * refillAttributesForCategory (lib/jumia/refill-attributes.ts) re-derives
+ * dynamic_attributes — the category-specific schema fields — and nothing
+ * else. It never touches title, description, brand, price, stock, images,
+ * or category choice. A message about any of those is never "refill", no
+ * matter how much it resembles one — classifying it that way spends a
+ * Gemini call and a push attempt on a field refill cannot change, then
+ * fails identically and tells the seller "I fixed it" a moment before
+ * proving it didn't. That shape — auto-fix promised, same rejection
+ * returned — is worse for trust than saying up front that this one needs
+ * them.
+ *
+ * Patterns below are matched against Jumia's actual wire shape: a
+ * bracketed placeholder ([ ]) once the value is filled in. A few classes
+ * of error (seen in Jumia's own API reference rather than a live
+ * rejection yet) use an unfilled {0}/{1} template instead — matched the
+ * same way, since the surrounding words are what identifies the error,
+ * not what's inside the brackets.
  */
 
 export type RemedyKind =
@@ -41,33 +60,168 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
     return { kind: "unknown", explanation: "Jumia didn't say why." };
   }
 
-  // Seller-only problems first: these must never be misread as fixable,
-  // because an automatic re-push would just fail again and burn a cycle.
-  if (/price/.test(msg) && /(required|missing|invalid|must)/.test(msg)) {
-    return { kind: "seller", explanation: "Jumia needs a price on this product, and I never set prices myself." };
+  // ── Duplicate VARIATION, checked before the generic duplicate/repush
+  // rule below. "Duplicate Variation on Product with seller sku [x] and
+  // Product set parent sku [y]" contains the word "duplicate", which would
+  // otherwise be caught by the SKU-duplicate rule further down and
+  // classified "repush" — but minting a fresh SKU suffix changes nothing
+  // about which variation values collide. The seller has to give the two
+  // variants different values (a size, a colour) before either can push.
+  if (/duplicate variation/.test(msg)) {
+    return { kind: "seller", explanation: "Two of the variants on this product have the same variation value (e.g. both marked the same size or colour) — Jumia needs them to differ." };
   }
+
+  // ── The product's name/title, never something refill touches ──────────
+  //
+  // refillAttributesForCategory only ever rewrites dynamic_attributes.
+  // Every one of these is about the top-level product name, so an
+  // automatic refill-and-resubmit would push the identical title again.
+  if (/product name.{0,40}(contains|has).{0,10}(brand|seller|company) name/.test(msg)
+    || /product name.{0,40}prohibited character/.test(msg)) {
+    return { kind: "seller", explanation: "The product title itself is the problem — it can't repeat the brand, seller or company name, or use characters Jumia blocks. Edit the title directly." };
+  }
+  if (/trademark.{0,80}protected.{0,80}brand/.test(msg)) {
+    return { kind: "seller", explanation: "Jumia sees a trademarked term in the title or description but the brand field doesn't match it — set the brand to the actual trademark owner, or reword the title." };
+  }
+
   if (/description/.test(msg) && /(short|50|length|characters)/.test(msg)) {
     return { kind: "seller", explanation: "The description is too short for Jumia — it needs at least 50 characters." };
   }
   if (/can'?t list products in this category|more specific|leaf/.test(msg)) {
     return { kind: "seller", explanation: "Jumia won't accept this category — it needs a more specific one." };
   }
-  if (/image|photo/.test(msg) && /(invalid|size|resolution|missing|failed)/.test(msg)) {
+
+  // ── Price, stock: seller-owned everywhere else in this codebase ───────
+  //
+  // "mandatory" is Jumia's own word for several of these ("The initial
+  // Stock is mandatory...", "The Global Price is mandatory...") and
+  // doesn't overlap with "required|missing|invalid|must" at all — a real
+  // gap that let both fall through to "unknown" and waste an automatic
+  // refill+resubmit cycle that could never have supplied a price or a
+  // stock count either way.
+  if (/\bprice\b/.test(msg) && /(required|missing|invalid|must|mandatory)/.test(msg)) {
+    return { kind: "seller", explanation: "Jumia needs a price on this product, and I never set prices myself." };
+  }
+  if (/\bstock\b/.test(msg) && /(required|missing|invalid|must|mandatory)/.test(msg)) {
+    return { kind: "seller", explanation: "Jumia needs a stock quantity on this product, and I never set stock myself." };
+  }
+
+  // ── Sale price / global price business rules ───────────────────────────
+  //
+  // All genuinely seller decisions — a date range, a discount, a currency
+  // choice. None of them are dynamic_attributes, so none are refillable.
+  if (/(global )?sale price/.test(msg) && /(startat|endat|before|after|bigger than the current date)/.test(msg)) {
+    return { kind: "seller", explanation: "The sale price's start/end dates don't work — they need to be in the future, and the start date has to come before the end date." };
+  }
+  if (/(global )?sale price discount/.test(msg)) {
+    return { kind: "seller", explanation: "The sale discount is outside what Jumia allows for this category — adjust the sale price." };
+  }
+  if (/(global )?sale price/.test(msg) && /(zero|negative|two decimal|greater than or equal price)/.test(msg)) {
+    return { kind: "seller", explanation: "The sale price itself isn't valid — it must be positive, less than the regular price, and have at most two decimal places." };
+  }
+  if (/(startat|endat) is mandatory when sale price is filled/.test(msg)) {
+    return { kind: "seller", explanation: "A sale price needs both a start and an end date." };
+  }
+  if (/(global )?price\b.{0,60}(equal or more than|equal or less than|two decimal|negative|should not be zero)/.test(msg)) {
+    return { kind: "seller", explanation: "The price itself isn't valid for this category — check Jumia's price limits, decimal places, and that it isn't zero or negative." };
+  }
+
+  // ── Barcode / GTIN ──────────────────────────────────────────────────────
+  if (/barcode ean.{0,40}already exists/.test(msg)) {
+    return { kind: "seller", explanation: "That barcode (EAN/GTIN) is already used by another product on Jumia — remove it or use the correct one." };
+  }
+
+  // ── Images ──────────────────────────────────────────────────────────────
+  //
+  // Broadened past the original (invalid|size|resolution|missing|failed)
+  // set to also catch a download timeout, an out-of-range dimension, and
+  // a blocked file extension — all seen in Jumia's own error catalogue,
+  // none matching the original set of words.
+  if (/main ?image.{0,20}(mandatory|cannot be empty)/.test(msg)) {
+    return { kind: "seller", explanation: "This product has no main image — Jumia won't accept a listing without one." };
+  }
+  if (/image/.test(msg) && /extension.{0,20}not allowed/.test(msg)) {
+    return { kind: "seller", explanation: "One of the images is in a format Jumia doesn't accept — re-save it as JPEG or PNG and re-upload." };
+  }
+  if (/image/.test(msg) && /dimensions?.{0,80}(height|width)/.test(msg)) {
+    return { kind: "seller", explanation: "One of the images is outside Jumia's size range (200-3000px on each side) — resize it and re-upload." };
+  }
+  if (/(image|photo)/.test(msg) && /(invalid|size|resolution|missing|failed|timeout|should be a link|invalid link)/.test(msg)) {
     return { kind: "seller", explanation: "Jumia rejected the images — they may need re-uploading." };
   }
 
+  // ── Category / attribute-set lookup failures ───────────────────────────
+  //
+  // Distinct from an attribute VALUE being wrong (that's refillable,
+  // below) — here the category itself can no longer be resolved, so
+  // refilling attributes for it would fail the exact same way. Needs a
+  // different category picked, or the catalogue re-synced.
+  if (/category not found by code/.test(msg)
+    || /category attribute set not found/.test(msg)
+    || /(attribute list than category|use the same category as the product set)/.test(msg)) {
+    return { kind: "seller", explanation: "Jumia doesn't recognise this product's category anymore — open the editor and pick the category again." };
+  }
+
+  // ── Locked after approval ───────────────────────────────────────────────
+  if (/cannot be updated since the product has been already approved/.test(msg)) {
+    return { kind: "seller", explanation: "This field is locked because the product has already been approved on Jumia at least once — that can't be changed by re-pushing." };
+  }
+
+  // ── Shop-level / connection problems, not this listing's content ──────
+  if (/does not have permissions to the provided shop/.test(msg)) {
+    return { kind: "seller", explanation: "Jumia says this account doesn't have permission for this shop — try disconnecting and reconnecting Jumia from Settings." };
+  }
+  if (/submitted currency.{0,40}different from the shop default currency/.test(msg)) {
+    return { kind: "seller", explanation: "This product's price is in the wrong currency for this shop — reconnecting Jumia usually fixes a stale currency setting." };
+  }
+
+  // ── Jumia's own configuration, not this listing at all ─────────────────
+  //
+  // Jumia's own wording ("Please contact the support team", "missing
+  // validations associated") says this isn't about the payload — it's
+  // their attribute-set metadata. Resubmitting, refilling, or editing
+  // anything on our side fails identically every time.
+  if (/missing validations associated/.test(msg)) {
+    return { kind: "seller", explanation: "Jumia's own setup for this attribute looks broken on their side — this needs Jumia seller support, not an edit here." };
+  }
+
+  // ── Duplicate SKU: the one case a blind re-push actually fixes ────────
+  //
+  // Checked after duplicate-variation above, and before the general
+  // attribute pattern below (which would otherwise catch "already
+  // exists" text near the word "sku" too aggressively).
   if (/duplicate|already exists|sku.*(taken|exists)/.test(msg)) {
     return { kind: "repush", explanation: "Jumia already has this SKU. Pushing again generates a fresh one." };
   }
 
-  // Attribute problems — the common, genuinely fixable case. Matches both
-  // "The column [product_weight] is missing from the file" and
-  // "Attribute [x] is not visible for category [y]" and invalid enums.
+  // ── A named top-level field, generically ────────────────────────────────
+  //
+  // "Required field [Product.Brand.Code] is missing or null." Checked
+  // BEFORE the attribute pattern below — it also contains "required" and
+  // "missing", and would otherwise be misread as a refillable
+  // dynamic_attributes problem. Product.Brand.Code is a top-level field;
+  // refilling the category schema never touches it.
+  const namedField = msg.match(/required field \[([\w.]+)\] is missing or null/);
+  if (namedField) {
+    const field = namedField[1].split(".").pop() ?? namedField[1];
+    return { kind: "seller", explanation: `Jumia needs ${field.toLowerCase()} set on this product — that's not something refilling the category fields can supply.` };
+  }
+
+  // ── Attribute problems — the common, genuinely fixable case ────────────
+  //
+  // Matches both the bracketed live shape ("Attribute [x] is not visible
+  // for category [y]") and the unfilled template shape ("Attribute [{0}]
+  // ... value [{1}] ...") — the word before the bracket/brace is what
+  // identifies these, not what's inside it.
   if (
-    /column \[/.test(msg) ||
-    /attribute \[/.test(msg) ||
+    /column\s*[\[{]/.test(msg) ||
+    /attribute\s*[\[{]/.test(msg) ||
+    /the attribute\b/.test(msg) ||
     /is not visible for category/.test(msg) ||
     /invalid value/.test(msg) ||
+    /not found on payload/.test(msg) ||
+    /(not a valid number|should be a boolean|should be in accordance to the format)/.test(msg) ||
+    /should have a value with a length between/.test(msg) ||
     (/missing/.test(msg) && /(field|attribute|column)/.test(msg)) ||
     /required/.test(msg)
   ) {
@@ -81,4 +235,30 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
  *  handing straight back to the seller. */
 export function isAutoFixable(kind: RemedyKind): boolean {
   return kind === "refill" || kind === "repush" || kind === "unknown";
+}
+
+/**
+ * Pull the specific schema attribute name out of a Jumia rejection, when
+ * it names one — "Attribute [color_family] is not visible for category
+ * [Laptops]." → "color_family".
+ *
+ * Powers "See Rejected Field" on the review page: rather than leaving the
+ * seller to scan a form that can run to dozens of fields for whichever one
+ * Jumia meant, the button jumps straight to it.
+ *
+ * Deliberately narrow. Matches only the live wire shape — a real,
+ * filled-in bracket right after "attribute" or "column" — never the
+ * unfilled {0}/{1} template shape some of Jumia's docs use, which carries
+ * no real field name to scroll to. And it never matches a Product-Name/
+ * title rejection: that field lives in the title input, not this schema,
+ * so a name pulled from "Product name...contains Brand name" would send
+ * the seller to a form field that was never the problem.
+ */
+export function extractRejectedAttributeName(raw: string | null | undefined): string | null {
+  const msg = raw ?? "";
+  const match = msg.match(/\b(?:attribute|column)\s*\[\s*([^\]]+?)\s*\]/i);
+  const name = match?.[1] ?? null;
+  // An unfilled template placeholder ("[{0}]") is not a real name.
+  if (name && /^\{.*\}$/.test(name)) return null;
+  return name;
 }

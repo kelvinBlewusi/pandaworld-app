@@ -87,6 +87,21 @@ interface SchemaFormProps {
    * set (e.g. Product Information) isn't affected.
    */
   collapseHighConfidence?: boolean;
+  /**
+   * Field names that must render in the always-visible group regardless of
+   * how confident collapseHighConfidence's own scoring is about them —
+   * has no effect when collapseHighConfidence is off, since nothing is
+   * collapsed to begin with.
+   *
+   * Exists for exactly one caller: "See Rejected Field" on the Jumia
+   * rejection banner. Jumia's own validation caught something our
+   * confidence score didn't (that's the whole reason it's a rejection,
+   * not a warning we already showed) — so the field that's wrong is not
+   * reliably one collapseHighConfidence would have flagged on its own.
+   * Scrolling to a field that's sitting collapsed behind "N fields look
+   * good" would land on a hidden zero-height element and look broken.
+   */
+  forceVisibleNames?: string[];
 }
 
 export function SchemaForm({
@@ -106,11 +121,13 @@ export function SchemaForm({
   onFillWithAI,
   fillWithAILoading = false,
   collapseHighConfidence = false,
+  forceVisibleNames,
 }: SchemaFormProps) {
   const [schema,    setSchema]    = useState<JumiaAttributeDef[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showLooksGood, setShowLooksGood] = useState(false);
+  const forceVisibleSet = new Set((forceVisibleNames ?? []).map((n) => n.toLowerCase()));
 
   // Single fetch — the server transparently syncs from Jumia on cache miss,
   // so by the time this promise resolves we have a fully-populated schema
@@ -376,7 +393,11 @@ export function SchemaForm({
     const isText     = attr.type === "string" || attr.type === "textarea" || attr.type === "number";
     const wideSpan   = attr.type === "textarea";
     return (
-      <div key={attr.name} className={wideSpan ? wideSpanClass : ""}>
+      <div
+        key={attr.name}
+        id={`jumia-field-${attr.name}`}
+        className={wideSpan ? wideSpanClass : ""}
+      >
         <SchemaField
           attr={attr}
           value={getValue(attr.name)}
@@ -410,7 +431,8 @@ export function SchemaForm({
       const flagged =
         (attr.required && !value) ||
         source === "seller-required" ||
-        (Boolean(value) && typeof confidence === "number" && confidence < 0.75);
+        (Boolean(value) && typeof confidence === "number" && confidence < 0.75) ||
+        forceVisibleSet.has(attr.name.toLowerCase());
       (flagged ? needsAttention : looksGood).push(attr);
     }
   }
