@@ -14,7 +14,7 @@ import { getOrCreateCreditBalance, deductCredits } from "@/lib/billing/extension
 import { WHATSAPP_DRAFT_CREDIT_COST } from "@/lib/billing/credit-packs";
 import { pushListingToJumia, missingFieldLabels, refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
-import { classifyJumiaRejection, isAutoFixable } from "@/lib/jumia/rejection-remedy";
+import { classifyJumiaRejection, isAutoFixable, extractRejectionText } from "@/lib/jumia/rejection-remedy";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { getJumiaConnectionKind, testJumiaCredentials, saveJumiaCredentialsForUser, disconnectJumiaForUser } from "@/lib/jumia/credentials";
 import { createConnectToken } from "@/lib/jumia/connect-token";
@@ -2628,18 +2628,74 @@ async function handleEdit(
  * without needing the focused editor for the common case.
  */
 /**
+ * Turns a Jumia rejection into extra context for a full re-draft, so the
+ * rerun doesn't just regenerate the identical mistake. Combined with the
+ * seller's own original note — a fresh draft must not lose what they said
+ * about the product just because it's also being told what went wrong.
+ *
+ * Deliberately hint-based rather than a rewrite of the AI pipeline: this
+ * is free text fed into userContext, which lib/actions/auto-analyze.ts
+ * already threads into the department-pick, category-rank and attribute
+ * passes (that's how a seller's own "this is a pack of 6" note already
+ * steers a draft) — so a plain instruction here reaches every pass that
+ * could act on it, with no new plumbing.
+ */
+function buildRerunContext(
+  rejectionText: string,
+  categoryPath:  string | null,
+  originalNote:  string | null,
+): string {
+  const lower = rejectionText.toLowerCase();
+  const hints: string[] = [];
+
+  if (/can'?t list products in this category|more specific|leaf|category not found|attribute set not found/.test(lower)) {
+    hints.push(
+      categoryPath
+        ? `Pick a category OTHER than "${categoryPath}" this time — Jumia said it isn't specific/listable enough. Choose a more specific leaf category.`
+        : `Pick a more specific leaf category this time — the previous one wasn't specific/listable enough.`,
+    );
+  }
+  if (/product name.{0,40}(contains|has).{0,10}(brand|seller|company) name|prohibited character/.test(lower)) {
+    hints.push(`The title must NOT repeat the brand, seller, or company name, and must avoid blocked characters — write a clean, descriptive title instead.`);
+  }
+  if (/trademark/.test(lower)) {
+    hints.push(`Set the brand field to the actual trademark owner mentioned in the title/description, or reword to remove the trademarked term.`);
+  }
+  if (/description/.test(lower) && /(short|50|length|characters)/.test(lower)) {
+    hints.push(`Write a description of at least 50 characters.`);
+  }
+  const restricted = rejectionText.match(/restricted words\s*:?\s*\[([^\]]+)\]/i);
+  if (restricted) {
+    hints.push(`Do not use the word(s) "${restricted[1]}" anywhere in the listing.`);
+  }
+
+  const problem = `Jumia rejected the previous draft: "${rejectionText}".${hints.length ? " " + hints.join(" ") : ""}`;
+  const combined = originalNote
+    ? `${problem}\n\nThe seller's own notes about this product: "${originalNote}"`
+    : problem;
+  return combined.slice(0, 1000);
+}
+
+/**
  * "Fix & resubmit" on a Jumia rejection.
  *
  * A rejection used to be a dead end: the seller got Jumia's own wording
  * ("The column [product_weight] is missing from the file") and was left to
  * translate that into an action. Most rejections fall into a few shapes,
- * and one of them — missing or invalid category attributes — the system
- * can genuinely repair by re-filling the schema and pushing again.
+ * and most of them the system can genuinely repair by re-running the same
+ * pipeline that drafted the listing in the first place (runAutoAnalyze),
+ * with the rejection folded into its context so it doesn't just regenerate
+ * the identical mistake — a bad title, an over-broad category, a short
+ * description, or an invalid attribute value are all things a fresh draft
+ * re-derives from scratch. This replaces the old attribute-only refill,
+ * which could never touch a title or a category and so had to hand those
+ * cases straight to the seller even though a redraft was fully capable.
  *
- * Deliberately honest about the rest. A price Jumia is missing is a price
- * only the seller has; claiming to have fixed it and re-pushing the same
- * payload would fail identically and waste their time. Seller-only causes
- * are named and handed back with the editor link.
+ * Deliberately honest about what's left. A price Jumia is missing is a
+ * price only the seller has; claiming to have fixed it and re-pushing the
+ * same payload would fail identically and waste their time. Those causes
+ * are named and handed back with the editor link — see
+ * classifyJumiaRejection's own doc comment for exactly which ones.
  */
 async function handleFixAndResubmit(
   userId:      string,
@@ -2673,7 +2729,11 @@ async function handleFixAndResubmit(
     return;
   }
 
-  const remedy = classifyJumiaRejection(row.jumia_error as string | null);
+  // Cleaned to plain text once, up front — jumia_error is a JSON blob most
+  // of the time, and both the classifier and the rerun context below want
+  // the human-readable form, not a string full of braces and quotes.
+  const rejectionText = extractRejectionText(row.jumia_error as string | null);
+  const remedy = classifyJumiaRejection(rejectionText);
 
   if (!isAutoFixable(remedy.kind)) {
     await replyError(
@@ -2686,26 +2746,30 @@ async function handleFixAndResubmit(
 
   await replyText(phoneNumber, `🔧 ${label}: ${remedy.explanation} Fixing and resubmitting…`);
 
-  // Re-fill the category schema before re-pushing. Skipped for a pure
-  // duplicate-SKU rejection, where the payload was fine and the push path
-  // generates a fresh suffix on its own — an AI call there would cost a
-  // credit to change nothing.
-  if (remedy.kind !== "repush" && row.category_code) {
+  // Re-draft before re-pushing. Skipped only for a pure duplicate-SKU
+  // rejection, where the payload was fine and the push path generates a
+  // fresh suffix on its own — an AI call there would cost a credit to
+  // change nothing. "unknown" still gets a rerun: it's already the
+  // "worth one automatic attempt" bucket, and a full redraft is a more
+  // capable attempt than the old attribute-only refill ever was.
+  if (remedy.kind !== "repush") {
     try {
-      const refill = await refillAttributesForCategory(userId, listingId, Number(row.category_code), {
-        categoryPath: row.category_path as string | null,
-        userContext:  (row.user_prompt as string | null) ?? null,
-      });
-      if (!refill.ok) {
+      const rerunContext = buildRerunContext(
+        rejectionText,
+        row.category_path as string | null,
+        (row.user_prompt as string | null) ?? null,
+      );
+      const result = await runAutoAnalyze(userId, listingId, rerunContext);
+      if (!result.ok) {
         await replyError(
           phoneNumber,
-          `⚠️ ${label}: couldn't refill the category fields (${refill.message}).`,
+          `⚠️ ${label}: couldn't redraft it (${result.message}).`,
           { retryId: `fix:${listingId}`, retryTitle: "Fix & resubmit", cta: { label: "Open editor", url: focusedEditorUrl(listingId) } },
         );
         return;
       }
     } catch (e) {
-      console.error(`[whatsapp intake] fix-and-resubmit refill failed for ${listingId}: ${(e as Error).message}`);
+      console.error(`[whatsapp intake] fix-and-resubmit rerun failed for ${listingId}: ${(e as Error).message}`);
       await replyError(
         phoneNumber,
         `⚠️ ${label}: something went wrong while fixing it.`,
