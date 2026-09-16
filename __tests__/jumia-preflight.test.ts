@@ -262,3 +262,87 @@ describe("snapToAllowed against a real Jumia material_family list", () => {
     expect(snapToAllowed("metal", ["Metal", "METAL"])).toBeNull();
   });
 });
+
+describe("preflightAttributes — decimalPlaces", () => {
+  // "Attribute [capacity_liter] with the value [0.35] should be a number
+  // without decimals." — the same rejection SHAPE capacity_liter hit
+  // (2026-09-14_fix-attribute-type-codes.sql fixed the TYPE being wrong;
+  // decimal_places is the value bound the type alone never enforced).
+  it("rounds a fractional value to a whole number when decimalPlaces is 0", () => {
+    const schema = [attr({ name: "capacity_liter", type: "number", decimal_places: 0 })];
+    const result = preflightAttributes([{ name: "capacity_liter", value: "1.7" }], schema);
+    expect(result.attributes[0].value).toBe("2");
+    expect(result.notes[0].reason).toBe("rounded_number");
+  });
+
+  it("rounds to the schema's own decimal-place count, not always to an integer", () => {
+    const schema = [attr({ name: "weight_kg", type: "number", decimal_places: 2 })];
+    const result = preflightAttributes([{ name: "weight_kg", value: "1.2345" }], schema);
+    expect(result.attributes[0].value).toBe("1.23");
+  });
+
+  it("leaves an already-compliant value untouched, with no note", () => {
+    const schema = [attr({ name: "capacity_liter", type: "number", decimal_places: 0 })];
+    const result = preflightAttributes([{ name: "capacity_liter", value: "5" }], schema);
+    expect(result.attributes[0].value).toBe("5");
+    expect(result.notes).toHaveLength(0);
+  });
+
+  it("does nothing when the schema doesn't constrain decimal places", () => {
+    const schema = [attr({ name: "capacity_liter", type: "number", decimal_places: null })];
+    const result = preflightAttributes([{ name: "capacity_liter", value: "1.23456" }], schema);
+    expect(result.attributes[0].value).toBe("1.23456");
+  });
+
+  it("leaves a non-numeric value on a number field alone — not this function's problem", () => {
+    const schema = [attr({ name: "capacity_liter", type: "number", decimal_places: 0 })];
+    const result = preflightAttributes([{ name: "capacity_liter", value: "about 1.7" }], schema);
+    expect(result.attributes[0].value).toBe("about 1.7");
+    expect(result.notes).toHaveLength(0);
+  });
+});
+
+describe("preflightAttributes — notZeroOrNegative", () => {
+  // "The attribute [x] with the value [y] should not be null or a
+  // negative value." No safe repair exists — dropped, same rule
+  // invalid_enum already follows.
+  it("drops a zero value rather than guessing a replacement", () => {
+    const schema = [attr({ name: "warranty_months", type: "number", not_zero_or_negative: true })];
+    const result = preflightAttributes([{ name: "warranty_months", value: "0" }], schema);
+    expect(result.attributes).toHaveLength(0);
+    expect(result.notes[0].reason).toBe("invalid_number");
+  });
+
+  it("drops a negative value the same way", () => {
+    const schema = [attr({ name: "warranty_months", type: "number", not_zero_or_negative: true })];
+    const result = preflightAttributes([{ name: "warranty_months", value: "-3" }], schema);
+    expect(result.attributes).toHaveLength(0);
+  });
+
+  it("surfaces as missing_required when the dropped field was required", () => {
+    const schema = [attr({ name: "warranty_months", type: "number", not_zero_or_negative: true, required: true })];
+    const result = preflightAttributes([{ name: "warranty_months", value: "-3" }], schema);
+    expect(result.missingRequired).toHaveLength(1);
+  });
+
+  it("keeps a positive value with no note", () => {
+    const schema = [attr({ name: "warranty_months", type: "number", not_zero_or_negative: true })];
+    const result = preflightAttributes([{ name: "warranty_months", value: "12" }], schema);
+    expect(result.attributes[0].value).toBe("12");
+    expect(result.notes).toHaveLength(0);
+  });
+
+  it("checks the sign BEFORE rounding, so a negative fractional value is dropped, not rounded then dropped", () => {
+    const schema = [attr({ name: "x", type: "number", not_zero_or_negative: true, decimal_places: 0 })];
+    const result = preflightAttributes([{ name: "x", value: "-1.7" }], schema);
+    expect(result.attributes).toHaveLength(0);
+    expect(result.notes).toHaveLength(1);
+    expect(result.notes[0].reason).toBe("invalid_number");
+  });
+
+  it("does nothing when the schema doesn't constrain the sign", () => {
+    const schema = [attr({ name: "x", type: "number", not_zero_or_negative: false })];
+    const result = preflightAttributes([{ name: "x", value: "-3" }], schema);
+    expect(result.attributes[0].value).toBe("-3");
+  });
+});

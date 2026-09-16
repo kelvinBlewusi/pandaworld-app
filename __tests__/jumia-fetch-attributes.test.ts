@@ -99,3 +99,50 @@ describe("fetchAttributesFromJumia — error handling", () => {
     await expect(fetchAttributesFromJumia("token", "sid-1")).resolves.toEqual([]);
   });
 });
+
+describe("fetchAttributesFromJumia — decimalPlaces and notZeroOrNegative", () => {
+  it("reads decimalPlaces and notZeroOrNegative from the real (lowercase) shape", async () => {
+    mockJsonResponse(200, {
+      attributes: [{
+        name: "capacity_liter", type: "NUMBER", mandatory: false, variation: false,
+        validations: { decimalPlaces: 0, notZeroOrNegative: true },
+      }],
+    });
+    const attrs = await fetchAttributesFromJumia("token", "sid-1");
+    expect(attrs[0].decimal_places).toBe(0);
+    expect(attrs[0].not_zero_or_negative).toBe(true);
+  });
+
+  it("still reads the capitalised fallback shape", async () => {
+    mockJsonResponse(200, {
+      attributes: [{
+        name: "capacity_liter", type: "NUMBER", mandatory: false, variation: false,
+        validations: [{ DecimalPlaces: 2, NotZeroOrNegative: true }],
+      }],
+    });
+    const attrs = await fetchAttributesFromJumia("token", "sid-1");
+    expect(attrs[0].decimal_places).toBe(2);
+    expect(attrs[0].not_zero_or_negative).toBe(true);
+  });
+
+  it("defaults to unconstrained/false when validations says nothing about them", async () => {
+    mockJsonResponse(200, {
+      attributes: [{ name: "brand", type: "TEXT", mandatory: false, variation: false, validations: { minLength: 2 } }],
+    });
+    const attrs = await fetchAttributesFromJumia("token", "sid-1");
+    expect(attrs[0].decimal_places).toBeNull();
+    expect(attrs[0].not_zero_or_negative).toBe(false);
+  });
+
+  // Jumia could in principle send notZeroOrNegative: false explicitly —
+  // that must read as false, not be confused with "not present" (which
+  // also reads as false here, but for a different reason: no constraint
+  // at all vs. an explicit constraint that happens to be off).
+  it("reads an explicit false the same as absent", async () => {
+    mockJsonResponse(200, {
+      attributes: [{ name: "x", type: "NUMBER", mandatory: false, variation: false, validations: { notZeroOrNegative: false } }],
+    });
+    const attrs = await fetchAttributesFromJumia("token", "sid-1");
+    expect(attrs[0].not_zero_or_negative).toBe(false);
+  });
+});

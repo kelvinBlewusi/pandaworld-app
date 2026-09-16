@@ -49,6 +49,18 @@ export interface JumiaCategoryAttribute {
   // Live validation constraints from the Jumia API. Empty when not provided.
   min_length?:    number | null;
   max_length?:    number | null;
+  /** Jumia's `decimalPlaces` — null means unconstrained, 0 means
+   *  integer-only. Behind "Attribute [x] with the value [y] is a not
+   *  valid number without decimals", the same rejection shape
+   *  capacity_liter hit (see 2026-09-14_fix-attribute-type-codes.sql —
+   *  that fixed the TYPE being wrong; this is the value bound the type
+   *  alone never enforced). */
+  decimal_places?: number | null;
+  /** Jumia's `notZeroOrNegative` — true means a value of zero or below is
+   *  rejected outright for this attribute (a weight, a capacity, a
+   *  warranty period). Defaults false — most attributes carry no such
+   *  constraint. */
+  not_zero_or_negative?: boolean;
 }
 
 // ─── Supabase reads ───────────────────────────────────────────────────────────
@@ -223,7 +235,7 @@ export async function getCategoryAttributes(categoryCode: number): Promise<Jumia
   const db = createServerClient();
   const { data } = await db
     .from("jumia_category_attributes")
-    .select("name, label, type, allowed_values, required, is_variant, min_length, max_length")
+    .select("name, label, type, allowed_values, required, is_variant, min_length, max_length, decimal_places, not_zero_or_negative")
     .eq("category_code", categoryCode)
     .order("sort_order");
   return (data ?? []).map((r) => ({
@@ -231,6 +243,8 @@ export async function getCategoryAttributes(categoryCode: number): Promise<Jumia
     is_variant: r.is_variant ?? false,
     min_length: r.min_length ?? null,
     max_length: r.max_length ?? null,
+    decimal_places: r.decimal_places ?? null,
+    not_zero_or_negative: r.not_zero_or_negative ?? false,
   })) as JumiaCategoryAttribute[];
 }
 
@@ -250,7 +264,7 @@ export async function getVariantAxes(categoryCode: number): Promise<JumiaCategor
   const db = createServerClient();
   const { data } = await db
     .from("jumia_category_attributes")
-    .select("name, label, type, allowed_values, required, is_variant, min_length, max_length")
+    .select("name, label, type, allowed_values, required, is_variant, min_length, max_length, decimal_places, not_zero_or_negative")
     .eq("category_code", categoryCode)
     .eq("is_variant", true)
     .order("sort_order");
@@ -259,6 +273,8 @@ export async function getVariantAxes(categoryCode: number): Promise<JumiaCategor
     is_variant: true,
     min_length: r.min_length ?? null,
     max_length: r.max_length ?? null,
+    decimal_places: r.decimal_places ?? null,
+    not_zero_or_negative: r.not_zero_or_negative ?? false,
   })) as JumiaCategoryAttribute[];
 }
 
@@ -640,6 +656,18 @@ export async function fetchAttributesFromJumia(
       };
       const minLength = readNum("minLength", "MinLength");
       const maxLength = readNum("maxLength", "MaxLength");
+      // decimalPlaces behind "Attribute [x] with the value [y] is a not
+      // valid number without decimals" — the same rejection SHAPE
+      // capacity_liter hit (2026-09-14_fix-attribute-type-codes.sql fixed
+      // the TYPE being wrong; this is the value bound the type alone never
+      // enforced, for any attribute whose type was always correct).
+      const decimalPlaces = readNum("decimalPlaces", "DecimalPlaces");
+      // notZeroOrNegative behind "The attribute [x] with the value [y]
+      // should not be null or a negative value" — read as a real boolean,
+      // not just presence, since Jumia could in principle send `false`
+      // explicitly and that must not be misread as "unconstrained".
+      const notZeroOrNegRaw = validations["notZeroOrNegative"] ?? validations["NotZeroOrNegative"];
+      const notZeroOrNegative = notZeroOrNegRaw === true || notZeroOrNegRaw === "true";
 
       return {
         name:           String(attr.name ?? ""),
@@ -652,6 +680,8 @@ export async function fetchAttributesFromJumia(
         is_variant:     Boolean(attr.variation ?? attr.variant ?? attr.is_variant ?? false),
         min_length:     minLength,
         max_length:     maxLength,
+        decimal_places: decimalPlaces,
+        not_zero_or_negative: notZeroOrNegative,
       };
     });
 }
@@ -750,6 +780,8 @@ export async function upsertAttributes(
     is_variant:     a.is_variant ?? false,
     min_length:     a.min_length ?? null,
     max_length:     a.max_length ?? null,
+    decimal_places: a.decimal_places ?? null,
+    not_zero_or_negative: a.not_zero_or_negative ?? false,
     sort_order:     i,
     synced_at:      new Date().toISOString(),
   }));

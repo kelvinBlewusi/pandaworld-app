@@ -47,7 +47,14 @@ export type PreflightReason =
   | "missing_required"
   /** Newlines in a long-text field rewritten as <br>, which is the only
    *  form Jumia's rich-text rendering preserves. */
-  | "line_breaks";
+  | "line_breaks"
+  /** A numeric value carried more decimal places than the schema allows
+   *  (often 0 — integer only) and was rounded to fit. */
+  | "rounded_number"
+  /** A numeric value violated the schema's notZeroOrNegative rule (zero
+   *  or below) and no repair is safe to guess — dropped, same as an
+   *  unmatched enum value. */
+  | "invalid_number";
 
 export interface PreflightNote {
   attribute: string;
@@ -208,6 +215,44 @@ export function preflightAttributes(
         continue;
       }
       value = kept.join(",");
+    }
+
+    // Numeric constraints — decimalPlaces and notZeroOrNegative, both from
+    // Jumia's per-attribute validations object. Only acts on a value that
+    // actually parses as a number; a non-numeric value on a number-type
+    // field is a different, pre-existing problem this function doesn't
+    // otherwise touch, so it's left alone here too.
+    if (field.type === "number") {
+      const num = Number(value);
+      if (!Number.isNaN(num)) {
+        if (field.not_zero_or_negative && num <= 0) {
+          // No safe repair to guess at — dropping it is the same rule
+          // invalid_enum already follows: a value Jumia won't accept is
+          // worse than no value, and if the field is required this
+          // surfaces via missingRequired below rather than silently.
+          notes.push({
+            attribute: attr.name,
+            label:     field.label,
+            reason:    "invalid_number",
+            detail:    `"${value}" must be greater than zero for this category`,
+          });
+          continue;
+        }
+        if (field.decimal_places != null && field.decimal_places >= 0) {
+          const rounded = Number(num.toFixed(field.decimal_places));
+          if (rounded !== num) {
+            value = String(rounded);
+            notes.push({
+              attribute: attr.name,
+              label:     field.label,
+              reason:    "rounded_number",
+              detail: field.decimal_places === 0
+                ? `rounded "${num}" to a whole number`
+                : `rounded "${num}" to ${field.decimal_places} decimal place${field.decimal_places === 1 ? "" : "s"}`,
+            });
+          }
+        }
+      }
     }
 
     // Trim at a word boundary where possible — a value cut mid-word looks
