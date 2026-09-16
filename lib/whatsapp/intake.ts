@@ -916,12 +916,13 @@ async function handleAwaitingCount(
 
   await replyButtons(
     phoneNumber,
-    `Got it — ${count} products. How do you want to send them?\n\n` +
-    `*Just send everything*: send all ${count} products' photos back to back — price and notes as a caption on one of each product's photos — closing each one by replying with just its number (1, 2, 3…). I'll stay quiet until the last one, then start drafting everything at once.\n\n` +
-    `*Guide me each step*: I'll confirm as you go, the way I do today.`,
+    `Got it — ${count} products. You can send all ${count} in two ways.\n\n` +
+    `I. Select all the photos of each product and caption it with the price and any other notes then send. After sending all the images of product 1, type and send 1, after sending all the images of product 2, type and send 2. Do same in that order until you finish sending all the ${count} products.\n` +
+    `I'll stay quiet until the last one, then start drafting everything at once.\n\n` +
+    `II. Guide me each step`,
     [
-      { id: "batch_mode:quiet",       title: "Just send everything" },
-      { id: "batch_mode:interactive", title: "Guide me each step" },
+      { id: "batch_mode:quiet",       title: "I" },
+      { id: "batch_mode:interactive", title: "II" },
     ],
   );
 }
@@ -1397,7 +1398,11 @@ async function handleAwaitingPhotos(
     await replyText(
       phoneNumber,
       quiet
-        ? `Rule for this batch: send product ${seq}'s photos, with the price and any notes as a caption on one of them, then reply with just *${seq}* once you're done with it. Repeat for each product — on product ${batchSize}'s number, I'll start drafting everything, and I won't reply in between.`
+        // The mechanic was already spelled out in full in the choice
+        // message above — repeating it here would be exactly the kind of
+        // redundant instruction this whole mode exists to cut. Just
+        // confirms the pick and gets them moving on product 1.
+        ? `Got it — send product ${seq}'s photos, then reply *${seq}* once you're done with it.`
         : `Let's go — product 1 of ${batchSize}.\n\nSend its photos, and tell me the price plus any other notes (variations, sizes, sale price etc.), then reply *done*.`,
     );
     return;
