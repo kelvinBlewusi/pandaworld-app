@@ -14,8 +14,8 @@ import { getOrCreateCreditBalance, deductCredits } from "@/lib/billing/extension
 import { WHATSAPP_DRAFT_CREDIT_COST } from "@/lib/billing/credit-packs";
 import { pushListingToJumia, missingFieldLabels, refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
-import { classifyJumiaRejection, isAutoFixable, extractRejectionText } from "@/lib/jumia/rejection-remedy";
-import { getValidJumiaCredentials } from "@/lib/jumia/api";
+import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix } from "@/lib/jumia/rejection-remedy";
+import { getValidJumiaCredentials, COUNTRY_CURRENCY, DEFAULT_JUMIA_COUNTRY, currencySymbol, currencyNameWord } from "@/lib/jumia/api";
 import { getJumiaConnectionKind, testJumiaCredentials, saveJumiaCredentialsForUser, disconnectJumiaForUser } from "@/lib/jumia/credentials";
 import { createConnectToken } from "@/lib/jumia/connect-token";
 import { parseGlobalCommand, type GlobalCommand } from "@/lib/whatsapp/commands";
@@ -44,7 +44,6 @@ import {
 } from "@/lib/whatsapp/batch";
 import { splitCredentialTokens, identifyCredentials, looksLikeCredential, isResendCommand, jumiaConnectLink, promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
 import { classifyBatchIntent, looksActionable } from "@/lib/whatsapp/intent";
-import { pickJoke } from "@/lib/whatsapp/waiting-jokes";
 import type { ListingRow } from "@/lib/supabase/types";
 import { enqueueAnalysisJobs, nudgeWorker, isBatchSettled, type AnalysisJob } from "@/lib/whatsapp/analysis-queue";
 
@@ -254,6 +253,40 @@ async function noteWarningsFor(listingId: string): Promise<string[]> {
   return warnings;
 }
 
+/** The seller's shop currency ISO code ("GHS", "NGN", ...) for a user
+ *  already in hand — best-effort, defaults to GHS on any lookup failure so
+ *  a currency-copy hiccup never blocks price parsing itself. PandaWorld
+ *  lists Jumia sellers across Africa, not just Ghana — extractPrice/
+ *  extractSalePrice (lib/whatsapp/batch.ts) used to always assume GHS
+ *  regardless of the seller's actual shop. */
+async function shopCurrencyForUser(userId: string): Promise<string> {
+  try {
+    const db = createServerClient();
+    const { data } = await db
+      .from("jumia_connections")
+      .select("country")
+      .eq("user_id", userId)
+      .maybeSingle();
+    return COUNTRY_CURRENCY[(data?.country as string | null) ?? DEFAULT_JUMIA_COUNTRY] ?? "GHS";
+  } catch {
+    return "GHS";
+  }
+}
+
+/** Same as shopCurrencyForUser, for a call site that only has the listing
+ *  id handy (applyNotes runs on every batch photo message and doesn't
+ *  otherwise need the seller's userId). */
+async function shopCurrencyForListing(listingId: string): Promise<string> {
+  try {
+    const db = createServerClient();
+    const { data: listing } = await db.from("listings").select("user_id").eq("id", listingId).maybeSingle();
+    if (!listing?.user_id) return "GHS";
+    return shopCurrencyForUser(listing.user_id as string);
+  } catch {
+    return "GHS";
+  }
+}
+
 /** Saves a seller's free-text note against a product, plus a deterministic
  *  (non-AI) pass for an explicit price/stock — see batch.ts for why this
  *  is regex, not an AI guess: those two fields are seller-owned everywhere
@@ -261,8 +294,9 @@ async function noteWarningsFor(listingId: string): Promise<string[]> {
 async function applyNotes(listingId: string, text: string): Promise<void> {
   if (!text) return;
   const db = createServerClient();
+  const currency = await shopCurrencyForListing(listingId);
   const updates: Record<string, unknown> = { user_prompt: text.slice(0, 1000), updated_at: new Date().toISOString() };
-  const price = extractPrice(text);
+  const price = extractPrice(text, currency);
   const stock = extractStock(text);
   if (price != null) updates.selling_price = price;
   if (stock != null) updates.quantity = stock;
@@ -271,11 +305,19 @@ async function applyNotes(listingId: string, text: string): Promise<void> {
   // back to this for every variant that doesn't have its own sale price,
   // so stating it once here applies no matter the variant, exactly like
   // selling_price already does for global_price.
-  const sale = extractSalePrice(text);
-  if (sale != null) {
-    updates.sale_price = sale.salePrice;
-    if (sale.startDate) updates.sale_start_date = sale.startDate;
-    if (sale.endDate) updates.sale_end_date = sale.endDate;
+  //
+  // Only persisted when BOTH dates come with it. Jumia requires all three
+  // together ("The Global StartAt and EndAt are mandatory when Sale Price
+  // is filled") — a price saved here without dates used to sit in the DB
+  // looking set, and only surfaced as a problem much later when a push
+  // silently dropped it. The seller's raw text survives in user_prompt
+  // either way, so a price stated alone isn't lost — just not applied
+  // until the dates come with it.
+  const sale = extractSalePrice(text, new Date(), currency);
+  if (sale != null && sale.startDate && sale.endDate) {
+    updates.sale_price      = sale.salePrice;
+    updates.sale_start_date = sale.startDate;
+    updates.sale_end_date   = sale.endDate;
   }
   await db.from("listings").update(updates).eq("id", listingId);
 }
@@ -724,35 +766,18 @@ async function sendStatusReply(
 
 /**
  * Fallback while startBatchAnalysis's Promise.all is still running — the
- * seller can't submit/edit anything yet (nothing's drafted), but a big
- * batch (10+, see startBatchAnalysis) can take a while, so "tell_joke"
- * (tapped from the button startBatchAnalysis sends for a batch that size,
- * or typed as a close variant of the phrase) gives them something to do
- * besides repeatedly checking status. Re-offers the same button afterward
- * so asking for another doesn't need retyping anything.
+ * seller can't submit/edit anything yet (nothing's drafted). A big batch
+ * (10+, see startBatchAnalysis) can take a while; this used to offer a
+ * "Tell me a joke" button to pass the time, which read as a distraction
+ * from an unrelated joke bot rather than a listing tool mid-task — dropped
+ * in favour of just saying plainly that it's still working.
  */
 async function handleAnalyzingMessage(
   phoneNumber: string,
-  session: WhatsAppSession,
-  content: { text?: string },
+  _session: WhatsAppSession,
+  _content: { text?: string },
 ): Promise<void> {
-  const text = content.text?.trim().toLowerCase() ?? "";
-  if (text === "tell_joke" || /\btell me a( nice)? (joke|story)\b/.test(text)) {
-    // "story" still matches on purpose: the button used to say that, and a
-    // seller mid-batch may be replying to an older message still on their
-    // screen. Costs one alternation, saves a dead end.
-    await replyButtons(phoneNumber, pickJoke(), [{ id: "tell_joke", title: "😄 Another one" }]);
-    return;
-  }
-  if ((session.batchSize ?? 1) >= BIG_BATCH_SIZE) {
-    await replyButtons(
-      phoneNumber,
-      "⏳ Still drafting your products — hang tight.",
-      [{ id: "tell_joke", title: "😄 Tell me a joke" }],
-    );
-    return;
-  }
-  await replyText(phoneNumber, "⏳ Still drafting your products — one sec.");
+  await replyText(phoneNumber, "⏳ Still drafting your products — hang tight.");
 }
 
 /**
@@ -819,7 +844,6 @@ async function describeStatus(
     case "analyzing":
       return {
         text: "Drafting your products right now — this can take up to a minute.",
-        buttons: (session.batchSize ?? 1) >= BIG_BATCH_SIZE ? [{ id: "tell_joke", title: "😄 Tell me a joke" }] : undefined,
       };
     case "awaiting_confirmation": {
       const batchId = session.batchId;
@@ -1699,15 +1723,9 @@ async function startBatchAnalysis(
   await updateSession(phoneNumber, { state: "analyzing" });
   await replyText(
     phoneNumber,
-    `🔎 Got everything for all ${batchSize} product${batchSize === 1 ? "" : "s"} — drafting them now. I'll update you as each one finishes…`,
+    `🔎 Got everything for all ${batchSize} product${batchSize === 1 ? "" : "s"} — drafting them now. I'll update you as each one finishes…` +
+    (batchSize >= BIG_BATCH_SIZE ? " This is a bigger batch, so it may take a little while." : ""),
   );
-  if (batchSize >= BIG_BATCH_SIZE) {
-    await replyButtons(
-      phoneNumber,
-      "This is a bigger batch, so drafting may take a little while. Want something to pass the time?",
-      [{ id: "tell_joke", title: "😄 Tell me a joke" }],
-    );
-  }
 
   // Still wrapped: a throw here would strand the seller in "analyzing",
   // where every message just gets "Still drafting" back. Much less can go
@@ -1896,11 +1914,12 @@ async function askForNextMissingPrice(
   const who = listings.length > 1 && next.whatsapp_seq != null
     ? `Product ${next.whatsapp_seq} — ${next.title}`
     : next.title;
+  const currency = await shopCurrencyForUser(next.user_id);
 
   await replyButtons(
     phoneNumber,
     `${opts.prefix ? `${opts.prefix}\n\n` : ""}💰 *${who}*\n\n` +
-    `What price are you selling it at? Reply with just the number in cedis — e.g. *150*.\n\n` +
+    `What price are you selling it at? Reply with just the number in ${currencyNameWord(currency)} — e.g. *150*.\n\n` +
     `Jumia won't accept a product without one.`,
     [{ id: "skip price", title: "Skip for now" }],
   );
@@ -1950,9 +1969,10 @@ async function applyChatPrice(
   // answered the one question we asked will otherwise assume the product
   // is ready, and only find out at submit time that it isn't.
   const stillMissing = await missingFieldsFor(listingId);
+  const currency = saved?.user_id ? await shopCurrencyForUser(saved.user_id) : "GHS";
   const confirmation = stillMissing.length === 0
-    ? `✅ Price set to GHS ${price} for ${label} — ready to submit.`
-    : `✅ Price set to GHS ${price} for ${label}.\n⚠️ Still needs: ${stillMissing.join(", ")} — tap *Edit product ${saved?.whatsapp_seq ?? ""}*.`.trimEnd();
+    ? `✅ Price set to ${currency} ${price} for ${label} — ready to submit.`
+    : `✅ Price set to ${currency} ${price} for ${label}.\n⚠️ Still needs: ${stillMissing.join(", ")} — tap *Edit product ${saved?.whatsapp_seq ?? ""}*.`.trimEnd();
 
   // The confirmation rides along with the next question rather than going
   // out as its own message — one send per answer, not two.
@@ -2174,7 +2194,7 @@ async function handleAwaitingBatchConfirmation(
   // conversation waiting for a number.
   if (session.awaitingPriceFor) {
     const priceFor = session.awaitingPriceFor;
-    const price = extractPrice(text);
+    const price = extractPrice(text, await shopCurrencyForUser(userId));
     if (price != null && price > 0) {
       await applyChatPrice(phoneNumber, batchId, priceFor, price);
       return;
@@ -2584,13 +2604,20 @@ async function handleEdit(
   }
 
   const db = createServerClient();
-  const price = extractPrice(editText);
+  const currency = await shopCurrencyForUser(userId);
+  const price = extractPrice(editText, currency);
   const stock = extractStock(editText);
-  const sale  = extractSalePrice(editText);
+  const sale  = extractSalePrice(editText, new Date(), currency);
+  // Jumia requires the sale price AND both dates together ("The Global
+  // StartAt and EndAt are mandatory when Sale Price is filled") — only
+  // apply it when the seller gave all three in this one message; a price
+  // stated alone used to get saved anyway and silently fail to reach Jumia
+  // much later at push time with no explanation.
+  const saleComplete = sale != null && !!sale.startDate && !!sale.endDate;
   const applied: string[] = [];
-  if (price != null) { applied.push(`price to GH₵${price}`); }
+  if (price != null) { applied.push(`price to ${currency} ${price}`); }
   if (stock != null) { applied.push(`stock to ${stock}`); }
-  if (sale != null) { applied.push(`sale price to GH₵${sale.salePrice}${sale.startDate || sale.endDate ? " with dates" : ""}`); }
+  if (saleComplete) { applied.push(`sale price to ${currency} ${sale!.salePrice} with dates`); }
   if (applied.length > 0) {
     await db
       .from("listings")
@@ -2599,17 +2626,20 @@ async function handleEdit(
         ...(stock != null ? { quantity: stock } : {}),
         // Listing-level fallback every variant resolves to when it has no
         // sale price of its own — see applyNotes's identical comment.
-        ...(sale != null ? {
-          sale_price: sale.salePrice,
-          ...(sale.startDate ? { sale_start_date: sale.startDate } : {}),
-          ...(sale.endDate ? { sale_end_date: sale.endDate } : {}),
+        ...(saleComplete ? {
+          sale_price:      sale!.salePrice,
+          sale_start_date: sale!.startDate,
+          sale_end_date:   sale!.endDate,
         } : {}),
         updated_at: new Date().toISOString(),
       })
       .eq("id", listing.id);
   }
 
-  const ack = applied.length > 0 ? `✅ Updated product ${seq}'s ${applied.join(" and ")}. ` : "";
+  let ack = applied.length > 0 ? `✅ Updated product ${seq}'s ${applied.join(" and ")}. ` : "";
+  if (sale != null && !saleComplete) {
+    ack += `I didn't set the sale price of ${currency} ${sale.salePrice} — Jumia needs a start AND end date with it. Tell me both together (e.g. "sale 80 from 20 Sept to 30 Sept") and I'll set it. `;
+  }
   await replyCta(
     phoneNumber,
     `${ack}For anything else, edit product ${seq} here:`,
@@ -2705,7 +2735,7 @@ async function handleFixAndResubmit(
   const db = createServerClient();
   const { data: row } = await db
     .from("listings")
-    .select("id, whatsapp_seq, title, jumia_error, category_code, category_path, user_prompt")
+    .select("id, whatsapp_seq, title, jumia_error, category_code, category_path, user_prompt, jumia_rerun_fingerprint, jumia_rerun_count")
     .eq("id", listingId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -2743,6 +2773,35 @@ async function handleFixAndResubmit(
     );
     return;
   }
+
+  // Cap automatic repair to one attempt per rejection shape. Real
+  // production loop (2026-09-17/18): a category rejection kept getting
+  // redrafted and resubmitted into the identical rejection, repeatedly,
+  // for over an hour, with no message ever telling the seller it wasn't
+  // working. See shouldBlockRepeatedAutoFix's doc comment.
+  const fingerprint = rejectionFingerprint(remedy.kind, rejectionText);
+  const prior = {
+    fingerprint: (row.jumia_rerun_fingerprint as string | null) ?? null,
+    count:       (row.jumia_rerun_count as number | null) ?? 0,
+  };
+  if (shouldBlockRepeatedAutoFix(remedy.kind, fingerprint, prior)) {
+    await db.from("listings").update({
+      jumia_rerun_fingerprint: null,
+      jumia_rerun_count:       0,
+      updated_at:              new Date().toISOString(),
+    }).eq("id", listingId);
+    await replyError(
+      phoneNumber,
+      `⚠️ ${label}: I already tried fixing this automatically once and Jumia rejected it the same way again — ${remedy.explanation} This one needs you now: open the editor, sort it out, and I'll resubmit once it's ready.`,
+      { retryId: `fix:${listingId}`, retryTitle: "Fix & resubmit", cta: { label: "Open editor", url: focusedEditorUrl(listingId) } },
+    );
+    return;
+  }
+  await db.from("listings").update({
+    jumia_rerun_fingerprint: fingerprint,
+    jumia_rerun_count:       prior.fingerprint === fingerprint ? prior.count + 1 : 1,
+    updated_at:              new Date().toISOString(),
+  }).eq("id", listingId);
 
   await replyText(phoneNumber, `🔧 ${label}: ${remedy.explanation} Fixing and resubmitting…`);
 

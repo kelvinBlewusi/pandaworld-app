@@ -268,6 +268,43 @@ export function isAutoFixable(kind: RemedyKind): boolean {
 }
 
 /**
+ * A stable identifier for "this listing got this same rejection" — cheap
+ * enough to store on the listing row and compare on the next Fix & resubmit
+ * tap, so a rerun that changes nothing can be told apart from a genuinely
+ * new problem. Kind is included because the same rejection text should
+ * never realistically map to two kinds, but keeping it explicit costs
+ * nothing and documents the intent.
+ */
+export function rejectionFingerprint(kind: RemedyKind, rejectionText: string): string {
+  const normalized = rejectionText.toLowerCase().replace(/\s+/g, " ").trim().slice(0, 80);
+  return `${kind}:${normalized}`;
+}
+
+/**
+ * Should THIS automatic-repair attempt be refused because it would just
+ * repeat one that already failed?
+ *
+ * Real production loop (2026-09-17/18 chat log): a category rejection on
+ * the same listing got "Fix & resubmit" tapped, redrafted, and rejected
+ * again with the identical "You can't list products in this category"
+ * message — repeatedly, over more than an hour, without ever telling the
+ * seller that automatic fixing wasn't working. Capping this to one attempt
+ * per fingerprint before handing back to the seller is what closes it.
+ *
+ * "repush" is exempt: a duplicate-SKU rejection is resolved by a genuinely
+ * fresh SKU each attempt (see pushListingToJumia's isRetry), so a second
+ * attempt is not "the same fix repeating" the way a rerun is.
+ */
+export function shouldBlockRepeatedAutoFix(
+  kind:  RemedyKind,
+  fingerprint: string,
+  prior: { fingerprint: string | null; count: number },
+): boolean {
+  if (kind === "repush") return false;
+  return prior.fingerprint === fingerprint && prior.count >= 1;
+}
+
+/**
  * Pull the specific schema attribute name out of a Jumia rejection, when
  * it names one — "Attribute [color_family] is not visible for category
  * [Laptops]." → "color_family".

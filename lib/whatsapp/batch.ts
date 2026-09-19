@@ -138,29 +138,81 @@ export function parseEditCommand(text: string, batchSize: number): EditCommand |
 // here too. This is plain regex over what the seller explicitly typed, not
 // an inference — if it doesn't match a clear, explicit number, it returns
 // null and the seller sets it on the review page instead.
+//
+// Parameterized by the seller's shop currency (PandaWorld lists Jumia
+// sellers across Africa, not just Ghana) — every pattern here used to be
+// hardcoded to GH[SC]/GH₵/₵/cedis. Deliberately self-contained rather than
+// importing lib/jumia/api.ts's COUNTRY_CURRENCY: this file is split out
+// specifically to stay unit-testable without pulling in Supabase/AI-
+// pipeline transitive deps (see the file's own header comment), and
+// api.ts carries exactly that weight.
+
+interface CurrencySpec {
+  /** Symbol/code forms usable as a PREFIX ("₦200", "GHS 150") — no
+   *  boundary needed there, matching the original GHS behaviour. */
+  prefix: string;
+  /** Letter/code forms usable as a SUFFIX ("200 GHC", "150 NGN") — gets a
+   *  trailing \b, since these are ordinary words. */
+  trailingLetters: string | null;
+  /** Symbol glyphs usable as a SUFFIX ("200 ₵", "150 ₦") — no \b: a word
+   *  boundary needs a word/non-word transition, and a glyph is already
+   *  non-word, so "200 ₵" would match nothing with a \b riding on it. */
+  trailingGlyphs: string | null;
+  /** Spelled-out unit name(s), suffix only ("150 cedis", "200 naira"). */
+  names: string;
+}
+
+const CURRENCY_SPECS: Record<string, CurrencySpec> = {
+  GHS: { prefix: "GH[SC]?|GH₵|₵", trailingLetters: "GH[SC]", trailingGlyphs: "GH₵|₵", names: "ced[ei]s" },
+  NGN: { prefix: "NGN|₦", trailingLetters: "NGN", trailingGlyphs: "₦", names: "naira" },
+  KES: { prefix: "KES|KSh", trailingLetters: "KES|KSh", trailingGlyphs: null, names: "shillings?" },
+  EGP: { prefix: "EGP|E£|£E", trailingLetters: "EGP", trailingGlyphs: "E£|£E", names: "(?:egyptian\\s+)?pounds?" },
+  MAD: { prefix: "MAD|DH", trailingLetters: "MAD|DH", trailingGlyphs: null, names: "dirhams?" },
+  XOF: { prefix: "XOF|CFA", trailingLetters: "XOF|CFA", trailingGlyphs: null, names: "(?:CFA\\s*)?francs?" },
+  TZS: { prefix: "TZS|TSh", trailingLetters: "TZS|TSh", trailingGlyphs: null, names: "shillings?" },
+  UGX: { prefix: "UGX|USh", trailingLetters: "UGX|USh", trailingGlyphs: null, names: "shillings?" },
+};
+
+function currencySpec(currency: string): CurrencySpec {
+  return CURRENCY_SPECS[currency] ?? CURRENCY_SPECS.GHS;
+}
+
+/** The trailing-currency alternation for one spec, letters \b-boundaried
+ *  and glyphs left bare — see CurrencySpec's own doc comment on why. */
+function trailingAlternation(spec: CurrencySpec): string {
+  const parts: string[] = [];
+  if (spec.trailingLetters) parts.push(`(?:${spec.trailingLetters})\\b`);
+  if (spec.trailingGlyphs) parts.push(spec.trailingGlyphs);
+  return parts.join("|");
+}
 
 /** "price 150", "price: GHS 150", "the price is 150", "₵150", "150 cedis"
- *  → 150. A message that's JUST a bare number ("200") also counts —
- *  confirmed live: a seller told "tell me the price" (the photo-prompt's
- *  own wording, no keyword required) reasonably just types "200", and
- *  requiring a "price"/currency prefix silently dropped it, leaving the
- *  listing with no price and "price is required" errors at submit time.
- *  Null if neither shape matches.
+ *  → 150 (or the equivalent shapes for another shop currency — see
+ *  `currency`, an ISO code like "NGN"/"KES", defaulting to "GHS"). A
+ *  message that's JUST a bare number ("200") also counts — confirmed live:
+ *  a seller told "tell me the price" (the photo-prompt's own wording, no
+ *  keyword required) reasonably just types "200", and requiring a
+ *  "price"/currency prefix silently dropped it, leaving the listing with
+ *  no price and "price is required" errors at submit time. Null if
+ *  neither shape matches.
  *
  *  The optional "is"/"was" before the separator matters: confirmed live,
  *  "The price is 150" (a completely natural way to say it, and how the
  *  photo-collection prompt's own example phrases it) didn't match when
  *  the gap between "price" and the separator only allowed whitespace —
  *  the seller got told "still needs: price" despite having stated it. */
-export function extractPrice(text: string): number | null {
+export function extractPrice(text: string, currency: string = "GHS"): number | null {
+  const spec = currencySpec(currency);
+
   // Negative lookbehind excludes "sale price 100" — that's
   // extractSalePrice's territory (below); without this guard, a message
   // that states ONLY a sale price (no regular price at all) would have
   // its sale price misread as the regular selling price.
-  const labeled = text.match(/(?<!sale\s)price\s*(?:is|was)?\s*[:=]?\s*(?:GH[SC]?|GH₵|₵)?\s*(\d+(?:\.\d+)?)/i);
+  const labeled = text.match(new RegExp(`(?<!sale\\s)price\\s*(?:is|was)?\\s*[:=]?\\s*(?:${spec.prefix})?\\s*(\\d+(?:\\.\\d+)?)`, "i"));
   if (labeled) return parseFloat(labeled[1]);
-  const currency = text.match(/(?:GH[SC]?|GH₵|₵)\s*(\d+(?:\.\d+)?)/i) ?? text.match(/(\d+(?:\.\d+)?)\s*ced[ei]s/i);
-  if (currency) return parseFloat(currency[1]);
+  const currencyMatch = text.match(new RegExp(`(?:${spec.prefix})\\s*(\\d+(?:\\.\\d+)?)`, "i"))
+    ?? text.match(new RegExp(`(\\d+(?:\\.\\d+)?)\\s*${spec.names}`, "i"));
+  if (currencyMatch) return parseFloat(currencyMatch[1]);
 
   // Number BEFORE the currency: "110 ghs", "110GHC", "110 ₵".
   //
@@ -168,10 +220,7 @@ export function extractPrice(text: string): number | null {
   // singles" read as no price at all — the seller stated it plainly and
   // the listing was still blocked at submit with "price is required".
   // Seen live on 2026-09-15.
-  // The \b rides on the LETTER forms only. A word boundary needs a
-  // word/non-word transition, and ₵ is already non-word, so "200 ₵"
-  // matched nothing at all with the boundary on the outside.
-  const trailingCurrency = text.match(/(\d+(?:\.\d+)?)\s*(?:GH[SC]\b|GH₵|₵)/i);
+  const trailingCurrency = text.match(new RegExp(`(\\d+(?:\\.\\d+)?)\\s*(?:${trailingAlternation(spec)})`, "i"));
   if (trailingCurrency) return parseFloat(trailingCurrency[1]);
 
   const bare = text.trim().match(/^(\d+(?:\.\d+)?)$/);
@@ -313,7 +362,8 @@ function parseDatePhrase(raw: string, now: Date): string | null {
 const DATE_RANGE_RE =
   /(?:from|between|(?:sale|promo(?:tion)?|start(?:\s+and\s+end)?|end)?\s*dates?\s*(?:is|are|will\s+be)?\s*(?:from)?)\s+([^.,\n]+?)\s+(?:to|until|till|through)\s+([^.,\n]+?)(?=[.,\n]|$)/i;
 
-export function extractSalePrice(text: string, now: Date = new Date()): SalePriceExtraction | null {
+export function extractSalePrice(text: string, now: Date = new Date(), currency: string = "GHS"): SalePriceExtraction | null {
+  const spec = currencySpec(currency);
   // (?!\d) before the %-guard matters: without it, a greedy \d+ that fails
   // the %-guard backtracks to a SHORTER digit run that dodges it (e.g.
   // "20%" backtracking from "20" to "2" — "2" isn't immediately followed
@@ -321,7 +371,7 @@ export function extractSalePrice(text: string, now: Date = new Date()): SalePric
   // salePrice=2). (?!\d) rejects any match that isn't the full digit run,
   // closing that backtrack path.
   const priceMatch = text.match(
-    /(?:sales?\s*price|promo(?:tion(?:al)?)?\s*price|discount(?:ed)?\s*(?:price)?)\s*(?:is|was|to|of|at)?\s*[:=]?\s*(?:GH[SC]?|GH₵|₵)?\s*(\d+(?:\.\d+)?)(?!\d)(?!\s*%)/i,
+    new RegExp(`(?:sales?\\s*price|promo(?:tion(?:al)?)?\\s*price|discount(?:ed)?\\s*(?:price)?)\\s*(?:is|was|to|of|at)?\\s*[:=]?\\s*(?:${spec.prefix})?\\s*(\\d+(?:\\.\\d+)?)(?!\\d)(?!\\s*%)`, "i"),
   );
   if (!priceMatch) return null;
   const result: SalePriceExtraction = { salePrice: parseFloat(priceMatch[1]) };

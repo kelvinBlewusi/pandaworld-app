@@ -3,6 +3,8 @@ import {
   isAutoFixable,
   extractRejectedAttributeName,
   extractRejectionText,
+  rejectionFingerprint,
+  shouldBlockRepeatedAutoFix,
 } from "@/lib/jumia/rejection-remedy";
 
 // Real rejection strings from this account's failed pushes.
@@ -314,5 +316,49 @@ describe("extractRejectionText", () => {
   it("returns empty string for null/undefined", () => {
     expect(extractRejectionText(null)).toBe("");
     expect(extractRejectionText(undefined)).toBe("");
+  });
+});
+
+// Fix 4: real production loop (2026-09-17/18 chat log) — a category
+// rejection kept getting "Fix & resubmit" -> redraft -> resubmit -> the
+// IDENTICAL rejection, repeatedly for over an hour, with no message ever
+// telling the seller automatic fixing wasn't working.
+describe("rejectionFingerprint + shouldBlockRepeatedAutoFix", () => {
+  const categoryMsg = "You can't list products in this category. Please choose a different (more specific) category and try again.";
+
+  it("produces the same fingerprint for the same kind + rejection text", () => {
+    const a = rejectionFingerprint("rerun", categoryMsg);
+    const b = rejectionFingerprint("rerun", categoryMsg);
+    expect(a).toBe(b);
+  });
+
+  it("produces a different fingerprint for a different rejection text", () => {
+    const a = rejectionFingerprint("rerun", categoryMsg);
+    const b = rejectionFingerprint("rerun", "Attribute [color_family] is not visible for category [Laptops].");
+    expect(a).not.toBe(b);
+  });
+
+  it("does not block the first automatic attempt (no prior fingerprint yet)", () => {
+    const fp = rejectionFingerprint("rerun", categoryMsg);
+    expect(shouldBlockRepeatedAutoFix("rerun", fp, { fingerprint: null, count: 0 })).toBe(false);
+  });
+
+  it("blocks a second automatic attempt at the identical rejection shape", () => {
+    const fp = rejectionFingerprint("rerun", categoryMsg);
+    expect(shouldBlockRepeatedAutoFix("rerun", fp, { fingerprint: fp, count: 1 })).toBe(true);
+  });
+
+  it("does not block when the rejection changed shape since the last attempt", () => {
+    const fp = rejectionFingerprint("rerun", categoryMsg);
+    const priorFp = rejectionFingerprint("rerun", "Attribute [color_family] is not visible for category [Laptops].");
+    expect(shouldBlockRepeatedAutoFix("rerun", fp, { fingerprint: priorFp, count: 1 })).toBe(false);
+  });
+
+  // Duplicate-SKU rejections are exempt: each attempt genuinely mints a
+  // fresh SKU (pushListingToJumia's isRetry), so a second attempt is not
+  // "the same fix repeating" the way a rerun is.
+  it("never blocks a repush (duplicate SKU), even at the same fingerprint", () => {
+    const fp = rejectionFingerprint("repush", "Jumia already has this SKU.");
+    expect(shouldBlockRepeatedAutoFix("repush", fp, { fingerprint: fp, count: 5 })).toBe(false);
   });
 });

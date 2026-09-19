@@ -54,7 +54,13 @@ export type PreflightReason =
   /** A numeric value violated the schema's notZeroOrNegative rule (zero
    *  or below) and no repair is safe to guess — dropped, same as an
    *  unmatched enum value. */
-  | "invalid_number";
+  | "invalid_number"
+  /** decimal_places===0 and the value still carries a fraction, AND Jumia
+   *  already rejected this exact attribute for the same reason once before
+   *  — dropped rather than silently rounded again, so a re-push doesn't
+   *  ship the identical shape a second time without the seller confirming
+   *  the number they meant. */
+  | "decimal_mismatch_blocked";
 
 export interface PreflightNote {
   attribute: string;
@@ -127,6 +133,29 @@ export interface PreflightOptions {
    * list useless as a gate.
    */
   carriedElsewhere?: Iterable<string>;
+
+  /**
+   * The listing's last recorded Jumia rejection text (raw jumia_error,
+   * already reduced to plain text — JSON or not, either survives the
+   * regex below). Used only to recognise when THIS SAME decimal-place
+   * mismatch was already rejected once, so a rerun doesn't silently round
+   * and resubmit the identical shape again — see the decimal_places branch
+   * below. Never used for anything else here.
+   */
+  priorRejectionText?: string | null;
+}
+
+/** Did Jumia already reject THIS attribute for a decimal/whole-number
+ *  reason? Matched against the live wire shape ("Attribute [x] with the
+ *  value [1.7] should be a number without decimals.") — narrow on purpose,
+ *  since a false match here would block a push over an unrelated rejection. */
+function priorRejectionBlocksDecimal(name: string, priorRejectionText: string | null | undefined): boolean {
+  if (!priorRejectionText) return false;
+  const msg = priorRejectionText.toLowerCase();
+  const escaped = name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const namedPattern = new RegExp(`\\b(?:attribute|column)\\s*\\[\\s*${escaped}\\s*\\]`, "i");
+  if (!namedPattern.test(msg)) return false;
+  return /without decimals|not a valid number|decimal/i.test(msg);
 }
 
 /**
@@ -241,6 +270,21 @@ export function preflightAttributes(
         if (field.decimal_places != null && field.decimal_places >= 0) {
           const rounded = Number(num.toFixed(field.decimal_places));
           if (rounded !== num) {
+            // Jumia already rejected this exact attribute for carrying a
+            // fraction it doesn't allow — rounding again and resubmitting
+            // ships the identical shape a second time on a guess. Drop it
+            // instead (surfacing via missingRequired below when the field
+            // is required) so the seller has to confirm the real number
+            // rather than have it reshaped again silently.
+            if (field.decimal_places === 0 && priorRejectionBlocksDecimal(attr.name, options.priorRejectionText)) {
+              notes.push({
+                attribute: attr.name,
+                label:     field.label,
+                reason:    "decimal_mismatch_blocked",
+                detail:    `"${num}" isn't a whole number and Jumia already rejected this exact attribute for that — set a whole number yourself before resubmitting`,
+              });
+              continue;
+            }
             value = String(rounded);
             notes.push({
               attribute: attr.name,

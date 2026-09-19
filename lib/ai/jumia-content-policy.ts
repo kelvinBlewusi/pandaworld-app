@@ -25,6 +25,7 @@
  */
 
 import { buildRestrictedWordsInstruction } from "./restricted-words";
+import { isFashionCategory } from "@/lib/jumia/fashion-category";
 
 // ─── Restricted-brand quick-glance set ───────────────────────────────────────
 //
@@ -209,7 +210,7 @@ export function buildContentPolicyInstructions(
 ): string {
   const { categoryPath, includeImageRules = true } = opts;
 
-  const isFashion = (categoryPath ?? "").toLowerCase().includes("fashion");
+  const isFashion = isFashionCategory(categoryPath);
 
   // The verbatim banned-words block from restricted-words.ts. This is
   // the SAME instruction we already give the AI — including it inside
@@ -359,8 +360,9 @@ BRAND & ANTI-COUNTERFEIT RULES:
         Ben Nye.
       Apparel: Yeezy.
       Misc: Rubik's, VigRX, Oriflame.
-  - Never invent a brand. "Generic" is a valid fallback when no logo is
-    visible.
+  - Never invent a brand. When no logo is visible: ${isFashion
+      ? "use \"Fashion\" as the fallback for this category, NOT \"Generic\" — Jumia rejects \"Generic\" as a brand on Fashion categories."
+      : "\"Generic\" is a valid fallback."}
 
 NUMERIC FIELDS — STRICTLY NUMBERS, NEVER STRINGS:
   - weight_kg, weight, size_l/w/h, screen_size, battery_capacity, ram_size,
