@@ -12,6 +12,18 @@ import { mapListingToJumiaProducts, type JumiaProduct } from "@/lib/jumia/api";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 
+// Sale-window dates used below must stay in the future relative to whenever
+// this suite actually runs — buildSalePriceField (lib/jumia/api.ts) refuses
+// a salePrice whose end date has already passed, so a fixed calendar date
+// would silently start failing this suite once "now" caught up to it.
+function isoDateOffset(days: number): string {
+  return new Date(Date.now() + days * 24 * 3600 * 1000).toISOString().slice(0, 10);
+}
+const FUTURE_SALE_START   = isoDateOffset(10);
+const FUTURE_SALE_END     = isoDateOffset(20);
+const FUTURE_SALE_START_2 = isoDateOffset(30);
+const FUTURE_SALE_END_2   = isoDateOffset(40);
+
 // ─── Shape of a valid POST /feeds/products/create payload per Postman ───────
 
 interface ExpectedShape {
@@ -35,7 +47,13 @@ const PRODUCT_SHAPE: Record<string, ExpectedShape> = {
   category: { required: ["code", "name"] },
   imageItem: { required: ["url", "primary"] },
   price: { required: ["value", "currency"], optional: ["salePrice"] },
-  salePrice: { required: ["value"], optional: ["startAt", "endAt"] },
+  // startAt/endAt are REQUIRED whenever salePrice is present at all — Jumia
+  // rejects a salePrice missing either ("Attribute
+  // [Product.Price.SalePrice.StartAt] with invalid value [null]"), and
+  // buildSalePriceField (lib/jumia/api.ts) now omits the whole salePrice
+  // key rather than ever emitting one without both dates. This used to mark
+  // them optional, which is exactly what let the partial shape ship.
+  salePrice: { required: ["value", "startAt", "endAt"] },
   attribute: { required: ["name", "value", "translations"] },
 };
 
@@ -103,8 +121,12 @@ const sampleVariants: VariantRow[] = [
     seller_sku: "PA-TEST-1-NAVY", gtin: "8806094956542",
     quantity: 10, global_price: 2199,
     sale_price: 1899,
-    sale_start_date: "2025-02-01",
-    sale_end_date:   "2025-02-15",
+    // Must stay in the future relative to whenever this suite runs —
+    // buildSalePriceField (lib/jumia/api.ts) refuses a salePrice whose end
+    // date has already passed, so a fixed past date would silently start
+    // failing these tests once "now" caught up to it.
+    sale_start_date: FUTURE_SALE_START,
+    sale_end_date:   FUTURE_SALE_END,
     created_at: "2025-01-01T00:00:00Z",
   },
 ];
@@ -260,13 +282,13 @@ describe("Jumia /feeds/products/create payload conformance", () => {
     );
 
     it("includes a listing-level sale price when set — the only place one can live with zero variant rows", () => {
-      const onSale: ListingRow = { ...sampleListing, sale_price: 1799, sale_start_date: "2026-09-20", sale_end_date: "2026-09-30" };
+      const onSale: ListingRow = { ...sampleListing, sale_price: 1799, sale_start_date: FUTURE_SALE_START_2, sale_end_date: FUTURE_SALE_END_2 };
       const ps = mapListingToJumiaProducts(onSale, [], brand, currency);
       const sp = ps[0].price.salePrice;
       expect(sp).toBeDefined();
       expect(sp!.value).toBe(1799);
-      expect(sp!.startAt).toBe("2026-09-20");
-      expect(sp!.endAt).toBe("2026-09-30");
+      expect(sp!.startAt).toBe(FUTURE_SALE_START_2);
+      expect(sp!.endAt).toBe(FUTURE_SALE_END_2);
     });
 
     it("omits salePrice when no listing-level sale price is set", () => {
@@ -309,31 +331,94 @@ describe("Jumia /feeds/products/create payload conformance", () => {
       expect(ps[0].variation.length).toBeGreaterThan(0);
     });
 
+    // Fix 6 (see lib/jumia/api.ts resolveVariantRowVariation): the
+    // variation axis discipline color_family already had must not treat a
+    // legitimate composite spec label ("RAM / Storage / Colour", joined by
+    // "/") as a list of alternatives — that's a DIFFERENT bug from a
+    // colour column holding several colourways.
+    it("keeps a composite variation label joined by '/' untouched with no axis schema", () => {
+      const ps = mapListingToJumiaProducts(sampleListing, sampleVariants, brand, currency);
+      expect(ps[0].variation).toBe("8GB / 128GB / Navy");
+    });
+
+    describe("variation snapped to the category's own variant axis", () => {
+      const colorAxis: JumiaCategoryAttribute[] = [
+        { name: "color_family", label: "Colour", type: "select",
+          allowed_values: ["Black", "White", "Gray", "Navy"],
+          required: false, is_variant: true },
+      ];
+
+      it("maps British 'Grey' to the axis's declared 'Gray' — real rejection: \"Attribute [variation] with invalid value [Grey]\"", () => {
+        const greyVariant: VariantRow = { ...sampleVariants[0], variation: "Grey" };
+        const ps = mapListingToJumiaProducts(sampleListing, [greyVariant], brand, currency, [], undefined, colorAxis);
+        expect(ps[0].variation).toBe("Gray");
+      });
+
+      // Real rejection: "Attribute [color_family] with invalid value
+      // [Yellow,Red,Orange,White,Blue]" — five individually-valid colours
+      // sent as one string. Only refused when the axis PROVES every part is
+      // a real stocked option — a value with no axis to check against is
+      // left alone (see the composite-label test above).
+      it("refuses a comma-joined list where every part is a real stocked colour", () => {
+        const multiVariant: VariantRow = { ...sampleVariants[0], variation: "Black,White,Navy" };
+        const ps = mapListingToJumiaProducts(sampleListing, [multiVariant], brand, currency, [], undefined, colorAxis);
+        expect(ps[0].variation).toBe("Default");
+      });
+
+      it("leaves a single axis-valid colour alone", () => {
+        const single: VariantRow = { ...sampleVariants[0], variation: "Navy" };
+        const ps = mapListingToJumiaProducts(sampleListing, [single], brand, currency, [], undefined, colorAxis);
+        expect(ps[0].variation).toBe("Navy");
+      });
+    });
+
     it("salePrice is included with startAt/endAt when set", () => {
       const sp = products[0].price.salePrice;
       expect(sp).toBeDefined();
       assertHasKeys(sp, PRODUCT_SHAPE.salePrice, "product.price.salePrice");
       expect(sp!.value).toBe(1899);
-      expect(sp!.startAt).toBe("2025-02-01");
-      expect(sp!.endAt).toBe("2025-02-15");
+      expect(sp!.startAt).toBe(FUTURE_SALE_START);
+      expect(sp!.endAt).toBe(FUTURE_SALE_END);
     });
 
     it("falls back to the listing-level sale price when a variant has none of its own — applies no matter the variant", () => {
-      const listingOnSale: ListingRow = { ...sampleListing, sale_price: 1799, sale_start_date: "2026-09-20", sale_end_date: "2026-09-30" };
+      const listingOnSale: ListingRow = { ...sampleListing, sale_price: 1799, sale_start_date: FUTURE_SALE_START_2, sale_end_date: FUTURE_SALE_END_2 };
       const variantWithoutSale: VariantRow = { ...sampleVariants[0], sale_price: null, sale_start_date: null, sale_end_date: null };
       const ps = mapListingToJumiaProducts(listingOnSale, [variantWithoutSale], brand, currency);
       const sp = ps[0].price.salePrice;
       expect(sp).toBeDefined();
       expect(sp!.value).toBe(1799);
-      expect(sp!.startAt).toBe("2026-09-20");
-      expect(sp!.endAt).toBe("2026-09-30");
+      expect(sp!.startAt).toBe(FUTURE_SALE_START_2);
+      expect(sp!.endAt).toBe(FUTURE_SALE_END_2);
     });
 
     it("a variant's own sale price overrides the listing-level fallback", () => {
-      const listingOnSale: ListingRow = { ...sampleListing, sale_price: 1799, sale_start_date: "2026-09-20", sale_end_date: "2026-09-30" };
+      const listingOnSale: ListingRow = { ...sampleListing, sale_price: 1799, sale_start_date: FUTURE_SALE_START_2, sale_end_date: FUTURE_SALE_END_2 };
       const ps = mapListingToJumiaProducts(listingOnSale, sampleVariants, brand, currency);
       // sampleVariants[0] already carries its own sale_price: 1899 (see fixture above)
       expect(ps[0].price.salePrice!.value).toBe(1899);
+    });
+
+    // The exact bug fix 2 closes: a sale price stated without both dates
+    // used to ship as {"value": X} (JSON.stringify drops undefined keys),
+    // and Jumia rejected it: "Attribute [Product.Price.SalePrice.StartAt]
+    // with invalid value [null]." Now the whole key is omitted instead.
+    it("omits salePrice entirely when dates are missing, rather than sending a partial one", () => {
+      const variantNoDates: VariantRow = { ...sampleVariants[0], sale_start_date: null, sale_end_date: null };
+      const ps = mapListingToJumiaProducts(sampleListing, [variantNoDates], brand, currency);
+      expect(ps[0].price.salePrice).toBeUndefined();
+    });
+
+    it("omits salePrice when the end date has already passed", () => {
+      const pastEnd: VariantRow = { ...sampleVariants[0], sale_start_date: "2020-01-01", sale_end_date: "2020-01-10" };
+      const ps = mapListingToJumiaProducts(sampleListing, [pastEnd], brand, currency);
+      expect(ps[0].price.salePrice).toBeUndefined();
+    });
+
+    it("omits salePrice when it isn't lower than the regular price", () => {
+      const notCheaper: VariantRow = { ...sampleVariants[0], sale_price: 2199, global_price: 2199 };
+      const ps = mapListingToJumiaProducts(sampleListing, [notCheaper], brand, currency);
+      expect(ps[0].price.salePrice).toBeUndefined();
     });
   });
 

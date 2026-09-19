@@ -207,7 +207,6 @@ export async function updateSession(
   patch: Partial<{
     state:         WhatsAppSessionState;
     listingId:     string | null;
-    lastMessageId: string | null;
     batchId:       string | null;
     batchSize:     number | null;
     batchSeq:      number | null;
@@ -222,7 +221,6 @@ export async function updateSession(
   const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (patch.state         !== undefined) update.state           = patch.state;
   if (patch.listingId     !== undefined) update.listing_id      = patch.listingId;
-  if (patch.lastMessageId !== undefined) update.last_message_id = patch.lastMessageId;
   if (patch.batchId       !== undefined) update.batch_id        = patch.batchId;
   if (patch.batchSize     !== undefined) update.batch_size      = patch.batchSize;
   if (patch.batchSeq      !== undefined) update.batch_seq       = patch.batchSeq;
@@ -254,6 +252,34 @@ export async function claimPhotoConfirmation(phoneNumber: string): Promise<boole
   const { data, error } = await db.rpc("claim_photo_confirmation", { p_phone: phoneNumber });
   if (error) {
     console.warn(`[whatsapp session] photo-confirmation claim failed for ${phoneNumber}: ${error.message}`);
+    return true;
+  }
+  return data === true;
+}
+
+/**
+ * Win the right to actually PROCESS this wamid for this phone number. True
+ * means it's new — proceed; false means another delivery of the same
+ * message already claimed it (a genuine WhatsApp webhook retry, or two
+ * concurrent deliveries racing each other).
+ *
+ * Atomic on purpose — see claim_message_id in
+ * 2026-09-19_atomic-message-id-claim.sql. The plain "read session.
+ * lastMessageId, act, write it back at the end" this replaces left a
+ * window the length of the ENTIRE handler (an AI rerun plus a Jumia push
+ * can run well past WhatsApp's own webhook ack timeout, which is exactly
+ * when Meta redelivers) during which a second delivery of the same
+ * message read the same stale value and ran the whole thing again.
+ *
+ * Fails OPEN: if the claim itself errors, the message is treated as new
+ * rather than silently dropped — a duplicate run is wasteful but
+ * recoverable, a message nobody ever answers is not.
+ */
+export async function claimMessageId(phoneNumber: string, messageId: string): Promise<boolean> {
+  const db = createServerClient();
+  const { data, error } = await db.rpc("claim_message_id", { p_phone: phoneNumber, p_message_id: messageId });
+  if (error) {
+    console.warn(`[whatsapp session] message-id claim failed for ${phoneNumber}: ${error.message}`);
     return true;
   }
   return data === true;

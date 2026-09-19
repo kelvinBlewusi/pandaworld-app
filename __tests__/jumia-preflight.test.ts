@@ -300,6 +300,60 @@ describe("preflightAttributes — decimalPlaces", () => {
     expect(result.attributes[0].value).toBe("about 1.7");
     expect(result.notes).toHaveLength(0);
   });
+
+  // Fix 3: rounding is still fine on a FIRST attempt (above) — the bug was
+  // shipping the identical shape again after Jumia already rejected this
+  // exact attribute for it. Real chat log: "Attribute [capacity_liter]
+  // with the value [1.7] should be a number without decimals." rejected an
+  // Electric Kettle, "Fix & resubmit" redrafted it, and the resubmit was
+  // rejected with the SAME message a second time — the value never
+  // actually changed shape, just got silently re-rounded and re-sent.
+  describe("preflightAttributes — decimal mismatch already rejected once", () => {
+    const priorRejectionText =
+      "Attribute [capacity_liter] with the value [1.7] should be a number without decimals.";
+
+    it("blocks (drops) rather than re-rounds when the same attribute was already rejected for a decimal mismatch", () => {
+      const schema = [attr({ name: "capacity_liter", type: "number", decimal_places: 0 })];
+      const result = preflightAttributes(
+        [{ name: "capacity_liter", value: "1.7" }],
+        schema,
+        { priorRejectionText },
+      );
+      expect(result.attributes.find((a) => a.name === "capacity_liter")).toBeUndefined();
+      expect(result.notes[0].reason).toBe("decimal_mismatch_blocked");
+    });
+
+    it("still rounds normally when the prior rejection was about a DIFFERENT attribute", () => {
+      const schema = [attr({ name: "capacity_liter", type: "number", decimal_places: 0 })];
+      const result = preflightAttributes(
+        [{ name: "capacity_liter", value: "1.7" }],
+        schema,
+        { priorRejectionText: "Attribute [weight_kg] with the value [2.4] should be a number without decimals." },
+      );
+      expect(result.attributes[0].value).toBe("2");
+      expect(result.notes[0].reason).toBe("rounded_number");
+    });
+
+    it("surfaces the blocked attribute as missingRequired when the schema requires it", () => {
+      const schema = [attr({ name: "capacity_liter", type: "number", decimal_places: 0, required: true })];
+      const result = preflightAttributes(
+        [{ name: "capacity_liter", value: "1.7" }],
+        schema,
+        { priorRejectionText },
+      );
+      expect(result.missingRequired.map((n) => n.attribute)).toContain("capacity_liter");
+    });
+
+    it("only blocks decimal_places===0 — a fractional-but-allowed field still rounds", () => {
+      const schema = [attr({ name: "weight_kg", type: "number", decimal_places: 2 })];
+      const result = preflightAttributes(
+        [{ name: "weight_kg", value: "1.2345" }],
+        schema,
+        { priorRejectionText: "Attribute [weight_kg] with the value [1.2] should be a number without decimals." },
+      );
+      expect(result.attributes[0].value).toBe("1.23");
+    });
+  });
 });
 
 describe("preflightAttributes — notZeroOrNegative", () => {

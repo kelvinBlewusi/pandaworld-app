@@ -92,15 +92,19 @@ export function missingFieldLabels(row: ListingRow): string[] {
  *
  *   processing        — a push is in flight for this row right now
  *   pending_approval  — already at Jumia, waiting on their review
- *
- * "live" stays pushable because the existing retry path (which mints a
- * fresh parentSku) is what "Fix & resubmit" relies on after a partial
- * rejection. Note that re-pushing a fully live listing therefore creates a
- * SECOND Jumia product rather than updating the first — that predates this
- * change and is left alone here rather than altered as a side effect; the
- * in-place edit path is /api/jumia/update.
+ *   live              — already on Jumia; re-pushing via create-feed mints
+ *                       a SECOND product rather than touching the first.
+ *                       This used to stay pushable "because the retry path
+ *                       (which mints a fresh parentSku) is what 'Fix &
+ *                       resubmit' relies on" — but that's exactly the bug:
+ *                       a live listing that gets a spurious "Fix & resubmit"
+ *                       tap (e.g. a stale button, a race between two taps)
+ *                       created a real duplicate product on Jumia. The
+ *                       in-place edit path for an already-live listing is
+ *                       /api/jumia/update (updateProductOnJumia); this
+ *                       function is create-only.
  */
-const PUSHABLE_STATUSES: ListingStatus[] = ["draft", "awaiting_review", "failed", "live"];
+const PUSHABLE_STATUSES: ListingStatus[] = ["draft", "awaiting_review", "failed"];
 
 /**
  * Hand back a push claim taken by the conditional UPDATE in
@@ -221,8 +225,9 @@ export async function previewListingPayload(
 
   let accessToken: string;
   let currency: string;
+  let country: string;
   try {
-    ({ accessToken, currency } = await getValidJumiaCredentials(userId));
+    ({ accessToken, currency, country } = await getValidJumiaCredentials(userId));
   } catch (e) {
     return {
       ok: false, code: "not_connected",
@@ -232,7 +237,7 @@ export async function previewListingPayload(
     };
   }
 
-  const built = await buildJumiaPayload(accessToken, row, variants, currency);
+  const built = await buildJumiaPayload(accessToken, row, variants, currency, country);
   if (built.error) return { ok: false, code: "build_failed", message: built.error };
 
   return {
@@ -327,8 +332,9 @@ export async function pushListingToJumia(
   let accessToken: string;
   let shopId: string;
   let currency: string;
+  let country: string;
   try {
-    ({ accessToken, shopId, currency } = await getValidJumiaCredentials(userId));
+    ({ accessToken, shopId, currency, country } = await getValidJumiaCredentials(userId));
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";
     if (msg === "JUMIA_NOT_CONNECTED") {
@@ -423,7 +429,9 @@ export async function pushListingToJumia(
         ? "This listing is already with Jumia and waiting on their review — submitting again would create a duplicate product."
         : current === "processing"
           ? "This listing is being submitted right now. Give it a moment."
-          : `This listing can't be submitted from its current state (${current}).`,
+          : current === "live"
+            ? "This listing is already live on Jumia — submitting again via create would make a second, duplicate product. Use the edit path to change a live listing."
+            : `This listing can't be submitted from its current state (${current}).`,
     };
   }
 
@@ -435,7 +443,7 @@ export async function pushListingToJumia(
   // back on the way out.
   let result: Awaited<ReturnType<typeof pushProductsToJumia>>;
   try {
-    result = await pushProductsToJumia(accessToken, shopId, row, variants, currency);
+    result = await pushProductsToJumia(accessToken, shopId, row, variants, currency, country);
   } catch (e) {
     await releaseClaim(db, listingId, row.status);
     throw e;
@@ -445,11 +453,16 @@ export async function pushListingToJumia(
     await db
       .from("listings")
       .update({
-        status:          "pending_approval",
-        jumia_ref:       result.jumia_ref,
-        jumia_error:     null,
-        jumia_synced_at: new Date().toISOString(),
-        updated_at:      new Date().toISOString(),
+        status:                  "pending_approval",
+        jumia_ref:               result.jumia_ref,
+        jumia_error:             null,
+        jumia_synced_at:         new Date().toISOString(),
+        // Clear the auto-fix loop-cap bookkeeping — a successful push means
+        // whatever the last rejection was is resolved, so the next one (if
+        // any) is a fresh problem, not a repeat. See rejectionFingerprint.
+        jumia_rerun_fingerprint: null,
+        jumia_rerun_count:       0,
+        updated_at:              new Date().toISOString(),
       })
       .eq("id", listingId);
 

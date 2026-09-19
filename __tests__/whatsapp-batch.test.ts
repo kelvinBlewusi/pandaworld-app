@@ -220,6 +220,40 @@ describe("extractPrice", () => {
   });
 });
 
+// Fix 8: PandaWorld lists Jumia sellers across Africa, not just Ghana —
+// extractPrice/extractSalePrice used to always assume GHS/GH₵/cedis
+// regardless of the seller's actual shop currency.
+describe("extractPrice — other African shop currencies", () => {
+  it("parses Nigerian naira (₦, NGN, 'naira')", () => {
+    expect(extractPrice("₦2000", "NGN")).toBe(2000);
+    expect(extractPrice("price is 2000 NGN", "NGN")).toBe(2000);
+    expect(extractPrice("2000 naira", "NGN")).toBe(2000);
+    expect(extractPrice("2000NGN", "NGN")).toBe(2000);
+  });
+
+  it("parses Kenyan shillings (KES, KSh, 'shillings')", () => {
+    expect(extractPrice("KES 1500", "KES")).toBe(1500);
+    expect(extractPrice("1500 KSh", "KES")).toBe(1500);
+    expect(extractPrice("1500 shillings", "KES")).toBe(1500);
+  });
+
+  it("parses Egyptian pounds (EGP, E£, 'pounds')", () => {
+    expect(extractPrice("E£300", "EGP")).toBe(300);
+    expect(extractPrice("price 300 EGP", "EGP")).toBe(300);
+    expect(extractPrice("300 pounds", "EGP")).toBe(300);
+  });
+
+  it("still falls back to GHS patterns when no currency is given", () => {
+    expect(extractPrice("₵150")).toBe(150);
+  });
+
+  it("does not cross-match another currency's symbol", () => {
+    // A naira sign should not be read as a price when the shop currency is
+    // GHS — the seller almost certainly wasn't in Nigeria.
+    expect(extractPrice("₦2000", "GHS")).toBeNull();
+  });
+});
+
 describe("extractStock", () => {
   it("parses labeled stock/qty/quantity", () => {
     expect(extractStock("stock 10")).toBe(10);
@@ -335,6 +369,12 @@ describe("extractSalePrice", () => {
     expect(
       extractSalePrice("sale price 150 from 30 September 2025 to 31 December 2026", now),
     ).toEqual({ salePrice: 150, startDate: "2025-09-30", endDate: "2026-12-31" });
+  });
+
+  // Fix 8: same currency parameterization as extractPrice.
+  it("parses a sale price in the seller's own shop currency", () => {
+    expect(extractSalePrice("sale price ₦2000", now, "NGN")).toEqual({ salePrice: 2000 });
+    expect(extractSalePrice("promo price 1500 KSh", now, "KES")).toEqual({ salePrice: 1500 });
   });
 });
 

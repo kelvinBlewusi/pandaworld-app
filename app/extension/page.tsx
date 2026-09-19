@@ -31,6 +31,8 @@ export const metadata: import("next").Metadata = {
     "Jumia listing chrome extension",
     "AI product listing Jumia",
     "Jumia seller tool Ghana",
+    "Jumia seller tool Nigeria",
+    "Jumia seller tool Africa",
     "list on Jumia from WhatsApp",
     "Jumia WhatsApp bot",
   ],

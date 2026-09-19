@@ -99,6 +99,11 @@ export interface ListingRow {
   jumia_product_sid?:  string | null;
   jumia_qc_status?:    string | null;
   jumia_product_map?:  Record<string, { sid: string | null; qc: string | null }> | null;
+  // Loop-cap bookkeeping for automatic "Fix & resubmit" repairs — see
+  // shouldBlockRepeatedAutoFix in lib/jumia/rejection-remedy.ts and
+  // migration 2026-09-19_jumia-rerun-loop-cap.sql.
+  jumia_rerun_fingerprint?: string | null;
+  jumia_rerun_count?:       number | null;
   // Set when this listing was created via the WhatsApp chatbot's
   // multi-product batch flow (see lib/whatsapp/intake.ts) — groups every
   // listing from one "how many products?" run and its 1-based position

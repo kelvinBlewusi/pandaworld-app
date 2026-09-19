@@ -14,18 +14,26 @@
 
 import { createServerClient } from "@/lib/supabase/server";
 import { columnFor, readAttributeValue } from "@/lib/jumia/attribute-mapping";
-import { preflightAttributes, summarisePreflight, type PreflightNote } from "@/lib/jumia/preflight";
+import { preflightAttributes, summarisePreflight, snapToAllowed, type PreflightNote } from "@/lib/jumia/preflight";
 import { refreshAccessToken, JUMIA_API_BASE } from "@/lib/jumia/oauth";
 import { mockCategories } from "@/lib/mock/categories";
 import { findBrandExact } from "@/lib/jumia/brands";
 import { stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
 import { encrypt, decrypt } from "@/lib/security/token-crypto";
-import { getCategoryAttributes, type JumiaCategoryAttribute } from "@/lib/jumia/categories";
+import { getCategoryAttributes, getVariantAxes, type JumiaCategoryAttribute } from "@/lib/jumia/categories";
+import { isFashionCategory } from "@/lib/jumia/fashion-category";
+import { assertListingReady } from "@/lib/jumia/listing-ready";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
 
 // ─── Country → ISO 4217 currency code ────────────────────────────────────────
-
-const COUNTRY_CURRENCY: Record<string, string> = {
+//
+// Exported so lib/whatsapp/batch.ts's price/sale-price extraction can parse
+// a seller's chat note in THEIR shop's currency instead of the hardcoded
+// GH₵/cedis patterns it started with — PandaWorld lists Jumia sellers across
+// Africa, not just Ghana. Keep this the single source of truth for the
+// mapping; getValidJumiaCredentials below and extractPrice/extractSalePrice
+// both key off it.
+export const COUNTRY_CURRENCY: Record<string, string> = {
   GH: "GHS",
   NG: "NGN",
   KE: "KES",
@@ -37,12 +45,63 @@ const COUNTRY_CURRENCY: Record<string, string> = {
   UG: "UGX",
 };
 
+export const DEFAULT_JUMIA_COUNTRY = "GH";
+
+/** Short display form for chat copy ("GH₵150", "₦2,000") — distinct from
+ *  the ISO code COUNTRY_CURRENCY resolves, which Jumia's own API needs
+ *  verbatim. Falls back to the ISO code itself for a currency with no
+ *  common short symbol. */
+export const CURRENCY_SYMBOL: Record<string, string> = {
+  GHS: "GH₵",
+  NGN: "₦",
+  KES: "KSh",
+  EGP: "E£",
+  MAD: "MAD",
+  XOF: "CFA",
+  TZS: "TSh",
+  UGX: "USh",
+};
+
+export function currencySymbol(currencyCode: string): string {
+  return CURRENCY_SYMBOL[currencyCode] ?? currencyCode;
+}
+
+/** The everyday spoken name of a currency unit ("cedis", "naira",
+ *  "shillings") for chat copy like "reply with the number in {name}" —
+ *  distinct from CURRENCY_SYMBOL, which is the printed short form. */
+const CURRENCY_NAME_WORD: Record<string, string> = {
+  GHS: "cedis",
+  NGN: "naira",
+  KES: "shillings",
+  EGP: "pounds",
+  MAD: "dirhams",
+  XOF: "CFA francs",
+  TZS: "shillings",
+  UGX: "shillings",
+};
+
+export function currencyNameWord(currencyCode: string): string {
+  return CURRENCY_NAME_WORD[currencyCode] ?? currencyCode;
+}
+
+/** currency → country. Only used where a currency code is on hand and a
+ *  country is needed (e.g. picking a currency-symbol pattern for chat price
+ *  parsing) — ambiguous for a shared currency (XOF: Senegal vs Ivory Coast),
+ *  so it resolves to whichever country lists it first above. Prefer
+ *  reading country directly (getValidJumiaCredentials) whenever it's on
+ *  hand instead of round-tripping through this. */
+export function countryForCurrency(currency: string): string {
+  const hit = Object.entries(COUNTRY_CURRENCY).find(([, c]) => c === currency);
+  return hit?.[0] ?? DEFAULT_JUMIA_COUNTRY;
+}
+
 // ─── Token + shopId retrieval ─────────────────────────────────────────────────
 
 export async function getValidJumiaCredentials(userId: string): Promise<{
   accessToken: string;
   shopId:      string;
   currency:    string;
+  country:     string;
 }> {
   const db = createServerClient();
 
@@ -113,9 +172,10 @@ export async function getValidJumiaCredentials(userId: string): Promise<{
   if (!shopId) shopId = await fetchAndStoreShopId(userId, accessToken, db);
   if (!shopId) throw new Error("JUMIA_NO_SHOP_ID");
 
-  const currency = COUNTRY_CURRENCY[(conn.country ?? "GH") as string] ?? "GHS";
+  const country  = (conn.country ?? DEFAULT_JUMIA_COUNTRY) as string;
+  const currency = COUNTRY_CURRENCY[country] ?? "GHS";
 
-  return { accessToken, shopId, currency };
+  return { accessToken, shopId, currency, country };
 }
 
 /**
@@ -315,13 +375,24 @@ const BRAND_GENERIC_FASHION     = { code: 1039426, name: "Fashion" };
  * Resolution order:
  *   1. Local `jumia_brands` DB cache  (fast, no network)
  *   2. Live Jumia Catalog API          (fallback before first sync)
- *   3. Generic brand code              (last resort)
+ *   3. Generic brand code — Fashion for a Fashion category, plain Generic
+ *      otherwise (last resort)
+ *
+ * `categoryHint` is whatever category text the caller has on hand
+ * (category_path is fine — this never needs a resolved code) so the last
+ * resort can tell a Fashion listing from anything else. BRAND_GENERIC_FASHION
+ * used to be declared and never referenced: every unresolved brand fell back
+ * to plain "Generic", including shoes, bags and watches, which is its own
+ * rejection class on Jumia ("Product category doesn't allow Generic brand").
  */
-async function resolveBrand(
-  accessToken: string,
-  brandName:   string | null
+export async function resolveBrand(
+  accessToken:  string,
+  brandName:    string | null,
+  categoryHint: string | null = null,
 ): Promise<{ code: number; name: string }> {
-  if (!brandName) return BRAND_GENERIC_NON_FASHION;
+  const genericFallback = isFashionCategory(categoryHint) ? BRAND_GENERIC_FASHION : BRAND_GENERIC_NON_FASHION;
+
+  if (!brandName) return genericFallback;
 
   // ── 1. Local DB (fast path) ──────────────────────────────────────────────
   try {
@@ -349,8 +420,8 @@ async function resolveBrand(
     // non-fatal
   }
 
-  // ── 3. Generic fallback ──────────────────────────────────────────────────
-  return { code: BRAND_GENERIC_NON_FASHION.code, name: brandName };
+  // ── 3. Generic fallback (Fashion or plain, per categoryHint) ─────────────
+  return { code: genericFallback.code, name: brandName };
 }
 
 // ─── Category code resolution ─────────────────────────────────────────────────
@@ -557,7 +628,8 @@ function buildAttributes(
   // snap-then-drop, so a casing or plural near-miss is corrected rather
   // than silently losing the seller an attribute they did supply.
   const preflight = preflightAttributes(attrs, schema, {
-    carriedElsewhere: CARRIED_OUTSIDE_ATTRIBUTES,
+    carriedElsewhere:   CARRIED_OUTSIDE_ATTRIBUTES,
+    priorRejectionText: listing.jumia_error,
   });
   const summary = summarisePreflight(preflight);
   if (summary) {
@@ -605,6 +677,166 @@ function isSingleColour(value: string): boolean {
   return !/[,/|&]|\band\b/i.test(value);
 }
 
+/**
+ * Snap a variation label to the category's own variant-axis spelling ("Grey"
+ * -> "Gray" when "Gray" is the allowed option) and refuse to ship a
+ * comma/slash-joined list as one SELECTION value — real rejection:
+ * "Attribute [variation] with invalid value [Grey]" (axis declared "Gray",
+ * not "Grey") and "Attribute [color_family] with invalid value
+ * [Yellow,Red,Orange,White,Blue]" (five stocked colours sent as one string).
+ *
+ * `variantAxes` is the category's own is_variant attribute set (see
+ * getVariantAxes in lib/jumia/categories.ts) — the same isSingleColour rule
+ * color_family already got is applied here too, now checked against the
+ * category's real allowed spellings instead of shipped as typed.
+ */
+/** British/American (and similar) spelling pairs seen in Jumia's own
+ *  attribute sets — "Grey" typed/detected where the category's schema
+ *  declares "Gray" (real rejection: "Attribute [variation] with invalid
+ *  value [Grey]"). snapToAllowed can't bridge these: they're not a casing
+ *  or plural difference, they're a different word for the same colour. */
+const SPELLING_PAIRS: [string, string][] = [
+  ["grey", "gray"],
+  ["colour", "color"],
+];
+
+function spellingSynonym(value: string, allowed: string[]): string | null {
+  const lower = value.toLowerCase();
+  for (const [a, b] of SPELLING_PAIRS) {
+    let alt: string | null = null;
+    if (lower === a) alt = b;
+    else if (lower === b) alt = a;
+    else if (lower.includes(a)) alt = lower.replace(a, b);
+    else if (lower.includes(b)) alt = lower.replace(b, a);
+    if (alt) {
+      const match = allowed.find((x) => x.toLowerCase() === alt);
+      if (match) return match;
+    }
+  }
+  return null;
+}
+
+/** Snap a variation value to the category's own variant-axis spelling —
+ *  shared tail of both resolvers below. A no-op when no axis data is
+ *  available (snapToAllowed already no-ops on an empty allowed list; the
+ *  explicit check just skips the spelling-synonym pass too). */
+function snapVariationSpelling(trimmed: string, allowed: string[], noteSink?: string[]): string {
+  if (allowed.length === 0) return trimmed;
+
+  const synonym = spellingSynonym(trimmed, allowed);
+  if (synonym) {
+    noteSink?.push(`variation "${trimmed}" corrected to "${synonym}"`);
+    return synonym;
+  }
+  const snapped = snapToAllowed(trimmed, allowed);
+  if (snapped && snapped !== trimmed) {
+    noteSink?.push(`variation "${trimmed}" corrected to "${snapped}"`);
+    return snapped;
+  }
+  return trimmed;
+}
+
+/**
+ * The base (zero-variant) product's OWN variation, derived from the
+ * listing's colour field(s) — see buildBaseProduct's doc comment on why a
+ * detected colour is used here. Keeps isSingleColour's broad separator
+ * check (comma/slash/pipe/&/"and") because this value comes from a COLOUR
+ * column specifically, where a joined string overwhelmingly means multiple
+ * colourways, not a composite label — unlike a variant row's own typed
+ * value (see resolveVariantRowVariation below), which routinely legitimately
+ * joins several DIFFERENT attributes ("8GB / 128GB / Navy").
+ */
+function resolveColorFallbackVariation(
+  rawColor:    string,
+  variantAxes: JumiaCategoryAttribute[],
+  noteSink?:   string[],
+): string {
+  const trimmed = rawColor.trim();
+  if (!trimmed || !isSingleColour(trimmed)) return "Default";
+  return snapVariationSpelling(trimmed, variantAxes.flatMap((a) => a.allowed_values ?? []), noteSink);
+}
+
+/**
+ * A variant ROW's own typed `variation` value. Deliberately does NOT apply
+ * isSingleColour's broad separator check — a variant's variation label is
+ * routinely a composite of several DIFFERENT attributes joined by "/"
+ * ("8GB / 128GB / Navy"), which isSingleColour misreads as a list of
+ * alternatives for one attribute and would wrongly discard.
+ *
+ * Only refuses a value when it can PROVE it's several stocked options
+ * joined into one: every comma-separated part matches one of the axis's
+ * own allowed values. Real rejection this closes: "Attribute [color_family]
+ * with invalid value [Yellow,Red,Orange,White,Blue]" — five distinct,
+ * individually-valid colours sent as one string.
+ */
+function resolveVariantRowVariation(
+  raw:         string,
+  fallback:    string,
+  variantAxes: JumiaCategoryAttribute[],
+  noteSink?:   string[],
+): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return fallback;
+
+  const allowed = variantAxes.flatMap((a) => a.allowed_values ?? []);
+  if (allowed.length > 0) {
+    const parts = trimmed.split(",").map((p) => p.trim()).filter(Boolean);
+    if (parts.length > 1 && parts.every((p) => allowed.some((a) => a.toLowerCase() === p.toLowerCase()))) {
+      noteSink?.push(
+        `"${trimmed}" lists more than one stocked option — Jumia's variation is a single value, so it went as "${fallback}"; split them into separate variants`,
+      );
+      return fallback;
+    }
+  }
+  return snapVariationSpelling(trimmed, allowed, noteSink);
+}
+
+/**
+ * The exact three-part rule Jumia enforces on salePrice: value AND both
+ * dates present together, end date not already past, start before end, sale
+ * price below the regular price. `JSON.stringify` silently drops `undefined`
+ * keys, so a payload built with `startAt: listing.sale_start_date ??
+ * undefined` and no end date used to ship as `{"value": X}` — Jumia's own
+ * rejection for that shape: "Attribute [Product.Price.SalePrice.StartAt]
+ * with invalid value [null]." Returning undefined here omits the whole
+ * `salePrice` key rather than ever sending a partial one.
+ */
+function buildSalePriceField(
+  value:        number | null | undefined,
+  startAt:      string | null | undefined,
+  endAt:        string | null | undefined,
+  sellingPrice: number | null | undefined,
+  noteSink?:    string[],
+): { value: number; startAt: string; endAt: string } | undefined {
+  if (value == null) return undefined;
+
+  if (!startAt || !endAt) {
+    noteSink?.push(`sale price ${value} wasn't sent — Jumia requires both a start and end date and only the price was set; add the dates and resubmit`);
+    return undefined;
+  }
+
+  const start = new Date(startAt);
+  const end   = new Date(endAt);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    noteSink?.push(`sale price ${value} wasn't sent — its start/end date didn't parse as a date`);
+    return undefined;
+  }
+  if (end.getTime() <= Date.now()) {
+    noteSink?.push(`sale price ${value} wasn't sent — its end date is already in the past`);
+    return undefined;
+  }
+  if (start.getTime() >= end.getTime()) {
+    noteSink?.push(`sale price ${value} wasn't sent — its start date isn't before its end date`);
+    return undefined;
+  }
+  if (sellingPrice != null && value >= sellingPrice) {
+    noteSink?.push(`sale price ${value} wasn't sent — it isn't lower than the regular price (${sellingPrice})`);
+    return undefined;
+  }
+
+  return { value, startAt, endAt };
+}
+
 export type JumiaProduct = ReturnType<typeof buildBaseProduct>;
 
 function buildBaseProduct(
@@ -613,6 +845,7 @@ function buildBaseProduct(
   currency: string,
   schema: JumiaCategoryAttribute[] = [],
   noteSink?: string[],
+  variantAxes: JumiaCategoryAttribute[] = [],
 ) {
   const category   = resolveCategoryCode(listing);
   const images     = (listing.images ?? [])
@@ -664,7 +897,7 @@ function buildBaseProduct(
   // which Jumia dedup-rejected. The push route validates upstream (empty
   // variation → 422) so the seller is told to type a label instead.
   const colorVariation   = (listing.color ?? listing.color_family ?? "").trim();
-  const defaultVariation = isSingleColour(colorVariation) ? colorVariation : "Default";
+  const defaultVariation = resolveColorFallbackVariation(colorVariation, variantAxes, noteSink);
 
   // Match Jumia Postman spec exactly:
   //   POST /feeds/products/create
@@ -697,14 +930,15 @@ function buildBaseProduct(
       // no variant row for one to live on. mapListingToJumiaProducts's
       // per-variant path below falls back to this same listing-level
       // value too, so a sale price set once applies no matter the
-      // variant.
-      ...(listing.sale_price != null ? {
-        salePrice: {
-          value:   listing.sale_price,
-          startAt: listing.sale_start_date ?? undefined,
-          endAt:   listing.sale_end_date   ?? undefined,
-        },
-      } : {}),
+      // variant. buildSalePriceField omits the key entirely unless value
+      // AND both dates are present and valid — see its doc comment.
+      ...(() => {
+        const salePrice = buildSalePriceField(
+          listing.sale_price, listing.sale_start_date, listing.sale_end_date,
+          listing.selling_price, noteSink,
+        );
+        return salePrice ? { salePrice } : {};
+      })(),
     },
     stock:       listing.quantity ?? 1,
     attributes:  buildAttributes(listing, schema, noteSink),
@@ -732,8 +966,14 @@ export function mapListingToJumiaProducts(
   categoryAttributeSchema: JumiaCategoryAttribute[] = [],
   /** Optional sink for changes made on the way out — see buildAttributes. */
   noteSink?: string[],
+  /** Optional — the category's own is_variant attribute set (see
+   *  getVariantAxes), used to snap a variation value to its declared
+   *  spelling and refuse a multi-value string as one SELECTION. Omitted by
+   *  callers that don't have it handy — variation values pass through with
+   *  only the isSingleColour check, same as before this existed. */
+  variantAxes: JumiaCategoryAttribute[] = [],
 ): JumiaProduct[] {
-  const base = buildBaseProduct(listing, brand, currency, categoryAttributeSchema, noteSink);
+  const base = buildBaseProduct(listing, brand, currency, categoryAttributeSchema, noteSink, variantAxes);
 
   if (!variants.length) {
     // No persisted variants → one product entry using the listing's own
@@ -772,7 +1012,7 @@ export function mapListingToJumiaProducts(
     // collide/dedup-reject exactly the way this fallback used to. Keep a
     // fixed literal instead; a real missing-variation case should surface
     // as this warning, not a plausible-looking colour string.
-    const variation = v.variation?.trim() || MISSING_VARIANT_VARIATION;
+    const rawVariation = v.variation?.trim() || MISSING_VARIANT_VARIATION;
     if (!v.variation?.trim()) {
       console.warn(
         `[Jumia mapping] Variant ${v.id} has no variation — falling back to ` +
@@ -780,6 +1020,10 @@ export function mapListingToJumiaProducts(
         `This shouldn't happen if the seller typed a value — investigate the save path.`,
       );
     }
+    // Axis-spelling discipline for a variant's own typed value — see
+    // resolveVariantRowVariation's doc comment on why this is intentionally
+    // less aggressive than the base product's colour-only fallback above.
+    const variation = resolveVariantRowVariation(rawVariation, MISSING_VARIANT_VARIATION, variantAxes, noteSink);
     return {
       ...base,
       sellerSku:  v.seller_sku ?? `${listing.sku}-${v.id.slice(0, 4)}`,
@@ -794,13 +1038,18 @@ export function mapListingToJumiaProducts(
         // matter the variant" fallback global_price already gets from
         // selling_price above. A variant that WAS given its own sale
         // price (e.g. via the web editor) still overrides it.
-        ...((v.sale_price ?? listing.sale_price) != null ? {
-          salePrice: {
-            value:   v.sale_price       ?? listing.sale_price!,
-            startAt: v.sale_start_date  ?? listing.sale_start_date ?? undefined,
-            endAt:   v.sale_end_date    ?? listing.sale_end_date   ?? undefined,
-          },
-        } : {}),
+        // buildSalePriceField omits the key entirely unless value AND both
+        // dates are present and valid — see its doc comment.
+        ...(() => {
+          const salePrice = buildSalePriceField(
+            v.sale_price       ?? listing.sale_price,
+            v.sale_start_date  ?? listing.sale_start_date,
+            v.sale_end_date    ?? listing.sale_end_date,
+            v.global_price     ?? listing.selling_price,
+            noteSink,
+          );
+          return salePrice ? { salePrice } : {};
+        })(),
       },
       stock: v.quantity ?? 1,
       // Per-variant attributes: clone the listing-level attributes and
@@ -899,6 +1148,8 @@ function describeAdjustments(notes: PreflightNote[]): string[] {
       out.push(`${n.label}: ${n.detail}, so it wasn't sent`);
     } else if (n.reason === "truncated") {
       out.push(`${n.label} was ${n.detail}`);
+    } else if (n.reason === "decimal_mismatch_blocked") {
+      out.push(`${n.label}: ${n.detail}`);
     }
   }
   return out;
@@ -958,21 +1209,58 @@ export async function buildJumiaPayload(
   listing:     ListingRow,
   variants:    VariantRow[],
   currency:    string = "GHS",
+  countryCode: string = DEFAULT_JUMIA_COUNTRY,
 ): Promise<JumiaPayloadBuild> {
-  const brand = await resolveBrand(accessToken, listing.brand);
+  const brand = await resolveBrand(accessToken, listing.brand, listing.category_path);
 
-  // Cheap local DB read, no Jumia call — see the note in the push below.
+  // Cheap local DB reads, no Jumia call — see the note in the push below.
   let schema: JumiaCategoryAttribute[] = [];
+  let variantAxes: JumiaCategoryAttribute[] = [];
+  let categoryResolved = false;
   try {
     const { code } = resolveCategoryCode(listing);
-    schema = await getCategoryAttributes(code);
+    categoryResolved = true;
+    [schema, variantAxes] = await Promise.all([
+      getCategoryAttributes(code),
+      getVariantAxes(code),
+    ]);
   } catch {
     // No valid category — mapListingToJumiaProducts reports it properly.
   }
 
+  // Fail closed rather than pass every attribute through unchecked.
+  // preflightAttributes treats schema.length===0 as "we never successfully
+  // fetched one" and deliberately doesn't drop anything in that case — the
+  // right call for a validator that must never cost a seller an attribute
+  // Jumia would have accepted. But that same leniency is wrong at the PUSH
+  // boundary: a category we resolved a code for but have no cached schema
+  // for means every enum, decimal-places and required check below is
+  // skipped, and real rejections happened exactly this way in production —
+  // "Attribute [color_family] with invalid value [Yellow,Red,Orange,White,
+  // Blue]" went out unvalidated because this category's schema hadn't
+  // synced. Refusing to push is recoverable (the seller waits for the sync
+  // or nudges it); shipping unvalidated attributes and letting Jumia
+  // discover the problem is not — it costs the whole feed.
+  if (categoryResolved && schema.length === 0) {
+    return {
+      products: [], adjustments: [], missingRequired: [],
+      error: "JUMIA_NO_SCHEMA: This category's attribute list hasn't synced yet, so nothing can be validated before sending — try again in a moment, or open the category picker to re-select it and force a re-sync.",
+    };
+  }
+
   const adjustments: string[] = [];
   try {
-    const products = mapListingToJumiaProducts(listing, variants, brand, currency, schema, adjustments);
+    const products = mapListingToJumiaProducts(listing, variants, brand, currency, schema, adjustments, variantAxes);
+
+    // Last-mile content gate — restricted words plus the prohibited-
+    // category/restricted-brand catalog, run right before anything is
+    // POSTed. See lib/jumia/listing-ready.ts.
+    const ready = assertListingReady(listing, countryCode, products);
+    adjustments.push(...ready.warnings);
+    if (!ready.ok) {
+      return { products: [], adjustments, missingRequired: [], error: ready.blockers.join(" ") };
+    }
+
     return { products, adjustments, missingRequired: missingRequiredFor(products, schema) };
   } catch (e) {
     return {
@@ -993,9 +1281,10 @@ export async function pushProductsToJumia(
   shopId:      string,
   listing:     ListingRow,
   variants:    VariantRow[],
-  currency:    string = "GHS"
+  currency:    string = "GHS",
+  countryCode: string = DEFAULT_JUMIA_COUNTRY,
 ): Promise<JumiaPushResult> {
-  const built = await buildJumiaPayload(accessToken, listing, variants, currency);
+  const built = await buildJumiaPayload(accessToken, listing, variants, currency, countryCode);
   if (built.error) {
     return { success: false, jumia_ref: null, raw: null, error: built.error };
   }
@@ -1097,19 +1386,23 @@ export async function updateProductOnJumia(
     };
   }
 
-  const brand = await resolveBrand(accessToken, listing.brand);
+  const brand = await resolveBrand(accessToken, listing.brand, listing.category_path);
 
   let categoryAttributeSchema: JumiaCategoryAttribute[] = [];
+  let variantAxes: JumiaCategoryAttribute[] = [];
   try {
     const { code } = resolveCategoryCode(listing);
-    categoryAttributeSchema = await getCategoryAttributes(code);
+    [categoryAttributeSchema, variantAxes] = await Promise.all([
+      getCategoryAttributes(code),
+      getVariantAxes(code),
+    ]);
   } catch {
     // No valid category — mapListingToJumiaProducts reports this properly.
   }
 
   let basePayload: ReturnType<typeof mapListingToJumiaProducts>;
   try {
-    basePayload = mapListingToJumiaProducts(listing, variants, brand, currency, categoryAttributeSchema);
+    basePayload = mapListingToJumiaProducts(listing, variants, brand, currency, categoryAttributeSchema, undefined, variantAxes);
   } catch (e) {
     const msg = (e as Error).message ?? "Failed to build update payload";
     return { success: false, jumia_ref: null, raw: null, error: msg };
