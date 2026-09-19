@@ -628,8 +628,7 @@ function buildAttributes(
   // snap-then-drop, so a casing or plural near-miss is corrected rather
   // than silently losing the seller an attribute they did supply.
   const preflight = preflightAttributes(attrs, schema, {
-    carriedElsewhere:   CARRIED_OUTSIDE_ATTRIBUTES,
-    priorRejectionText: listing.jumia_error,
+    carriedElsewhere: CARRIED_OUTSIDE_ATTRIBUTES,
   });
   const summary = summarisePreflight(preflight);
   if (summary) {
