@@ -189,6 +189,17 @@ export class FakeDb {
       return { data: true, error: null };
     }
 
+    if (name === "claim_message_id") {
+      // Mirrors claim_message_id (2026-09-19_atomic-message-id-claim.sql):
+      // a conditional update that only wins when last_message_id isn't
+      // already this exact id.
+      const row = this.tables.whatsapp_sessions.find((r) => r.phone_number === args.p_phone);
+      if (!row) return { data: false, error: null };
+      if (row.last_message_id === args.p_message_id) return { data: false, error: null };
+      row.last_message_id = args.p_message_id;
+      return { data: true, error: null };
+    }
+
     throw new Error(`FakeDb: unmodelled rpc "${name}" — add it deliberately rather than letting a test pass against a stub.`);
   }
 }

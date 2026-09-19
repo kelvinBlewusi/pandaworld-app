@@ -735,6 +735,28 @@ describe("Fix & resubmit", () => {
     expect(pushCallCount).toBe(1);
   });
 
+  // Real production symptom (2026-09-17/18 chat log): the SAME "Fix &
+  // resubmit" tap produced interleaved "Fixing and resubmitting..."
+  // messages and redundant AI reruns for one product — consistent with
+  // WhatsApp redelivering the button tap because handleFixAndResubmit
+  // (an AI rerun + a Jumia push) ran past Meta's own webhook ack timeout.
+  // The old dedupe only wrote session.lastMessageId back AFTER the whole
+  // handler finished, so a redelivery arriving before that write read the
+  // same stale value and ran the whole thing again. It's now claimed
+  // atomically up front (see claim_message_id) — a second delivery of the
+  // identical wamid must never reach runAutoAnalyze or pushListingToJumia
+  // at all.
+  it("never reruns/re-pushes for a redelivered copy of the same fix: tap", async () => {
+    seedRejectedListing();
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "dup-wamid", { text: `fix:${REJECTED_ID}` });
+    await handleLinkedMessage(USER, PHONE, "dup-wamid", { text: `fix:${REJECTED_ID}` });
+
+    expect(autoAnalyzeCalls).toHaveLength(1);
+    expect(pushCallCount).toBe(1);
+  });
+
   // Never fixed by a redraft — no amount of rerunning invents a price.
   it("still refuses to auto-fix a price/stock rejection", async () => {
     seedRejectedListing({ jumia_error: "The Global Price is mandatory in order to create a Product." });

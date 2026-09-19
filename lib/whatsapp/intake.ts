@@ -6,6 +6,7 @@ import {
   updateSession,
   resetSession,
   claimPhotoConfirmation,
+  claimMessageId,
   type WhatsAppSession,
 } from "@/lib/whatsapp/session";
 import { createListingForUser } from "@/lib/listings/create";
@@ -338,8 +339,14 @@ export async function handleLinkedMessage(
 ): Promise<void> {
   const session = await getOrCreateSession(userId, phoneNumber);
 
-  if (messageId && session.lastMessageId === messageId) {
-    console.info(`[whatsapp intake] skipping duplicate message ${messageId} for ${phoneNumber}`);
+  // Claimed ATOMICALLY, up front, before any slow work — not read-then-
+  // written-back-at-the-end. handleFixAndResubmit (an AI rerun + a Jumia
+  // push) routinely runs past WhatsApp's own webhook ack timeout, which is
+  // exactly when Meta redelivers the same tap; a plain read/write-later
+  // check let both deliveries see the same stale value and both run the
+  // whole handler. See claim_message_id's own doc comment.
+  if (messageId && !(await claimMessageId(phoneNumber, messageId))) {
+    console.info(`[whatsapp intake] skipping duplicate/racing message ${messageId} for ${phoneNumber}`);
     return;
   }
 
@@ -372,7 +379,6 @@ export async function handleLinkedMessage(
     if (!(content.platformError && midPhotoBurst)) {
       await replyText(phoneNumber, unsupportedMediaMessage(content.unsupported));
     }
-    if (messageId) await updateSession(phoneNumber, { lastMessageId: messageId });
     return;
   }
 
@@ -390,7 +396,6 @@ export async function handleLinkedMessage(
   const fixMatch = content.text?.trim().match(/^fix:([0-9a-f-]{36})$/i);
   if (fixMatch) {
     await handleFixAndResubmit(userId, phoneNumber, fixMatch[1]);
-    if (messageId) await updateSession(phoneNumber, { lastMessageId: messageId });
     return;
   }
 
@@ -424,8 +429,6 @@ export async function handleLinkedMessage(
         break;
     }
   }
-
-  if (messageId) await updateSession(phoneNumber, { lastMessageId: messageId });
 }
 
 async function handleGlobalCommand(
