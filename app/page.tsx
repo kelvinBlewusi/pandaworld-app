@@ -35,29 +35,30 @@ import { ExtensionPage } from "@/app/extension/page";
 // interact.
 //
 // Metadata: without its own export here, this route fell back to the root
-// layout's generic default title/description — which no longer matches what
-// a visitor actually sees (the Chrome extension pitch, not a generic "AI
-// listing assistant" pitch). Mirrors app/extension/page.tsx's copy since
-// the two render byte-identical content; canonical is root itself (the
-// primary, most-shared URL) — app/extension/page.tsx's own canonical points
-// HERE instead of self-referencing, so Google consolidates ranking signal
-// on this one URL instead of splitting it across both.
+// layout's generic default title/description. This route's own metadata
+// export always wins over whatever app/extension/page.tsx declares (Next.js
+// resolves metadata from the route segment, not the rendered component
+// tree), so it has to repeat the same unified title/description rather than
+// relying on the shared component to supply it — the two render
+// byte-identical content, and canonical is root itself (the primary,
+// most-shared URL); app/extension/page.tsx's own canonical points HERE
+// instead of self-referencing, so Google consolidates ranking signal on
+// this one URL instead of splitting it across both.
+const PAGE_TITLE = "Jumia listings from WhatsApp or Chrome | PandaWorld";
+const PAGE_DESCRIPTION =
+  "Send product photos and a price on WhatsApp, or autofill Jumia Vendor Center from Chrome. You review the draft before it goes live. Free while we test. For Jumia sellers across Africa.";
+
 export const metadata: Metadata = {
-  title: "Chrome Extension — Autofill Jumia Listings",
-  description:
-    "The PandaWorld Chrome extension fills the Jumia Vendor Center product form for you. Upload a photo, pick a category, and AI writes the title, description, highlights, and attributes — SEO-optimised and QC-compliant. You review and submit. Works on any category.",
-  keywords: [
-    "Jumia autofill",
-    "Jumia Vendor Center extension",
-    "Jumia listing chrome extension",
-    "AI product listing Jumia",
-    "Jumia seller tool Ghana",
-  ],
+  title: { absolute: PAGE_TITLE },
+  description: PAGE_DESCRIPTION,
   openGraph: {
-    title: "PandaWorld Chrome Extension for Jumia Vendor Center",
-    description:
-      "Autofill the Jumia listing form from a product photo — SEO-optimised, QC-compliant. You review and submit.",
+    title: PAGE_TITLE,
+    description: PAGE_DESCRIPTION,
     type: "website",
+  },
+  twitter: {
+    title: PAGE_TITLE,
+    description: PAGE_DESCRIPTION,
   },
   alternates: { canonical: "/" },
 };

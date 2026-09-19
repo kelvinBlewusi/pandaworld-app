@@ -28,16 +28,28 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority:        1.0,                   // landing — highest
     },
     {
-      url:            `${APP_URL}/landing`,
-      lastModified,
-      changeFrequency: "weekly",
-      priority:        0.9,
-    },
-    {
       url:            `${APP_URL}/pricing`,
       lastModified,
       changeFrequency: "monthly",
       priority:        0.9,                   // pricing page — high
+    },
+    {
+      url:            `${APP_URL}/jumia-whatsapp-listings`,
+      lastModified,
+      changeFrequency: "monthly",
+      priority:        0.8,
+    },
+    {
+      url:            `${APP_URL}/jumia-vendor-center-extension`,
+      lastModified,
+      changeFrequency: "monthly",
+      priority:        0.8,
+    },
+    {
+      url:            `${APP_URL}/jumia-listing-rejected`,
+      lastModified,
+      changeFrequency: "monthly",
+      priority:        0.8,
     },
     {
       url:            `${APP_URL}/terms`,

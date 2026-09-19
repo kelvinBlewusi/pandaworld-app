@@ -58,18 +58,18 @@ export function MarketingFooter({
   extensionPricing?: { signedIn: boolean; signInHref: string };
 } = {}) {
   return (
-    <footer className="border-t border-zinc-100 bg-zinc-50">
+    <footer className="border-t border-[#e7e5e4] bg-[#f6f3ee]">
       <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-6 px-6 py-10 sm:flex-row">
-        <div className="flex flex-col items-center gap-2 text-sm text-zinc-500 sm:flex-row">
+        <div className="flex flex-col items-center gap-2 text-sm text-[#57534e] sm:flex-row">
           <Wordmark size={20} />
           <span className="sm:before:content-['·_']">Built for Jumia sellers</span>
         </div>
 
-        <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-zinc-500">
+        <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-[#57534e]">
           {extensionPricing ? (
             <FooterPricingTrigger signedIn={extensionPricing.signedIn} signInHref={extensionPricing.signInHref} />
           ) : (
-            <Link href="/pricing" className="hover:text-zinc-900">
+            <Link href="/pricing" className="hover:text-[#1c1917]">
               Pricing
             </Link>
           )}
@@ -81,14 +81,14 @@ export function MarketingFooter({
               intent (and screen readers get a note), no click does
               anything. */}
           <span
-            className="cursor-not-allowed text-zinc-300"
+            className="cursor-not-allowed text-[#a8a29e]"
             aria-disabled="true"
             title="Coming soon"
           >
             Terms
           </span>
           <span
-            className="cursor-not-allowed text-zinc-300"
+            className="cursor-not-allowed text-[#a8a29e]"
             aria-disabled="true"
             title="Coming soon"
           >
@@ -97,7 +97,7 @@ export function MarketingFooter({
 
           <a
             href={SUPPORT_MAILTO}
-            className="inline-flex items-center gap-1.5 hover:text-zinc-900"
+            className="inline-flex items-center gap-1.5 hover:text-[#1c1917]"
           >
             <Mail className="h-3 w-3" />
             {SUPPORT_EMAIL}
@@ -107,7 +107,7 @@ export function MarketingFooter({
             href={COMMUNITY_WHATSAPP_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700 transition-colors hover:bg-emerald-100"
+            className="inline-flex items-center gap-1.5 rounded-[6px] border border-[#e7e5e4] px-2.5 py-1 font-medium text-[#1c1917] transition-colors hover:bg-white"
           >
             <Users className="h-3 w-3" />
             Join our community
@@ -127,7 +127,7 @@ export function MarketingFooter({
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label={`Follow PandaWorld on ${s.name}`}
-                className="inline-flex items-center justify-center rounded-full p-1.5 text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-900"
+                className="inline-flex items-center justify-center rounded-[6px] p-1.5 text-[#57534e] transition-colors hover:bg-white hover:text-[#1c1917]"
                 title={`${s.name} — ${s.handle}`}
               >
                 <Icon className="h-3.5 w-3.5" />

@@ -10,6 +10,9 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 //   /pricing      — pricing comparison (must be indexable)
 //   /terms        — legal page (must be indexable)
 //   /privacy      — legal page (must be indexable)
+//   /jumia-whatsapp-listings        — indexable marketing page
+//   /jumia-vendor-center-extension  — indexable marketing page
+//   /jumia-listing-rejected         — indexable marketing page
 //   /sign-in(.*)  — Clerk hosted UI
 //   /sign-up(.*)  — Clerk hosted UI
 //   /api/paystack/webhook — incoming webhook signed by Paystack HMAC
@@ -61,6 +64,9 @@ const isPublicRoute = createRouteMatcher([
   '/pricing',
   '/terms',
   '/privacy',
+  '/jumia-whatsapp-listings',
+  '/jumia-vendor-center-extension',
+  '/jumia-listing-rejected',
   '/sign-in(.*)',
   '/sign-up(.*)',
   '/api/paystack/webhook',

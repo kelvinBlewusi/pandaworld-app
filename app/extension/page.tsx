@@ -1,46 +1,44 @@
+import Link from "next/link";
+import Script from "next/script";
 import { WhatsAppIcon } from "@/components/whatsapp/whatsapp-icon";
-import {Chrome, KeyRound, UploadCloud, Wand2, ListOrdered, Camera, CheckCircle2, Megaphone} from "lucide-react";
+import { Chrome } from "lucide-react";
 import { auth } from "@clerk/nextjs/server";
 import { MarketingFooter } from "@/components/marketing/footer";
-import { ExtensionHeroBackdrop } from "@/components/marketing/extension-hero-backdrop";
+import { MarketingHeader } from "@/components/marketing/header";
+import { MarketingButton } from "@/components/marketing/button";
+import { LINE, TEXT, MUTED, ACCENT, ACCENT_TEXT, PAGE_BG, MARKETING_FONT } from "@/components/marketing/palette";
 import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 
-// ─── /extension — public page for the Chrome extension + WhatsApp flows ──────
+// ─── /extension — homepage for the Chrome extension + WhatsApp flows ────────
 //
 // Lives outside the (main) layout so logged-out visitors can read about
-// either way to list without bouncing through Clerk. Mirrors the structure of
-// app/pricing/page.tsx (local MarketingNav + shared MarketingFooter) so the
-// marketing surface stays consistent.
+// either way to list without bouncing through Clerk. Also rendered directly
+// at "/" (app/page.tsx re-exports this same component) — the two routes
+// serve byte-identical content, with "/" as the canonical URL.
 //
-// Two products live under this one page: the Chrome extension autofills the
-// Jumia Vendor Center "Add Products" form from a product photo (auth is a
-// PandaWorld-issued API key generated in the dashboard, see
-// docs/chrome-extension-plan.md §9), and the WhatsApp bot drafts + submits
-// listings from photos sent in chat (see lib/whatsapp/intake.ts). Both need
-// a PandaWorld account first, so the WhatsApp steps below point back at the
-// same sign-up CTA rather than a public wa.me link — there's no way to talk
-// to the bot before the seller has an account to link.
+// Two products, same weight: the Chrome extension autofills the Jumia
+// Vendor Center "Add Products" form from a product photo (auth is a
+// PandaWorld-issued API key generated in the dashboard), and the WhatsApp
+// bot drafts + submits listings from photos sent in chat (see
+// lib/whatsapp/intake.ts). Both need a PandaWorld account first, so the
+// WhatsApp CTA points at sign-up rather than a public wa.me link — there's
+// no way to talk to the bot before the seller has an account to link.
+
+const PAGE_TITLE = "Jumia listings from WhatsApp or Chrome | PandaWorld";
+const PAGE_DESCRIPTION =
+  "Send product photos and a price on WhatsApp, or autofill Jumia Vendor Center from Chrome. You review the draft before it goes live. Free while we test. For Jumia sellers across Africa.";
 
 export const metadata: import("next").Metadata = {
-  title:       "AI Jumia Listings for Chrome and WhatsApp",
-  description:
-    "PandaWorld writes your Jumia listings for you. Upload a photo in the Chrome extension or send it on WhatsApp, and AI fills in the title, description, highlights, and every attribute Jumia asks for. You check it over, then submit.",
-  keywords: [
-    "Jumia autofill",
-    "Jumia Vendor Center extension",
-    "Jumia listing chrome extension",
-    "AI product listing Jumia",
-    "Jumia seller tool Ghana",
-    "Jumia seller tool Nigeria",
-    "Jumia seller tool Africa",
-    "list on Jumia from WhatsApp",
-    "Jumia WhatsApp bot",
-  ],
+  title: { absolute: PAGE_TITLE },
+  description: PAGE_DESCRIPTION,
   openGraph: {
-    title:       "PandaWorld: AI Jumia Listings for Chrome and WhatsApp",
-    description:
-      "Upload a photo in the Chrome extension or send it on WhatsApp. AI writes the listing, you review and submit.",
+    title: PAGE_TITLE,
+    description: PAGE_DESCRIPTION,
     type: "website",
+  },
+  twitter: {
+    title: PAGE_TITLE,
+    description: PAGE_DESCRIPTION,
   },
   // Points at root, not "/extension" itself — app/page.tsx renders this exact
   // same component for logged-out visitors, so both URLs serve byte-identical
@@ -50,116 +48,63 @@ export const metadata: import("next").Metadata = {
   alternates: { canonical: "/" },
 };
 
-const STEPS = [
-  {
-    Icon: Chrome,
-    title: "Install the extension",
-    body: "Add PandaWorld to Chrome and pin it. It opens as a side panel next to Jumia Vendor Center.",
-    href: CHROME_WEB_STORE_URL,
+// ─── JSON-LD structured data — homepage only ─────────────────────────────────
+//
+// Organization gets the knowledge-panel sidebar for "PandaWorld" branded
+// searches. SoftwareApplication gets the rich "Application" card. No priced
+// `offers` — pricing isn't set yet ("Free while we test").
+
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://pandaworldai.site";
+
+const organizationLd = {
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  name: "PandaWorld",
+  url: APP_URL,
+  logo: `${APP_URL}/opengraph-image`,
+  description: "AI-powered product listing assistant for Jumia sellers across Africa.",
+  sameAs: [
+    "https://x.com/pandaworldai",
+    "https://www.instagram.com/pandaworldai",
+  ],
+} as const;
+
+const softwareApplicationLd = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "PandaWorld",
+  operatingSystem: "Web",
+  applicationCategory: "BusinessApplication",
+  description: "AI-powered listing assistant for Jumia sellers across Africa. Draft listings from a WhatsApp photo or autofill Jumia Vendor Center from Chrome. Sellers review every draft before it goes live.",
+  url: APP_URL,
+  audience: {
+    "@type": "Audience",
+    audienceType: "Jumia sellers across Africa",
   },
-  {
-    Icon: KeyRound,
-    title: "Sign in with your API key",
-    body: "Generate a key in your PandaWorld dashboard and paste it into the panel.",
-  },
-  {
-    Icon: UploadCloud,
-    title: "Add a photo and pick a category",
-    body: "Do your listing on Jumia like normal. Upload the product image and choose a category to open the form.",
-  },
-  {
-    Icon: Wand2,
-    title: "Click Autofill, review, submit",
-    body: "AI fills the title, description, highlights, and attributes. Check it, tweak anything that needs it, and submit.",
-  },
+} as const;
+
+const CHECKS = [
+  "Fashion brand is never “Generic” — we use the real brand, or “Fashion.”",
+  "Capacities are whole numbers when Jumia requires it.",
+  "Sale dates only show up when you gave a full start and end.",
+  "Category is one Jumia will accept for that shop.",
+  "Variants are separate, allowed options — never made up.",
+  "One submit — no silent retry of the same payload.",
 ];
 
-const WHATSAPP_STEPS = [
-  {
-    Icon: WhatsAppIcon,
-    title: "Link your WhatsApp",
-    body: "Grab a connect code from your PandaWorld dashboard and send it to our number. Takes a few seconds.",
-  },
-  {
-    Icon: ListOrdered,
-    title: "Say how many products",
-    body: "Reply with a number, like 3, and we'll take you through them one by one.",
-  },
-  {
-    Icon: Camera,
-    title: "Send photos and a note",
-    body: "Snap the product and send the photos. Mention anything that matters, like the price, the colour, or what's in the box.",
-  },
-  {
-    Icon: CheckCircle2,
-    title: "Review and submit",
-    body: "We draft the listing and message it back to you. Check it over, reply submit, and it goes live on Jumia.",
-  },
+const WHATSAPP_LINES = [
+  "Send a photo of the product.",
+  "Add the price and any notes in the same message.",
+  "We draft the Jumia listing and send it back.",
+  "Reply “submit” and it goes live.",
 ];
 
-/** Any icon that takes a className — lucide's, or one of our own brand
- *  marks. It was `typeof Chrome`, which pinned it to lucide's exact
- *  ForwardRef shape and rejected the WhatsApp glyph outright. */
-type IconComponent = (props: { className?: string }) => React.ReactNode;
-
-interface Step {
-  Icon: IconComponent;
-  title: string;
-  body: string;
-  href?: string;
-}
-
-/** One "How it works" column — a small icon + label heading over a
- *  vertical list of numbered steps. Used twice on this page (Chrome
- *  extension, WhatsApp) so both sit side by side instead of the single
- *  4-up card grid this section used to be, which only had room for one
- *  flow at a time. */
-function HowItWorksTrack({ icon: TrackIcon, label, steps }: { icon: IconComponent; label: string; steps: Step[] }) {
-  return (
-    <div>
-      <div className="flex items-center gap-2.5">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500 text-white">
-          <TrackIcon className="h-4 w-4" />
-        </div>
-        <h3 className="text-lg font-bold text-zinc-900">{label}</h3>
-      </div>
-      <ol className="mt-6 space-y-6 border-l border-zinc-200 pl-6">
-        {steps.map((step, i) => {
-          const content = (
-            <>
-              <div className="flex items-center gap-2">
-                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-orange-50 text-xs font-bold text-orange-600">
-                  {i + 1}
-                </span>
-                <h4 className="text-sm font-semibold text-zinc-900">{step.title}</h4>
-                {step.href && (
-                  <span className="text-xs font-medium text-orange-500">Open Chrome Web Store →</span>
-                )}
-              </div>
-              <p className="mt-1.5 pl-8 text-sm leading-relaxed text-zinc-600">{step.body}</p>
-            </>
-          );
-          return (
-            <li key={step.title} className="-ml-[1px] pl-[1px]">
-              {step.href ? (
-                <a
-                  href={step.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="-m-2 block rounded-lg p-2 transition-colors hover:bg-white"
-                >
-                  {content}
-                </a>
-              ) : (
-                content
-              )}
-            </li>
-          );
-        })}
-      </ol>
-    </div>
-  );
-}
+const CHROME_LINES = [
+  "Open the side panel next to Jumia Vendor Center.",
+  "Add a photo and pick a category.",
+  "Click Autofill to fill in the form.",
+  "Review it, then submit.",
+];
 
 // Every auth link on this page carries this so a NEW sign-up lands directly on
 // the extension dashboard — never the old Jumia-OAuth onboarding gate
@@ -176,84 +121,175 @@ const DASHBOARD_REDIRECT = "/extension/dashboard";
 // of this markup that could drift out of sync.
 export async function ExtensionPage() {
   const { userId } = await auth();
-  // Signed-in visitors skip straight to the real key-generation screen;
-  // logged-out visitors sign up first (the dashboard requires an account).
   const ctaHref  = userId ? DASHBOARD_REDIRECT : `/sign-up?redirect_url=${DASHBOARD_REDIRECT}`;
   const ctaLabel = userId ? "Open dashboard" : "Get Started";
   const signInHref = `/sign-in?redirect_url=${DASHBOARD_REDIRECT}`;
+  const signUpHref = `/sign-up?redirect_url=${DASHBOARD_REDIRECT}`;
 
   return (
-    <div className="min-h-screen bg-white text-zinc-900">
-      {/* "Use for free" announcement bar — a growth-phase callout (see
-          lib/billing/free-for-all.ts) sitting above the hero so it's the
-          very first thing a visitor sees. The diagonal highlight sweeping
-          across it (Tailwind's `animate-shimmer`, added for this) is pure
-          CSS — no client JS needed, so this stays a plain server-rendered
-          element even though the hero right below it is a client
-          component. Remove this whole block (and the `shimmer` keyframe/
-          animation in tailwind.config.ts, if nothing else uses them by
-          then) once free-for-all mode ends. */}
-      <div
-        className="relative flex items-center justify-center gap-2 overflow-hidden bg-orange-600 px-4 py-2.5 text-center text-sm font-semibold text-white animate-shimmer"
-        style={{
-          backgroundImage: "linear-gradient(115deg, transparent 30%, rgba(255,255,255,0.35) 50%, transparent 70%)",
-          backgroundSize: "200% 100%",
-        }}
-      >
-        <Megaphone className="h-4 w-4 shrink-0" />
-        <span>Try PandaWorld for free — auto-push listings from WhatsApp chat to Jumia, or from the Chrome extension.</span>
-      </div>
-
-      {/* Hero — dark, canvas-animated backdrop (components/marketing/extension-hero-backdrop.tsx).
-          Carries its own nav (logo, Pricing, Sign in, Get Started) since
-          it's visually a different world from the "How it works" section and
-          footer below — no separate MarketingNav on this page. That means
-          Pricing/Sign in aren't persistently reachable while scrolled past
-          the hero; MarketingFooter below still offers a way through. */}
-      <ExtensionHeroBackdrop
-        signInHref={signInHref}
-        signUpHref={`/sign-up?redirect_url=${DASHBOARD_REDIRECT}`}
-        ctaHref={ctaHref}
-        ctaLabel={ctaLabel}
-        signedIn={Boolean(userId)}
+    <div
+      className="min-h-screen"
+      style={{ backgroundColor: PAGE_BG, color: TEXT, fontFamily: MARKETING_FONT }}
+    >
+      <Script
+        id="ld-organization"
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationLd) }}
+      />
+      <Script
+        id="ld-software-application"
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(softwareApplicationLd) }}
       />
 
-      {/* How it works — two tracks side by side (Chrome extension, WhatsApp),
-          each its own vertical step list rather than the old single 4-up
-          card grid, since that layout doesn't leave room for a second set
-          of steps next to it. Stacks to one column on phones. */}
-      <section id="how-it-works" className="bg-zinc-50">
-        <div className="mx-auto max-w-6xl px-6 py-16">
-          <div className="text-center">
-            <p className="text-xs font-semibold uppercase tracking-widest text-orange-500">
-              How it works
-            </p>
-            <h2 className="mt-3 text-2xl font-bold sm:text-3xl">
-              Two ways to get your products listed
+      <MarketingHeader ctaHref={ctaHref} ctaLabel={ctaLabel} signInHref={signInHref} />
+
+      {/* Hero — left-aligned, no dark background, no gradients. */}
+      <section className="mx-auto max-w-5xl px-6 py-16 sm:py-20">
+        <h1 className="max-w-2xl text-3xl font-bold leading-tight sm:text-5xl">
+          List on Jumia from WhatsApp, or from Chrome.
+        </h1>
+        <p className="mt-5 max-w-xl text-base leading-relaxed sm:text-lg" style={{ color: MUTED }}>
+          Send photos and a price, or autofill the Vendor Center form. You review the draft, then it goes live. Free while we test.
+        </p>
+        <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+          <MarketingButton href={signUpHref}>List from WhatsApp</MarketingButton>
+          <MarketingButton href={CHROME_WEB_STORE_URL} external variant="outline">
+            Add to Chrome
+          </MarketingButton>
+        </div>
+      </section>
+
+      {/* Two equal columns — WhatsApp and Chrome, same weight, same border
+          and type as the rest of the page. Each mock is plain HTML, not a
+          screenshot. */}
+      <section className="border-t" style={{ borderColor: LINE }}>
+        <div className="mx-auto grid max-w-5xl grid-cols-1 gap-12 px-6 py-16 lg:grid-cols-2 lg:gap-10">
+          <div>
+            <h2 className="flex items-center gap-2 text-xl font-bold">
+              <WhatsAppIcon className="h-5 w-5" />
+              From WhatsApp
             </h2>
-            <p className="mx-auto mt-3 max-w-xl text-sm text-zinc-500">
-              Use the extension when you&apos;re at your laptop, or send photos on WhatsApp when
-              you&apos;re not. Either way our AI writes the listing, and you have the final say
-              before it goes live.
-            </p>
+
+            <WhatsAppMock />
+
+            <ol className="mt-6 space-y-2 text-sm" style={{ color: MUTED }}>
+              {WHATSAPP_LINES.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ol>
           </div>
 
-          <div className="mt-12 grid grid-cols-1 gap-12 lg:grid-cols-2 lg:gap-16">
-            <HowItWorksTrack
-              icon={Chrome}
-              label="From your browser"
-              steps={STEPS}
-            />
-            <HowItWorksTrack
-              icon={WhatsAppIcon}
-              label="From WhatsApp"
-              steps={WHATSAPP_STEPS}
-            />
+          <div>
+            <h2 className="flex items-center gap-2 text-xl font-bold">
+              <Chrome className="h-5 w-5" />
+              From Chrome
+            </h2>
+
+            <ChromeMock />
+
+            <ol className="mt-6 space-y-2 text-sm" style={{ color: MUTED }}>
+              {CHROME_LINES.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      {/* Checks — plain sentences, not icon cards. */}
+      <section className="border-t" style={{ borderColor: LINE }}>
+        <div className="mx-auto max-w-5xl px-6 py-16">
+          <h2 className="text-xl font-bold">What we check before it goes live</h2>
+          <ul className="mt-5 max-w-2xl space-y-3 text-sm leading-relaxed" style={{ color: MUTED }}>
+            {CHECKS.map((c) => (
+              <li key={c}>{c}</li>
+            ))}
+          </ul>
+          <p className="mt-6 text-sm" style={{ color: MUTED }}>
+            You review the draft before it goes live. We check category rules before submit.
+          </p>
+        </div>
+      </section>
+
+      {/* Related pages — internal links per the SEO brief. */}
+      <section className="border-t" style={{ borderColor: LINE }}>
+        <div className="mx-auto max-w-5xl px-6 py-10">
+          <p className="text-sm font-semibold">Read more</p>
+          <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-sm">
+            <Link href="/jumia-whatsapp-listings" className="underline hover:opacity-70" style={{ color: TEXT }}>
+              Jumia listings from WhatsApp
+            </Link>
+            <Link href="/jumia-vendor-center-extension" className="underline hover:opacity-70" style={{ color: TEXT }}>
+              Chrome extension for Jumia Vendor Center
+            </Link>
+            <Link href="/jumia-listing-rejected" className="underline hover:opacity-70" style={{ color: TEXT }}>
+              Why Jumia rejected your listing
+            </Link>
+            <Link href="/pricing" className="underline hover:opacity-70" style={{ color: TEXT }}>
+              Pricing
+            </Link>
           </div>
         </div>
       </section>
 
       <MarketingFooter extensionPricing={{ signedIn: Boolean(userId), signInHref }} />
+    </div>
+  );
+}
+
+/** Plain-HTML WhatsApp thread mock — photo, caption with a price, a short
+ *  draft reply, and the "Reply submit" step. No screenshot, same border
+ *  and type as the rest of the page. */
+function WhatsAppMock() {
+  return (
+    <div className="mt-6 rounded-[6px] border p-4" style={{ borderColor: LINE }}>
+      <div className="flex flex-col gap-3">
+        <div className="ml-auto max-w-[85%] rounded-[6px] border p-2.5" style={{ borderColor: LINE }}>
+          <div className="flex h-24 w-full items-center justify-center rounded-[6px] border text-xs" style={{ borderColor: LINE, color: MUTED }}>
+            product photo
+          </div>
+          <p className="mt-2 text-sm">Blue ankara dress, size M, GHS 120</p>
+        </div>
+
+        <div className="max-w-[85%] rounded-[6px] border p-2.5 text-sm" style={{ borderColor: LINE, color: MUTED }}>
+          Draft ready: Blue Ankara Wrap Dress — GHS 120, Fashion → Dresses. Reply <strong style={{ color: TEXT }}>submit</strong> to publish.
+        </div>
+
+        <div className="ml-auto max-w-[85%] rounded-[6px] border p-2.5 text-sm font-medium" style={{ borderColor: LINE }}>
+          submit
+        </div>
+      </div>
+      <p className="mt-3 text-xs" style={{ color: MUTED }}>Reply submit</p>
+    </div>
+  );
+}
+
+/** Plain-HTML mock of the Chrome side panel sitting next to the Jumia
+ *  Vendor Center form it autofills. */
+function ChromeMock() {
+  return (
+    <div className="mt-6 flex flex-col gap-3 rounded-[6px] border p-4 sm:flex-row" style={{ borderColor: LINE }}>
+      <div className="flex-1 rounded-[6px] border p-3" style={{ borderColor: LINE }}>
+        <p className="text-xs font-semibold" style={{ color: MUTED }}>Jumia Vendor Center</p>
+        <div className="mt-3 space-y-2">
+          <div className="h-8 rounded-[6px] border" style={{ borderColor: LINE }} />
+          <div className="h-8 rounded-[6px] border" style={{ borderColor: LINE }} />
+          <div className="h-16 rounded-[6px] border" style={{ borderColor: LINE }} />
+        </div>
+      </div>
+      <div className="w-full rounded-[6px] border p-3 sm:w-40" style={{ borderColor: LINE, backgroundColor: "#fff" }}>
+        <p className="text-xs font-semibold">PandaWorld</p>
+        <div className="mt-2 flex h-14 items-center justify-center rounded-[6px] border text-[10px]" style={{ borderColor: LINE, color: MUTED }}>
+          photo
+        </div>
+        <div className="mt-2 rounded-[6px] border px-2 py-1 text-[11px]" style={{ borderColor: LINE, color: MUTED }}>
+          Category
+        </div>
+        <div className="mt-2 rounded-[6px] px-2 py-1 text-center text-[11px] font-semibold" style={{ backgroundColor: ACCENT, color: ACCENT_TEXT }}>
+          Autofill
+        </div>
+      </div>
     </div>
   );
 }
