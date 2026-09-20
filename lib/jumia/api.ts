@@ -20,7 +20,7 @@ import { mockCategories } from "@/lib/mock/categories";
 import { findBrandExact } from "@/lib/jumia/brands";
 import { stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
 import { encrypt, decrypt } from "@/lib/security/token-crypto";
-import { getCategoryAttributes, getVariantAxes, type JumiaCategoryAttribute } from "@/lib/jumia/categories";
+import { getCategoryAttributes, getVariantAxes, getCategoryByCode, fetchAttributesFromJumia, upsertAttributes, type JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import { isFashionCategory } from "@/lib/jumia/fashion-category";
 import { assertListingReady } from "@/lib/jumia/listing-ready";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
@@ -1564,15 +1564,44 @@ export async function buildJumiaPayload(
   let schema: JumiaCategoryAttribute[] = [];
   let variantAxes: JumiaCategoryAttribute[] = [];
   let categoryResolved = false;
+  let resolvedCode = 0;
   try {
     const { code } = resolveCategoryCode(listing);
     categoryResolved = true;
+    resolvedCode = code;
     [schema, variantAxes] = await Promise.all([
       getCategoryAttributes(code),
       getVariantAxes(code),
     ]);
   } catch {
     // No valid category — mapListingToJumiaProducts reports it properly.
+  }
+
+  // A cache miss here doesn't mean this category is broken — it means
+  // NOBODY has ever pushed to it before (getCategoryAttributes is a pure
+  // cache read; nothing populates it in the background). Confirmed live,
+  // 2026-09-20: three products in one batch failed here purely because
+  // their categories (Drilling Hammers, Moisturizers, Standing Fans) had
+  // never been selected by any listing before, while the auto-analyze
+  // pipeline's OWN on-demand fetch-and-cache (lib/actions/auto-analyze.ts)
+  // had no access token to use at draft time — the seller's Jumia
+  // connection was mid-reconnect that same session. One live fetch here,
+  // same as auto-analyze already does, means a category doesn't have to
+  // wait for the seller to notice and manually re-pick it.
+  if (categoryResolved && schema.length === 0 && resolvedCode) {
+    try {
+      const catRow = await getCategoryByCode(resolvedCode);
+      if (catRow?.attribute_set_sid) {
+        const fresh = await fetchAttributesFromJumia(accessToken, catRow.attribute_set_sid);
+        if (fresh.length > 0) {
+          await upsertAttributes(resolvedCode, fresh);
+          schema = fresh;
+          variantAxes = fresh.filter((a) => a.is_variant);
+        }
+      }
+    } catch (e) {
+      console.warn(`[Jumia push] on-demand schema fetch failed for category ${resolvedCode}: ${(e as Error).message}`);
+    }
   }
 
   // Fail closed rather than pass every attribute through unchecked.
@@ -1587,14 +1616,10 @@ export async function buildJumiaPayload(
   // Blue]" went out unvalidated because this category's schema hadn't
   // synced. Refusing to push is recoverable (the seller waits for the sync
   // or nudges it); shipping unvalidated attributes and letting Jumia
-  // discover the problem is not — it costs the whole feed.
+  // discover the problem is not — it costs the whole feed. Reached only
+  // when the on-demand fetch just above also came up empty (e.g. Jumia
+  // itself is unreachable right now).
   if (categoryResolved && schema.length === 0) {
-    // Optional future improvement, not implemented here: getCategoryAttributes
-    // caches per category with no TTL-based background refresh, so a stale
-    // sync only self-heals on the next explicit re-fetch (the category
-    // picker re-select this error message points a seller at). Fail-closed
-    // above is what matters for correctness; a scheduled refresh would only
-    // shrink how often a seller hits this message at all.
     return {
       products: [], adjustments: [], missingRequired: [],
       error: "JUMIA_NO_SCHEMA: This category's attribute list hasn't synced yet, so nothing can be validated before sending — try again in a moment, or open the category picker to re-select it and force a re-sync.",
