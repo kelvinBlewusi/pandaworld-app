@@ -801,6 +801,23 @@ function resolveColorFallbackVariation(
     snapped === trimmed &&
     !allowed.some((a) => a.toLowerCase() === trimmed.toLowerCase())
   ) {
+    // Same fallback reconcileDraftVariation uses at draft time — Jumia's
+    // own Vendor Center offers "..." as a genuine, accepted placeholder
+    // for exactly this category shape (confirmed live: a Baby Carrier in
+    // a "Backpacks & Carriers" category whose entire axis is inch/letter
+    // sizes, no colour option at all, so a colour-derived guess can NEVER
+    // match here no matter how many times it's redrafted). Unlike
+    // resolveVariantRowVariation's block, THIS value was never typed by a
+    // seller — it's the automatic colour fallback for a zero-variant
+    // product — so there's no seller-facing dropdown to send them to fix
+    // it in; holding the push here just repeats the identical block on
+    // every redraft. Only takes this path when the category actually
+    // offers "..." as one of its own options; otherwise still holds the
+    // push, since there is nothing safe to send.
+    if (allowed.includes("...")) {
+      noteSink?.push(`variation "${trimmed}" isn't one of this category's stocked options — sent as "..." instead`);
+      return "...";
+    }
     const shown = allowed.length > 8
       ? `${allowed.slice(0, 8).join(", ")}, and ${allowed.length - 8} more`
       : allowed.join(", ");
