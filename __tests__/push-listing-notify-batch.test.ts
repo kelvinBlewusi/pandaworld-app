@@ -18,7 +18,7 @@
 import { FakeDb } from "./helpers/fake-supabase";
 
 const db = new FakeDb();
-const sent: { to: string; body: string; kind: string; buttons?: string[] }[] = [];
+const sent: { to: string; body: string; kind: string; buttons?: string[]; titles?: string[]; descriptions?: string[] }[] = [];
 
 jest.mock("@/lib/supabase/server", () => ({
   createServerClient: () => db,
@@ -27,9 +27,13 @@ jest.mock("@/lib/supabase/server", () => ({
 jest.mock("@/lib/whatsapp/client", () => ({
   sendTextIfConfigured: async (to: string, body: string) => { sent.push({ to, body, kind: "text" }); },
   sendButtonsIfConfigured: async (to: string, body: string, buttons: { id: string; title: string }[]) => {
-    sent.push({ to, body, kind: "buttons", buttons: buttons.map((b) => b.id) });
+    sent.push({ to, body, kind: "buttons", buttons: buttons.map((b) => b.id), titles: buttons.map((b) => b.title) });
   },
   sendCtaUrlIfConfigured: async (to: string, body: string) => { sent.push({ to, body, kind: "cta" }); },
+  sendListIfConfigured: async (to: string, body: string, buttonText: string, rows: { id: string; title: string; description?: string }[]) => {
+    sent.push({ to, body, kind: "list", buttons: rows.map((r) => r.id), titles: rows.map((r) => r.title), descriptions: rows.map((r) => r.description ?? "") });
+  },
+  LIST_MAX_ROWS: 10,
 }));
 
 type ConnResult = { connected: boolean; phoneNumber: string | null };
@@ -92,7 +96,7 @@ describe("refreshPendingFeedStatus — skipNotify", () => {
 describe("notifyBatchResolved", () => {
   function notice(patch: Partial<ResolvedListingNotice> = {}): ResolvedListingNotice {
     return {
-      listingId: "listing-1", title: "Electric Kettle", batchId: "batch-1",
+      listingId: "listing-1", title: "Electric Kettle", whatsappSeq: null, batchId: "batch-1",
       newStatus: "live", errorMsg: null,
       counts: { liveCount: 1, totalCount: 1, rejectedSkus: [] },
       ...patch,
@@ -112,9 +116,9 @@ describe("notifyBatchResolved", () => {
 
   it("combines several resolutions from the same batch into ONE message, not one per listing", async () => {
     await notifyBatchResolved(PHONE, "batch-1", [
-      notice({ listingId: "listing-1", title: "Electric Kettle", newStatus: "live" }),
-      notice({ listingId: "listing-2", title: "Baby Carrier", newStatus: "failed", errorMsg: "Attribute [variation] with invalid value [Navy Blue]" }),
-      notice({ listingId: "listing-3", title: "Blender", newStatus: "live" }),
+      notice({ listingId: "listing-1", title: "Electric Kettle", whatsappSeq: 1, newStatus: "live" }),
+      notice({ listingId: "listing-2", title: "Baby Carrier", whatsappSeq: 2, newStatus: "failed", errorMsg: "Attribute [variation] with invalid value [Navy Blue]" }),
+      notice({ listingId: "listing-3", title: "Blender", whatsappSeq: 3, newStatus: "live" }),
     ]);
 
     const texts = sent.filter((m) => m.kind === "text");
@@ -124,21 +128,55 @@ describe("notifyBatchResolved", () => {
     expect(texts[0].body).toContain('"Baby Carrier" was rejected by Jumia: Attribute [variation]');
     expect(texts[0].body).toContain('"Blender" is now live');
 
-    // One combined way back in, not a Fix & resubmit button per rejection —
-    // WhatsApp buttons and a cta_url can't share one message.
-    const ctas = sent.filter((m) => m.kind === "cta");
-    expect(ctas).toHaveLength(1);
-    expect(sent.some((m) => m.kind === "buttons")).toBe(false);
+    // 3 or fewer items: a Fix button per REJECTED item (only the one that
+    // needs it), no button for the live ones — nothing to fix there.
+    const buttonMsgs = sent.filter((m) => m.kind === "buttons");
+    expect(buttonMsgs).toHaveLength(1);
+    expect(buttonMsgs[0].buttons).toEqual(["fix:listing-2"]);
+    expect(sent.some((m) => m.kind === "cta")).toBe(false);
+    expect(sent.some((m) => m.kind === "list")).toBe(false);
   });
 
-  it("sends no CTA when everything in the batch went live", async () => {
+  it("sends nothing further when everything in the batch went live — nothing to fix", async () => {
     await notifyBatchResolved(PHONE, "batch-1", [
       notice({ listingId: "listing-1", newStatus: "live" }),
       notice({ listingId: "listing-2", newStatus: "live" }),
     ]);
 
-    expect(sent.filter((m) => m.kind === "cta")).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].kind).toBe("text");
     expect(sent[0].body).toContain("2 more products went live");
+  });
+
+  it("uses a tappable LIST, not chunked buttons, when 4+ items resolve in one tick — every item gets a row, live or rejected", async () => {
+    await notifyBatchResolved(PHONE, "batch-1", [
+      notice({ listingId: "listing-1", title: "Kettle", whatsappSeq: 1, newStatus: "live" }),
+      notice({ listingId: "listing-2", title: "Baby Carrier", whatsappSeq: 2, newStatus: "failed", errorMsg: "Attribute [variation] with invalid value [Navy Blue]" }),
+      notice({ listingId: "listing-3", title: "Blender", whatsappSeq: 3, newStatus: "live" }),
+      notice({ listingId: "listing-4", title: "Toaster", whatsappSeq: 4, newStatus: "failed", errorMsg: "You can't list products in this category." }),
+    ]);
+
+    expect(sent.some((m) => m.kind === "buttons")).toBe(false);
+    expect(sent.some((m) => m.kind === "cta")).toBe(false);
+
+    const lists = sent.filter((m) => m.kind === "list");
+    expect(lists).toHaveLength(1);
+    expect(lists[0].buttons).toEqual(["fix:listing-1", "fix:listing-2", "fix:listing-3", "fix:listing-4"]);
+    expect(lists[0].descriptions?.[0]).toMatch(/Live on Jumia/);
+    expect(lists[0].descriptions?.[1]).toMatch(/Rejected — Attribute \[variation\]/);
+    expect(lists[0].descriptions?.[3]).toMatch(/Rejected — You can't list products/);
+  });
+
+  it("chunks the list into groups of LIST_MAX_ROWS when more items resolve than fit in one list", async () => {
+    const items = Array.from({ length: 12 }, (_, i) =>
+      notice({ listingId: `listing-${i + 1}`, title: `Product ${i + 1}`, whatsappSeq: i + 1, newStatus: i % 2 === 0 ? "live" : "failed", errorMsg: i % 2 === 0 ? null : "some rejection" }),
+    );
+    await notifyBatchResolved(PHONE, "batch-1", items);
+
+    const lists = sent.filter((m) => m.kind === "list");
+    expect(lists).toHaveLength(2);
+    expect(lists[0].buttons).toHaveLength(10);
+    expect(lists[1].buttons).toHaveLength(2);
   });
 
   it("does nothing for an empty batch", async () => {
@@ -150,7 +188,7 @@ describe("notifyBatchResolved", () => {
 describe("notifyResolvedListings", () => {
   function notice(patch: Partial<ResolvedListingNotice> = {}): ResolvedListingNotice {
     return {
-      listingId: "listing-1", title: "Product", batchId: "batch-1",
+      listingId: "listing-1", title: "Product", whatsappSeq: null, batchId: "batch-1",
       newStatus: "live", errorMsg: null,
       counts: { liveCount: 1, totalCount: 1, rejectedSkus: [] },
       ...patch,
@@ -190,10 +228,16 @@ describe("toResolvedNotice — what the cron route collects per listing", () => 
   it("builds a notice when the status actually changed and a batch id is present", () => {
     const notice = toResolvedNotice(listing, "pending_approval", liveResult);
     expect(notice).toEqual({
-      listingId: "listing-1", title: "Electric Kettle", batchId: "batch-1",
+      listingId: "listing-1", title: "Electric Kettle", whatsappSeq: null, batchId: "batch-1",
       newStatus: "live", errorMsg: null,
       counts: { liveCount: 1, totalCount: 1, rejectedSkus: [] },
     });
+  });
+
+  it("carries whatsapp_seq through when the listing has one", () => {
+    const withSeq = { ...listing, whatsapp_seq: 2 };
+    const notice = toResolvedNotice(withSeq, "pending_approval", liveResult);
+    expect(notice?.whatsappSeq).toBe(2);
   });
 
   it("returns null when the status did not change this pass — nothing to notify about", () => {

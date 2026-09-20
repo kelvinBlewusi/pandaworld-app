@@ -842,6 +842,24 @@ describe("Fix & resubmit", () => {
     expect(pushCallCount).toBe(1);
   });
 
+  // notifyBatchResolved (lib/jumia/push-listing.ts) now puts every item —
+  // live or rejected — behind the same fix:<listingId> id in its "Pick a
+  // product" list, so a seller can tap an already-live row from that same
+  // list. Without this guard, extractRejectionText(null) => "" =>
+  // classifyJumiaRejection("") => kind: "unknown" => isAutoFixable ===
+  // true, which would happily redraft-and-repush a product Jumia already
+  // approved.
+  it("does nothing but confirm when there's no rejection to fix — e.g. a tap on an already-live row", async () => {
+    seedRejectedListing({ status: "live", jumia_error: null });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
+
+    expect(autoAnalyzeCalls).toHaveLength(0);
+    expect(pushCallCount).toBe(0);
+    expect(sent.some((m) => m.body.includes("already live"))).toBe(true);
+  });
+
   // Never fixed by a redraft — no amount of rerunning invents a price.
   it("still refuses to auto-fix a price/stock rejection", async () => {
     seedRejectedListing({ jumia_error: "The Global Price is mandatory in order to create a Product." });

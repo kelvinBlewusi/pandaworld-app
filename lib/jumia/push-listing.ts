@@ -682,12 +682,17 @@ async function notifyListingResolved(
 }
 
 export interface ResolvedListingNotice {
-  listingId: string;
-  title:     string | null;
-  batchId:   string;
-  newStatus: string;
-  errorMsg:  string | null;
-  counts:    ResolutionCounts;
+  listingId:    string;
+  title:        string | null;
+  /** The product's position in its WhatsApp batch (Product 1, Product 2,
+   *  ...) — used to label a "Fix product N" button/row when several
+   *  listings resolve in one cron pass, since "Fix & resubmit" alone
+   *  doesn't say which product it applies to. */
+  whatsappSeq:  number | null;
+  batchId:      string;
+  newStatus:    string;
+  errorMsg:     string | null;
+  counts:       ResolutionCounts;
 }
 
 /**
@@ -702,18 +707,19 @@ export interface ResolvedListingNotice {
  * without needing to exercise the whole HTTP handler.
  */
 export function toResolvedNotice(
-  listing: { id: string; title: string | null; whatsapp_batch_id: string | null },
+  listing: { id: string; title: string | null; whatsapp_batch_id: string | null; whatsapp_seq?: number | null },
   before:  string,
   result:  FeedResolution,
 ): ResolvedListingNotice | null {
   if (result.status === before || !listing.whatsapp_batch_id) return null;
   return {
-    listingId: listing.id,
-    title:     listing.title,
-    batchId:   listing.whatsapp_batch_id,
-    newStatus: result.status,
-    errorMsg:  result.error,
-    counts:    { liveCount: result.liveCount, totalCount: result.totalCount, rejectedSkus: result.rejectedSkus },
+    listingId:   listing.id,
+    title:       listing.title,
+    whatsappSeq: listing.whatsapp_seq ?? null,
+    batchId:     listing.whatsapp_batch_id,
+    newStatus:   result.status,
+    errorMsg:    result.error,
+    counts:      { liveCount: result.liveCount, totalCount: result.totalCount, rejectedSkus: result.rejectedSkus },
   };
 }
 
@@ -735,13 +741,29 @@ export function toResolvedNotice(
  * (same wording, same Fix & resubmit button) via the shared
  * resolutionLine — this is the common case in practice, since most cron
  * ticks resolve at most one or two products per batch, and nothing about
- * that experience should change. Only when 2+ listings from the SAME
- * batch resolve in the SAME tick does the message collapse into one
- * combined summary, with a single "Review listings" link in place of a
- * Fix & resubmit button per rejection (WhatsApp caps reply-buttons at
- * three per message, and a cta_url button can't share a message with
- * them anyway — same constraint sendStatusReply documents in
- * lib/whatsapp/intake.ts).
+ * that experience should change.
+ *
+ * When 2+ listings from the SAME batch resolve in the SAME tick, the
+ * message collapses into one combined summary text, plus a SEPARATE way
+ * to act on it — because a rejection buried in a wall of text with
+ * nothing to tap is a dead end. Real live example this closes: a
+ * 2-product batch where one went live and one was rejected for a
+ * category problem (a genuinely auto-fixable rejection —
+ * classifyJumiaRejection treats "can't list products in this category" as
+ * kind: "rerun") got a plain-text summary and a generic "Review listings"
+ * link that didn't even show the rejection reason or offer a retry —
+ * Fix & resubmit was reachable in principle but not in practice.
+ *
+ *   - 1-3 items: reply-buttons hold three per message (Meta's own cap), so
+ *     every REJECTED item gets its own "Fix product N" button in one
+ *     message. A live item needs no button — nothing to fix.
+ *   - 4+ items: a list holds up to 10 rows in ONE message (see sendList's
+ *     own doc comment on why this replaced button-message chunking) — so
+ *     EVERY item, live or rejected, gets a row, each labelled with its
+ *     status. Tapping a rejected row fixes it; tapping an already-live
+ *     row just confirms it's already live (see handleFixAndResubmit's own
+ *     early-return for a listing with nothing to fix) — one mechanism for
+ *     the whole list rather than two different tap behaviours to explain.
  */
 export async function notifyBatchResolved(
   phoneNumber: string,
@@ -750,7 +772,7 @@ export async function notifyBatchResolved(
 ): Promise<void> {
   if (items.length === 0) return;
   try {
-    const { sendTextIfConfigured, sendButtonsIfConfigured, sendCtaUrlIfConfigured } = await import("@/lib/whatsapp/client");
+    const { sendTextIfConfigured, sendButtonsIfConfigured, sendListIfConfigured, LIST_MAX_ROWS } = await import("@/lib/whatsapp/client");
 
     if (items.length === 1) {
       const item = items[0];
@@ -764,20 +786,45 @@ export async function notifyBatchResolved(
       return;
     }
 
-    const rejectedCount = items.filter((i) => i.newStatus !== "live").length;
-    const liveCount = items.length - rejectedCount;
+    const rejected = items.filter((i) => i.newStatus !== "live");
+    const liveCount = items.length - rejected.length;
     const lines = items.map((i) => resolutionLine(i.title ?? "Your product", i.newStatus, i.errorMsg, i.counts));
-    const header = rejectedCount === 0
+    const header = rejected.length === 0
       ? `🎉 Since your last update: ${liveCount} more product${liveCount === 1 ? "" : "s"} went live on Jumia!`
       : liveCount === 0
-        ? `⚠️ Since your last update: ${rejectedCount} product${rejectedCount === 1 ? "" : "s"} ${rejectedCount === 1 ? "was" : "were"} rejected by Jumia.`
-        : `Since your last update: ${liveCount} went live, ${rejectedCount} rejected.`;
+        ? `⚠️ Since your last update: ${rejected.length} product${rejected.length === 1 ? "" : "s"} ${rejected.length === 1 ? "was" : "were"} rejected by Jumia.`
+        : `Since your last update: ${liveCount} went live, ${rejected.length} rejected.`;
 
     await sendTextIfConfigured(phoneNumber, [header, "", ...lines].join("\n"));
 
-    if (rejectedCount > 0) {
-      const { whatsappListingsUrl } = await import("@/lib/whatsapp/batch");
-      await sendCtaUrlIfConfigured(phoneNumber, "Fix what didn't go through:", "Review listings", whatsappListingsUrl(batchId));
+    if (rejected.length === 0) return;
+
+    const label = (i: ResolvedListingNotice) => i.whatsappSeq != null ? `Product ${i.whatsappSeq}` : (i.title ?? "product");
+
+    if (items.length <= 3) {
+      await sendButtonsIfConfigured(
+        phoneNumber,
+        "Fix what didn't go through:",
+        rejected.map((i) => ({ id: `fix:${i.listingId}`, title: `Fix ${label(i)}`.slice(0, 20) })),
+      );
+      return;
+    }
+
+    const rows = items.map((i) => ({
+      id:          `fix:${i.listingId}`,
+      title:       label(i),
+      description: i.newStatus === "live"
+        ? "✅ Live on Jumia"
+        : `⚠️ Rejected — ${i.errorMsg ?? "see details"}`,
+    }));
+    for (let idx = 0; idx < rows.length; idx += LIST_MAX_ROWS) {
+      const chunk = rows.slice(idx, idx + LIST_MAX_ROWS);
+      await sendListIfConfigured(
+        phoneNumber,
+        idx === 0 ? "Tap a product to fix it, or see a live one's details:" : "…and the rest:",
+        "Pick a product",
+        chunk,
+      );
     }
   } catch (e) {
     console.warn(`[push-listing] batch resolve notification failed for batch ${batchId}: ${(e as Error).message}`);
