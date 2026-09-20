@@ -3,11 +3,10 @@ import {
   claimAnalysisJobs,
   markJobDone,
   markJobFailed,
-  isBatchSettled,
+  findUnfinalizedSettledBatches,
   claimBatchFinalization,
   msUntilNextJobSettles,
   nudgeWorker,
-  type AnalysisJob,
 } from "@/lib/whatsapp/analysis-queue";
 import { runQueuedAnalysis, finalizeBatch } from "@/lib/whatsapp/intake";
 import { readGeminiTelemetry } from "@/lib/ai/quota-telemetry";
@@ -37,6 +36,36 @@ export const maxDuration = 60;
 // dozen calls. Raising this trades quota headroom for queue throughput —
 // scheduling the cron more often is the safer lever.
 const CLAIM_LIMIT = 3;
+
+/**
+ * Close out every batch that has settled but never got a closing message —
+ * see findUnfinalizedSettledBatches's own doc comment for why that can
+ * happen even though every job in it has already reached a terminal
+ * status. Deliberately NOT scoped to batch_ids of jobs claimed this tick:
+ * that was the bug (a batch whose last job silently retires to 'failed'
+ * inside claim_analysis_jobs is never claimed again, so it was never
+ * checked again either) — this runs unconditionally, including on a tick
+ * that claimed no new work at all.
+ */
+async function closeSettledBatches(): Promise<number> {
+  const batches = await findUnfinalizedSettledBatches();
+  let closed = 0;
+  for (const b of batches) {
+    try {
+      // Only one worker may send the closing messages — see
+      // claimBatchFinalization. Also what stops a backlog of several
+      // orphaned batches for the same seller from all firing at once:
+      // the first one to win this flips the session off 'analyzing', so
+      // every later one in this same pass loses the race and is skipped.
+      if (!(await claimBatchFinalization(b.phone_number))) continue;
+      await finalizeBatch(b.batch_id, b.phone_number, b.batch_size);
+      closed++;
+    } catch (e) {
+      console.error(`[worker] finalizing batch ${b.batch_id} failed: ${(e as Error).message}`);
+    }
+  }
+  return closed;
+}
 
 export async function POST(req: NextRequest) {
   const cronSecret = process.env.CRON_SECRET;
@@ -80,8 +109,13 @@ export async function POST(req: NextRequest) {
   }
 
   if (jobs.length === 0) {
+    // An idle claim is exactly the tick an orphaned batch (see
+    // closeSettledBatches) would otherwise never get checked on — nothing
+    // claimed this tick means its batch_id would never even be looked at
+    // under the old jobs-claimed-this-tick-only scoping.
+    const batchesClosed = await closeSettledBatches();
     return NextResponse.json({
-      claimed: 0, done: 0, failed: 0, batchesClosed: 0,
+      claimed: 0, done: 0, failed: 0, batchesClosed,
       ...(settleWaitMs > 0 ? { settleWaitMs } : {}),
       ...(claimError ? { claimError } : {}),
       gemini: readGeminiTelemetry(),
@@ -118,25 +152,11 @@ export async function POST(req: NextRequest) {
     }),
   );
 
-  // Close out any batch whose last job just settled. Checked per distinct
-  // batch, after every job above has been marked, so the settle check sees
-  // the final state rather than racing its own siblings.
-  const seen = new Map<string, AnalysisJob>();
-  for (const job of jobs) seen.set(job.batch_id, job);
-
-  let batchesClosed = 0;
-  for (const [batchId, job] of Array.from(seen)) {
-    try {
-      if (!(await isBatchSettled(batchId))) continue;
-      // Only one worker may send the closing messages — see
-      // claimBatchFinalization.
-      if (!(await claimBatchFinalization(job.phone_number))) continue;
-      await finalizeBatch(batchId, job.phone_number, job.batch_size);
-      batchesClosed++;
-    } catch (e) {
-      console.error(`[worker] finalizing batch ${batchId} failed: ${(e as Error).message}`);
-    }
-  }
+  // Close out any batch that has settled, including one whose last job
+  // just finished above AND one whose last job silently retired to
+  // 'failed' on some earlier tick without ever being claimed again — see
+  // closeSettledBatches.
+  const batchesClosed = await closeSettledBatches();
 
   // Keep the queue draining without waiting for the next scheduled tick.
   // Only fires when this tick actually had work, so an empty queue can't

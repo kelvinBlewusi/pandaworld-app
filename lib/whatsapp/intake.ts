@@ -1973,6 +1973,33 @@ async function applyChatPrice(
 }
 
 /**
+ * Listings whose analysis job hit its retry cap without ever reaching
+ * runQueuedAnalysis's own graceful failure reply.
+ *
+ * status='done' with no title already means runQueuedAnalysis got far
+ * enough to call replyError itself before returning — that job is marked
+ * done regardless of whether the draft it produced is usable, precisely
+ * so finalizeBatch can tell "handled" apart from "never handled" here.
+ * status='failed' is the OTHER kind: claim_analysis_jobs retired the job
+ * itself after repeated crashes (a Vercel function-timeout kill, live and
+ * confirmed, is silent at the platform level — no catch block, no
+ * replyError, nothing runs), so nobody ever told the seller anything.
+ */
+async function hardFailedListingIds(batchId: string): Promise<Set<string>> {
+  const db = createServerClient();
+  const { data, error } = await db
+    .from("analysis_jobs")
+    .select("listing_id")
+    .eq("batch_id", batchId)
+    .eq("status", "failed");
+  if (error) {
+    console.warn(`[whatsapp intake] hard-failed lookup failed for batch ${batchId}: ${error.message}`);
+    return new Set();
+  }
+  return new Set((data ?? []).map((r) => r.listing_id as string));
+}
+
+/**
  * Close out a batch once every job has settled — the tail of what used to
  * be startBatchAnalysis, called by the worker that finished the last job.
  *
@@ -2019,9 +2046,23 @@ export async function finalizeBatch(
       // Jumia, and it is the only missing field a seller can supply in a
       // single word without opening the editor.
       await askForNextMissingPrice(phoneNumber, batchId);
+      return;
     }
-    // else: the product's own failure message (sent by runQueuedAnalysis)
-    // already covers what happened — nothing to add.
+    // No title: runQueuedAnalysis's own graceful failure reply already
+    // covered this UNLESS the job never got that far — a hard crash or a
+    // platform timeout kill mid-analysis, silent by nature, is the one
+    // case with nobody ever telling the seller anything went wrong.
+    if (only && (await hardFailedListingIds(batchId)).has(only.id)) {
+      const seq = only.whatsapp_seq ?? 1;
+      await replyError(
+        phoneNumber,
+        `⚠️ Product couldn't be drafted after several tries — sorry about that. You can retry, or fill it in yourself.`,
+        {
+          retryId: `retry product ${seq}`,
+          cta:     { label: `Fix product ${seq}`, url: focusedEditorUrl(only.id) },
+        },
+      );
+    }
     return;
   }
 
