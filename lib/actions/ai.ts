@@ -38,6 +38,7 @@ import {
   stripBrandFromTitle,
 } from "@/lib/ai/jumia-content-policy";
 import { buildNoteIntentPrompt } from "@/lib/whatsapp/note-intent";
+import { buildAllowedValueMatchPrompt, resolveMatchedValue } from "@/lib/jumia/variant-value-match";
 import {
   buildDescriptionAndHighlightsStyleBlock,
   buildDescriptionStyleBlock,
@@ -2259,6 +2260,47 @@ export async function aiReadNoteIntent(note: string): Promise<unknown> {
     return parseAIResponse(raw);
   } catch (e) {
     console.warn(`[aiReadNoteIntent] failed (non-fatal): ${(e as Error).message}`);
+    return null;
+  }
+}
+
+/**
+ * AI-assisted fallback for reconcileDraftVariation (lib/jumia/api.ts): when
+ * a seller-stated variant value doesn't literally match any of a
+ * category's own allowed values — not even after casing/plural/
+ * spelling-pair snapping (snapToAllowedWithSynonyms) — ask a model to
+ * match it BY MEANING against that exact, closed list instead of falling
+ * back to the "..." placeholder. See lib/jumia/variant-value-match.ts for
+ * why this is safe: the model can only ever return one of the values it
+ * was given, or none at all — it never gets to invent a new option, so a
+ * wrong answer here is "missed a match", never "made one up".
+ *
+ * Never throws — a failed match just means the caller's own fallback
+ * stands, exactly as before this existed.
+ */
+export async function aiMatchAllowedValue(
+  stated:       string,
+  allowed:      string[],
+  noteContext?: string | null,
+): Promise<string | null> {
+  const trimmed = stated.trim();
+  if (!trimmed || allowed.length === 0) return null;
+  if (USE_MOCK_AI) return null;
+
+  const prompt = buildAllowedValueMatchPrompt(trimmed, allowed, noteContext);
+
+  // Same reasoning as aiReadNoteIntent: pin the one model every seller's
+  // note gets read with, so two sellers who wrote the same thing get the
+  // same match regardless of plan tier.
+  const textModel = await resolveModel(null, "text", { forceBestModel: true });
+
+  try {
+    const raw = await callGemini(prompt, [], textModel);
+    const parsed = parseAIResponse(raw) as { match?: unknown };
+    const candidate = typeof parsed.match === "string" ? parsed.match : "";
+    return resolveMatchedValue(candidate, allowed);
+  } catch (e) {
+    console.warn(`[aiMatchAllowedValue] failed (non-fatal): ${(e as Error).message}`);
     return null;
   }
 }

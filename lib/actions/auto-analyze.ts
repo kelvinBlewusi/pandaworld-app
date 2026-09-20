@@ -25,6 +25,7 @@ import {
   aiPassBC_pickAndFill,
   aiFillGaps,
   aiExpandDescription,
+  aiMatchAllowedValue,
   type CandidateWithSchema,
   type RankedCategory,
 } from "@/lib/actions/ai";
@@ -1413,17 +1414,46 @@ export async function runAutoAnalyze(
       // `chosen`/`attrs` are known, catches a category whose axis is a
       // closed list (screen sizes, shoe lengths) before the seller ever
       // sees a value Jumia would reject outright.
-      const variantAxes = attrs.filter((a) => a.is_variant);
-      const rows = variations.map((v) => ({
-        listing_id:      listingId,
-        variation:       reconcileDraftVariation(v.label, variantAxes),
-        seller_sku:      `${baseSku}-${v.sku_suffix}`,
-        gtin:            null,
-        quantity:        baseStock,
-        global_price:    basePrice,
-        sale_price:      null,
-        sale_start_date: null,
-        sale_end_date:   null,
+      const variantAxes         = attrs.filter((a) => a.is_variant);
+      const allowedVariantValues = variantAxes.flatMap((a) => a.allowed_values ?? []);
+      const rows = await Promise.all(variations.map(async (v) => {
+        let variation = reconcileDraftVariation(v.label, variantAxes);
+
+        // reconcileDraftVariation only ever falls back to "..." when the
+        // axis DOES restrict to a closed list and the seller's label
+        // didn't match it even after casing/plural/spelling-pair
+        // snapping — i.e. the seller said SOMETHING, the category has a
+        // fixed vocabulary, and neither literally lines up. That is
+        // exactly the case a live listing hit: a Backpacks & Carriers
+        // note named a size the category's own axis genuinely stocked,
+        // just not spelled the seller's way, and it drafted as the
+        // meaningless "..." placeholder instead of the size meant.
+        // aiMatchAllowedValue asks a model to match BY MEANING against
+        // the category's own exact, closed list — see its doc comment
+        // for why an answer here can only ever be one of that list, or
+        // nothing at all.
+        if (variation === "..." && allowedVariantValues.length > 0 && v.label.trim() !== "...") {
+          const matched = await aiMatchAllowedValue(v.label, allowedVariantValues, userContext);
+          if (matched) {
+            console.info(
+              `[auto-analyze] listing=${listingId} matched variant label "${v.label}" → "${matched}" ` +
+              `against category ${chosen.code}'s own options`,
+            );
+            variation = matched;
+          }
+        }
+
+        return {
+          listing_id:      listingId,
+          variation,
+          seller_sku:      `${baseSku}-${v.sku_suffix}`,
+          gtin:            null,
+          quantity:        baseStock,
+          global_price:    basePrice,
+          sale_price:      null,
+          sale_start_date: null,
+          sale_end_date:   null,
+        };
       }));
       // Clear-then-insert. RLS still enforces ownership via the listings
       // ownership check above.
