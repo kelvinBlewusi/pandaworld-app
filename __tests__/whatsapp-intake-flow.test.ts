@@ -456,6 +456,53 @@ describe("asking for a missing price in chat", () => {
   });
 });
 
+describe("a single-product batch whose analysis hard-failed", () => {
+  // Real production shape: a Vercel function-timeout kill mid-analysis is
+  // silent at the platform level — no catch block runs, so
+  // runQueuedAnalysis never reaches its own replyError call. The job gets
+  // retried, and once claim_analysis_jobs finally retires it to 'failed'
+  // after exhausting attempts, the seller had heard NOTHING since
+  // "drafting them now" — confirmed live, two single-product batches sat
+  // untouched for hours.
+  it("tells the seller when the job was retired to 'failed' with no title ever set", async () => {
+    db.tables.listings = [
+      { id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: null, selling_price: null },
+    ];
+    db.tables.analysis_jobs = [
+      { id: "job-1", listing_id: "listing-1", batch_id: "batch-1", user_id: USER, phone_number: PHONE, seq: 1, batch_size: 1, status: "failed", attempts: 3, error: "Gave up after 3 attempts" },
+    ];
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 1);
+
+    const failure = sent.find((m) => m.body.includes("couldn't be drafted after several tries"));
+    expect(failure).toBeDefined();
+  });
+
+  // The other half: a job that reached runQueuedAnalysis's own graceful
+  // failure path is marked 'done' (not 'failed'), specifically so
+  // finalizeBatch does not send a SECOND message on top of the one
+  // runQueuedAnalysis already sent. No analysis_jobs row at all is the
+  // same case — the job might have been cleaned up, or never queued via
+  // this path in the test at all.
+  it("stays silent when the no-title listing's job is not 'failed' — already covered elsewhere", async () => {
+    db.tables.listings = [
+      { id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: null, selling_price: null },
+    ];
+    db.tables.analysis_jobs = [
+      { id: "job-1", listing_id: "listing-1", batch_id: "batch-1", user_id: USER, phone_number: PHONE, seq: 1, batch_size: 1, status: "done", attempts: 1, error: null },
+    ];
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 1);
+
+    expect(sent).toHaveLength(0);
+  });
+});
 
 describe("message volume on a large batch", () => {
   // The live failure: a 10-product batch sent roughly 25 messages to one
