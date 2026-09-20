@@ -281,6 +281,39 @@ describe("Jumia /feeds/products/create payload conformance", () => {
       },
     );
 
+    // Real rejection, live: a Baby Carrier with ZERO persisted variant rows
+    // (so this base-product fallback, not resolveVariantRowVariation, is
+    // the one that runs) shipped "Blue" straight to Jumia into a category
+    // whose variant axis is entirely lengths in inches ("Attribute
+    // [variation] with invalid value [Blue]") — nothing here checked the
+    // detected colour against what the category actually stocks before a
+    // create-feed push, unlike the identical check already applied to a
+    // variant row's own typed value.
+    it("holds the push (via blockers) when the detected colour isn't one of the category's own stocked options", () => {
+      const sizeOnlyAxis: JumiaCategoryAttribute[] = [
+        { name: "variation", label: "Variation", type: "select",
+          allowed_values: ["S", "M", "L", "XL", "One Size Fits All"],
+          required: true, is_variant: true },
+      ];
+      const babyCarrier: ListingRow = { ...sampleListing, color: "Blue", color_family: "Blue" };
+      const blockers: string[] = [];
+      const ps = mapListingToJumiaProducts(babyCarrier, [], brand, currency, [], undefined, sizeOnlyAxis, blockers);
+      expect(blockers).toHaveLength(1);
+      expect(blockers[0]).toMatch(/isn't one of this category's stocked options/);
+      expect(blockers[0]).toMatch(/S, M, L, XL, One Size Fits All/);
+      // Still built — blockers is the signal the caller must check, not a
+      // thrown error (see the variant-row equivalent above).
+      expect(ps[0].variation).toBe("Blue");
+    });
+
+    it("does not block a colour when no variant-axis data is available", () => {
+      const babyCarrier: ListingRow = { ...sampleListing, color: "Blue", color_family: "Blue" };
+      const blockers: string[] = [];
+      const ps = mapListingToJumiaProducts(babyCarrier, [], brand, currency, [], undefined, [], blockers);
+      expect(blockers).toHaveLength(0);
+      expect(ps[0].variation).toBe("Blue");
+    });
+
     it("includes a listing-level sale price when set — the only place one can live with zero variant rows", () => {
       const onSale: ListingRow = { ...sampleListing, sale_price: 1799, sale_start_date: FUTURE_SALE_START_2, sale_end_date: FUTURE_SALE_END_2 };
       const ps = mapListingToJumiaProducts(onSale, [], brand, currency);

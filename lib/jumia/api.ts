@@ -744,15 +744,47 @@ function snapVariationSpelling(trimmed: string, allowed: string[], noteSink?: st
  * colourways, not a composite label — unlike a variant row's own typed
  * value (see resolveVariantRowVariation below), which routinely legitimately
  * joins several DIFFERENT attributes ("8GB / 128GB / Navy").
+ *
+ * Same local hold as resolveVariantRowVariation, and for the identical
+ * reason: a category whose variant axis is something OTHER than colour
+ * (sizes, lengths in inches, capacities) can never accept a colour value no
+ * matter how it's spelled. Real rejection this closes, live: a Baby
+ * Carrier with zero persisted variant rows (so THIS fallback, not
+ * resolveVariantRowVariation, was the one running) shipped "Blue" as its
+ * variation into a category whose axis is entirely shoe/strap lengths in
+ * inches — "Attribute [variation] with invalid value [Blue]" — because
+ * nothing here checked the detected colour against what the category
+ * actually stocks before sending.
  */
 function resolveColorFallbackVariation(
   rawColor:    string,
   variantAxes: JumiaCategoryAttribute[],
   noteSink?:   string[],
+  blockers?:   string[],
 ): string {
   const trimmed = rawColor.trim();
   if (!trimmed || !isSingleColour(trimmed)) return "Default";
-  return snapVariationSpelling(trimmed, variantAxes.flatMap((a) => a.allowed_values ?? []), noteSink);
+
+  const allowed = variantAxes.flatMap((a) => a.allowed_values ?? []);
+  const snapped = snapVariationSpelling(trimmed, allowed, noteSink);
+
+  // Same "nothing matched" test as resolveVariantRowVariation: an axis
+  // that declares options, none of which is this colour even after
+  // synonym/spelling snapping.
+  if (
+    allowed.length > 0 &&
+    snapped === trimmed &&
+    !allowed.some((a) => a.toLowerCase() === trimmed.toLowerCase())
+  ) {
+    const shown = allowed.length > 8
+      ? `${allowed.slice(0, 8).join(", ")}, and ${allowed.length - 8} more`
+      : allowed.join(", ");
+    blockers?.push(
+      `Variation "${trimmed}" isn't one of this category's stocked options (${shown}) — pick one of those, or use the editor if you genuinely stock a new one.`,
+    );
+  }
+
+  return snapped;
 }
 
 /**
@@ -876,6 +908,7 @@ function buildBaseProduct(
   schema: JumiaCategoryAttribute[] = [],
   noteSink?: string[],
   variantAxes: JumiaCategoryAttribute[] = [],
+  blockers?: string[],
 ) {
   const category   = resolveCategoryCode(listing);
   const images     = (listing.images ?? [])
@@ -927,7 +960,7 @@ function buildBaseProduct(
   // which Jumia dedup-rejected. The push route validates upstream (empty
   // variation → 422) so the seller is told to type a label instead.
   const colorVariation   = (listing.color ?? listing.color_family ?? "").trim();
-  const defaultVariation = resolveColorFallbackVariation(colorVariation, variantAxes, noteSink);
+  const defaultVariation = resolveColorFallbackVariation(colorVariation, variantAxes, noteSink, blockers);
 
   // Match Jumia Postman spec exactly:
   //   POST /feeds/products/create
@@ -1007,7 +1040,15 @@ export function mapListingToJumiaProducts(
    *  array means the caller must not push the resulting products. */
   blockers?: string[],
 ): JumiaProduct[] {
-  const base = buildBaseProduct(listing, brand, currency, categoryAttributeSchema, noteSink, variantAxes);
+  // blockers only when base.variation will actually ship: with real
+  // variant rows present, base is built (for its other shared fields) but
+  // its OWN variation is deliberately discarded below in favour of each
+  // variant's typed value — blocking on it here would hold a push over a
+  // colour fallback nothing ever sends.
+  const base = buildBaseProduct(
+    listing, brand, currency, categoryAttributeSchema, noteSink, variantAxes,
+    variants.length ? undefined : blockers,
+  );
 
   if (!variants.length) {
     // No persisted variants → one product entry using the listing's own
