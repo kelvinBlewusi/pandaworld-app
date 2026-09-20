@@ -20,6 +20,7 @@ import {
   getFeedProductDetails,
   type FeedProductInfo,
 } from "@/lib/jumia/api";
+import { fingerprintListingContent, logFeedOutcome, type FeedOutcomeKind } from "@/lib/jumia/feed-outcomes";
 import type { ListingRow, ListingStatus, VariantRow } from "@/lib/supabase/types";
 
 export interface PushListingVariantInput {
@@ -328,6 +329,10 @@ export async function pushListingToJumia(
     }
   }
 
+  // Computed once, from the content as typed — see fingerprintListingContent's
+  // own doc comment for why seller_sku is excluded (it changes on every retry).
+  const payloadFingerprint = fingerprintListingContent(row, variants);
+
   // ── Get valid Jumia token + shopId ───────────────────────────────────────
   let accessToken: string;
   let shopId: string;
@@ -453,16 +458,19 @@ export async function pushListingToJumia(
     await db
       .from("listings")
       .update({
-        status:                  "pending_approval",
-        jumia_ref:               result.jumia_ref,
-        jumia_error:             null,
-        jumia_synced_at:         new Date().toISOString(),
+        status:                    "pending_approval",
+        jumia_ref:                 result.jumia_ref,
+        jumia_error:               null,
+        jumia_synced_at:           new Date().toISOString(),
         // Clear the auto-fix loop-cap bookkeeping — a successful push means
         // whatever the last rejection was is resolved, so the next one (if
         // any) is a fresh problem, not a repeat. See rejectionFingerprint.
-        jumia_rerun_fingerprint: null,
-        jumia_rerun_count:       0,
-        updated_at:              new Date().toISOString(),
+        jumia_rerun_fingerprint:   null,
+        jumia_rerun_count:         0,
+        // Carried forward so refreshPendingFeedStatus can log this feed's
+        // eventual per-SKU outcome against the content that produced it.
+        jumia_payload_fingerprint: payloadFingerprint,
+        updated_at:                new Date().toISOString(),
       })
       .eq("id", listingId);
 
@@ -479,6 +487,11 @@ export async function pushListingToJumia(
   // as a missing price, so it comes back the same way: a validation error
   // naming the fields, with the draft left intact to fix.
   if (result.blocked === "missing_required") {
+    await logFeedOutcome({
+      listingId, feedId: null, sellerSku: row.sku, country,
+      categoryCode: row.category_code, outcome: "blocked_locally",
+      rawError: result.error, payloadFingerprint,
+    });
     // Hand the claim back. Nothing reached Jumia, so the listing must
     // return to a state it can be pushed from once the seller fills the
     // gaps — otherwise it sits at 'processing' forever: the feed cron only
@@ -494,6 +507,19 @@ export async function pushListingToJumia(
   if (errMsg.includes("401") || errMsg.includes("403") || errMsg.toLowerCase().includes("unauthor")) {
     await markNeedsReconnect(db, userId);
   }
+
+  // result.raw is only ever non-null when Jumia's create-feed endpoint
+  // actually answered (see pushProductsToJumia) — every local-refusal
+  // branch there (no schema yet, a blocked variant value, restricted
+  // words/brand/category) returns raw: null. That's the difference
+  // between a string worth writing a regression test against (Jumia's own
+  // wording) and one that is ours to begin with.
+  await logFeedOutcome({
+    listingId, feedId: result.jumia_ref, sellerSku: row.sku, country,
+    categoryCode: row.category_code,
+    outcome: result.raw != null ? "rejected" : "blocked_locally",
+    rawError: result.error ?? "Unknown error from Jumia", payloadFingerprint,
+  });
 
   await db
     .from("listings")
@@ -682,7 +708,36 @@ export async function refreshPendingFeedStatus(
     if (succeeded?.qcStatus)   updates.jumia_qc_status   = succeeded.qcStatus;
 
     const db = createServerClient();
-    await db.from("listings").update(updates).eq("id", listing.id);
+    const { data: updatedRows } = await db
+      .from("listings")
+      .update(updates)
+      .eq("id", listing.id)
+      .select("category_code, jumia_payload_fingerprint");
+    const updatedRow = (updatedRows as { category_code?: string | null; jumia_payload_fingerprint?: string | null }[] | null)?.[0];
+
+    // One outcome row per product Jumia actually itemised, so a feed with
+    // a partial rejection logs the SKU that failed rather than the whole
+    // listing — falls back to one listing-level row when Jumia gave no
+    // per-item detail at all. No per-listing "country" here (this function
+    // never has the seller's credentials in scope, only the feed's own
+    // response) — left null rather than threading it through every caller.
+    const outcomeItems = details.length > 0
+      ? details.map((p) => ({
+          sellerSku: p.sellerSku,
+          outcome:   (rejected.includes(p) ? "rejected" : "live") as FeedOutcomeKind,
+          rawError:  rejected.includes(p) ? (p.errors.find((e) => e.trim()) ?? reason ?? null) : null,
+        }))
+      : [{ sellerSku: null, outcome: (newStatus === "live" ? "live" : "rejected") as FeedOutcomeKind, rawError: errorMsg }];
+
+    await Promise.all(outcomeItems.map((item) => logFeedOutcome({
+      listingId:          listing.id,
+      feedId:             listing.jumia_ref,
+      sellerSku:          item.sellerSku,
+      categoryCode:       updatedRow?.category_code ?? null,
+      outcome:            item.outcome,
+      rawError:           item.rawError,
+      payloadFingerprint: updatedRow?.jumia_payload_fingerprint ?? null,
+    })));
 
     // Only the pending → resolved transition is news. Re-checking an
     // already-resolved listing (what /api/jumia/diagnose does) must not
