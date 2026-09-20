@@ -54,8 +54,10 @@ import { enqueueAnalysisJobs, nudgeWorker, isBatchSettled, type AnalysisJob } fr
  * Flow: link -> "how many products?" (awaiting_count) -> for each product,
  * photos + notes then "done" (awaiting_photos, batch-scoped, no AI calls
  * yet) -> once the LAST product's "done" arrives, every product in the
- * batch is analyzed together (concurrently, with a live per-product
- * update as each finishes) -> one consolidated review link
+ * batch is analyzed together (concurrently, with only a low-confidence-
+ * category prompt sent live per product — everything else about how each
+ * one drafted is reported once, in finalizeBatch's own summary, once the
+ * whole batch settles) -> one consolidated review link
  * (awaiting_confirmation) -> "submit" / "submit 2 4" / "2: change the
  * price to 150" (or free-form phrasing the AI fallback in
  * lib/whatsapp/intent.ts interprets) all handled right here, no app visit
@@ -1818,34 +1820,16 @@ export async function runQueuedAnalysis(job: AnalysisJob): Promise<void> {
     return;
   }
 
-  // Gives access to the focused single-product editor the moment this
-  // product's draft is ready, rather than making the seller wait for the
-  // batch-wide summary. Only worth doing mid-batch when there ARE other
-  // products still drafting; a 1-product batch's single "drafted" event
-  // folds straight into finalizeBatch's combined message instead.
-  if (batchSize > 1) {
-    // One message, not two. This used to send the "✅ Product N drafted"
-    // line and then a bare follow-up reading only "Still needs: price." —
-    // which never named a product, so in a batch the seller could not tell
-    // WHICH one was missing a price, and the warning arrived detached from
-    // the Edit button that fixes it. Confirmed from a live 2-product
-    // batch: "Still needs: price." and "Ready to submit." arrived as two
-    // anonymous messages under two drafted products.
-    const missing = await missingFieldsFor(job.listing_id);
-    const noteWarnings = await noteWarningsFor(job.listing_id);
-    await replyCta(
-      phoneNumber,
-      [
-        `✅ Product ${seq} drafted: ${result.title ?? "(untitled)"}.`,
-        missing.length > 0
-          ? `⚠️ Product ${seq} still needs ${missing.join(" and ")} — tap *Edit product ${seq}* below to add it.`
-          : "Ready to submit.",
-        ...noteWarnings.map((w) => `⚠️ Product ${seq}: ${w}.`),
-      ].join("\n"),
-      `Edit product ${seq}`,
-      focusedEditorUrl(job.listing_id),
-    );
-  }
+  // No live "✅ Product N drafted" message here for a multi-product batch
+  // (batchSize > 1) — this used to fire the moment EVERY product finished,
+  // which is most of where a real 20-product batch's ~108 bot messages
+  // came from (2026-09-19 live batch, see the module doc comment above).
+  // finalizeBatch now reports every product's Ready/Held status in ONE
+  // summary once the whole batch settles, derived from the same
+  // missingFieldsFor/noteWarningsFor this used to call per-product. A
+  // 1-product batch still gets its single "drafted" message, but that one
+  // comes from finalizeBatch too (batchSize === 1 branch) — there is
+  // nothing to consolidate at that size, so no reason for two code paths.
 
   // Low-confidence category pick — surfaced right here in chat (for every
   // batch size) instead of only on a web confidence banner most
@@ -2041,15 +2025,34 @@ export async function finalizeBatch(
     return;
   }
 
-  // Every "Edit product N" link already went out live as each product
-  // finished — now that the whole batch has settled, offer every ready
-  // product's "Submit product N" in ONE pass, so edits and submits read as
-  // two separate blocks rather than alternating pairs.
   const ready = listings
     .filter((l) => l.title && l.whatsapp_seq != null)
     .sort((a, b) => (a.whatsapp_seq as number) - (b.whatsapp_seq as number));
   const readyToSubmitSeqs = ready.map((l) => l.whatsapp_seq as number);
 
+  // ONE status line per drafted product — Ready, or Held with why —
+  // replacing what used to be a separate live message the moment EACH one
+  // finished (runQueuedAnalysis). Real 20-product batch, 2026-09-19: ~108
+  // bot messages total, and this was most of them. Plain text, not
+  // buttons: the same ~1024-char interactive-body cap that forces the
+  // submit summary (handleSubmit) to plain text applies here too, and a
+  // 20-line batch clears it easily.
+  if (ready.length > 0) {
+    const statusLines = await Promise.all(ready.map(async (l) => {
+      const [missing, noteWarnings] = await Promise.all([missingFieldsFor(l.id), noteWarningsFor(l.id)]);
+      const reasons = [...missing.map((m) => `needs ${m}`), ...noteWarnings];
+      return reasons.length > 0
+        ? `Product ${l.whatsapp_seq}: ⚠️ Held — ${reasons.join("; ")}.`
+        : `Product ${l.whatsapp_seq}: ✅ Ready — ${l.title}.`;
+    }));
+    await replyText(phoneNumber, statusLines.join("\n"));
+  }
+
+  // Now that the whole batch has settled, offer every ready product's
+  // "Submit product N" in ONE pass, so the status summary above and the
+  // submit actions below read as two separate blocks rather than
+  // alternating pairs.
+  //
   // A list holds ten rows; a button message holds three. That difference
   // is the whole point here.
   //

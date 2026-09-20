@@ -531,6 +531,44 @@ describe("message volume on a large batch", () => {
     expect(list.rows).toEqual(["submit 1", "submit 2", "submit 4", "submit 5"]);
     expect(sent.some((m) => m.body.includes("retry 3"))).toBe(true);
   });
+
+  // The other half of the ~108-message evidence: runQueuedAnalysis used to
+  // send its own "✅ Product N drafted" message the moment EACH product
+  // finished, so a 20-product batch fired up to 20 of these on top of
+  // everything else. That per-product bubble is gone; the status is
+  // reported once, by finalizeBatch, after the whole batch settles.
+  it("does not send a live 'drafted' message per product while a multi-product batch is still analyzing", async () => {
+    db.tables.listings = [{ id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: null, ...FULL }];
+    sent.length = 0;
+
+    const { runQueuedAnalysis } = await import("@/lib/whatsapp/intake");
+    await runQueuedAnalysis({
+      id: "job-1", listing_id: "listing-1", batch_id: "batch-1", user_id: USER,
+      phone_number: PHONE, seq: 1, batch_size: 2, status: "running", attempts: 1,
+    });
+
+    expect(sent.some((m) => m.body.includes("drafted"))).toBe(false);
+  });
+
+  // finalizeBatch's own replacement for that per-product bubble: ONE
+  // message naming every drafted product's status — Ready, or Held with
+  // why — instead of one live message per product as each one finished.
+  it("reports every drafted product's Ready/Held status in one consolidated message", async () => {
+    seedDrafted(3);
+    db.tables.listings[1].selling_price = null; // product 2 is missing its price
+    seedSession({ state: "awaiting_confirmation", batch_size: 3, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 3);
+
+    const statusMessages = sent.filter((m) => m.kind === "text" && m.body.includes("Product 1"));
+    expect(statusMessages).toHaveLength(1);
+    const body = statusMessages[0].body;
+    expect(body).toContain("Product 1: ✅ Ready — Drafted product number 1.");
+    expect(body).toContain("Product 2: ⚠️ Held — needs price.");
+    expect(body).toContain("Product 3: ✅ Ready — Drafted product number 3.");
+  });
 });
 
 describe("quiet batch mode", () => {
