@@ -45,9 +45,12 @@ export async function GET() {
   if (!conn) {
     return NextResponse.json({ ok: false, reason: "not_connected" });
   }
-  if (conn.status === "needs_reconnect") {
-    return NextResponse.json({ ok: false, reason: "needs_reconnect" });
-  }
+  // NOT a short-circuit on needs_reconnect — that used to skip straight to
+  // "needs_reconnect" every time, permanently, the moment status ever
+  // flipped once. A refresh_token can still be good (Jumia's run ~1 year
+  // vs. the access token's much shorter life), so this falls through to
+  // getValidJumiaCredentials below, which gives it one real attempt before
+  // giving up.
   if (conn.access_token === "credential_auth") {
     return NextResponse.json({ ok: false, reason: "oauth_required" });
   }

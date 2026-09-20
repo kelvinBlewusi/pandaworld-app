@@ -10,6 +10,7 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { encrypt, decrypt } from "@/lib/security/token-crypto";
 import { revokeToken } from "@/lib/jumia/oauth";
+import { getValidJumiaCredentials } from "@/lib/jumia/api";
 
 const JUMIA_TOKEN_URL = "https://auth-external.jumia.com/connect/token";
 
@@ -94,7 +95,19 @@ export async function getJumiaConnectionKind(userId: string): Promise<JumiaConne
 
   if (!conn || conn.status === "revoked") return "needs_credentials";
   if (conn.access_token === "credential_auth") return "needs_oauth";
-  if (conn.status === "needs_reconnect") return "needs_reconnect";
+  if (conn.status === "needs_reconnect") {
+    // A refresh_token can outlive a single past failure — Jumia's run
+    // ~1 year vs. the access token's much shorter life — so a status that
+    // flipped once (a lost lock race, a network blip on an earlier call)
+    // isn't necessarily still true. One real attempt before telling a
+    // seller to redo the whole OAuth dance.
+    try {
+      await getValidJumiaCredentials(userId);
+      return "connected";
+    } catch {
+      return "needs_reconnect";
+    }
+  }
   return "connected";
 }
 
