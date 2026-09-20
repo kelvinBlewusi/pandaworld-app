@@ -90,7 +90,7 @@ export async function GET(req: NextRequest) {
     try {
       const { data: conn } = await db
         .from("jumia_connections")
-        .select("access_token, refresh_token, token_expires_at")
+        .select("access_token, refresh_token, token_expires_at, app_id, app_secret")
         .eq("user_id", userId)
         .eq("status", "active")
         .maybeSingle();
@@ -105,7 +105,16 @@ export async function GET(req: NextRequest) {
       if (conn.token_expires_at) {
         const expiresAt = new Date(conn.token_expires_at as string).getTime();
         if (Date.now() >= expiresAt - 5 * 60 * 1000 && refreshTokenPlain) {
-          const fresh = await refreshAccessToken(refreshTokenPlain);
+          // Each seller's refresh_token is bound to THEIR OWN Vendor
+          // Center app (app_id/app_secret), not this platform's default
+          // JUMIA_CLIENT_ID/SECRET — refreshAccessToken falls back to
+          // those defaults when no client is passed, which Jumia's auth
+          // server rejects for a token issued to a different client.
+          // lib/jumia/api.ts's getValidJumiaCredentials already does this
+          // correctly; this call site was the one place that didn't.
+          const appId     = (conn.app_id     ?? undefined) as string | undefined;
+          const appSecret = conn.app_secret ? decrypt(conn.app_secret as string) : undefined;
+          const fresh = await refreshAccessToken(refreshTokenPlain, appId, appSecret);
           accessToken = fresh.access_token;
           await db.from("jumia_connections").update({
             access_token:     encrypt(fresh.access_token),
