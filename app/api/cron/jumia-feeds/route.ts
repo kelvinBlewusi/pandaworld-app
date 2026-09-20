@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
   // must never look alike.
   const { data: pending, error: pendingError } = await db
     .from("listings")
-    .select("id, user_id, jumia_ref, title, whatsapp_batch_id")
+    .select("id, user_id, jumia_ref, title, whatsapp_batch_id, whatsapp_seq")
     .eq("status", "pending_approval")
     .not("jumia_ref", "is", null);
 
@@ -157,7 +157,12 @@ export async function GET(req: NextRequest) {
         );
       }
       const notice = toResolvedNotice(
-        { id: listing.id as string, title: listing.title as string | null, whatsapp_batch_id: listing.whatsapp_batch_id as string | null },
+        {
+          id:                listing.id as string,
+          title:             listing.title as string | null,
+          whatsapp_batch_id: listing.whatsapp_batch_id as string | null,
+          whatsapp_seq:      listing.whatsapp_seq as number | null,
+        },
         before,
         result,
       );

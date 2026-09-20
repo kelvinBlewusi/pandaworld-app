@@ -2784,7 +2784,7 @@ async function handleFixAndResubmit(
   const db = createServerClient();
   const { data: row } = await db
     .from("listings")
-    .select("id, whatsapp_seq, title, brand, field_sources, field_confidence, jumia_error, category_code, category_path, user_prompt, jumia_rerun_fingerprint, jumia_rerun_count")
+    .select("id, whatsapp_seq, title, status, brand, field_sources, field_confidence, jumia_error, category_code, category_path, user_prompt, jumia_rerun_fingerprint, jumia_rerun_count")
     .eq("id", listingId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -2795,6 +2795,24 @@ async function handleFixAndResubmit(
   }
 
   const label = row.whatsapp_seq != null ? `Product ${row.whatsapp_seq}` : (row.title as string | null) ?? "That product";
+
+  // A tap with nothing to fix — e.g. the seller tapped a LIVE row in the
+  // "Pick a product" list notifyBatchResolved sends when several products
+  // resolve in one tick (lib/jumia/push-listing.ts), which puts every
+  // item — live or rejected — behind the same fix:<listingId> id rather
+  // than inventing a second tap behaviour to explain. Without this,
+  // extractRejectionText(null) => "" => classifyJumiaRejection("") =>
+  // kind: "unknown" => isAutoFixable === true, which would happily
+  // redraft-and-repush a product Jumia already approved.
+  if (!row.jumia_error) {
+    await replyText(
+      phoneNumber,
+      row.status === "live"
+        ? `✅ ${label} is already live on Jumia — nothing to fix.`
+        : `${label} hasn't been rejected by Jumia — nothing to fix here yet.`,
+    );
+    return;
+  }
 
   // Anything the seller alone can supply blocks the push regardless of
   // what Jumia complained about — check it before spending an AI call.
