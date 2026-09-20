@@ -13,7 +13,7 @@
  */
 
 import { createServerClient } from "@/lib/supabase/server";
-import { columnFor, readAttributeValue } from "@/lib/jumia/attribute-mapping";
+import { columnFor, readAttributeValue, aliasesForColumn, type MappedColumn } from "@/lib/jumia/attribute-mapping";
 import { preflightAttributes, summarisePreflight, snapToAllowed, type PreflightNote } from "@/lib/jumia/preflight";
 import { refreshAccessToken, JUMIA_API_BASE } from "@/lib/jumia/oauth";
 import { mockCategories } from "@/lib/mock/categories";
@@ -513,6 +513,34 @@ const CARRIED_OUTSIDE_ATTRIBUTES: string[] = [
   ...Array.from(PER_VARIANT_ATTRIBUTE_NAMES),
 ];
 
+/**
+ * Which spelling of a column-backed field THIS category's schema actually
+ * declares. Jumia uses different attribute names for the same logical
+ * field across categories (color/colour, weight/weight_kg/product_weight,
+ * warranty/warranty_text/product_warranty, …) — sending the wrong one
+ * doesn't just fail to match a nicer name, it gets the whole attribute
+ * dropped by preflightAttributes as "not visible for category" and the
+ * value is lost, even though the category genuinely accepts that field
+ * under its own name.
+ *
+ * `defaultName` is tried first (preserves today's behaviour whenever the
+ * schema uses the name already hardcoded here or the schema is empty/
+ * unknown), then every other known alias for `column`, in the order
+ * declared in ATTRIBUTE_TO_COLUMN. Falls back to `defaultName` if the
+ * schema declares none of them — preflightAttributes still reports that
+ * correctly as "not_in_schema" for a category that truly doesn't accept
+ * the field at all.
+ */
+function resolveAttrName(schema: JumiaCategoryAttribute[], defaultName: string, column: MappedColumn): string {
+  if (schema.length === 0) return defaultName;
+  const bySchema = new Set(schema.map((f) => f.name.toLowerCase()));
+  if (bySchema.has(defaultName.toLowerCase())) return defaultName;
+  for (const alias of aliasesForColumn(column)) {
+    if (bySchema.has(alias.toLowerCase())) return alias;
+  }
+  return defaultName;
+}
+
 function buildAttributes(
   listing: ListingRow,
   schema: JumiaCategoryAttribute[],
@@ -532,32 +560,56 @@ function buildAttributes(
     }
   };
 
-  add("color",              listing.color);
-  add("color_family",       listing.color_family);
-  add("main_material",      listing.main_material);
-  add("material_family",    listing.material_family);
-  add("model",              listing.model);
-  add("product_line",       listing.product_line);
-  add("production_country", listing.production_country);
-  add("warranty_duration",  listing.warranty_duration);
-  add("warranty_type",      listing.warranty_type);
-  add("warranty_address",   listing.warranty_address);
-  add("product_warranty",   listing.warranty_text);
-  add("youtube_id",         listing.youtube_id);
-  add("short_description",  listing.highlights);
+  add(resolveAttrName(schema, "color",              "color"),              listing.color);
+  add(resolveAttrName(schema, "color_family",       "color_family"),       listing.color_family);
+  add(resolveAttrName(schema, "main_material",      "main_material"),      listing.main_material);
+  add(resolveAttrName(schema, "material_family",    "material_family"),    listing.material_family);
+  add(resolveAttrName(schema, "model",              "model"),              listing.model);
+  add(resolveAttrName(schema, "product_line",       "product_line"),       listing.product_line);
+  add(resolveAttrName(schema, "production_country", "production_country"), listing.production_country);
+  add(resolveAttrName(schema, "warranty_duration",  "warranty_duration"),  listing.warranty_duration);
+  add(resolveAttrName(schema, "warranty_type",      "warranty_type"),      listing.warranty_type);
+  add(resolveAttrName(schema, "warranty_address",   "warranty_address"),   listing.warranty_address);
+  add(resolveAttrName(schema, "product_warranty",   "warranty_text"),      listing.warranty_text);
+  add(resolveAttrName(schema, "youtube_id",         "youtube_id"),         listing.youtube_id);
+  add(resolveAttrName(schema, "short_description",  "highlights"),         listing.highlights);
   add("manufacturer_txt",   listing.brand);
 
-  if (listing.weight_kg != null) add("product_weight", `${listing.weight_kg} kg`);
+  if (listing.weight_kg != null) {
+    add(resolveAttrName(schema, "product_weight", "weight_kg"), `${listing.weight_kg} kg`);
+  }
 
-  const measures = [
-    listing.size_l != null ? `L: ${listing.size_l} cm` : null,
-    listing.size_w != null ? `W: ${listing.size_w} cm` : null,
-    listing.size_h != null ? `H: ${listing.size_h} cm` : null,
-  ].filter(Boolean).join(" × ");
-  if (measures) add("product_measures", measures);
+  // Some categories declare length/width/height as three SEPARATE
+  // attributes (their own required-ness, their own number type) rather
+  // than one free-text "product_measures" field. Collapsing into the
+  // combined string unconditionally meant those categories never received
+  // size_l/size_w/size_h under their own names — Jumia rejected
+  // "product_measures" as not visible for the category AND separately
+  // reported size_l/size_w/size_h missing, for a value the seller had
+  // actually supplied. Prefer whichever shape this category's schema
+  // actually declares; only fall back to the combined field when none of
+  // the three individual names are present (including when the schema is
+  // empty/unknown, matching prior behaviour exactly).
+  const dimensionNames = {
+    size_l: schema.length > 0 ? aliasesForColumn("size_l").find((n) => schema.some((f) => f.name.toLowerCase() === n.toLowerCase())) : undefined,
+    size_w: schema.length > 0 ? aliasesForColumn("size_w").find((n) => schema.some((f) => f.name.toLowerCase() === n.toLowerCase())) : undefined,
+    size_h: schema.length > 0 ? aliasesForColumn("size_h").find((n) => schema.some((f) => f.name.toLowerCase() === n.toLowerCase())) : undefined,
+  };
+  if (dimensionNames.size_l || dimensionNames.size_w || dimensionNames.size_h) {
+    if (dimensionNames.size_l && listing.size_l != null) add(dimensionNames.size_l, String(listing.size_l));
+    if (dimensionNames.size_w && listing.size_w != null) add(dimensionNames.size_w, String(listing.size_w));
+    if (dimensionNames.size_h && listing.size_h != null) add(dimensionNames.size_h, String(listing.size_h));
+  } else {
+    const measures = [
+      listing.size_l != null ? `L: ${listing.size_l} cm` : null,
+      listing.size_w != null ? `W: ${listing.size_w} cm` : null,
+      listing.size_h != null ? `H: ${listing.size_h} cm` : null,
+    ].filter(Boolean).join(" × ");
+    if (measures) add("product_measures", measures);
+  }
 
   if (listing.certifications?.length) {
-    add("certifications", listing.certifications.join(", "));
+    add(resolveAttrName(schema, "certifications", "certifications"), listing.certifications.join(", "));
   }
 
   // Merge in category-specific dynamic attributes (AI-detected + seller-edited)

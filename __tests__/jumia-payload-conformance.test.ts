@@ -757,6 +757,96 @@ describe("Jumia /feeds/products/create payload conformance", () => {
       expect(products[0].attributes.map((a) => a.name)).not.toContain("product_weight");
     });
   });
+
+  describe("category-aware attribute naming (aliases)", () => {
+    // Jumia uses DIFFERENT attribute names for the SAME logical field
+    // across categories — "color" in some, "colour" in others; "weight",
+    // "weight_kg" or "product_weight" depending on category. Hardcoding
+    // one spelling meant a category using the other one had the value
+    // dropped outright by preflightAttributes as "not visible for
+    // category", even though that category genuinely accepts the field
+    // under its own name.
+    const colourSchema: JumiaCategoryAttribute[] = [
+      { name: "colour", label: "Colour", type: "string", allowed_values: [], required: false, is_variant: false },
+    ];
+
+    it("sends the value under the schema's own spelling when it differs from the default", () => {
+      const products = mapListingToJumiaProducts(sampleListing, [], brand, currency, colourSchema);
+      const names = products[0].attributes.map((a) => a.name);
+      expect(names).not.toContain("color");
+      const attr = products[0].attributes.find((a) => a.name === "colour");
+      expect(attr?.value).toBe("Navy Blue");
+    });
+
+    it("still prefers the default spelling when the schema declares it", () => {
+      const colorSchema: JumiaCategoryAttribute[] = [
+        { name: "color", label: "Color", type: "string", allowed_values: [], required: false, is_variant: false },
+      ];
+      const products = mapListingToJumiaProducts(sampleListing, [], brand, currency, colorSchema);
+      const attr = products[0].attributes.find((a) => a.name === "color");
+      expect(attr?.value).toBe("Navy Blue");
+    });
+
+    it("falls back to the default spelling (and lets preflight drop it) when the schema declares neither alias", () => {
+      const neitherSchema: JumiaCategoryAttribute[] = [
+        { name: "ram", label: "RAM", type: "string", allowed_values: [], required: false, is_variant: false },
+      ];
+      const products = mapListingToJumiaProducts(sampleListing, [], brand, currency, neitherSchema);
+      const names = products[0].attributes.map((a) => a.name);
+      expect(names).not.toContain("color");
+      expect(names).not.toContain("colour");
+    });
+
+    it("sends weight under the schema's 'weight' spelling instead of the default 'product_weight'", () => {
+      const weightAliasSchema: JumiaCategoryAttribute[] = [
+        { name: "weight", label: "Weight", type: "string", allowed_values: [], required: false, is_variant: false },
+      ];
+      const products = mapListingToJumiaProducts(sampleListing, [], brand, currency, weightAliasSchema);
+      const names = products[0].attributes.map((a) => a.name);
+      expect(names).not.toContain("product_weight");
+      const attr = products[0].attributes.find((a) => a.name === "weight");
+      expect(attr?.value).toBe("0.213 kg");
+    });
+  });
+
+  describe("length/width/height — combined vs. per-dimension attributes", () => {
+    // Some categories declare size_l/size_w/size_h as three separate
+    // (often required, numeric) attributes rather than one free-text
+    // "product_measures" field. Always collapsing into the combined
+    // string meant those categories never got size_l/size_w/size_h under
+    // their own names at all — Jumia rejected "product_measures" as
+    // undeclared AND separately reported the three as missing, for a
+    // value the seller had actually supplied.
+    const dimensionSchema: JumiaCategoryAttribute[] = [
+      { name: "size_l", label: "Length (cm)", type: "number", allowed_values: [], required: true, is_variant: false },
+      { name: "size_w", label: "Width (cm)",  type: "number", allowed_values: [], required: true, is_variant: false },
+      { name: "size_h", label: "Height (cm)", type: "number", allowed_values: [], required: true, is_variant: false },
+    ];
+
+    it("sends size_l/size_w/size_h as their own bare-number attributes when the schema declares them separately", () => {
+      const products = mapListingToJumiaProducts(sampleListing, [], brand, currency, dimensionSchema);
+      const attrs = products[0].attributes;
+      expect(attrs.find((a) => a.name === "size_l")?.value).toBe("16.1");
+      expect(attrs.find((a) => a.name === "size_w")?.value).toBe("7.7");
+      expect(attrs.find((a) => a.name === "size_h")?.value).toBe("0.8");
+      expect(attrs.map((a) => a.name)).not.toContain("product_measures");
+    });
+
+    it("falls back to the combined product_measures string when the schema doesn't declare the dimensions separately", () => {
+      const noDimensionSchema: JumiaCategoryAttribute[] = [
+        { name: "product_measures", label: "Measurements", type: "string", allowed_values: [], required: false, is_variant: false },
+      ];
+      const products = mapListingToJumiaProducts(sampleListing, [], brand, currency, noDimensionSchema);
+      const attr = products[0].attributes.find((a) => a.name === "product_measures");
+      expect(attr?.value).toBe("L: 16.1 cm × W: 7.7 cm × H: 0.8 cm");
+    });
+
+    it("still sends the combined product_measures string when no schema is passed at all", () => {
+      const products = mapListingToJumiaProducts(sampleListing, [], brand, currency);
+      const attr = products[0].attributes.find((a) => a.name === "product_measures");
+      expect(attr?.value).toBe("L: 16.1 cm × W: 7.7 cm × H: 0.8 cm");
+    });
+  });
 });
 
 describe("what the seller is told about what was sent", () => {
