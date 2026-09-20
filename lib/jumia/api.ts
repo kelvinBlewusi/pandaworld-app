@@ -771,10 +771,45 @@ function snapVariationSpelling(trimmed: string, allowed: string[], noteSink?: st
 }
 
 /**
- * The base (zero-variant) product's OWN variation, derived from the
- * listing's colour field(s) — see buildBaseProduct's doc comment on why a
- * detected colour is used here. Keeps isSingleColour's broad separator
- * check (comma/slash/pipe/&/"and") because this value comes from a COLOUR
+ * The variation to send when there's nothing to go on: no colour the
+ * seller stated themselves, no persisted variant row — just a single-SKU
+ * product with nothing distinguishing it. Every listing defaults to this
+ * rather than a guessed colour or the meaningless literal "Default",
+ * unless the seller actually said what the variant is (see
+ * buildBaseProduct's doc comment on the seller-notes gate).
+ *
+ * Jumia's own Vendor Center offers "..." as a genuine, selectable
+ * placeholder in every variant-axis dropdown for exactly this "nothing to
+ * pick" situation (the same convention reconcileDraftVariation and
+ * resolveColorFallbackVariation already rely on below), so that ships
+ * whenever the category's axis is unrestricted or explicitly lists "..."
+ * as one of its own options. A category whose axis is a closed list that
+ * does NOT offer "..." has nothing safe to send without seller input —
+ * held via `blockers` rather than guessing one of the category's
+ * unrelated options.
+ */
+function resolveDefaultVariation(
+  variantAxes: JumiaCategoryAttribute[],
+  blockers?:   string[],
+): string {
+  const allowed = variantAxes.flatMap((a) => a.allowed_values ?? []);
+  if (allowed.length === 0 || allowed.includes("...")) return "...";
+
+  const shown = allowed.length > 8
+    ? `${allowed.slice(0, 8).join(", ")}, and ${allowed.length - 8} more`
+    : allowed.join(", ");
+  blockers?.push(
+    `This category needs a variation picked from its own stocked options (${shown}) — mention it in your listing notes, or pick one in the editor.`,
+  );
+  return "...";
+}
+
+/**
+ * The base (zero-variant) product's OWN variation, derived from a colour
+ * the SELLER stated themselves — see buildBaseProduct's doc comment on why
+ * this is only ever called with a seller-specified colour, never an
+ * AI-guessed one. Keeps isSingleColour's broad separator check
+ * (comma/slash/pipe/&/"and") because this value comes from a COLOUR
  * column specifically, where a joined string overwhelmingly means multiple
  * colourways, not a composite label — unlike a variant row's own typed
  * value (see resolveVariantRowVariation below), which routinely legitimately
@@ -783,13 +818,11 @@ function snapVariationSpelling(trimmed: string, allowed: string[], noteSink?: st
  * Same local hold as resolveVariantRowVariation, and for the identical
  * reason: a category whose variant axis is something OTHER than colour
  * (sizes, lengths in inches, capacities) can never accept a colour value no
- * matter how it's spelled. Real rejection this closes, live: a Baby
- * Carrier with zero persisted variant rows (so THIS fallback, not
- * resolveVariantRowVariation, was the one running) shipped "Blue" as its
- * variation into a category whose axis is entirely shoe/strap lengths in
- * inches — "Attribute [variation] with invalid value [Blue]" — because
- * nothing here checked the detected colour against what the category
- * actually stocks before sending.
+ * matter how it's spelled. Real rejection this closed, live, back when this
+ * fallback ran on every AI-guessed colour rather than only a seller-stated
+ * one: a Baby Carrier with zero persisted variant rows shipped "Blue" as
+ * its variation into a category whose axis is entirely shoe/strap lengths
+ * in inches — "Attribute [variation] with invalid value [Blue]".
  */
 function resolveColorFallbackVariation(
   rawColor:    string,
@@ -798,7 +831,7 @@ function resolveColorFallbackVariation(
   blockers?:   string[],
 ): string {
   const trimmed = rawColor.trim();
-  if (!trimmed || !isSingleColour(trimmed)) return "Default";
+  if (!trimmed || !isSingleColour(trimmed)) return resolveDefaultVariation(variantAxes, blockers);
 
   const allowed = variantAxes.flatMap((a) => a.allowed_values ?? []);
   const snapped = snapVariationSpelling(trimmed, allowed, noteSink);
@@ -1044,10 +1077,22 @@ function buildBaseProduct(
   //
   // This is the base product's OWN variation — used as-is only when the
   // listing has zero variant rows (a genuinely simple, single-SKU
-  // product). There's no dedup risk in that case since exactly one
-  // product ships, so a detected colour is strictly more useful to the
-  // seller/buyer than the meaningless literal "Default" placeholder.
-  // Falls back to "Default" only when there's no colour either.
+  // product). Every listing defaults to "..." here (see
+  // resolveDefaultVariation) — the same one-SKU-unless-stated default the
+  // "Describe" pass now applies to whether it drafts variant rows at all
+  // (lib/actions/ai.ts) — no matter what colour the AI thinks it sees in
+  // the photos, or what category this is. `color`/`color_family` only
+  // drive this value when the SELLER stated it themselves: a note like
+  // "the colour is navy" gets verified and written back with
+  // field_confidence.color.source === "seller-required" (see
+  // auto-analyze.ts's note-intent/note-assertion handling), which is the
+  // one signal here that distinguishes an actual seller statement from an
+  // AI guess at what's in the photo. An AI-guessed colour used to drive
+  // this unconditionally, which routinely produced a specific-sounding
+  // variation ("Blue") the seller never confirmed they stock in exactly
+  // that shade — and, when the category's variant axis was something else
+  // entirely (sizes, lengths), a guaranteed rejection (see
+  // resolveColorFallbackVariation's doc comment).
   //
   // This must NOT be reused as the fallback for a VARIANT that's missing
   // its own typed variation (see mapListingToJumiaProducts below) — that
@@ -1057,8 +1102,12 @@ function buildBaseProduct(
   // the same value when colour was combined (e.g. "black and green"),
   // which Jumia dedup-rejected. The push route validates upstream (empty
   // variation → 422) so the seller is told to type a label instead.
-  const colorVariation   = (listing.color ?? listing.color_family ?? "").trim();
-  const defaultVariation = resolveColorFallbackVariation(colorVariation, variantAxes, noteSink, blockers);
+  const sellerStatedColor = listing.field_confidence?.color?.source === "seller-required"
+    ? (listing.color ?? "").trim()
+    : "";
+  const defaultVariation = sellerStatedColor
+    ? resolveColorFallbackVariation(sellerStatedColor, variantAxes, noteSink, blockers)
+    : resolveDefaultVariation(variantAxes, blockers);
 
   // Match Jumia Postman spec exactly:
   //   POST /feeds/products/create

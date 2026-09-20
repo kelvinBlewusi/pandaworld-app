@@ -243,15 +243,33 @@ describe("Jumia /feeds/products/create payload conformance", () => {
       expect(products[0].variation.length).toBeGreaterThan(0);
     });
 
-    it("variation falls back to 'Default' when no color is set", () => {
+    it("variation defaults to '...' when no color is set", () => {
       const noColorListing: ListingRow = { ...sampleListing, color: null, color_family: null };
       const ps = mapListingToJumiaProducts(noColorListing, [], brand, currency);
-      expect(ps[0].variation).toBe("Default");
+      expect(ps[0].variation).toBe("...");
     });
 
-    it("variation uses color when present (preferred over 'Default')", () => {
-      // Sample listing has color "Navy Blue"
-      expect(products[0].variation).toBe("Navy Blue");
+    // Every listing defaults to a single SKU ("...") no matter what the AI
+    // thinks it sees in the photos. sampleListing's colour ("Navy Blue")
+    // came from the vision pass — field_sources.color is "ai", and it
+    // carries no field_confidence marking it seller-required — so it must
+    // NOT drive the variation.
+    it("variation defaults to '...' for an AI-guessed colour, even when one is set", () => {
+      expect(products[0].variation).toBe("...");
+    });
+
+    // Only a colour the SELLER stated themselves — verified via
+    // field_confidence.color.source === "seller-required", written by
+    // auto-analyze.ts's note-intent/note-assertion handling when the
+    // listing notes actually say what the colour/variant is — drives the
+    // variation. This is the one case where a colour-derived value ships.
+    it("variation uses the colour when the seller stated it in their own notes", () => {
+      const sellerStated: ListingRow = {
+        ...sampleListing,
+        field_confidence: { color: { confidence: 1, source: "seller-required" } },
+      };
+      const ps = mapListingToJumiaProducts(sellerStated, [], brand, currency);
+      expect(ps[0].variation).toBe("Navy Blue");
     });
 
     // A single SKU cannot have three colours. When the AI sees a product
@@ -259,23 +277,31 @@ describe("Jumia /feeds/products/create payload conformance", () => {
     // string used to ship as the variation: observed live on 2026-09-15 as
     // one product whose variation read "Black, Silver, White", which no
     // buyer can choose from. A list means variants the seller hasn't set
-    // up yet, not a name for this one.
+    // up yet, not a name for this one. Marked seller-required so this
+    // exercises resolveColorFallbackVariation's own multi-colour guard
+    // rather than being skipped for not being seller-stated at all.
     it.each([
       "Black, Silver, White",
       "Black and White",
       "Red & Blue",
       "Red/Blue",
-    ])("variation falls back to 'Default' rather than shipping the list %p", (color) => {
-      const multi: ListingRow = { ...sampleListing, color, color_family: color };
+    ])("variation falls back to '...' rather than shipping the list %p", (color) => {
+      const multi: ListingRow = {
+        ...sampleListing, color, color_family: color,
+        field_confidence: { color: { confidence: 1, source: "seller-required" } },
+      };
       const ps = mapListingToJumiaProducts(multi, [], brand, currency);
-      expect(ps[0].variation).toBe("Default");
+      expect(ps[0].variation).toBe("...");
     });
 
     // The guard must not swallow legitimate multi-word colour names.
     it.each(["Navy Blue", "Rose Gold", "Off White", "Sandstone"])(
-      "keeps %p, which is one colour that happens to have two words",
+      "keeps %p, which is one colour that happens to have two words, when the seller stated it",
       (color) => {
-        const single: ListingRow = { ...sampleListing, color, color_family: color };
+        const single: ListingRow = {
+          ...sampleListing, color, color_family: color,
+          field_confidence: { color: { confidence: 1, source: "seller-required" } },
+        };
         const ps = mapListingToJumiaProducts(single, [], brand, currency);
         expect(ps[0].variation).toBe(color);
       },
@@ -288,14 +314,19 @@ describe("Jumia /feeds/products/create payload conformance", () => {
     // [variation] with invalid value [Blue]") — nothing here checked the
     // detected colour against what the category actually stocks before a
     // create-feed push, unlike the identical check already applied to a
-    // variant row's own typed value.
-    it("holds the push (via blockers) when the detected colour isn't one of the category's own stocked options", () => {
+    // variant row's own typed value. Seller-stated here so the colour is
+    // even considered in the first place — see the AI-guessed-colour test
+    // above for the case where it isn't.
+    it("holds the push (via blockers) when the seller's stated colour isn't one of the category's own stocked options", () => {
       const sizeOnlyAxis: JumiaCategoryAttribute[] = [
         { name: "variation", label: "Variation", type: "select",
           allowed_values: ["S", "M", "L", "XL", "One Size Fits All"],
           required: true, is_variant: true },
       ];
-      const babyCarrier: ListingRow = { ...sampleListing, color: "Blue", color_family: "Blue" };
+      const babyCarrier: ListingRow = {
+        ...sampleListing, color: "Blue", color_family: "Blue",
+        field_confidence: { color: { confidence: 1, source: "seller-required" } },
+      };
       const blockers: string[] = [];
       const ps = mapListingToJumiaProducts(babyCarrier, [], brand, currency, [], undefined, sizeOnlyAxis, blockers);
       expect(blockers).toHaveLength(1);
@@ -306,8 +337,11 @@ describe("Jumia /feeds/products/create payload conformance", () => {
       expect(ps[0].variation).toBe("Blue");
     });
 
-    it("does not block a colour when no variant-axis data is available", () => {
-      const babyCarrier: ListingRow = { ...sampleListing, color: "Blue", color_family: "Blue" };
+    it("does not block a seller-stated colour when no variant-axis data is available", () => {
+      const babyCarrier: ListingRow = {
+        ...sampleListing, color: "Blue", color_family: "Blue",
+        field_confidence: { color: { confidence: 1, source: "seller-required" } },
+      };
       const blockers: string[] = [];
       const ps = mapListingToJumiaProducts(babyCarrier, [], brand, currency, [], undefined, [], blockers);
       expect(blockers).toHaveLength(0);
@@ -330,10 +364,31 @@ describe("Jumia /feeds/products/create payload conformance", () => {
           allowed_values: ["18\"", "19\"", "20\"", "L", "M", "S", "XL", "One Size Fits All", "15.6\"", "13.3\"", "..."],
           required: true, is_variant: true },
       ];
-      const babyCarrier: ListingRow = { ...sampleListing, color: "Navy Blue", color_family: "Navy Blue" };
+      const babyCarrier: ListingRow = {
+        ...sampleListing, color: "Navy Blue", color_family: "Navy Blue",
+        field_confidence: { color: { confidence: 1, source: "seller-required" } },
+      };
       const blockers: string[] = [];
       const ps = mapListingToJumiaProducts(babyCarrier, [], brand, currency, [], undefined, mixedSizeAxis, blockers);
       expect(blockers).toHaveLength(0);
+      expect(ps[0].variation).toBe("...");
+    });
+
+    // resolveDefaultVariation's own block path: no seller-stated colour at
+    // all (the new universal default), AND the category's axis is a closed
+    // list that doesn't even offer "..." — genuinely nothing safe to send
+    // without the seller picking one themselves.
+    it("holds the push when there's no seller-stated colour and the category's axis doesn't offer '...' either", () => {
+      const sizeOnlyAxis: JumiaCategoryAttribute[] = [
+        { name: "variation", label: "Variation", type: "select",
+          allowed_values: ["S", "M", "L", "XL"],
+          required: true, is_variant: true },
+      ];
+      const noColorListing: ListingRow = { ...sampleListing, color: null, color_family: null };
+      const blockers: string[] = [];
+      const ps = mapListingToJumiaProducts(noColorListing, [], brand, currency, [], undefined, sizeOnlyAxis, blockers);
+      expect(blockers).toHaveLength(1);
+      expect(blockers[0]).toMatch(/needs a variation picked from its own stocked options/);
       expect(ps[0].variation).toBe("...");
     });
 
