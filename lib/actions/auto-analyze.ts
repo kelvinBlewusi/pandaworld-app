@@ -15,7 +15,7 @@
  * the result to JSON.
  */
 
-import { snapToAllowed } from "@/lib/jumia/preflight";
+import { snapToAllowed, checkNumericConstraint } from "@/lib/jumia/preflight";
 import { createServerClient } from "@/lib/supabase/server";
 import {
   aiPassA_describeProduct,
@@ -1024,14 +1024,21 @@ export async function runAutoAnalyze(
   ]);
   const TEXTY_NAME_RE = /(desc|note|text|title|label|name|comment|message|copy|tagline)/i;
 
-  const numericAttrNames = new Set(
+  const numericAttrFields = new Map(
     attrs
       .filter((a) => a.type === "number")
-      .map((a) => a.name.toLowerCase())
-      .filter((n) => !SKIP_NUMERIC_SCRUB.has(n) && !TEXTY_NAME_RE.test(n)),
+      .filter((a) => !SKIP_NUMERIC_SCRUB.has(a.name.toLowerCase()) && !TEXTY_NAME_RE.test(a.name))
+      .map((a) => [a.name.toLowerCase(), a] as const),
   );
+  const dropNumericAttr = (key: string) => {
+    delete finalDynamicAttrs[key];
+    // Also clear any field_sources / field_confidence tracking for it.
+    if (mergedSources[key] !== "user") delete mergedSources[key];
+    delete mergedConfidence[key];
+  };
   for (const key of Object.keys(finalDynamicAttrs)) {
-    if (!numericAttrNames.has(key.toLowerCase())) continue;
+    const field = numericAttrFields.get(key.toLowerCase());
+    if (!field) continue;
     const raw   = String(finalDynamicAttrs[key]);
 
     // Last-resort heuristic: if the value contains spaces AND letters,
@@ -1044,22 +1051,37 @@ export async function runAutoAnalyze(
     }
 
     const match = raw.match(/-?\d+(?:\.\d+)?/);
-    if (match) {
-      const n = parseFloat(match[0]);
-      if (Number.isFinite(n)) {
-        finalDynamicAttrs[key] = String(n); // canonical numeric string
-        continue;
-      }
+    const n = match ? parseFloat(match[0]) : NaN;
+    if (!Number.isFinite(n)) {
+      // Couldn't extract a real number ("true", "yes", "unknown") — drop
+      // it. Leaving the field empty is better than failing Jumia QC.
+      console.warn(
+        `[auto-analyze] dropping non-numeric value for numeric attr '${key}': '${raw.slice(0, 40)}'`,
+      );
+      dropNumericAttr(key);
+      continue;
     }
-    // Couldn't extract a real number ("true", "yes", "unknown") — drop it.
-    // Leaving the field empty is better than failing Jumia QC.
-    console.warn(
-      `[auto-analyze] dropping non-numeric value for numeric attr '${key}': '${raw.slice(0, 40)}'`,
-    );
-    delete finalDynamicAttrs[key];
-    // Also clear any field_sources / field_confidence tracking for it.
-    if (mergedSources[key] !== "user") delete mergedSources[key];
-    delete mergedConfidence[key];
+
+    // A clean number can STILL be one this category rejects — the exact
+    // decimalPlaces / notZeroOrNegative rules preflightAttributes enforces
+    // at push time, run here so the same "1.7 into a whole-number-only
+    // capacity_liter" mistake is caught the moment the category is known
+    // rather than after a push attempt. Real, repeated rejection this
+    // closes: "Attribute [capacity_liter] with the value [1.7] should be
+    // a number without decimals" — previously the numeric scrub above
+    // accepted "1.7" as a perfectly clean number and moved on.
+    const checked = checkNumericConstraint(String(n), field);
+    if (checked.value === null) {
+      console.info(
+        `[auto-analyze] listing=${listingId} cleared ${key}="${n}" — ${checked.note?.detail}`,
+      );
+      dropNumericAttr(key);
+      continue;
+    }
+    finalDynamicAttrs[key] = checked.value; // canonical numeric string, possibly rounded
+    if (checked.value !== String(n)) {
+      console.info(`[auto-analyze] listing=${listingId} rounded ${key}: "${n}" -> "${checked.value}"`);
+    }
   }
 
   // ── C) PATTERN DEFAULTS for still-empty required attributes ─────────────

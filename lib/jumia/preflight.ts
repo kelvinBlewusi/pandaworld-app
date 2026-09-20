@@ -143,6 +143,94 @@ function splitMulti(value: string): string[] {
   return value.split(",").map((v) => v.trim()).filter(Boolean);
 }
 
+export interface NumericCheckResult {
+  /** The value as it should actually be sent, or null when it must be
+   *  dropped outright (no safe repair to guess at). */
+  value: string | null;
+  /** Set only when the value was changed or dropped, for logging and for
+   *  telling a seller what happened. */
+  note?: {
+    reason: Extract<PreflightReason, "invalid_number" | "decimal_mismatch_blocked" | "rounded_number">;
+    detail: string;
+  };
+}
+
+/**
+ * Validate/repair a number-type attribute's value against decimalPlaces
+ * and notZeroOrNegative — Jumia's per-attribute validations object.
+ *
+ * Pulled out of preflightAttributes so the identical rule can run at
+ * DRAFT time too (auto-analyze.ts, the moment a category is known)
+ * instead of only at push time — the same principle every other
+ * schema-aware check in this file already follows: a value the category
+ * will reject shouldn't sit in the editor looking correct until a push
+ * attempt finds out.
+ *
+ * Only acts on a value that actually parses as a number; a non-numeric
+ * value on a number-type field is a different, pre-existing problem this
+ * function doesn't touch — the caller's own type-scrub handles that.
+ */
+export function checkNumericConstraint(value: string, field: JumiaCategoryAttribute): NumericCheckResult {
+  const num = Number(value);
+  if (Number.isNaN(num)) return { value };
+
+  if (field.not_zero_or_negative && num <= 0) {
+    // No safe repair to guess at — dropping it is the same rule
+    // invalid_enum already follows: a value Jumia won't accept is worse
+    // than no value, and if the field is required this surfaces via
+    // missingRequired (preflightAttributes) rather than silently.
+    return {
+      value: null,
+      note: { reason: "invalid_number", detail: `"${value}" must be greater than zero for this category` },
+    };
+  }
+
+  // decimal_places===0 means the field is a COUNT of something (a litre
+  // capacity, a piece count) — rounding 1.7 to 1 or 2 is a guess about
+  // what's actually being sold, not a precision trim. WHOLE_NUMBER_ATTRIBUTES
+  // extends the same rule to a name Jumia has confirmed live requires it
+  // even where THIS category's own schema leaves decimal_places null (see
+  // its doc comment) — the schema can't be trusted to always say so itself.
+  const requiresWholeNumber =
+    field.decimal_places === 0 || WHOLE_NUMBER_ATTRIBUTES.has(field.name.toLowerCase());
+
+  if (requiresWholeNumber) {
+    if (!Number.isInteger(num)) {
+      // Block rather than round and wait for Jumia to say so — the schema
+      // (or the confirmed name override) already knows this value is
+      // invalid before anything is sent. Real, repeated rejection this
+      // closes: "Attribute [capacity_liter] with the value [1.7] should
+      // be a number without decimals."
+      return {
+        value: null,
+        note: {
+          reason: "decimal_mismatch_blocked",
+          detail: `"${num}" isn't a whole number — this category needs one, so set it yourself before submitting`,
+        },
+      };
+    }
+    return { value };
+  }
+
+  if (field.decimal_places != null && field.decimal_places > 0) {
+    // A non-zero decimal count (e.g. 2) is excess PRECISION, not a
+    // different quantity — trimming "1.2345" to "1.23" doesn't change
+    // what's being sold, so rounding here is safe.
+    const rounded = Number(num.toFixed(field.decimal_places));
+    if (rounded !== num) {
+      return {
+        value: String(rounded),
+        note: {
+          reason: "rounded_number",
+          detail: `rounded "${num}" to ${field.decimal_places} decimal place${field.decimal_places === 1 ? "" : "s"}`,
+        },
+      };
+    }
+  }
+
+  return { value };
+}
+
 export interface PreflightOptions {
   /**
    * Schema-required names the PRODUCT object carries somewhere OTHER than
@@ -251,66 +339,17 @@ export function preflightAttributes(
     // Jumia's per-attribute validations object. Only acts on a value that
     // actually parses as a number; a non-numeric value on a number-type
     // field is a different, pre-existing problem this function doesn't
-    // otherwise touch, so it's left alone here too.
+    // otherwise touch, so it's left alone here too. Pulled into
+    // checkNumericConstraint so auto-analyze.ts's draft-time reconciliation
+    // can run the identical rule the moment a category is known, rather
+    // than only at push time.
     if (field.type === "number") {
-      const num = Number(value);
-      if (!Number.isNaN(num)) {
-        if (field.not_zero_or_negative && num <= 0) {
-          // No safe repair to guess at — dropping it is the same rule
-          // invalid_enum already follows: a value Jumia won't accept is
-          // worse than no value, and if the field is required this
-          // surfaces via missingRequired below rather than silently.
-          notes.push({
-            attribute: attr.name,
-            label:     field.label,
-            reason:    "invalid_number",
-            detail:    `"${value}" must be greater than zero for this category`,
-          });
-          continue;
-        }
-        // decimal_places===0 means the field is a COUNT of something (a
-        // litre capacity, a piece count) — rounding 1.7 to 1 or 2 is a
-        // guess about what's actually being sold, not a precision trim.
-        // WHOLE_NUMBER_ATTRIBUTES extends the same rule to a name Jumia
-        // has confirmed live requires it even where THIS category's own
-        // schema leaves decimal_places null (see its doc comment) — the
-        // schema can't be trusted to always say so itself.
-        const requiresWholeNumber =
-          field.decimal_places === 0 || WHOLE_NUMBER_ATTRIBUTES.has(attr.name.toLowerCase());
-
-        if (requiresWholeNumber) {
-          if (!Number.isInteger(num)) {
-            // Block on the very first attempt rather than rounding and
-            // waiting for Jumia to say so — the schema (or the confirmed
-            // name override) already knows this value is invalid before
-            // anything is sent. Real rejection this shipped unrounded
-            // anyway (2026-09-19, recurred 2026-09-20): "Attribute
-            // [capacity_liter] with the value [1.7] should be a number
-            // without decimals."
-            notes.push({
-              attribute: attr.name,
-              label:     field.label,
-              reason:    "decimal_mismatch_blocked",
-              detail:    `"${num}" isn't a whole number — this category needs one, so set it yourself before submitting`,
-            });
-            continue;
-          }
-        } else if (field.decimal_places != null && field.decimal_places > 0) {
-          // A non-zero decimal count (e.g. 2) is excess PRECISION, not a
-          // different quantity — trimming "1.2345" to "1.23" doesn't
-          // change what's being sold, so rounding here is safe.
-          const rounded = Number(num.toFixed(field.decimal_places));
-          if (rounded !== num) {
-            value = String(rounded);
-            notes.push({
-              attribute: attr.name,
-              label:     field.label,
-              reason:    "rounded_number",
-              detail:    `rounded "${num}" to ${field.decimal_places} decimal place${field.decimal_places === 1 ? "" : "s"}`,
-            });
-          }
-        }
+      const checked = checkNumericConstraint(value, field);
+      if (checked.note) {
+        notes.push({ attribute: attr.name, label: field.label, reason: checked.note.reason, detail: checked.note.detail });
       }
+      if (checked.value === null) continue;
+      value = checked.value;
     }
 
     // Trim at a word boundary where possible — a value cut mid-word looks
