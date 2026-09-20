@@ -125,6 +125,17 @@ describe("classifyJumiaRejection — the full Jumia error catalogue", () => {
     expect(isAutoFixable(r.kind)).toBe(false);
   });
 
+  // Our OWN pre-push hold (lib/jumia/api.ts resolveVariantRowVariation),
+  // not a Jumia rejection — a rerun can't do any better than the first
+  // guess since it's the seller's own typed value that didn't match.
+  it("never auto-fixes our own 'not a stocked option' variation hold", () => {
+    const r = classifyJumiaRejection(
+      `Variation "Navy Blue" isn't one of this category's stocked options (Black, Blue, Grey, Red, White) — pick one of those, or use the editor if you genuinely stock a new one.`,
+    );
+    expect(r.kind).toBe("seller");
+    expect(isAutoFixable(r.kind)).toBe(false);
+  });
+
   it("reruns a title/brand-name problem instead of stopping at the seller", () => {
     for (const msg of [
       "Product name or translations [Red Nike Shoe] contains Brand name [Nike].",

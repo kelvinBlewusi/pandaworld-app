@@ -767,12 +767,23 @@ function resolveColorFallbackVariation(
  * own allowed values. Real rejection this closes: "Attribute [color_family]
  * with invalid value [Yellow,Red,Orange,White,Blue]" — five distinct,
  * individually-valid colours sent as one string.
+ *
+ * When the axis DOES declare allowed values and the typed one is neither
+ * an exact/near match NOR provably a joined list, this now HOLDS the push
+ * (via `blockers`) rather than shipping the unmatched value as typed. Real
+ * rejection this closes, live and repeated: "Attribute [variation] with
+ * invalid value [Navy Blue]" — "Navy Blue" was never in the category's own
+ * colour list, and "Fix & resubmit" kept redrafting and resubmitting the
+ * identical value because nothing local ever checked it against the axis.
+ * Naming the actual stocked options up front is strictly more useful to
+ * the seller than a rejection Jumia won't explain further.
  */
 function resolveVariantRowVariation(
   raw:         string,
   fallback:    string,
   variantAxes: JumiaCategoryAttribute[],
   noteSink?:   string[],
+  blockers?:   string[],
 ): string {
   const trimmed = raw.trim();
   if (!trimmed) return fallback;
@@ -787,7 +798,27 @@ function resolveVariantRowVariation(
       return fallback;
     }
   }
-  return snapVariationSpelling(trimmed, allowed, noteSink);
+
+  const snapped = snapVariationSpelling(trimmed, allowed, noteSink);
+
+  // snapVariationSpelling only changes the value when it found a match —
+  // an unchanged result plus "not literally in the allowed list" means
+  // nothing matched at all (as opposed to already being a correct,
+  // unchanged value).
+  if (
+    allowed.length > 0 &&
+    snapped === trimmed &&
+    !allowed.some((a) => a.toLowerCase() === trimmed.toLowerCase())
+  ) {
+    const shown = allowed.length > 8
+      ? `${allowed.slice(0, 8).join(", ")}, and ${allowed.length - 8} more`
+      : allowed.join(", ");
+    blockers?.push(
+      `Variation "${trimmed}" isn't one of this category's stocked options (${shown}) — pick one of those, or use the editor if you genuinely stock a new one.`,
+    );
+  }
+
+  return snapped;
 }
 
 /**
@@ -971,6 +1002,10 @@ export function mapListingToJumiaProducts(
    *  callers that don't have it handy — variation values pass through with
    *  only the isSingleColour check, same as before this existed. */
   variantAxes: JumiaCategoryAttribute[] = [],
+  /** Optional sink for reasons the push must be HELD rather than sent —
+   *  see resolveVariantRowVariation. Unlike noteSink, a non-empty blockers
+   *  array means the caller must not push the resulting products. */
+  blockers?: string[],
 ): JumiaProduct[] {
   const base = buildBaseProduct(listing, brand, currency, categoryAttributeSchema, noteSink, variantAxes);
 
@@ -1022,7 +1057,7 @@ export function mapListingToJumiaProducts(
     // Axis-spelling discipline for a variant's own typed value — see
     // resolveVariantRowVariation's doc comment on why this is intentionally
     // less aggressive than the base product's colour-only fallback above.
-    const variation = resolveVariantRowVariation(rawVariation, MISSING_VARIANT_VARIATION, variantAxes, noteSink);
+    const variation = resolveVariantRowVariation(rawVariation, MISSING_VARIANT_VARIATION, variantAxes, noteSink, blockers);
     return {
       ...base,
       sellerSku:  v.seller_sku ?? `${listing.sku}-${v.id.slice(0, 4)}`,
@@ -1241,6 +1276,12 @@ export async function buildJumiaPayload(
   // or nudges it); shipping unvalidated attributes and letting Jumia
   // discover the problem is not — it costs the whole feed.
   if (categoryResolved && schema.length === 0) {
+    // Optional future improvement, not implemented here: getCategoryAttributes
+    // caches per category with no TTL-based background refresh, so a stale
+    // sync only self-heals on the next explicit re-fetch (the category
+    // picker re-select this error message points a seller at). Fail-closed
+    // above is what matters for correctness; a scheduled refresh would only
+    // shrink how often a seller hits this message at all.
     return {
       products: [], adjustments: [], missingRequired: [],
       error: "JUMIA_NO_SCHEMA: This category's attribute list hasn't synced yet, so nothing can be validated before sending — try again in a moment, or open the category picker to re-select it and force a re-sync.",
@@ -1248,8 +1289,17 @@ export async function buildJumiaPayload(
   }
 
   const adjustments: string[] = [];
+  const blockers: string[] = [];
   try {
-    const products = mapListingToJumiaProducts(listing, variants, brand, currency, schema, adjustments, variantAxes);
+    const products = mapListingToJumiaProducts(listing, variants, brand, currency, schema, adjustments, variantAxes, blockers);
+
+    // A variant's own typed value that isn't one of the category's stocked
+    // options (see resolveVariantRowVariation) — checked before the
+    // content gate below since it's about the payload not being buildable
+    // as typed at all, the same class of problem an empty schema is.
+    if (blockers.length > 0) {
+      return { products: [], adjustments, missingRequired: [], error: blockers.join(" ") };
+    }
 
     // Last-mile content gate — restricted words plus the prohibited-
     // category/restricted-brand catalog, run right before anything is
