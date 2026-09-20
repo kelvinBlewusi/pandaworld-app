@@ -4,7 +4,7 @@ import { encrypt, decrypt } from "@/lib/security/token-crypto";
 
 export const dynamic = "force-dynamic";
 import { refreshAccessToken } from "@/lib/jumia/oauth";
-import { refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
+import { refreshPendingFeedStatus, notifyResolvedListings, toResolvedNotice, type ResolvedListingNotice } from "@/lib/jumia/push-listing";
 
 // ─── GET /api/cron/jumia-feeds ────────────────────────────────────────────────
 // Checks all pending_approval listings across all users and updates statuses.
@@ -132,13 +132,23 @@ export async function GET(req: NextRequest) {
     // also counted a feed with ANY failed product as a total failure, which
     // is how a listing with four live variants and one rejected showed up
     // as "Failed". One shared implementation now, in push-listing.ts.
+    //
+    // skipNotify: true here — this loop runs across EVERY pending listing
+    // for this user, which for a multi-product WhatsApp batch used to mean
+    // one separate "🎉 X is live!" / "⚠️ X was rejected" message per
+    // listing the moment each one resolved, often several ticks apart. The
+    // resolutions are collected instead and handed to
+    // notifyResolvedListings ONCE per user below, which groups them by
+    // whatsapp_batch_id and sends at most one message per batch for
+    // whatever resolved in THIS run.
+    const resolved: ResolvedListingNotice[] = [];
     for (const listing of listings) {
       const before = "pending_approval";
       const result = await refreshPendingFeedStatus(accessToken, {
         id:         listing.id as string,
         status:     before,
         jumia_ref:  listing.jumia_ref as string,
-      });
+      }, { skipNotify: true });
       if (result.status !== before) {
         updated++;
         console.info(
@@ -146,7 +156,14 @@ export async function GET(req: NextRequest) {
           (result.totalCount > 1 ? ` (${result.liveCount}/${result.totalCount} variants live)` : ""),
         );
       }
+      const notice = toResolvedNotice(
+        { id: listing.id as string, title: listing.title as string | null, whatsapp_batch_id: listing.whatsapp_batch_id as string | null },
+        before,
+        result,
+      );
+      if (notice) resolved.push(notice);
     }
+    await notifyResolvedListings(userId, resolved);
   }
 
   return NextResponse.json({ checked: pending.length, updated });
