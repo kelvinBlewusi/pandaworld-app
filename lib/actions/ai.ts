@@ -1492,7 +1492,7 @@ export interface RankingResult {
 
 export async function aiPassB_rankCategory(
   imageUrls:  string[],
-  candidates: Array<{ code: number; name: string; path: string }>,
+  candidates: Array<{ code: number; name: string; path: string; is_leaf?: boolean }>,
   userContext?: string | null,
   // From Pass A — anchors the rank model so it disambiguates
   // visually-similar candidates by what the product is actually FOR.
@@ -1528,7 +1528,7 @@ export async function aiPassB_rankCategory(
   const rankVisionModel = await resolveModel(rankUserId, "vision", { forceBestModel: opts.forceBestModel });
 
   const candidateList = candidates
-    .map((c, i) => `${i + 1}. ${c.code} — ${c.path}`)
+    .map((c, i) => `${i + 1}. ${c.code} — ${c.path}${c.is_leaf === false ? " [PARENT category — has more specific sub-categories on Jumia]" : ""}`)
     .join("\n");
 
   const ctxSection = userContext && userContext.trim()
@@ -1543,7 +1543,7 @@ export async function aiPassB_rankCategory(
       ? `\nPRIMARY USE CASE: ${useCase ?? "(not specified)"}\nENVIRONMENT: ${environment ?? "unknown"}\n`
       : "";
 
-  const prompt = `You are a Jumia category classification expert. Look at the product images and pick the single best Jumia listable category for them from the candidates below. Candidates can be either leaves or listable parents — both are valid choices.
+  const prompt = `You are a Jumia category classification expert. Look at the product images and pick the single best Jumia listable category for them from the candidates below. A candidate marked [PARENT category] has more specific sub-categories on Jumia; a candidate with no such mark is a leaf (Jumia's most specific level for that branch).
 
 CANDIDATES:
 ${candidateList}
@@ -1555,7 +1555,8 @@ Rules:
 4. You MUST choose from the candidates above. Do not invent new codes.
 5. When two candidates look visually similar (e.g. carpet cleaner vs farm sprayer, yoga mat vs camping mat, kitchen knife vs hunting knife), pick the one whose path matches the PRIMARY USE CASE and ENVIRONMENT above. Visual similarity alone is not enough — a handheld pump-and-tank used on a farm belongs under Agriculture, not Home Cleaning.
 6. Jumia QC ALWAYS rejects wrong-category listings. Phone cases must NOT be filed under Mobile Phones; they belong in Mobile Accessories > Phone Cases. Headphone cables go under Audio Accessories, not Headphones. Pick the leaf or listable parent whose path matches the product's primary identity, not its parent category.
-7. If the visible brand is a luxury / restricted brand (Rolex, Gucci, Bose, MAC, Ray-Ban, Yeezy, Chanel etc.) the seller will likely fail brand-permission QC regardless of the category you pick — but pick the category accurately anyway; the brand-permission flag is handled separately downstream.
+7. Prefer a LEAF candidate over one marked [PARENT category] when both are plausible matches for this product — Jumia frequently rejects a listing filed directly under a parent as too broad ("You can't list products in this category ... choose a different (more specific) category"), even though the parent itself is selectable and has its own attribute set. Only pick a [PARENT category] candidate when it is genuinely the best fit and no leaf candidate on this list covers the product.
+8. If the visible brand is a luxury / restricted brand (Rolex, Gucci, Bose, MAC, Ray-Ban, Yeezy, Chanel etc.) the seller will likely fail brand-permission QC regardless of the category you pick — but pick the category accurately anyway; the brand-permission flag is handled separately downstream.
 ${ctxSection}
 Return ONLY valid JSON, no markdown:
 {
@@ -1747,10 +1748,17 @@ Return ONLY valid JSON, no markdown:
 // errors (API key missing, network completely down).
 
 export interface CandidateWithSchema {
-  code:   number;
-  name:   string;
-  path:   string;
-  attrs:  JumiaCategoryAttribute[];
+  code:    number;
+  name:    string;
+  path:    string;
+  attrs:   JumiaCategoryAttribute[];
+  /** See CategoryCandidate's own doc comment (lib/jumia/category-search.ts)
+   *  — whether Jumia has no more-specific child under this one. Surfaced
+   *  to the model so it can prefer a leaf over a listable parent when
+   *  both are plausible; Jumia rejects a listing filed directly under a
+   *  parent it considers too broad ("You can't list products in this
+   *  category ... choose a more specific category"). */
+  is_leaf: boolean;
 }
 
 export interface PickAndFillResult {
@@ -1848,7 +1856,8 @@ export async function aiPassBC_pickAndFill(
           return `    - ${a.name}: ${a.label}${valStr}${a.required ? " [REQUIRED]" : ""}`;
         }).join("\n");
 
-    return `${i + 1}. CODE ${c.code} — ${c.path}\n${attrLines}`;
+    const specificity = c.is_leaf ? "" : " [PARENT category — has more specific sub-categories on Jumia]";
+    return `${i + 1}. CODE ${c.code} — ${c.path}${specificity}\n${attrLines}`;
   }).join("\n\n");
 
   const ctxSection = userContext && userContext.trim()
@@ -1881,12 +1890,13 @@ ${policyBlock}
 
 OUTPUT RULES:
 1. chosen_code MUST be one of the candidate codes above, or null. Do not invent a code that isn't listed. These candidates came from a text search that can miss badly — if NONE of them is a genuine home for this product (e.g. the product is a wall-art print and the candidates are all kitchen utensils), set chosen_code to null and say why in reasoning. Do NOT settle for the least-wrong one: a listing the seller categorises themselves is far better than a confidently wrong category, which Jumia rejects outright. Only pick a candidate you'd actually defend as the right shelf for this product.
-2. dynamic_attributes keys MUST be attribute names from your chosen category's list (the names shown after "- " on each schema line). NEVER include attributes from a different candidate.
-3. For attributes with an allowed list, pick exactly one value from that list. Otherwise omit.
-4. Skip any attribute you can't determine — null/omit is better than guessing. EXCEPT for required-by-Jumia fields where general online knowledge can give you a sensible answer (e.g. typical material for a known product line) — fill those with moderate confidence.
-5. Disambiguate visually-similar candidates by PRIMARY USE CASE + ENVIRONMENT — a farm sprayer goes under Agriculture, not Home Cleaning.
-6. Confidence is 0..1, and it means "how well does this category actually fit this product" — NOT "how sure am I this is the best of the three offered". If the best candidate is only a loose fit, that's a LOW confidence even when it's clearly better than the other two. Be honest. Set needsConfirmation=true if your top pick is below 0.75 OR within 0.15 of your second choice.
-7. ALWAYS include these dynamic_attributes keys, even if the chosen category's schema doesn't list them (Jumia silently drops unknown keys; the cost of including is zero, the cost of omitting is a missed buyer-trust signal):
+2. When a candidate is marked "[PARENT category — has more specific sub-categories on Jumia]" AND one of the OTHER candidates is a more specific match for the same product, prefer the more specific one — Jumia frequently rejects a listing filed directly under a parent category as too broad ("You can't list products in this category ... choose a different (more specific) category"), even though the parent has its own attribute set and looks selectable. Only choose a PARENT candidate when it is genuinely the best fit and no more specific candidate on the list covers this product.
+3. dynamic_attributes keys MUST be attribute names from your chosen category's list (the names shown after "- " on each schema line). NEVER include attributes from a different candidate.
+4. For attributes with an allowed list, pick exactly one value from that list. Otherwise omit.
+5. Skip any attribute you can't determine — null/omit is better than guessing. EXCEPT for required-by-Jumia fields where general online knowledge can give you a sensible answer (e.g. typical material for a known product line) — fill those with moderate confidence.
+6. Disambiguate visually-similar candidates by PRIMARY USE CASE + ENVIRONMENT — a farm sprayer goes under Agriculture, not Home Cleaning.
+7. Confidence is 0..1, and it means "how well does this category actually fit this product" — NOT "how sure am I this is the best of the three offered". If the best candidate is only a loose fit, that's a LOW confidence even when it's clearly better than the other two. Be honest. Set needsConfirmation=true if your top pick is below 0.75 OR within 0.15 of your second choice.
+8. ALWAYS include these dynamic_attributes keys, even if the chosen category's schema doesn't list them (Jumia silently drops unknown keys; the cost of including is zero, the cost of omitting is a missed buyer-trust signal):
    - product_note: A short, friendly note thanking the buyer and asking for a review once they receive the item. The default is fine: "Dear Customer, once you receive your item, please take a moment to share your feedback and leave a review. Thank you for shopping with us!"
    - what_is_in_the_box: A real, product-specific MULTI-LINE LIST of what is actually BEING SOLD, in Jumia's preferred format. EACH item is on its OWN LINE, starting with a count like "1x", "2x", etc. NEVER a single line / paragraph. NEVER just a number like "1". If the seller's context states what's included, use EXACTLY that (reformatted into this list style) — it always wins over guessing from images. Otherwise list ONLY the product itself plus any accessory clearly visible in the images — do NOT add "User Manual" or "Original Packaging" as generic filler; most listings don't actually include either, and an inaccurate guess is worse than a short, accurate list.
        CORRECT format examples (newline-separated, one item per line):

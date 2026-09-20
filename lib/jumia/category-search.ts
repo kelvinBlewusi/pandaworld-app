@@ -59,6 +59,21 @@ export interface CategoryCandidate {
   retrievalScore:     number;
   /** Where this candidate came from — useful for debugging the pipeline */
   source:             "fuzzy" | "jumia" | "merged" | "embedding";
+  /**
+   * Whether this is Jumia's most specific category for this branch —
+   * i.e. it has no more-specific child a product could be filed under
+   * instead. Optional and NOT set by the retrieval functions in this
+   * file (they don't have it to hand without an extra lookup per
+   * result) — callers that need it enrich candidates afterwards from
+   * the same getListableCategories() rows the retrieval pool came from
+   * (see auto-analyze.ts's category-resolution section). Real rejection
+   * this closes: a listing filed under "Electric Kettles & Pots" (a
+   * non-leaf category with its own attribute set, so getListableCategories
+   * happily includes it) got "You can't list products in this category
+   * ... choose a more specific category" — is_leaf was already false
+   * for it, just never surfaced to the model choosing between candidates.
+   */
+  is_leaf?:           boolean;
 }
 
 interface IndexedRow extends JumiaCategoryRow {
