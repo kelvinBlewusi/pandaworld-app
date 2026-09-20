@@ -14,7 +14,7 @@
 
 import { createServerClient } from "@/lib/supabase/server";
 import { columnFor, readAttributeValue, aliasesForColumn, type MappedColumn } from "@/lib/jumia/attribute-mapping";
-import { preflightAttributes, summarisePreflight, snapToAllowed, type PreflightNote } from "@/lib/jumia/preflight";
+import { preflightAttributes, summarisePreflight, snapToAllowedWithSynonyms, type PreflightNote } from "@/lib/jumia/preflight";
 import { refreshAccessToken, JUMIA_API_BASE } from "@/lib/jumia/oauth";
 import { mockCategories } from "@/lib/mock/categories";
 import { findBrandExact } from "@/lib/jumia/brands";
@@ -741,45 +741,18 @@ function isSingleColour(value: string): boolean {
  * color_family already got is applied here too, now checked against the
  * category's real allowed spellings instead of shipped as typed.
  */
-/** British/American (and similar) spelling pairs seen in Jumia's own
- *  attribute sets — "Grey" typed/detected where the category's schema
- *  declares "Gray" (real rejection: "Attribute [variation] with invalid
- *  value [Grey]"). snapToAllowed can't bridge these: they're not a casing
- *  or plural difference, they're a different word for the same colour. */
-const SPELLING_PAIRS: [string, string][] = [
-  ["grey", "gray"],
-  ["colour", "color"],
-];
-
-function spellingSynonym(value: string, allowed: string[]): string | null {
-  const lower = value.toLowerCase();
-  for (const [a, b] of SPELLING_PAIRS) {
-    let alt: string | null = null;
-    if (lower === a) alt = b;
-    else if (lower === b) alt = a;
-    else if (lower.includes(a)) alt = lower.replace(a, b);
-    else if (lower.includes(b)) alt = lower.replace(b, a);
-    if (alt) {
-      const match = allowed.find((x) => x.toLowerCase() === alt);
-      if (match) return match;
-    }
-  }
-  return null;
-}
-
 /** Snap a variation value to the category's own variant-axis spelling —
- *  shared tail of both resolvers below. A no-op when no axis data is
- *  available (snapToAllowed already no-ops on an empty allowed list; the
- *  explicit check just skips the spelling-synonym pass too). */
+ *  shared tail of both resolvers below. snapToAllowedWithSynonyms (see
+ *  lib/jumia/preflight.ts) covers both a casing/plural near-miss and a
+ *  British/American spelling pair ("Grey" -> "Gray") in one call, and is
+ *  the same function the draft-time reconciliation in auto-analyze.ts and
+ *  preflightAttributes' own enum check use — one shared table so the
+ *  three cannot drift on which spelling pairs they know about. A no-op
+ *  when no axis data is available. */
 function snapVariationSpelling(trimmed: string, allowed: string[], noteSink?: string[]): string {
   if (allowed.length === 0) return trimmed;
 
-  const synonym = spellingSynonym(trimmed, allowed);
-  if (synonym) {
-    noteSink?.push(`variation "${trimmed}" corrected to "${synonym}"`);
-    return synonym;
-  }
-  const snapped = snapToAllowed(trimmed, allowed);
+  const snapped = snapToAllowedWithSynonyms(trimmed, allowed);
   if (snapped && snapped !== trimmed) {
     noteSink?.push(`variation "${trimmed}" corrected to "${snapped}"`);
     return snapped;
@@ -903,6 +876,52 @@ function resolveVariantRowVariation(
   }
 
   return snapped;
+}
+
+/**
+ * Reconcile an AI-drafted variant's variation LABEL against the category's
+ * own variant axis, at DRAFT time — before it ever reaches a push.
+ *
+ * The "Describe" pass (lib/actions/ai.ts) invents variation labels ("13.3
+ * inch", "Silver") purely from what's visible in the photos, before the
+ * category — and therefore its variant-axis schema — is even resolved. A
+ * category whose axis is a closed list (screen sizes, shoe lengths) can
+ * reject ANY value that isn't literally one of its own options, no matter
+ * how it's spelled — the exact failure resolveVariantRowVariation already
+ * guards against at push time, just too late to avoid a rejection round
+ * trip and a confusing edit for the seller.
+ *
+ * Real Jumia behaviour, confirmed live in Vendor Center for exactly this
+ * shape of category: its own Variation dropdown offers "..." as a
+ * selectable, accepted placeholder alongside the real options — a seller
+ * unsure which one applies can defer the choice rather than being forced
+ * to guess. Mirroring that convention here means a draft that can't be
+ * confidently placed in the category's own list still lands editable and
+ * pushable, instead of shipping a free-text guess Jumia will reject.
+ *
+ * - No axis restriction at all (allowed_values empty) → the AI's label is
+ *   kept exactly as drafted; free text is genuinely fine here.
+ * - The label matches one of the axis's own options (exactly, or after the
+ *   same casing/plural/spelling-synonym snap resolveVariantRowVariation
+ *   already applies) → snapped to the category's own spelling.
+ *   Otherwise → "..." rather than the AI's unmatched guess.
+ */
+export function reconcileDraftVariation(
+  rawLabel:    string,
+  variantAxes: JumiaCategoryAttribute[],
+): string {
+  const trimmed = rawLabel.trim();
+  if (!trimmed) return trimmed;
+
+  const allowed = variantAxes.flatMap((a) => a.allowed_values ?? []);
+  if (allowed.length === 0) return trimmed;
+
+  const snapped = snapVariationSpelling(trimmed, allowed);
+  const matched = snapped !== trimmed || allowed.some((a) => a.toLowerCase() === trimmed.toLowerCase());
+  if (matched) return snapped;
+
+  console.info(`[Jumia draft-variation] "${trimmed}" isn't one of this category's stocked options — drafted as "..." instead`);
+  return "...";
 }
 
 /**

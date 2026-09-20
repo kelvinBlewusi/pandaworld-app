@@ -1,4 +1,4 @@
-import { preflightAttributes, snapToAllowed, checkNumericConstraint } from "@/lib/jumia/preflight";
+import { preflightAttributes, snapToAllowed, snapToAllowedWithSynonyms, checkNumericConstraint } from "@/lib/jumia/preflight";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 
 function attr(over: Partial<JumiaCategoryAttribute> & { name: string }): JumiaCategoryAttribute {
@@ -41,6 +41,34 @@ describe("snapToAllowed", () => {
   });
 });
 
+describe("snapToAllowedWithSynonyms", () => {
+  // Same contract as snapToAllowed, plus a British/American spelling-pair
+  // check — shared by resolveVariantRowVariation/resolveColorFallbackVariation
+  // (lib/jumia/api.ts), preflightAttributes' own enum check below, and the
+  // draft-time reconciliation in auto-analyze.ts, so all three treat
+  // "Grey" against a "Gray"-only axis the same way instead of drifting.
+  it("bridges a British/American spelling pair snapToAllowed alone cannot", () => {
+    expect(snapToAllowedWithSynonyms("Grey", ["Black", "Gray", "White"])).toBe("Gray");
+    expect(snapToAllowed("Grey", ["Black", "Gray", "White"])).toBeNull();
+  });
+
+  it("bridges the pair inside a longer compound value", () => {
+    expect(snapToAllowedWithSynonyms("Grey Metal", ["Gray Metal", "Black Metal"])).toBe("Gray Metal");
+  });
+
+  it("still falls back to plain snapToAllowed's casing/plural repair", () => {
+    expect(snapToAllowedWithSynonyms("metal", ["Metal", "Wood"])).toBe("Metal");
+  });
+
+  it("still refuses to guess when nothing plausible matches", () => {
+    expect(snapToAllowedWithSynonyms("Fabric", ["Metal", "Wood"])).toBeNull();
+  });
+
+  it("passes a value through unchanged when the field is free text", () => {
+    expect(snapToAllowedWithSynonyms("Grey", [])).toBe("Grey");
+  });
+});
+
 describe("preflightAttributes", () => {
   const schema = [
     attr({ name: "material_family", label: "Material", allowed_values: ["Metal", "Wood"] }),
@@ -59,6 +87,15 @@ describe("preflightAttributes", () => {
   it("snaps a near-miss enum instead of dropping it", () => {
     const r = preflightAttributes([{ name: "material_family", value: "metal" }], schema);
     expect(r.attributes).toEqual([{ name: "material_family", value: "Metal" }]);
+    expect(r.notes.find((n) => n.reason === "snapped_enum")?.detail).toMatch(/corrected/);
+  });
+
+  it("snaps a British/American spelling pair the same way, not just casing/plural", () => {
+    const colourSchema = [
+      attr({ name: "color_family", label: "Colour", allowed_values: ["Gray", "Black", "White"] }),
+    ];
+    const r = preflightAttributes([{ name: "color_family", value: "Grey" }], colourSchema);
+    expect(r.attributes).toEqual([{ name: "color_family", value: "Gray" }]);
     expect(r.notes.find((n) => n.reason === "snapped_enum")?.detail).toMatch(/corrected/);
   });
 

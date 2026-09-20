@@ -15,7 +15,7 @@
  * the result to JSON.
  */
 
-import { snapToAllowed, checkNumericConstraint } from "@/lib/jumia/preflight";
+import { snapToAllowedWithSynonyms, checkNumericConstraint } from "@/lib/jumia/preflight";
 import { createServerClient } from "@/lib/supabase/server";
 import {
   aiPassA_describeProduct,
@@ -62,7 +62,7 @@ import {
   mergeCandidates,
   type CategoryCandidate,
 } from "@/lib/jumia/category-search";
-import { getValidJumiaCredentials } from "@/lib/jumia/api";
+import { getValidJumiaCredentials, reconcileDraftVariation } from "@/lib/jumia/api";
 import { AI_DYNAMIC_ATTR_DEFAULTS, resolvePatternDefault } from "@/lib/ai/policy";
 import { webSearch, formatSearchSnippetsForPrompt, isWebSearchEnabled } from "@/lib/ai/web-search";
 
@@ -1246,8 +1246,9 @@ export async function runAutoAnalyze(
   //
   // aiFillGaps already validates its own output this way; the earlier
   // passes (A and combined B+C) never did, which is where these came from.
-  // Same snapping rules as the push path, reusing snapToAllowed so the two
-  // cannot drift: casing and singular/plural are repaired, genuine
+  // Same snapping rules as the push path, reusing snapToAllowedWithSynonyms
+  // so the two cannot drift: casing, singular/plural, and a British/
+  // American spelling pair ("Grey" -> "Gray") are repaired, genuine
   // mismatches are dropped, and anything ambiguous is dropped rather than
   // guessed.
   //
@@ -1267,7 +1268,7 @@ export async function runAutoAnalyze(
       ? value.split(",").map((v) => v.trim()).filter(Boolean)
       : [value];
     const kept = parts
-      .map((part) => snapToAllowed(part, field.allowed_values))
+      .map((part) => snapToAllowedWithSynonyms(part, field.allowed_values))
       .filter((v): v is string => v !== null);
 
     if (kept.length === 0) {
@@ -1319,7 +1320,7 @@ export async function runAutoAnalyze(
       ? raw.split(",").map((v) => v.trim()).filter(Boolean)
       : [raw];
     const kept = parts
-      .map((part) => snapToAllowed(part, field.allowed_values))
+      .map((part) => snapToAllowedWithSynonyms(part, field.allowed_values))
       .filter((v): v is string => v !== null);
 
     if (kept.length === 0) {
@@ -1406,9 +1407,16 @@ export async function runAutoAnalyze(
       const baseSku    = (listing.sku as string | undefined) ?? listingId.slice(0, 8).toUpperCase();
       const basePrice  = (listing.selling_price as number | undefined) ?? null;
       const baseStock  = (listing.quantity as number | undefined) ?? 1;
+      // The Describe pass invents these labels before the category (and
+      // its variant-axis schema) is even resolved — see
+      // reconcileDraftVariation's doc comment. Reconciling here, now that
+      // `chosen`/`attrs` are known, catches a category whose axis is a
+      // closed list (screen sizes, shoe lengths) before the seller ever
+      // sees a value Jumia would reject outright.
+      const variantAxes = attrs.filter((a) => a.is_variant);
       const rows = variations.map((v) => ({
         listing_id:      listingId,
-        variation:       v.label,
+        variation:       reconcileDraftVariation(v.label, variantAxes),
         seller_sku:      `${baseSku}-${v.sku_suffix}`,
         gtin:            null,
         quantity:        baseStock,

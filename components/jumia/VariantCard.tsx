@@ -3,6 +3,7 @@
 import { ChevronDown, ChevronUp, Trash2, Calendar as CalendarIcon } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { isValidGTIN } from "@/lib/utils/gtin";
 import type { VariantRow, AxisDef } from "@/lib/jumia/variant-types";
@@ -30,6 +31,7 @@ export function VariantCard({
   onToggleSelect,
   onToggleCollapse,
   onDelete,
+  variationOptions,
 }: {
   variant: VariantRow;
   selected?: boolean;
@@ -38,6 +40,23 @@ export function VariantCard({
   onToggleSelect?: () => void;
   onToggleCollapse: () => void;
   onDelete: () => void;
+  /**
+   * The category's own fixed list of variation options (e.g. screen sizes,
+   * shoe lengths) — present exactly when the category declares a SINGLE
+   * variant axis with its own allowed_values, mirroring what Jumia's own
+   * Vendor Center shows in its Variation dropdown for that same category
+   * (including a literal "..." entry when Jumia's schema offers one, for a
+   * seller who can't tell which option applies).
+   *
+   * When given and non-empty, the Variation field renders as a dropdown of
+   * exactly these options instead of free text — Jumia genuinely doesn't
+   * accept anything else for a category like this, so offering free text
+   * only sets a seller up for a rejection. Omitted (or empty) for a
+   * category with no restricted axis, where free text is genuinely fine,
+   * or one with more than one axis, where the separate "Variant axes"
+   * picker above already builds the right composite value per combo.
+   */
+  variationOptions?: string[];
 }) {
   const variationLabel =
     variant.variation?.trim() ||
@@ -80,16 +99,42 @@ export function VariantCard({
               <Label className="text-xs font-semibold text-zinc-700">
                 Variation<Required />
               </Label>
-              <Input
-                placeholder={Object.values(variant.axes ?? {}).filter(Boolean).join(" / ") || "..."}
-                value={variant.variation}
-                onChange={(e) => onUpdate("variation", e.target.value)}
-                className="h-10 text-sm"
-              />
-              <p className="text-[10px] text-zinc-400">
-                Label that distinguishes this variant — e.g. &quot;3 Set (Trowel, Fork &amp; Cultivator)&quot;,
-                &quot;Hoe only&quot;, &quot;Pack of 6&quot;, &quot;Large&quot;, &quot;Red&quot;.
-              </p>
+              {variationOptions && variationOptions.length > 0 ? (
+                <>
+                  <Select value={variant.variation} onValueChange={(v) => onUpdate("variation", v)}>
+                    <SelectTrigger className="h-10 text-sm">
+                      <SelectValue placeholder="Select an option" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {/* The variant's current value may be a stale guess
+                          from before this category's options were known —
+                          shown here rather than silently dropped, so the
+                          seller sees exactly what's set and can replace it. */}
+                      {variant.variation && !variationOptions.includes(variant.variation) && (
+                        <SelectItem value={variant.variation}>{variant.variation} (current)</SelectItem>
+                      )}
+                      {variationOptions.map((v) => <SelectItem key={v} value={v}>{v}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] text-zinc-400">
+                    This category only accepts one of its own stocked options — pick the one that matches,
+                    or &quot;...&quot; if you&apos;re not sure which applies.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <Input
+                    placeholder={Object.values(variant.axes ?? {}).filter(Boolean).join(" / ") || "..."}
+                    value={variant.variation}
+                    onChange={(e) => onUpdate("variation", e.target.value)}
+                    className="h-10 text-sm"
+                  />
+                  <p className="text-[10px] text-zinc-400">
+                    Label that distinguishes this variant — e.g. &quot;3 Set (Trowel, Fork &amp; Cultivator)&quot;,
+                    &quot;Hoe only&quot;, &quot;Pack of 6&quot;, &quot;Large&quot;, &quot;Red&quot;.
+                  </p>
+                </>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold text-zinc-700">
