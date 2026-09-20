@@ -383,20 +383,27 @@ export function extractRejectedAttributeName(raw: string | null | undefined): st
  * rarely breaks a keyword match), but anything that hands this text
  * onward — a rerun's AI prompt, a seller-facing message — needs the
  * clean form, not a blob of braces and quotes.
+ *
+ * A rejected feed can carry several distinct problems in one `errors[]`
+ * array (a variation value AND a decimal capacity, say) — joining all of
+ * them, rather than only `errors[0]`, is what lets a rerun's AI prompt and
+ * a seller-facing message address everything Jumia reported instead of
+ * one reason at a time.
  */
 export function extractRejectionText(raw: string | null | undefined): string {
   if (!raw) return "";
   try {
     const parsed = JSON.parse(raw);
     if (typeof parsed === "string") return parsed;
-    const candidates = [
-      parsed?.message,
-      parsed?.errorMessage,
-      parsed?.error,
-      Array.isArray(parsed?.errors) ? parsed.errors[0] : undefined,
-    ];
-    const first = candidates.find((c) => typeof c === "string");
-    return (first as string | undefined) ?? JSON.stringify(parsed);
+    const single = [parsed?.message, parsed?.errorMessage, parsed?.error].find(
+      (c) => typeof c === "string",
+    );
+    if (typeof single === "string") return single;
+    if (Array.isArray(parsed?.errors)) {
+      const joined = parsed.errors.filter((e: unknown) => typeof e === "string").join(" | ");
+      if (joined) return joined;
+    }
+    return JSON.stringify(parsed);
   } catch {
     return raw;
   }
