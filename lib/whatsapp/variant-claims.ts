@@ -35,6 +35,12 @@ const CONNECTORS = new Set([
   "colours", "colors", "option", "options", "variant", "variants", "one",
   "ones", "size", "sizes", "version", "versions", "them", "this", "that",
   "i", "we", "my", "our", "it", "for", "of", "to", "sale", "sell", "selling",
+  // Additive fillers. "we have blue too" / "black, and also red" name
+  // exactly as many options as without the filler word — treating "too"
+  // or "also" as a candidate option name is what made a live batch drop a
+  // seller's whole colour claim, because neither one is ever going to
+  // match a colour/size the photo actually shows.
+  "too", "also",
 ]);
 
 /** Markers that introduce a restriction on what's in stock. Each captures
