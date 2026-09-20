@@ -75,6 +75,24 @@ export interface PreflightNote {
   detail:    string;
 }
 
+/**
+ * Attribute names confirmed whole-number-only by a LIVE rejection even in
+ * a category whose synced schema leaves decimal_places null for that same
+ * attribute. Jumia's own schema is inconsistent per category for identical
+ * attribute names — jumia_category_attributes has "capacity_liter" rows
+ * with decimal_places=0 in some categories and null in others — so a
+ * missing declaration doesn't mean the live constraint isn't there.
+ *
+ * "capacity_liter" earned this the hard way: the 2026-09-19 rejection that
+ * justified decimal_mismatch_blocked below ("Attribute [capacity_liter]
+ * with the value [1.7] should be a number without decimals") happened
+ * again on 2026-09-20, on a DIFFERENT listing in a DIFFERENT category
+ * (1029495) whose schema has decimal_places: null for this attribute — the
+ * schema-only check had nothing to block on and shipped "1.7" straight
+ * into the identical rejection a second time.
+ */
+const WHOLE_NUMBER_ATTRIBUTES = new Set(["capacity_liter"]);
+
 export interface PreflightResult {
   /** The payload as it should actually be sent. */
   attributes: PreflightAttribute[];
@@ -250,30 +268,39 @@ export function preflightAttributes(
           });
           continue;
         }
-        if (field.decimal_places != null && field.decimal_places >= 0) {
+        // decimal_places===0 means the field is a COUNT of something (a
+        // litre capacity, a piece count) — rounding 1.7 to 1 or 2 is a
+        // guess about what's actually being sold, not a precision trim.
+        // WHOLE_NUMBER_ATTRIBUTES extends the same rule to a name Jumia
+        // has confirmed live requires it even where THIS category's own
+        // schema leaves decimal_places null (see its doc comment) — the
+        // schema can't be trusted to always say so itself.
+        const requiresWholeNumber =
+          field.decimal_places === 0 || WHOLE_NUMBER_ATTRIBUTES.has(attr.name.toLowerCase());
+
+        if (requiresWholeNumber) {
+          if (!Number.isInteger(num)) {
+            // Block on the very first attempt rather than rounding and
+            // waiting for Jumia to say so — the schema (or the confirmed
+            // name override) already knows this value is invalid before
+            // anything is sent. Real rejection this shipped unrounded
+            // anyway (2026-09-19, recurred 2026-09-20): "Attribute
+            // [capacity_liter] with the value [1.7] should be a number
+            // without decimals."
+            notes.push({
+              attribute: attr.name,
+              label:     field.label,
+              reason:    "decimal_mismatch_blocked",
+              detail:    `"${num}" isn't a whole number — this category needs one, so set it yourself before submitting`,
+            });
+            continue;
+          }
+        } else if (field.decimal_places != null && field.decimal_places > 0) {
+          // A non-zero decimal count (e.g. 2) is excess PRECISION, not a
+          // different quantity — trimming "1.2345" to "1.23" doesn't
+          // change what's being sold, so rounding here is safe.
           const rounded = Number(num.toFixed(field.decimal_places));
           if (rounded !== num) {
-            // decimal_places===0 means the field is a COUNT of something
-            // (a litre capacity, a piece count) — rounding 1.7 to 1 or 2 is
-            // a guess about what's actually being sold, not a precision
-            // trim. Block on the very first attempt rather than rounding
-            // and waiting for Jumia to say so: the schema already knows
-            // this value is invalid before anything is sent. Real
-            // rejection this shipped unrounded anyway (2026-09-19):
-            // "Attribute [capacity_liter] with the value [1.7] should be a
-            // number without decimals."
-            if (field.decimal_places === 0) {
-              notes.push({
-                attribute: attr.name,
-                label:     field.label,
-                reason:    "decimal_mismatch_blocked",
-                detail:    `"${num}" isn't a whole number — this category needs one, so set it yourself before submitting`,
-              });
-              continue;
-            }
-            // A non-zero decimal count (e.g. 2) is excess PRECISION, not a
-            // different quantity — trimming "1.2345" to "1.23" doesn't
-            // change what's being sold, so rounding here is safe.
             value = String(rounded);
             notes.push({
               attribute: attr.name,

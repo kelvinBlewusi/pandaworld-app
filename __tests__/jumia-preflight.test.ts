@@ -303,9 +303,24 @@ describe("preflightAttributes — decimalPlaces", () => {
   });
 
   it("does nothing when the schema doesn't constrain decimal places", () => {
-    const schema = [attr({ name: "capacity_liter", type: "number", decimal_places: null })];
-    const result = preflightAttributes([{ name: "capacity_liter", value: "1.23456" }], schema);
+    const schema = [attr({ name: "weight_kg", type: "number", decimal_places: null })];
+    const result = preflightAttributes([{ name: "weight_kg", value: "1.23456" }], schema);
     expect(result.attributes[0].value).toBe("1.23456");
+  });
+
+  // Real rejection, recurred 2026-09-20 on a DIFFERENT listing in a
+  // DIFFERENT category (1029495) than the 2026-09-19 one above — same
+  // exact wire text, but that category's own synced schema has
+  // decimal_places: null for capacity_liter (Jumia's schema is
+  // inconsistent about this per category for the identical attribute
+  // name). The schema-only check above had nothing to block on and shipped
+  // "1.7" straight into the same rejection a second time — this is the
+  // name-based hardening that closes that gap.
+  it("blocks capacity_liter as whole-number-only even when THIS category's schema leaves decimal_places null", () => {
+    const schema = [attr({ name: "capacity_liter", type: "number", decimal_places: null })];
+    const result = preflightAttributes([{ name: "capacity_liter", value: "1.7" }], schema);
+    expect(result.attributes.find((a) => a.name === "capacity_liter")).toBeUndefined();
+    expect(result.notes[0].reason).toBe("decimal_mismatch_blocked");
   });
 
   it("leaves a non-numeric value on a number field alone — not this function's problem", () => {
