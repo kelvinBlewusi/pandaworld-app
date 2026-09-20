@@ -347,6 +347,16 @@ export async function runAutoAnalyze(
     candidates = searchCategoriesByText(retrievalQuery, listableCategories, 8);
   }
 
+  // Enrich with is_leaf from the SAME listableCategories rows the pool
+  // came from — none of the retrieval functions in category-search.ts
+  // carry it themselves (see CategoryCandidate's own doc comment). This
+  // is what lets the ranking prompts below prefer a leaf over a listable
+  // parent when both are plausible, rather than treating "has its own
+  // attribute set" as the whole story on whether Jumia will actually
+  // accept a listing filed there directly.
+  const listableByCode = new Map(listableCategories.map((c) => [c.code, c]));
+  candidates = candidates.map((c) => ({ ...c, is_leaf: listableByCode.get(c.code)?.is_leaf ?? false }));
+
   console.info(
     `[auto-analyze] category resolution for query="${retrievalQuery.slice(0, 100)}" → ${candidates.length} candidate(s)`,
   );
@@ -406,10 +416,11 @@ export async function runAutoAnalyze(
         }
       }
       return {
-        code:  c.code,
-        name:  c.name,
-        path:  c.path,
+        code:    c.code,
+        name:    c.name,
+        path:    c.path,
         attrs,
+        is_leaf: c.is_leaf ?? false,
       };
     }),
   );
