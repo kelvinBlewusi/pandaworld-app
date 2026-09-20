@@ -370,6 +370,44 @@ describe("Jumia /feeds/products/create payload conformance", () => {
         const ps = mapListingToJumiaProducts(sampleListing, [single], brand, currency, [], undefined, colorAxis);
         expect(ps[0].variation).toBe("Navy");
       });
+
+      // Real rejection, live and repeated (2026-09-19 batch): "Attribute
+      // [variation] with invalid value [Navy Blue]" on a Baby Carrier —
+      // "Navy Blue" was never one of the category's own colour options,
+      // and "Fix & resubmit" kept redrafting and resubmitting the
+      // identical value because nothing local ever checked it against the
+      // axis. Held now instead of shipped, with the real options named.
+      it("holds the push (via blockers) when the value isn't a stocked option and no unambiguous snap exists", () => {
+        const unmatched: VariantRow = { ...sampleVariants[0], variation: "Navy Blue" };
+        const blockers: string[] = [];
+        const ps = mapListingToJumiaProducts(sampleListing, [unmatched], brand, currency, [], undefined, colorAxis, blockers);
+        expect(blockers).toHaveLength(1);
+        expect(blockers[0]).toMatch(/isn't one of this category's stocked options/);
+        expect(blockers[0]).toMatch(/Black, White, Gray, Navy/);
+        // The product is still built (the caller decides whether to push it) —
+        // blockers is the signal, not a thrown error.
+        expect(ps[0].variation).toBe("Navy Blue");
+      });
+
+      it("does not block a value that snaps unambiguously (Grey → Gray)", () => {
+        const greyVariant: VariantRow = { ...sampleVariants[0], variation: "Grey" };
+        const blockers: string[] = [];
+        mapListingToJumiaProducts(sampleListing, [greyVariant], brand, currency, [], undefined, colorAxis, blockers);
+        expect(blockers).toHaveLength(0);
+      });
+
+      it("does not block a value that's already an exact stocked option", () => {
+        const single: VariantRow = { ...sampleVariants[0], variation: "Navy" };
+        const blockers: string[] = [];
+        mapListingToJumiaProducts(sampleListing, [single], brand, currency, [], undefined, colorAxis, blockers);
+        expect(blockers).toHaveLength(0);
+      });
+
+      it("does not block a composite label with no axis to check against", () => {
+        const blockers: string[] = [];
+        mapListingToJumiaProducts(sampleListing, sampleVariants, brand, currency, [], undefined, [], blockers);
+        expect(blockers).toHaveLength(0);
+      });
     });
 
     it("salePrice is included with startAt/endAt when set", () => {
