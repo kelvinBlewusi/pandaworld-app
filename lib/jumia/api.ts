@@ -1242,6 +1242,12 @@ export async function buildJumiaPayload(
   // or nudges it); shipping unvalidated attributes and letting Jumia
   // discover the problem is not — it costs the whole feed.
   if (categoryResolved && schema.length === 0) {
+    // Optional future improvement, not implemented here: getCategoryAttributes
+    // caches per category with no TTL-based background refresh, so a stale
+    // sync only self-heals on the next explicit re-fetch (the category
+    // picker re-select this error message points a seller at). Fail-closed
+    // above is what matters for correctness; a scheduled refresh would only
+    // shrink how often a seller hits this message at all.
     return {
       products: [], adjustments: [], missingRequired: [],
       error: "JUMIA_NO_SCHEMA: This category's attribute list hasn't synced yet, so nothing can be validated before sending — try again in a moment, or open the category picker to re-select it and force a re-sync.",
