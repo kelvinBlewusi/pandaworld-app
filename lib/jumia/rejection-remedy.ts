@@ -91,6 +91,26 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
     return { kind: "seller", explanation: "The variation value isn't one of this category's stocked options — pick one of the ones listed, or use the editor to add a new option." };
   }
 
+  // ── Jumia's OWN async rejection for the same problem the local hold
+  // above exists to catch before push ever happens.
+  //
+  // Confirmed live (2026-09-19 batch, Baby Carrier): "Attribute [variation]
+  // with invalid value [Navy Blue]." — the local check in
+  // resolveVariantRowVariation didn't catch this one (the category's
+  // variant-axis schema hadn't synced at push time), so it fell through to
+  // the generic "Attribute [...]" pattern below and was misclassified
+  // "rerun". That's wrong for the identical reason the local hold's own
+  // branch above exists: runAutoAnalyze re-derives variant labels from the
+  // SAME photos on every pass (see the variant-persist step in
+  // lib/actions/auto-analyze.ts), so a rerun reproduces the same invalid
+  // guess, not a different one. Checked before the generic attribute
+  // pattern, and narrowly on the literal "variation" attribute name only —
+  // "Attribute [color_family] with invalid value [...]" and similar stay
+  // "rerun", since those ARE dynamic attributes a rerun regenerates fully.
+  if (/attribute\s*\[\s*variation\s*\]\s*with invalid value/.test(msg)) {
+    return { kind: "seller", explanation: "The variation value Jumia has isn't one of this category's stocked options — pick one of the ones listed, or use the editor to add a new option." };
+  }
+
   // ── The product's name/title — a rerun rewrites this from scratch ─────
   //
   // runAutoAnalyze regenerates the title on every pass, so a rejection

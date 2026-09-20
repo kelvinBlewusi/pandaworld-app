@@ -11,7 +11,8 @@
     "test:watch": "jest --watch",
     "snapshot-categories": "node --env-file=.env.local --import=tsx scripts/snapshot-categories.ts",
     "snapshot-brands": "node --env-file=.env.local --import=tsx scripts/snapshot-brands.ts",
-    "rotate-extension-key-pepper": "node --env-file=.env.local --import=tsx scripts/rotate-extension-key-pepper.ts"
+    "rotate-extension-key-pepper": "node --env-file=.env.local --import=tsx scripts/rotate-extension-key-pepper.ts",
+    "print-unfixed-rejects": "node --env-file=.env.local --import=tsx scripts/print-unfixed-rejects.ts"
   },
   "dependencies": {
     "@clerk/nextjs": "^6.12.0",
