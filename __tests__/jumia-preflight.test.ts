@@ -1,4 +1,4 @@
-import { preflightAttributes, snapToAllowed, snapToAllowedWithSynonyms } from "@/lib/jumia/preflight";
+import { preflightAttributes, snapToAllowed, snapToAllowedWithSynonyms, checkNumericConstraint } from "@/lib/jumia/preflight";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 
 function attr(over: Partial<JumiaCategoryAttribute> & { name: string }): JumiaCategoryAttribute {
@@ -411,5 +411,57 @@ describe("preflightAttributes — notZeroOrNegative", () => {
     const schema = [attr({ name: "x", type: "number", not_zero_or_negative: false })];
     const result = preflightAttributes([{ name: "x", value: "-3" }], schema);
     expect(result.attributes[0].value).toBe("-3");
+  });
+});
+
+describe("checkNumericConstraint", () => {
+  // Extracted out of preflightAttributes so auto-analyze.ts can run the
+  // identical rule at DRAFT time — the moment a category is known —
+  // rather than only discovering a bad decimal after a push attempt.
+  // Real, repeated rejection this exists to close: "Attribute
+  // [capacity_liter] with the value [1.7] should be a number without
+  // decimals."
+  const capacityField = attr({ name: "capacity_liter", type: "number", decimal_places: 0 });
+
+  it("blocks a fractional value on a whole-number-only field, same as preflightAttributes", () => {
+    const result = checkNumericConstraint("1.7", capacityField);
+    expect(result.value).toBeNull();
+    expect(result.note?.reason).toBe("decimal_mismatch_blocked");
+  });
+
+  it("catches capacity_liter as whole-number-only even when the schema leaves decimal_places null", () => {
+    const noDeclaredPlaces = attr({ name: "capacity_liter", type: "number", decimal_places: null });
+    const result = checkNumericConstraint("1.7", noDeclaredPlaces);
+    expect(result.value).toBeNull();
+    expect(result.note?.reason).toBe("decimal_mismatch_blocked");
+  });
+
+  it("keeps a whole number on a whole-number-only field, unchanged and with no note", () => {
+    const result = checkNumericConstraint("2", capacityField);
+    expect(result).toEqual({ value: "2" });
+  });
+
+  it("rounds excess precision on a field with a non-zero decimal_places, rather than blocking it", () => {
+    const twoDp = attr({ name: "price_extra", type: "number", decimal_places: 2 });
+    const result = checkNumericConstraint("1.2345", twoDp);
+    expect(result.value).toBe("1.23");
+    expect(result.note?.reason).toBe("rounded_number");
+  });
+
+  it("drops a zero-or-negative value when the schema forbids it", () => {
+    const positiveOnly = attr({ name: "weight", type: "number", not_zero_or_negative: true });
+    expect(checkNumericConstraint("0", positiveOnly).value).toBeNull();
+    expect(checkNumericConstraint("-5", positiveOnly).value).toBeNull();
+    expect(checkNumericConstraint("0", positiveOnly).note?.reason).toBe("invalid_number");
+  });
+
+  it("leaves a non-numeric value alone — a different, pre-existing problem", () => {
+    const result = checkNumericConstraint("true", capacityField);
+    expect(result).toEqual({ value: "true" });
+  });
+
+  it("leaves an unconstrained number field's value unchanged", () => {
+    const unconstrained = attr({ name: "x", type: "number" });
+    expect(checkNumericConstraint("1.23456", unconstrained)).toEqual({ value: "1.23456" });
   });
 });
