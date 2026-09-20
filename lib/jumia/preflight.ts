@@ -137,6 +137,54 @@ export function snapToAllowed(value: string, allowed: string[]): string | null {
   return null;
 }
 
+/**
+ * British/American (and similar) spelling pairs seen in Jumia's own
+ * attribute sets — "Grey" typed/detected where a category's schema
+ * declares "Gray" (real rejection: "Attribute [variation] with invalid
+ * value [Grey]"). snapToAllowed can't bridge these: they're not a casing
+ * or plural difference, they're a different word for the same thing.
+ */
+const SPELLING_PAIRS: [string, string][] = [
+  ["grey", "gray"],
+  ["colour", "color"],
+];
+
+function spellingSynonym(value: string, allowed: string[]): string | null {
+  const lower = value.toLowerCase();
+  for (const [a, b] of SPELLING_PAIRS) {
+    let alt: string | null = null;
+    if (lower === a) alt = b;
+    else if (lower === b) alt = a;
+    else if (lower.includes(a)) alt = lower.replace(a, b);
+    else if (lower.includes(b)) alt = lower.replace(b, a);
+    if (alt) {
+      const match = allowed.find((x) => x.toLowerCase() === alt);
+      if (match) return match;
+    }
+  }
+  return null;
+}
+
+/**
+ * Same contract as snapToAllowed, plus the British/American spelling-pair
+ * check above. A single shared entry point so every caller that resolves
+ * a value against a category's allowed_values — the push-time variation
+ * resolvers, this module's own enum checks, and the draft-time
+ * reconciliation in auto-analyze.ts — treats "Grey" against a "Gray"-only
+ * axis the same way, rather than three call sites drifting on which one
+ * remembered the spelling-pair table.
+ */
+export function snapToAllowedWithSynonyms(value: string, allowed: string[]): string | null {
+  const raw = value.trim();
+  if (!raw) return null;
+  if (allowed.length === 0) return raw;
+
+  const synonym = spellingSynonym(raw, allowed);
+  if (synonym) return synonym;
+
+  return snapToAllowed(raw, allowed);
+}
+
 /** Split a multi-select value into its parts. Jumia sends these comma
  *  separated. */
 function splitMulti(value: string): string[] {
@@ -223,7 +271,7 @@ export function preflightAttributes(
       const parts = field.type === "multi" ? splitMulti(value) : [value];
       const kept: string[] = [];
       for (const part of parts) {
-        const snapped = snapToAllowed(part, field.allowed_values);
+        const snapped = snapToAllowedWithSynonyms(part, field.allowed_values);
         if (snapped === null) continue;
         if (snapped !== part) {
           notes.push({

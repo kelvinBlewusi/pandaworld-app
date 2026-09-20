@@ -15,7 +15,7 @@
  * the result to JSON.
  */
 
-import { snapToAllowed } from "@/lib/jumia/preflight";
+import { snapToAllowedWithSynonyms } from "@/lib/jumia/preflight";
 import { createServerClient } from "@/lib/supabase/server";
 import {
   aiPassA_describeProduct,
@@ -1224,8 +1224,9 @@ export async function runAutoAnalyze(
   //
   // aiFillGaps already validates its own output this way; the earlier
   // passes (A and combined B+C) never did, which is where these came from.
-  // Same snapping rules as the push path, reusing snapToAllowed so the two
-  // cannot drift: casing and singular/plural are repaired, genuine
+  // Same snapping rules as the push path, reusing snapToAllowedWithSynonyms
+  // so the two cannot drift: casing, singular/plural, and a British/
+  // American spelling pair ("Grey" -> "Gray") are repaired, genuine
   // mismatches are dropped, and anything ambiguous is dropped rather than
   // guessed.
   //
@@ -1245,7 +1246,7 @@ export async function runAutoAnalyze(
       ? value.split(",").map((v) => v.trim()).filter(Boolean)
       : [value];
     const kept = parts
-      .map((part) => snapToAllowed(part, field.allowed_values))
+      .map((part) => snapToAllowedWithSynonyms(part, field.allowed_values))
       .filter((v): v is string => v !== null);
 
     if (kept.length === 0) {
@@ -1297,7 +1298,7 @@ export async function runAutoAnalyze(
       ? raw.split(",").map((v) => v.trim()).filter(Boolean)
       : [raw];
     const kept = parts
-      .map((part) => snapToAllowed(part, field.allowed_values))
+      .map((part) => snapToAllowedWithSynonyms(part, field.allowed_values))
       .filter((v): v is string => v !== null);
 
     if (kept.length === 0) {
