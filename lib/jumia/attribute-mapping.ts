@@ -114,6 +114,29 @@ export function columnFor(attributeName: string): MappedColumn | null {
   return ATTRIBUTE_TO_COLUMN[attributeName.toLowerCase()] ?? null;
 }
 
+const COLUMN_TO_ALIASES: Partial<Record<MappedColumn, string[]>> = (() => {
+  const map: Partial<Record<MappedColumn, string[]>> = {};
+  for (const [name, col] of Object.entries(ATTRIBUTE_TO_COLUMN)) {
+    (map[col] ??= []).push(name);
+  }
+  return map;
+})();
+
+/**
+ * Every Jumia attribute-name alias that writes to this column, e.g.
+ * "color" → ["color", "colour"]. Jumia's own schema uses a DIFFERENT
+ * spelling for the same logical field across categories, so a builder
+ * that hardcodes one alias silently loses the value on any category whose
+ * schema declares it under another one — the field gets dropped as
+ * "not visible for category" instead of sent under the name that category
+ * actually accepts. Callers that construct an outbound attribute name
+ * should check the category's own schema against this list rather than
+ * assuming one fixed spelling.
+ */
+export function aliasesForColumn(column: MappedColumn): string[] {
+  return COLUMN_TO_ALIASES[column] ?? [];
+}
+
 /**
  * Alias groups for dynamic-attribute keys. Jumia uses different spellings
  * across categories for the same logical seller field — without these
