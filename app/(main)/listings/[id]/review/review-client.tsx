@@ -1531,6 +1531,18 @@ export function ReviewClient({
       .catch(() => setSchemaAxes([]));
   }, [categoryCode]);
 
+  // A category whose ONLY variant axis is a fixed list (screen sizes, shoe
+  // lengths) can't accept anything else for its Variation field — Jumia's
+  // own Vendor Center shows exactly this axis's options as a dropdown
+  // rather than a free-text box. Scoped to exactly one axis: with two or
+  // more, the "Variant axes" picker above already builds the right
+  // composite value per combo, and a flat dropdown of one axis's values
+  // alone would misrepresent what the category actually requires.
+  const singleAxisVariationOptions =
+    schemaAxes.length === 1 && schemaAxes[0].allowed_values.length > 0
+      ? schemaAxes[0].allowed_values
+      : undefined;
+
   // Rebuild variant rows from variant axes (Color, Size, etc.).
   // When axesDef is empty we LEAVE variants alone — they were either
   // hydrated from persisted DB rows (AI-detected variations or previous
@@ -2481,6 +2493,7 @@ export function ReviewClient({
                     onToggleSelect={() => toggleSelectVariant(v.id)}
                     onToggleCollapse={() => toggleCollapse(v.id)}
                     onDelete={() => deleteVariant(v.id)}
+                    variationOptions={singleAxisVariationOptions}
                   />
                 ))}
               </div>
