@@ -125,6 +125,24 @@ describe("classifyJumiaRejection — the full Jumia error catalogue", () => {
     expect(isAutoFixable(r.kind)).toBe(false);
   });
 
+  // Real live rejection (listings.jumia_error, 2026-09-19 batch), the
+  // FULL composite message refreshPendingFeedStatus actually stores —
+  // not just the bare Jumia fragment — since that composite text is what
+  // classifyJumiaRejection is called with in production
+  // (handleFixAndResubmit reads it straight off the listing row). A
+  // different wire shape ("Product with parentSKU [X] and variation [Y]")
+  // than the one above ("Product with seller sku [x] and Product set
+  // parent sku [y]"), so worth its own fixture even though both share the
+  // same "duplicate variation" trigger.
+  it("catches a duplicate VARIATION inside the full multi-variant status line Jumia actually sent", () => {
+    const r = classifyJumiaRejection(
+      "1 of 4 variants went live. Jumia rejected PA-MU8ULMI7-BLK, PA-MU8ULMI7-GRN, PA-MU8ULMI7-BLU: " +
+      "Duplicate Variation on Product with parentSKU [PA-MU8ULMI7] and variation [XXL]",
+    );
+    expect(r.kind).toBe("seller");
+    expect(isAutoFixable(r.kind)).toBe(false);
+  });
+
   // Our OWN pre-push hold (lib/jumia/api.ts resolveVariantRowVariation),
   // not a Jumia rejection — a rerun can't do any better than the first
   // guess since it's the seller's own typed value that didn't match.
@@ -132,6 +150,19 @@ describe("classifyJumiaRejection — the full Jumia error catalogue", () => {
     const r = classifyJumiaRejection(
       `Variation "Navy Blue" isn't one of this category's stocked options (Black, Blue, Grey, Red, White) — pick one of those, or use the editor if you genuinely stock a new one.`,
     );
+    expect(r.kind).toBe("seller");
+    expect(isAutoFixable(r.kind)).toBe(false);
+  });
+
+  // Real live rejection (listings.jumia_error, 2026-09-19 batch, Baby
+  // Carrier): Jumia's OWN async verdict for the identical problem the
+  // local hold above exists to catch before push — the local check missed
+  // this one (the category's variant-axis schema hadn't synced yet), and
+  // without this branch it fell through to the generic attribute pattern
+  // below and came back "rerun" — wrong, since a rerun re-derives variant
+  // labels from the SAME photos and reproduces the same guess.
+  it("never auto-fixes Jumia's own 'invalid variation value' rejection either", () => {
+    const r = classifyJumiaRejection("Attribute [variation] with invalid value [Navy Blue].");
     expect(r.kind).toBe("seller");
     expect(isAutoFixable(r.kind)).toBe(false);
   });
