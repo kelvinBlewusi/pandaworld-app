@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
-import { encrypt, decrypt } from "@/lib/security/token-crypto";
+import { decrypt } from "@/lib/security/token-crypto";
 
 export const dynamic = "force-dynamic";
-import { refreshAccessToken } from "@/lib/jumia/oauth";
+import { refreshJumiaConnection } from "@/lib/jumia/api";
 import { refreshPendingFeedStatus, notifyResolvedListings, toResolvedNotice, type ResolvedListingNotice } from "@/lib/jumia/push-listing";
 
 // ─── GET /api/cron/jumia-feeds ────────────────────────────────────────────────
@@ -90,7 +90,7 @@ export async function GET(req: NextRequest) {
     try {
       const { data: conn } = await db
         .from("jumia_connections")
-        .select("access_token, refresh_token, token_expires_at")
+        .select("access_token, refresh_token, token_expires_at, app_id, app_secret")
         .eq("user_id", userId)
         .eq("status", "active")
         .maybeSingle();
@@ -105,14 +105,18 @@ export async function GET(req: NextRequest) {
       if (conn.token_expires_at) {
         const expiresAt = new Date(conn.token_expires_at as string).getTime();
         if (Date.now() >= expiresAt - 5 * 60 * 1000 && refreshTokenPlain) {
-          const fresh = await refreshAccessToken(refreshTokenPlain);
-          accessToken = fresh.access_token;
-          await db.from("jumia_connections").update({
-            access_token:     encrypt(fresh.access_token),
-            refresh_token:    encrypt(fresh.refresh_token ?? refreshTokenPlain),
-            token_expires_at: new Date(Date.now() + fresh.expires_in * 1000).toISOString(),
-            updated_at:       new Date().toISOString(),
-          }).eq("user_id", userId);
+          // Routed through the single shared refresh path — see
+          // refreshJumiaConnection in lib/jumia/api.ts for why this can't
+          // just call the Jumia token endpoint inline: each seller's
+          // refresh_token is bound to THEIR OWN app_id/app_secret, and a
+          // concurrent refresh from a page load or a push racing this
+          // same tick would otherwise both rotate the same refresh_token
+          // and one of them would silently persist a token Jumia has
+          // already invalidated.
+          const appId     = (conn.app_id     ?? undefined) as string | undefined;
+          const appSecret = conn.app_secret ? decrypt(conn.app_secret as string) : undefined;
+          const fresh = await refreshJumiaConnection(db, userId, refreshTokenPlain, appId, appSecret);
+          accessToken = fresh.accessToken;
         }
       }
     } catch (e) {

@@ -131,6 +131,37 @@ export async function fetchJumiaSellerProfile(accessToken: string): Promise<{
 
 // ─── Refresh an expired access token ─────────────────────────────────────────
 
+/**
+ * A refresh attempt that reached Jumia's token endpoint and got a real
+ * error response back — as opposed to a network failure, timeout, or 5xx,
+ * none of which say anything about whether the refresh_token itself is
+ * still good. Callers classify `code` against Jumia's documented error
+ * values (invalid_grant, invalid_token, unauthorized_client) to decide
+ * whether this is the definitive "the connection is really dead" signal
+ * that justifies asking the seller to reconnect — see isDefinitiveAuthDeath
+ * in lib/jumia/api.ts.
+ */
+export class JumiaTokenError extends Error {
+  status: number;
+  code:   string | undefined;
+
+  constructor(status: number, body: unknown) {
+    const b = (typeof body === "object" && body !== null) ? (body as Record<string, unknown>) : {};
+    const code = typeof b.error === "string" ? b.error : undefined;
+    const description = typeof b.error_description === "string" ? b.error_description : undefined;
+    super(`Jumia token error (${status}): ${code ?? "unknown"}${description ? ` — ${description}` : ""}`);
+    // This project compiles to ES5 (tsconfig's target), where `super(...)`
+    // into a built-in like Error doesn't wire up the prototype chain —
+    // every instance otherwise comes out as a plain Error at runtime, and
+    // `e instanceof JumiaTokenError` silently returns false for callers
+    // that need it to classify a failure as definitive vs. transient.
+    Object.setPrototypeOf(this, JumiaTokenError.prototype);
+    this.name   = "JumiaTokenError";
+    this.status = status;
+    this.code   = code;
+  }
+}
+
 export async function refreshAccessToken(
   refreshToken: string,
   clientId?: string,
@@ -157,8 +188,8 @@ export async function refreshAccessToken(
   });
 
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Jumia token refresh failed (${res.status}): ${text}`);
+    const errorBody = await res.json().catch(() => ({}));
+    throw new JumiaTokenError(res.status, errorBody);
   }
 
   return res.json();

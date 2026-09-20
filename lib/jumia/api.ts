@@ -15,7 +15,7 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { columnFor, readAttributeValue, aliasesForColumn, type MappedColumn } from "@/lib/jumia/attribute-mapping";
 import { preflightAttributes, summarisePreflight, snapToAllowedWithSynonyms, type PreflightNote } from "@/lib/jumia/preflight";
-import { refreshAccessToken, JUMIA_API_BASE } from "@/lib/jumia/oauth";
+import { refreshAccessToken, JumiaTokenError, JUMIA_API_BASE } from "@/lib/jumia/oauth";
 import { mockCategories } from "@/lib/mock/categories";
 import { findBrandExact } from "@/lib/jumia/brands";
 import { stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
@@ -95,6 +95,140 @@ export function countryForCurrency(currency: string): string {
   return hit?.[0] ?? DEFAULT_JUMIA_COUNTRY;
 }
 
+// ─── Token refresh ──────────────────────────────────────────────────────────
+
+/**
+ * Jumia's documented refresh-error codes that mean the connection is
+ * really, definitively dead — the refresh_token itself has been revoked
+ * or was never valid for this client. Anything else (a network error, a
+ * timeout, a 5xx, an error code we don't recognise) is treated as
+ * transient: the access token might still have a few minutes of life
+ * left, and the next call — this cron tick, the next page load — gets
+ * another chance. Getting this wrong in the strict direction is what
+ * turned "Jumia had a bad moment" into "reconnect your account", every
+ * single day, for every seller.
+ */
+const DEFINITIVE_AUTH_DEATH_CODES = new Set(["invalid_grant", "invalid_token", "unauthorized_client"]);
+
+export function isDefinitiveAuthDeath(status: number, code: string | undefined): boolean {
+  return !!code && DEFINITIVE_AUTH_DEATH_CODES.has(code);
+}
+
+const REFRESH_LOCK_POLL_MS     = 400;
+const REFRESH_LOCK_MAX_WAIT_MS = 4_000;
+const REFRESH_LOCK_STALE_AFTER = "30 seconds";
+
+/**
+ * The ONE place a Jumia connection's access token is ever refreshed —
+ * getValidJumiaCredentials, the feed-poll cron, and the connection health
+ * check all route through this instead of each calling refreshAccessToken
+ * inline.
+ *
+ * Two things every inline refresh got wrong on its own:
+ *
+ * 1. Wrong credentials. A seller's refresh_token is bound to THEIR OWN
+ *    Vendor Center application (app_id/app_secret) — refreshAccessToken
+ *    falls back to this platform's own JUMIA_CLIENT_ID/SECRET when no
+ *    client is passed, which Jumia's auth server rejects outright for a
+ *    token issued to a different client. Every caller now has to pass the
+ *    connection's own app_id/app_secret — there is no safe default.
+ *
+ * 2. Racing rotations. Jumia rotates the refresh_token on every successful
+ *    refresh and invalidates the previous one (its own "Refresh Token Best
+ *    Practices"). Two callers noticing the same expiring token at once —
+ *    the cron, a page load's health check, an in-flight push — and both
+ *    refreshing independently each get back a DIFFERENT new refresh_token;
+ *    whichever write loses persists a token Jumia has already thrown away,
+ *    and the connection dies for good the next time it's needed. The
+ *    claim_jumia_refresh_lock() row lock (see the migration) makes only
+ *    one of them actually call Jumia; the rest wait for it to finish and
+ *    reuse what it got.
+ */
+export async function refreshJumiaConnection(
+  db:                ReturnType<typeof createServerClient>,
+  userId:            string,
+  refreshTokenPlain: string,
+  appId:             string | undefined,
+  appSecret:         string | undefined,
+): Promise<{ accessToken: string; tokenExpiresAt: string }> {
+  const { data: claimedRows, error: claimError } = await db.rpc("claim_jumia_refresh_lock", {
+    p_user_id:    userId,
+    p_stale_after: REFRESH_LOCK_STALE_AFTER,
+  });
+  if (claimError) {
+    console.warn(`[Jumia refresh] lock claim failed for ${userId}: ${claimError.message}`);
+  }
+  const won = !claimError && Array.isArray(claimedRows) && claimedRows.length > 0;
+
+  if (!won) {
+    // Someone else is already refreshing this connection — wait for them
+    // rather than racing a second refresh that would invalidate whichever
+    // rotated refresh_token loses.
+    const deadline = Date.now() + REFRESH_LOCK_MAX_WAIT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, REFRESH_LOCK_POLL_MS));
+      const { data: row } = await db
+        .from("jumia_connections")
+        .select("access_token, token_expires_at, refresh_locked_at, status")
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (!row) break;
+      if (row.status === "needs_reconnect") throw new Error("JUMIA_RECONNECT_REQUIRED");
+      const stillLocked = row.refresh_locked_at
+        && Date.now() - new Date(row.refresh_locked_at as string).getTime() < 30_000;
+      const hasHeadroom = row.token_expires_at
+        && new Date(row.token_expires_at as string).getTime() > Date.now() + 60_000;
+      if (!stillLocked && hasHeadroom) {
+        return {
+          accessToken:    decrypt(row.access_token as string),
+          tokenExpiresAt: row.token_expires_at as string,
+        };
+      }
+    }
+    // Gave up waiting rather than hang forever — fail open into our own
+    // refresh attempt below. A redundant refresh is wasteful, not unsafe,
+    // on its own; the loss only happens when two refreshes land AT ONCE,
+    // which the lock already prevented for whichever call won it.
+  }
+
+  try {
+    const fresh = await refreshAccessToken(refreshTokenPlain, appId, appSecret);
+    const tokenExpiresAt = new Date(Date.now() + fresh.expires_in * 1000).toISOString();
+    const { error: writeError } = await db.from("jumia_connections").update({
+      access_token:      encrypt(fresh.access_token),
+      // Always store whatever Jumia returned — never fall back to the old
+      // refresh_token. Jumia has already invalidated it as part of this
+      // same rotation, so keeping it around just means the NEXT refresh
+      // fails with a definitive, unrecoverable error.
+      refresh_token:      fresh.refresh_token ? encrypt(fresh.refresh_token) : null,
+      token_expires_at:    tokenExpiresAt,
+      status:              "active",
+      refresh_locked_at:   null,
+      updated_at:          new Date().toISOString(),
+    }).eq("user_id", userId);
+    if (writeError) {
+      // A refreshed token we failed to persist is worse than not
+      // refreshing at all — every later read decrypts the OLD row and
+      // may retry with a refresh_token Jumia has already rotated away.
+      console.error(`[Jumia refresh] got a fresh token for ${userId} but the DB write failed: ${writeError.message}`);
+      throw new Error(`JUMIA_REFRESH_PERSIST_FAILED: ${writeError.message}`);
+    }
+    return { accessToken: fresh.access_token, tokenExpiresAt };
+  } catch (e) {
+    await db.from("jumia_connections").update({ refresh_locked_at: null }).eq("user_id", userId);
+
+    if (e instanceof JumiaTokenError && isDefinitiveAuthDeath(e.status, e.code)) {
+      console.error(`[Jumia refresh] definitive auth death for ${userId}: ${e.message}`);
+      await markNeedsReconnect(db, userId);
+      throw new Error("JUMIA_RECONNECT_REQUIRED");
+    }
+    // Transient: network error, timeout, 5xx, or an error we don't
+    // recognise as definitive. Status is left untouched on purpose.
+    console.warn(`[Jumia refresh] transient failure for ${userId}: ${(e as Error).message}`);
+    throw new Error("JUMIA_REFRESH_TRANSIENT");
+  }
+}
+
 // ─── Token + shopId retrieval ─────────────────────────────────────────────────
 
 export async function getValidJumiaCredentials(userId: string): Promise<{
@@ -111,9 +245,8 @@ export async function getValidJumiaCredentials(userId: string): Promise<{
     .eq("user_id", userId)
     .maybeSingle();
 
-  if (error || !conn)                     throw new Error("JUMIA_NOT_CONNECTED");
-  if (conn.status === "revoked")          throw new Error("JUMIA_NOT_CONNECTED");
-  if (conn.status === "needs_reconnect")  throw new Error("JUMIA_RECONNECT_REQUIRED");
+  if (error || !conn)            throw new Error("JUMIA_NOT_CONNECTED");
+  if (conn.status === "revoked") throw new Error("JUMIA_NOT_CONNECTED");
 
   // "credential_auth" is the sentinel stored when credentials were saved but
   // the seller hasn't yet completed the OAuth authorization code flow.
@@ -129,43 +262,28 @@ export async function getValidJumiaCredentials(userId: string): Promise<{
   let accessToken = decrypt(conn.access_token as string);
   const refreshTokenPlain = conn.refresh_token ? decrypt(conn.refresh_token as string) : null;
 
-  // Auto-refresh within 5 minutes of expiry. If the refresh itself fails
-  // (typically because the seller deleted the OAuth application from their
-  // Vendor Center → Applications), mark the connection as needs_reconnect
-  // and surface a clear error the UI can route to the onboarding page.
-  if (conn.token_expires_at) {
-    const expiresAt = new Date(conn.token_expires_at as string).getTime();
-    if (Date.now() >= expiresAt - 5 * 60 * 1000) {
-      if (!refreshTokenPlain) {
-        await markNeedsReconnect(db, userId);
-        throw new Error("JUMIA_RECONNECT_REQUIRED");
-      }
-      const appId     = (conn.app_id     ?? undefined) as string | undefined;
-      const appSecret = conn.app_secret ? decrypt(conn.app_secret as string) : undefined;
-      try {
-        const fresh = await refreshAccessToken(
-          refreshTokenPlain,
-          appId,
-          appSecret,
-        );
-        const newExpiry = new Date(Date.now() + fresh.expires_in * 1000).toISOString();
-        await db.from("jumia_connections").update({
-          access_token:     encrypt(fresh.access_token),
-          refresh_token:    encrypt(fresh.refresh_token ?? refreshTokenPlain),
-          token_expires_at: newExpiry,
-          status:           "active",            // recover from past needs_reconnect
-          updated_at:       new Date().toISOString(),
-        }).eq("user_id", userId);
-        accessToken = fresh.access_token;
-      } catch (e) {
-        // Refresh failed — most likely the app was deleted on Jumia's side.
-        // Mark the connection as needs_reconnect so the UI can prompt
-        // the seller to redo onboarding.
-        console.error("[Jumia] refresh failed, marking needs_reconnect:", (e as Error).message);
-        await markNeedsReconnect(db, userId);
-        throw new Error("JUMIA_RECONNECT_REQUIRED");
-      }
+  const expiresAtMs  = conn.token_expires_at ? new Date(conn.token_expires_at as string).getTime() : 0;
+  const needsRefresh = !conn.token_expires_at || Date.now() >= expiresAtMs - 5 * 60 * 1000;
+
+  if (needsRefresh) {
+    if (!refreshTokenPlain) {
+      await markNeedsReconnect(db, userId);
+      throw new Error("JUMIA_RECONNECT_REQUIRED");
     }
+    // Always attempted, even when status already reads needs_reconnect —
+    // a refresh_token can outlive a single earlier failure (Jumia's own
+    // refresh tokens run ~1 year vs. the access token's much shorter
+    // life), so a past network blip or a lost lock race must never
+    // permanently block a refresh_token that still works.
+    const appId     = (conn.app_id     ?? undefined) as string | undefined;
+    const appSecret = conn.app_secret ? decrypt(conn.app_secret as string) : undefined;
+    const fresh     = await refreshJumiaConnection(db, userId, refreshTokenPlain, appId, appSecret);
+    accessToken = fresh.accessToken;
+  } else if (conn.status === "needs_reconnect") {
+    // The token still has headroom, but a PAST refresh already hit a
+    // definitive failure — that's the one case with nothing left to try
+    // short of the seller reauthorising.
+    throw new Error("JUMIA_RECONNECT_REQUIRED");
   }
 
   let shopId = (conn.shop_id ?? "") as string;
@@ -179,10 +297,10 @@ export async function getValidJumiaCredentials(userId: string): Promise<{
 }
 
 /**
- * Mark a connection as needing reconnect. Called when the OAuth refresh
- * fails (usually because the seller deleted the OAuth app from their
- * Vendor Center → Applications). The UI watches for this status and
- * shows a persistent banner directing the seller to /onboarding/connect.
+ * Mark a connection as needing reconnect. Called only on a DEFINITIVE
+ * auth failure — see isDefinitiveAuthDeath — never on a network error, a
+ * timeout, or a 5xx. The UI watches for this status and shows a
+ * persistent banner directing the seller to /onboarding/connect.
  */
 export async function markNeedsReconnect(
   userIdOrDb: string | ReturnType<typeof createServerClient>,
@@ -200,10 +318,17 @@ export async function markNeedsReconnect(
     db = userIdOrDb;
     userId = userIdArg!;
   }
-  await db.from("jumia_connections").update({
+  const { error } = await db.from("jumia_connections").update({
     status:     "needs_reconnect",
     updated_at: new Date().toISOString(),
   }).eq("user_id", userId);
+  if (error) {
+    // Confirmed live, 2026-09-20: this write silently failed for EVERY
+    // connection for months — the table's check constraint didn't allow
+    // this value at all, and nothing here ever looked at the result.
+    // Loud now on purpose; see the migration that fixed the constraint.
+    console.error(`[Jumia] markNeedsReconnect failed to persist for ${userId}: ${error.message}`);
+  }
 }
 
 /**
