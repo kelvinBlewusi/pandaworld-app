@@ -506,18 +506,24 @@ async function handleGlobalCommand(
  */
 /**
  * The end of a batch — every product submitted, session already reset.
- * Carries a button because this was the one place the flow still stopped
- * dead: the seller had nothing to tap and no stated phrase to type, so
- * listing a second batch meant guessing. The id is "restart", the same
- * canonical phrase the typed command uses (see lib/whatsapp/commands.ts),
- * so a tap and a typed *restart* run the identical path — and the body
- * still names the phrase for clients that can't render buttons.
+ *
+ * Used to carry a "Create new listing" button here, on the reasoning that
+ * the seller had nothing else to tap. That button fires the instant
+ * submission completes — before Jumia has resolved a single product — so
+ * a seller who tapped it straight away could start a whole new batch
+ * before ever seeing whether the one they just submitted actually went
+ * live. The resolution messages (notifyBatchResolved/
+ * notifyListingResolved, lib/jumia/push-listing.ts) still arrive
+ * regardless of what the seller does next — restart doesn't suppress
+ * them — but nothing here should actively invite moving on before that.
+ * No button now; *restart* (typed) is still how a seller starts a new
+ * batch, same canonical phrase the global command already recognises
+ * (lib/whatsapp/commands.ts).
  */
 function sendBatchDoneMessage(phoneNumber: string): Promise<void> {
-  return replyButtons(
+  return replyText(
     phoneNumber,
-    "🎉 That's the whole batch submitted! I'll message you here as each one goes live.\n\nWant to list something else? Tap below or reply *restart*.",
-    [{ id: "restart", title: "Create new listing" }],
+    "🎉 That's the whole batch submitted! I'll message you here as each one goes live.\n\nOnce you've seen how these went, reply *restart* to list something else.",
   );
 }
 
