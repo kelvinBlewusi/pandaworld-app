@@ -202,6 +202,16 @@ export function WhatsAppFocusedEditor({
       .catch(() => setSchemaAxes([]));
   }, [categoryCode]);
 
+  // Same rule as the full editor: a category whose ONLY variant axis is a
+  // fixed list (screen sizes, shoe lengths) can't accept anything else for
+  // its Variation field — Jumia's own Vendor Center shows exactly this
+  // axis's options as a dropdown, not free text. Scoped to exactly one
+  // axis; two or more is what the "Variant axes" picker below is for.
+  const singleAxisVariationOptions =
+    schemaAxes.length === 1 && schemaAxes[0].allowed_values.length > 0
+      ? schemaAxes[0].allowed_values
+      : undefined;
+
   // Rebuild variant rows from active axis values (Color, Size, etc.), same
   // logic as the full editor — leaves variants alone when no axes are
   // active so a previously-saved or AI-detected multi-variant list never
@@ -622,6 +632,7 @@ export function WhatsAppFocusedEditor({
                 onUpdate={(field, value) => updateVariant(v.id, field, value)}
                 onToggleCollapse={() => toggleCollapse(v.id)}
                 onDelete={() => deleteVariant(v.id)}
+                variationOptions={singleAxisVariationOptions}
               />
             ))}
           </div>

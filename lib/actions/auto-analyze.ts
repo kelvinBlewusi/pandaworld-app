@@ -62,7 +62,7 @@ import {
   mergeCandidates,
   type CategoryCandidate,
 } from "@/lib/jumia/category-search";
-import { getValidJumiaCredentials } from "@/lib/jumia/api";
+import { getValidJumiaCredentials, reconcileDraftVariation } from "@/lib/jumia/api";
 import { AI_DYNAMIC_ATTR_DEFAULTS, resolvePatternDefault } from "@/lib/ai/policy";
 import { webSearch, formatSearchSnippetsForPrompt, isWebSearchEnabled } from "@/lib/ai/web-search";
 
@@ -1384,9 +1384,16 @@ export async function runAutoAnalyze(
       const baseSku    = (listing.sku as string | undefined) ?? listingId.slice(0, 8).toUpperCase();
       const basePrice  = (listing.selling_price as number | undefined) ?? null;
       const baseStock  = (listing.quantity as number | undefined) ?? 1;
+      // The Describe pass invents these labels before the category (and
+      // its variant-axis schema) is even resolved — see
+      // reconcileDraftVariation's doc comment. Reconciling here, now that
+      // `chosen`/`attrs` are known, catches a category whose axis is a
+      // closed list (screen sizes, shoe lengths) before the seller ever
+      // sees a value Jumia would reject outright.
+      const variantAxes = attrs.filter((a) => a.is_variant);
       const rows = variations.map((v) => ({
         listing_id:      listingId,
-        variation:       v.label,
+        variation:       reconcileDraftVariation(v.label, variantAxes),
         seller_sku:      `${baseSku}-${v.sku_suffix}`,
         gtin:            null,
         quantity:        baseStock,

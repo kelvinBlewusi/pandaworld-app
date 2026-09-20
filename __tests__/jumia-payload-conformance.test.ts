@@ -8,7 +8,7 @@
  * Run: npm test
  */
 
-import { mapListingToJumiaProducts, type JumiaProduct } from "@/lib/jumia/api";
+import { mapListingToJumiaProducts, reconcileDraftVariation, type JumiaProduct } from "@/lib/jumia/api";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 
@@ -846,6 +846,45 @@ describe("Jumia /feeds/products/create payload conformance", () => {
       const attr = products[0].attributes.find((a) => a.name === "product_measures");
       expect(attr?.value).toBe("L: 16.1 cm × W: 7.7 cm × H: 0.8 cm");
     });
+  });
+});
+
+describe("reconcileDraftVariation", () => {
+  // The Describe pass (lib/actions/ai.ts) invents a variation label from
+  // the photos before the category — and therefore its variant axis — is
+  // even resolved. A laptop-screen-size category (real shape, confirmed
+  // live in Vendor Center) never accepts free text for this field, no
+  // matter how it's spelled: its own dropdown offers "..." alongside the
+  // real sizes for a seller who can't tell which one applies.
+  const screenSizeAxis: JumiaCategoryAttribute[] = [
+    {
+      name: "variation", label: "Variation", type: "string",
+      allowed_values: ["...", "13.3\"", "14\"", "15.6\"", "17.3\""],
+      required: true, is_variant: true,
+    },
+  ];
+
+  it("falls back to \"...\" when the AI's guess doesn't match any of the category's own options", () => {
+    expect(reconcileDraftVariation("15.6 inch", screenSizeAxis)).toBe("...");
+  });
+
+  it("snaps to the category's exact spelling on a case-only near-miss", () => {
+    const colourAxis: JumiaCategoryAttribute[] = [
+      { name: "variation", label: "Variation", type: "string", allowed_values: ["Black", "White"], required: true, is_variant: true },
+    ];
+    expect(reconcileDraftVariation("black", colourAxis)).toBe("Black");
+  });
+
+  it("keeps an already-exact match unchanged", () => {
+    expect(reconcileDraftVariation("15.6\"", screenSizeAxis)).toBe("15.6\"");
+  });
+
+  it("keeps the AI's free-text label unchanged when the category has no restricted axis", () => {
+    expect(reconcileDraftVariation("Rustic Oak Finish", [])).toBe("Rustic Oak Finish");
+  });
+
+  it("returns an empty label unchanged regardless of axis restrictions", () => {
+    expect(reconcileDraftVariation("   ", screenSizeAxis)).toBe("");
   });
 });
 
