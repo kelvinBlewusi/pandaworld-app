@@ -43,7 +43,7 @@ as $$
   from analysis_jobs aj
   join whatsapp_sessions ws
     on ws.phone_number = aj.phone_number
-   and ws.batch_id      = aj.batch_id
+   and ws.batch_id      = aj.batch_id::text
   where ws.state = 'analyzing'
     and not exists (
       select 1 from analysis_jobs aj2
