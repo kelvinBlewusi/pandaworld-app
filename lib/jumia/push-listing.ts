@@ -570,19 +570,46 @@ export interface FeedResolution {
   rejectedSkus: string[];
 }
 
-/** First human-readable reason we can find, preferring the per-product
- *  errors (which name the actual variant's problem) over the feed-level
- *  ones. Jumia sometimes hands back objects rather than strings. */
-function firstErrorText(rejected: FeedProductInfo[], feedErrors: unknown[]): string | null {
+/**
+ * Every distinct human-readable rejection reason we can find, across ALL
+ * rejected items and the feed-level errors — not just the first.
+ *
+ * A real batch can fail several SKUs for genuinely DIFFERENT reasons in
+ * one feed (a variation value AND a decimal capacity, say). Storing only
+ * the first one meant a seller who fixed problem A and tapped "Fix &
+ * resubmit" only found out about problem B on the NEXT round trip, one
+ * tap at a time — the same rejection surfaced piecemeal instead of all at
+ * once. classifyJumiaRejection/buildRerunContext both work by testing
+ * wire-format substrings against whatever text they're handed, so joining
+ * every distinct reason (not paraphrasing them) lets a single redraft
+ * address everything Jumia actually said, when the underlying fixes don't
+ * conflict — and lets the seller see the whole picture even when they
+ * don't.
+ *
+ * Per-product reasons come first (they name the actual variant's
+ * problem), then feed-level ones, each reason kept exactly once. Jumia
+ * sometimes hands back objects rather than strings.
+ */
+function allErrorTexts(rejected: FeedProductInfo[], feedErrors: unknown[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (text: string) => {
+    const trimmed = text.trim();
+    if (trimmed && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      out.push(trimmed);
+    }
+  };
   for (const item of rejected) {
-    const first = item.errors.find((e) => typeof e === "string" && e.trim());
-    if (first) return first;
+    for (const e of item.errors) {
+      if (typeof e === "string") add(e);
+    }
   }
   for (const e of feedErrors) {
-    if (typeof e === "string" && e.trim()) return e;
-    if (e && typeof e === "object") return JSON.stringify(e);
+    if (typeof e === "string") add(e);
+    else if (e && typeof e === "object") add(JSON.stringify(e));
   }
-  return null;
+  return out;
 }
 
 type ResolutionCounts = { liveCount: number; totalCount: number; rejectedSkus: string[] };
@@ -831,7 +858,8 @@ export async function refreshPendingFeedStatus(
       ? "live"
       : liveCount > 0 ? "live" : "failed";
 
-    const reason = firstErrorText(rejected, feedStatus.errors);
+    const reasons = allErrorTexts(rejected, feedStatus.errors);
+    const reason = reasons.length ? reasons.join(" | ") : null;
     const errorMsg = failedCount === 0
       ? null
       : liveCount > 0

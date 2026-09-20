@@ -348,10 +348,14 @@ describe("extractRejectionText", () => {
     expect(extractRejectionText(JSON.stringify({ message: "Description too short." }))).toBe("Description too short.");
   });
 
-  it("falls back through errorMessage, then error, then the first of errors[]", () => {
+  it("falls back through errorMessage, then error, then all of errors[] joined", () => {
     expect(extractRejectionText(JSON.stringify({ errorMessage: "A" }))).toBe("A");
     expect(extractRejectionText(JSON.stringify({ error: "B" }))).toBe("B");
-    expect(extractRejectionText(JSON.stringify({ errors: ["C", "D"] }))).toBe("C");
+    expect(extractRejectionText(JSON.stringify({ errors: ["C", "D"] }))).toBe("C | D");
+  });
+
+  it("prefers a single message/errorMessage/error field over errors[] even when both are present", () => {
+    expect(extractRejectionText(JSON.stringify({ message: "Primary reason.", errors: ["C", "D"] }))).toBe("Primary reason.");
   });
 
   it("unwraps a JSON-encoded plain string", () => {

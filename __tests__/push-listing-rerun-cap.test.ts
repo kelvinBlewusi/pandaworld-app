@@ -130,4 +130,49 @@ describe("refreshPendingFeedStatus — genuine async resolution", () => {
     );
     expect(row.jumia_rerun_count).toBe(1);
   });
+
+  it("surfaces EVERY distinct rejection reason across all rejected variants, not just the first", async () => {
+    // A real multi-SKU feed can fail different variants for genuinely
+    // different reasons in the same round trip. Reporting only the first
+    // meant a seller who fixed it still got rejected again on the next
+    // "Fix & resubmit" tap purely because the SECOND reason was never
+    // surfaced until then.
+    seedListing({ status: "pending_approval", jumia_ref: "feed-1" });
+    feedStatusResult = { status: "DONE", total: 2, success: 0, failed: 2, errors: [], raw: null };
+    feedProductDetailsResult = [
+      {
+        sellerSku: "SKU-1", productSid: null, qcStatus: "rejected",
+        errors: ["Attribute [capacity_liter] with the value [1.7] should be a number without decimals."],
+      },
+      {
+        sellerSku: "SKU-2", productSid: null, qcStatus: "rejected",
+        errors: ["Attribute [variation] with the value [Navy Blue] is not one of the allowed options."],
+      },
+    ];
+
+    const resolution = await refreshPendingFeedStatus("tok", {
+      id: "listing-1", status: "pending_approval", jumia_ref: "feed-1",
+    });
+
+    expect(resolution.status).toBe("failed");
+    expect(resolution.error).toContain("capacity_liter");
+    expect(resolution.error).toContain("variation");
+    expect(resolution.error).toContain(" | ");
+  });
+
+  it("deduplicates an identical reason repeated across multiple rejected variants", async () => {
+    seedListing({ status: "pending_approval", jumia_ref: "feed-1" });
+    feedStatusResult = { status: "DONE", total: 2, success: 0, failed: 2, errors: [], raw: null };
+    const sameError = "Attribute [capacity_liter] with the value [1.7] should be a number without decimals.";
+    feedProductDetailsResult = [
+      { sellerSku: "SKU-1", productSid: null, qcStatus: "rejected", errors: [sameError] },
+      { sellerSku: "SKU-2", productSid: null, qcStatus: "rejected", errors: [sameError] },
+    ];
+
+    const resolution = await refreshPendingFeedStatus("tok", {
+      id: "listing-1", status: "pending_approval", jumia_ref: "feed-1",
+    });
+
+    expect(resolution.error).toBe(sameError);
+  });
 });
