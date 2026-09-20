@@ -34,6 +34,7 @@ import {
 import {
   buildContentPolicyInstructions,
   isRestrictedBrand,
+  isJumiaHouseBrand,
   stripBrandFromTitle,
 } from "@/lib/ai/jumia-content-policy";
 import { buildNoteIntentPrompt } from "@/lib/whatsapp/note-intent";
@@ -778,7 +779,15 @@ function buildCoreResult(
   if (aiBrandRestricted) {
     console.info(`[AI Pass A] AI claimed restricted brand "${aiBrand}" — overriding to Generic for QC safety.`);
   }
-  const brandValue = brandConfidence >= BRAND_CONFIDENCE_THRESHOLD && aiBrand && !aiBrandRestricted
+  // Jumia's own watermark isn't a product brand — see isJumiaHouseBrand's
+  // doc comment. Unlike a restricted brand, Jumia never rejects this one
+  // (it's a genuinely valid brand code), so it ships live silently wrong
+  // if not caught here.
+  const aiBrandIsJumia = isJumiaHouseBrand(aiBrand);
+  if (aiBrandIsJumia) {
+    console.info(`[AI Pass A] AI picked Jumia's own house brand "${aiBrand}" (likely a watermark) — overriding to Generic.`);
+  }
+  const brandValue = brandConfidence >= BRAND_CONFIDENCE_THRESHOLD && aiBrand && !aiBrandRestricted && !aiBrandIsJumia
     ? aiBrand
     : "Generic";
 
@@ -807,7 +816,7 @@ function buildCoreResult(
   //   - Above threshold + AI detected a real brand → high (image source)
   //   - Below threshold OR no AI brand → "Generic" fallback (inferred, low)
   field_sources["brand"] = "ai";
-  if (brandConfidence >= BRAND_CONFIDENCE_THRESHOLD && aiBrand && !aiBrandRestricted) {
+  if (brandConfidence >= BRAND_CONFIDENCE_THRESHOLD && aiBrand && !aiBrandRestricted && !aiBrandIsJumia) {
     field_confidence["brand"] = {
       confidence: brandConfidence,
       source:     "image",
@@ -818,6 +827,12 @@ function buildCoreResult(
       confidence: 0.3,
       source:     "inferred",
       reasoning:  `Detected restricted brand "${aiBrand}". Jumia requires brand-authorisation paperwork for this name — defaulted to Generic. Update only if you can prove authorisation.`,
+    };
+  } else if (aiBrandIsJumia && aiBrand) {
+    field_confidence["brand"] = {
+      confidence: 0.3,
+      source:     "inferred",
+      reasoning:  `Detected "${aiBrand}" — that's Jumia's own marketplace branding (often a watermark on the photo), not the product's actual brand. Defaulted to Generic. Update if you know the real brand.`,
     };
   } else {
     field_confidence["brand"] = {
@@ -1874,17 +1889,18 @@ OUTPUT RULES:
 6. Confidence is 0..1, and it means "how well does this category actually fit this product" — NOT "how sure am I this is the best of the three offered". If the best candidate is only a loose fit, that's a LOW confidence even when it's clearly better than the other two. Be honest. Set needsConfirmation=true if your top pick is below 0.75 OR within 0.15 of your second choice.
 7. ALWAYS include these dynamic_attributes keys, even if the chosen category's schema doesn't list them (Jumia silently drops unknown keys; the cost of including is zero, the cost of omitting is a missed buyer-trust signal):
    - product_note: A short, friendly note thanking the buyer and asking for a review once they receive the item. The default is fine: "Dear Customer, once you receive your item, please take a moment to share your feedback and leave a review. Thank you for shopping with us!"
-   - what_is_in_the_box: A real, product-specific MULTI-LINE LIST in Jumia's preferred format. EACH item is on its OWN LINE, starting with a count like "1x", "2x", etc. NEVER a single line / paragraph. NEVER just a number like "1". If the seller's context states what's included, use EXACTLY that (reformatted into this list style) — it always wins over guessing from images. Otherwise read the images for clues (charger? case? cable? manual?).
+   - what_is_in_the_box: A real, product-specific MULTI-LINE LIST of what is actually BEING SOLD, in Jumia's preferred format. EACH item is on its OWN LINE, starting with a count like "1x", "2x", etc. NEVER a single line / paragraph. NEVER just a number like "1". If the seller's context states what's included, use EXACTLY that (reformatted into this list style) — it always wins over guessing from images. Otherwise list ONLY the product itself plus any accessory clearly visible in the images — do NOT add "User Manual" or "Original Packaging" as generic filler; most listings don't actually include either, and an inaccurate guess is worse than a short, accurate list.
        CORRECT format examples (newline-separated, one item per line):
-         "1x Smartphone\\n1x USB-C Charger\\n1x USB Cable\\n1x User Manual"
-         "1x Drone\\n1x Remote Controller\\n2x Batteries\\n1x Charger\\n4x Spare Propellers\\n1x Carrying Case"
-         "1x Volcano Humidifier\\n1x Power Adapter\\n1x User Manual"
+         "1x Smartphone\\n1x USB-C Charger\\n1x USB Cable" (charger/cable visible in the photos)
+         "1x Drone\\n1x Remote Controller\\n2x Batteries\\n1x Charger\\n4x Spare Propellers\\n1x Carrying Case" (full accessory kit visible)
+         "1x Volcano Humidifier" (product only, nothing else visible)
        WRONG (do not produce):
          "1"                                      — just a digit
          "1x Smartphone 1x Charger 1x Manual"     — all on one line
          "Smartphone, charger, manual"            — missing counts
-       If the image only shows the product itself with no accessories, default to:
-         "1x [Product Name]\\n1x User Manual (if applicable)\\n1x Original Packaging"
+         "1x Kettle\\n1x User Manual\\n1x Original Packaging" — manual/packaging added without evidence
+       If the image only shows the product itself with no accessories, state just the product:
+         "1x [Product Name]"
        NEVER omit this field.
 ${ctxSection}
 Return ONLY valid JSON, no markdown:

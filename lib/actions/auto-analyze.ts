@@ -955,15 +955,16 @@ export async function runAutoAnalyze(
   // "1x Item" list (Jumia's preferred format), substituting the listing
   // title for the main product so it reads:
   //     1x Volcano Humidifier
-  //     1x User manual (if applicable)
-  //     1x Original packaging
-  // — much more buyer-trust-worthy than a generic prose note.
+  // — just the product itself, not a manual/packaging guess (see
+  // AI_DYNAMIC_ATTR_DEFAULTS's doc comment in lib/ai/policy.ts) — a seller
+  // who wants real extras listed can say so in their own notes, which
+  // always wins over this fallback (see the mergedSources check below).
   function getProductAwareDefault(intent: string, fallback: string): string {
     const title = (updates.title as string | undefined) ?? (listing?.title ?? "") as string;
     if (intent === "what_is_in_the_box" && title && title.length > 0) {
       // Take the first 6 words from the title for a tidy product name.
       const productName = title.split(/\s+/).slice(0, 6).join(" ");
-      return `1x ${productName}\n1x User manual (if applicable)\n1x Original packaging`;
+      return `1x ${productName}`;
     }
     return fallback;
   }
