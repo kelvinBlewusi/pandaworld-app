@@ -553,15 +553,28 @@ function firstErrorText(rejected: FeedProductInfo[], feedErrors: unknown[]): str
   return null;
 }
 
+type ResolutionCounts = { liveCount: number; totalCount: number; rejectedSkus: string[] };
+
+/** One resolution's message text, in the seller's terms — shared by the
+ *  single-listing notify below and the batched one, so the two render
+ *  identically for the same input. Says what actually happened, including
+ *  the partial case: a feed where four variants went live and one was
+ *  rejected used to be reported to the seller (when it was reported at
+ *  all) as a flat failure, which contradicted the four live products
+ *  sitting in their Vendor Center. */
+function resolutionLine(name: string, newStatus: string, errorMsg: string | null, counts: ResolutionCounts): string {
+  const partial = newStatus === "live" && counts.totalCount > counts.liveCount && counts.liveCount > 0;
+  return newStatus !== "live"
+    ? `⚠️ "${name}" was rejected by Jumia: ${errorMsg ?? "see the app for details"}`
+    : partial
+      ? `✅ "${name}" is live on Jumia — ${counts.liveCount} of ${counts.totalCount} variants went through.\n\n⚠️ Jumia rejected ${counts.rejectedSkus.length ? counts.rejectedSkus.join(", ") : "the rest"}. You can fix and resubmit just those from your listings.`
+      : `🎉 "${name}" is now live on Jumia!`;
+}
+
 /**
  * Tell a WhatsApp seller their listing resolved. Only fires for listings
  * that came from the chat flow — a web-app listing's seller watches the
  * app instead.
- *
- * Says what actually happened, including the partial case: a feed where
- * four variants went live and one was rejected used to be reported to the
- * seller (when it was reported at all) as a flat failure, which
- * contradicted the four live products sitting in their Vendor Center.
  *
  * Best-effort throughout: a failed lookup or send must never turn a
  * successful status refresh into an error for the caller.
@@ -570,9 +583,7 @@ async function notifyListingResolved(
   listingId: string,
   newStatus: string,
   errorMsg: string | null,
-  counts: { liveCount: number; totalCount: number; rejectedSkus: string[] } = {
-    liveCount: 0, totalCount: 0, rejectedSkus: [],
-  },
+  counts: ResolutionCounts = { liveCount: 0, totalCount: 0, rejectedSkus: [] },
 ): Promise<void> {
   try {
     const db = createServerClient();
@@ -591,13 +602,7 @@ async function notifyListingResolved(
     if (!wa.connected || !wa.phoneNumber) return;
 
     const name = (row.title as string | null) ?? "Your product";
-    const partial = newStatus === "live" && counts.totalCount > counts.liveCount && counts.liveCount > 0;
-
-    const text = newStatus !== "live"
-      ? `⚠️ "${name}" was rejected by Jumia: ${errorMsg ?? "see the app for details"}`
-      : partial
-        ? `✅ "${name}" is live on Jumia — ${counts.liveCount} of ${counts.totalCount} variants went through.\n\n⚠️ Jumia rejected ${counts.rejectedSkus.length ? counts.rejectedSkus.join(", ") : "the rest"}. You can fix and resubmit just those from your listings.`
-        : `🎉 "${name}" is now live on Jumia!`;
+    const text = resolutionLine(name, newStatus, errorMsg, counts);
 
     // A rejection gets a way out of it. Without this the message is a dead
     // end: Jumia's own wording ("The column [product_weight] is missing
@@ -617,10 +622,145 @@ async function notifyListingResolved(
   }
 }
 
+export interface ResolvedListingNotice {
+  listingId: string;
+  title:     string | null;
+  batchId:   string;
+  newStatus: string;
+  errorMsg:  string | null;
+  counts:    ResolutionCounts;
+}
+
+/**
+ * Turn one refreshPendingFeedStatus result into a ResolvedListingNotice
+ * for the cron route to collect, or null when there's nothing to notify
+ * about — either the status didn't actually change this pass, or the
+ * listing has no whatsapp_batch_id (a web-app-only listing, which never
+ * had a WhatsApp notification to send in the first place — the same
+ * early-return notifyListingResolved has always had for this case).
+ *
+ * Pulled out of the cron route itself so this filtering has a test
+ * without needing to exercise the whole HTTP handler.
+ */
+export function toResolvedNotice(
+  listing: { id: string; title: string | null; whatsapp_batch_id: string | null },
+  before:  string,
+  result:  FeedResolution,
+): ResolvedListingNotice | null {
+  if (result.status === before || !listing.whatsapp_batch_id) return null;
+  return {
+    listingId: listing.id,
+    title:     listing.title,
+    batchId:   listing.whatsapp_batch_id,
+    newStatus: result.status,
+    errorMsg:  result.error,
+    counts:    { liveCount: result.liveCount, totalCount: result.totalCount, rejectedSkus: result.rejectedSkus },
+  };
+}
+
+/**
+ * Notify one seller about every listing that resolved for ONE
+ * whatsapp_batch_id in a single cron pass — one message instead of one
+ * per listing.
+ *
+ * Real risk this closes: a 20-product "submit all" has Jumia resolve each
+ * product's async review at its own pace, often spread across many of the
+ * per-minute cron ticks (app/api/cron/jumia-feeds) rather than all at
+ * once. Before this, EVERY resolution called notifyListingResolved
+ * individually, so a batch could trickle in up to one "🎉 X is live!" /
+ * "⚠️ X was rejected" message per product — a real contributor to the
+ * ~108-message/20-product evidence behind the draft-phase fix in this same
+ * area (see finalizeBatch in lib/whatsapp/intake.ts).
+ *
+ * The single-item case renders IDENTICALLY to notifyListingResolved
+ * (same wording, same Fix & resubmit button) via the shared
+ * resolutionLine — this is the common case in practice, since most cron
+ * ticks resolve at most one or two products per batch, and nothing about
+ * that experience should change. Only when 2+ listings from the SAME
+ * batch resolve in the SAME tick does the message collapse into one
+ * combined summary, with a single "Review listings" link in place of a
+ * Fix & resubmit button per rejection (WhatsApp caps reply-buttons at
+ * three per message, and a cta_url button can't share a message with
+ * them anyway — same constraint sendStatusReply documents in
+ * lib/whatsapp/intake.ts).
+ */
+export async function notifyBatchResolved(
+  phoneNumber: string,
+  batchId:     string,
+  items:       ResolvedListingNotice[],
+): Promise<void> {
+  if (items.length === 0) return;
+  try {
+    const { sendTextIfConfigured, sendButtonsIfConfigured, sendCtaUrlIfConfigured } = await import("@/lib/whatsapp/client");
+
+    if (items.length === 1) {
+      const item = items[0];
+      const name = item.title ?? "Your product";
+      const text = resolutionLine(name, item.newStatus, item.errorMsg, item.counts);
+      if (item.newStatus !== "live") {
+        await sendButtonsIfConfigured(phoneNumber, text, [{ id: `fix:${item.listingId}`, title: "Fix & resubmit" }]);
+        return;
+      }
+      await sendTextIfConfigured(phoneNumber, text);
+      return;
+    }
+
+    const rejectedCount = items.filter((i) => i.newStatus !== "live").length;
+    const liveCount = items.length - rejectedCount;
+    const lines = items.map((i) => resolutionLine(i.title ?? "Your product", i.newStatus, i.errorMsg, i.counts));
+    const header = rejectedCount === 0
+      ? `🎉 Since your last update: ${liveCount} more product${liveCount === 1 ? "" : "s"} went live on Jumia!`
+      : liveCount === 0
+        ? `⚠️ Since your last update: ${rejectedCount} product${rejectedCount === 1 ? "" : "s"} ${rejectedCount === 1 ? "was" : "were"} rejected by Jumia.`
+        : `Since your last update: ${liveCount} went live, ${rejectedCount} rejected.`;
+
+    await sendTextIfConfigured(phoneNumber, [header, "", ...lines].join("\n"));
+
+    if (rejectedCount > 0) {
+      const { whatsappListingsUrl } = await import("@/lib/whatsapp/batch");
+      await sendCtaUrlIfConfigured(phoneNumber, "Fix what didn't go through:", "Review listings", whatsappListingsUrl(batchId));
+    }
+  } catch (e) {
+    console.warn(`[push-listing] batch resolve notification failed for batch ${batchId}: ${(e as Error).message}`);
+  }
+}
+
+/**
+ * Fan out every listing that genuinely resolved in one cron pass for ONE
+ * user — grouped by whatsapp_batch_id (see notifyBatchResolved) so a
+ * multi-product batch gets at most one message per tick, not one per
+ * listing. A listing with no whatsapp_batch_id (a web-app-only seller)
+ * never reaches here to begin with — the cron route only adds an item for
+ * this when one is present, matching notifyListingResolved's own
+ * early-return for the same case.
+ *
+ * The seller's WhatsApp connection is looked up ONCE and reused across
+ * every batch, rather than once per batch or per listing.
+ */
+export async function notifyResolvedListings(userId: string, resolved: ResolvedListingNotice[]): Promise<void> {
+  if (resolved.length === 0) return;
+  try {
+    const { getWhatsAppConnection } = await import("@/lib/whatsapp/link");
+    const wa = await getWhatsAppConnection(userId);
+    if (!wa.connected || !wa.phoneNumber) return;
+
+    const byBatch = new Map<string, ResolvedListingNotice[]>();
+    for (const item of resolved) {
+      if (!byBatch.has(item.batchId)) byBatch.set(item.batchId, []);
+      byBatch.get(item.batchId)!.push(item);
+    }
+    for (const [batchId, items] of Array.from(byBatch)) {
+      await notifyBatchResolved(wa.phoneNumber, batchId, items);
+    }
+  } catch (e) {
+    console.warn(`[push-listing] notifyResolvedListings failed for user ${userId}: ${(e as Error).message}`);
+  }
+}
+
 export async function refreshPendingFeedStatus(
   accessToken: string,
   listing: { id: string; status: string; jumia_ref: string | null },
-  opts: { allowNonPending?: boolean } = {},
+  opts: { allowNonPending?: boolean; skipNotify?: boolean } = {},
 ): Promise<FeedResolution> {
   const isPending = listing.status === "pending_approval";
   if ((!isPending && !opts.allowNonPending) || !listing.jumia_ref) {
@@ -686,8 +826,11 @@ export async function refreshPendingFeedStatus(
 
     // Only the pending → resolved transition is news. Re-checking an
     // already-resolved listing (what /api/jumia/diagnose does) must not
-    // message the seller again.
-    if (isPending) {
+    // message the seller again. skipNotify is the OTHER way a caller opts
+    // out of this — the per-minute cron (app/api/cron/jumia-feeds) sets it
+    // so it can batch every resolution from one whatsapp_batch_id into a
+    // single message instead of one per listing (see notifyBatchResolved).
+    if (isPending && !opts.skipNotify) {
       await notifyListingResolved(listing.id, newStatus, errorMsg, { liveCount, totalCount, rejectedSkus });
     }
     return { status: newStatus, error: errorMsg, liveCount, totalCount, rejectedSkus };
