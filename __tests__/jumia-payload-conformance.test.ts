@@ -314,6 +314,29 @@ describe("Jumia /feeds/products/create payload conformance", () => {
       expect(ps[0].variation).toBe("Blue");
     });
 
+    // Real category, confirmed live via Supabase (1005888, "Baby Products >
+    // Gear > Backpacks & Carriers"): a Baby Carrier's zero-variant push kept
+    // getting held on EVERY redraft, all day, because its axis has no colour
+    // option at all and reconcileDraftVariation's "..." fallback only runs
+    // for the multi-variant draft path — this base-product fallback still
+    // blocked outright. Jumia's own Vendor Center offers "..." as a real,
+    // selectable option in this axis (confirmed by the literal "..." entry
+    // below, taken from the live jumia_category_attributes row), so a
+    // colour that can never match should go out as that instead of holding
+    // the push a fourth time.
+    it('falls back to "..." instead of blocking when the category itself offers it as a stocked option', () => {
+      const mixedSizeAxis: JumiaCategoryAttribute[] = [
+        { name: "variation", label: "Variation", type: "select",
+          allowed_values: ["18\"", "19\"", "20\"", "L", "M", "S", "XL", "One Size Fits All", "15.6\"", "13.3\"", "..."],
+          required: true, is_variant: true },
+      ];
+      const babyCarrier: ListingRow = { ...sampleListing, color: "Navy Blue", color_family: "Navy Blue" };
+      const blockers: string[] = [];
+      const ps = mapListingToJumiaProducts(babyCarrier, [], brand, currency, [], undefined, mixedSizeAxis, blockers);
+      expect(blockers).toHaveLength(0);
+      expect(ps[0].variation).toBe("...");
+    });
+
     it("includes a listing-level sale price when set — the only place one can live with zero variant rows", () => {
       const onSale: ListingRow = { ...sampleListing, sale_price: 1799, sale_start_date: FUTURE_SALE_START_2, sale_end_date: FUTURE_SALE_END_2 };
       const ps = mapListingToJumiaProducts(onSale, [], brand, currency);
