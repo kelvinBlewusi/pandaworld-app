@@ -132,25 +132,38 @@ async function resolveImages(body: FillRequest): Promise<{ base64: string; mimeT
 
 /**
  * Ensure a Brand field is filled — default to "Generic" like the API push
- * does.
+ * does, or "Fashion" when this category's own Brand dropdown offers it
+ * (Jumia rejects "Generic" outright on Fashion-labelled categories:
+ * "Product category doesn't allow Generic brand" — see BRAND_GENERIC_FASHION
+ * in lib/jumia/api.ts, the same fashion-aware fallback the API push path
+ * already uses). The AI never fills a real brand from the photo any more
+ * (see hintFor() in lib/ai/extension-fill.ts) — only from the seller's own
+ * notes — so this default is what every other listing gets.
  *
- * Previously gated this on `brand.options` actually listing "Generic"
- * first, to avoid writing a value the combobox can't select. That backfired
- * live: the harvested option snapshot (content.js's enrichComboboxOptions,
- * taken once during harvest) can miss a real option that IS selectable at
- * apply time — confirmed by re-testing a category where "Generic" was
- * genuinely there but got refused anyway, because content.js's scrape of
- * that specific dropdown hadn't captured it. That snapshot was never meant
- * to be authoritative for "does this option exist" — it's a hint for the
- * PROMPT. The real answer lives in the live DOM at apply time, which is
- * exactly what content.js's writeCombobox already searches/scrolls through
- * when it tries to select "Generic" — so it's the one true arbiter here,
- * via the per-field ok/fail the panel's results list already shows.
+ * Previously gated the "Generic" attempt on `brand.options` actually
+ * listing it first, to avoid writing a value the combobox can't select.
+ * That backfired live: the harvested option snapshot (content.js's
+ * enrichComboboxOptions, taken once during harvest) can miss a real option
+ * that IS selectable at apply time — confirmed by re-testing a category
+ * where "Generic" was genuinely there but got refused anyway, because
+ * content.js's scrape of that specific dropdown hadn't captured it. That
+ * snapshot was never meant to be authoritative for "does this option
+ * exist" — it's a hint for the PROMPT. The real answer lives in the live
+ * DOM at apply time, which is exactly what content.js's writeCombobox
+ * already searches/scrolls through when it tries to select a value — so
+ * it's the one true arbiter here, via the per-field ok/fail the panel's
+ * results list already shows.
  *
- * So: always attempt "Generic" here, and phrase the warning honestly as a
- * prediction rather than a claimed outcome — neither "filled" nor "isn't an
- * option" is something this function actually knows at the time it runs,
- * since the write itself hasn't happened yet.
+ * Choosing BETWEEN "Generic" and "Fashion" is a different question from
+ * "does my one candidate exist" — a snapshot that's missing "Fashion"
+ * just means we fall back to "Generic" exactly as before this existed, so
+ * there's no regression risk in using presence-in-snapshot as a
+ * preference signal here, only upside when it IS captured.
+ *
+ * Phrase the warning honestly as a prediction rather than a claimed
+ * outcome — neither "filled" nor "isn't an option" is something this
+ * function actually knows at the time it runs, since the write itself
+ * hasn't happened yet.
  */
 function applyBrandDefault(
   values: Record<string, string>,
@@ -159,9 +172,10 @@ function applyBrandDefault(
 ) {
   const brand = fields.find((f) => /brand/i.test(f.label) && !/store/i.test(f.label));
   if (!brand || values[brand.label]) return;
-  values[brand.label] = "Generic";
+  const fallback = brand.options?.some((o) => o.trim().toLowerCase() === "fashion") ? "Fashion" : "Generic";
+  values[brand.label] = fallback;
   warnings.push(
-    `Brand not detected — trying "Generic". Check the results list below: if it didn't take, pick the real brand yourself.`,
+    `Brand not detected — trying "${fallback}". Check the results list below: if it didn't take, pick the real brand yourself.`,
   );
 }
 
