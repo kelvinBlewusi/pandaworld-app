@@ -1502,9 +1502,17 @@ export function ReviewClient({
     }
     return [{
       id: "v1", axes: {}, variation: "Default", sellerSku: listing.sku,
-      gtin: "", quantity: "1",
+      gtin: "", quantity: String(listing.quantity ?? 1),
       globalPrice: listing.selling_price ? String(listing.selling_price) : "",
-      salePrice: "", saleStartDate: "", saleEndDate: "",
+      // Same fallback as globalPrice above, for the same reason — a sale
+      // price set before any variant row exists (via the WhatsApp chat
+      // flow, or a previous save from this same synthetic row) lands on
+      // the listing itself, so hydrate it here rather than showing a
+      // blank field that looks like it never registered — and would
+      // silently clear the existing value on the next Save.
+      salePrice:     listing.sale_price != null ? String(listing.sale_price) : "",
+      saleStartDate: listing.sale_start_date ?? "",
+      saleEndDate:   listing.sale_end_date   ?? "",
     }];
   });
   const [axesDef, setAxesDef] = useState<AxisDef[]>([]);
