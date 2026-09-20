@@ -17,6 +17,8 @@ import { pushListingToJumia, missingFieldLabels, refreshPendingFeedStatus } from
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
 import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix } from "@/lib/jumia/rejection-remedy";
 import { getValidJumiaCredentials, COUNTRY_CURRENCY, DEFAULT_JUMIA_COUNTRY, currencySymbol, currencyNameWord } from "@/lib/jumia/api";
+import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
+import { isFashionCategory } from "@/lib/jumia/fashion-category";
 import { getJumiaConnectionKind, testJumiaCredentials, saveJumiaCredentialsForUser, disconnectJumiaForUser } from "@/lib/jumia/credentials";
 import { createConnectToken } from "@/lib/jumia/connect-token";
 import { parseGlobalCommand, type GlobalCommand } from "@/lib/whatsapp/commands";
@@ -2782,7 +2784,7 @@ async function handleFixAndResubmit(
   const db = createServerClient();
   const { data: row } = await db
     .from("listings")
-    .select("id, whatsapp_seq, title, jumia_error, category_code, category_path, user_prompt, jumia_rerun_fingerprint, jumia_rerun_count")
+    .select("id, whatsapp_seq, title, brand, field_sources, field_confidence, jumia_error, category_code, category_path, user_prompt, jumia_rerun_fingerprint, jumia_rerun_count")
     .eq("id", listingId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -2810,6 +2812,40 @@ async function handleFixAndResubmit(
   // of the time, and both the classifier and the rerun context below want
   // the human-readable form, not a string full of braces and quotes.
   const rejectionText = extractRejectionText(row.jumia_error as string | null);
+
+  // A brand Jumia (or our own restricted-brand list) won't allow for this
+  // category has exactly one always-safe answer: Jumia's own Generic/
+  // Fashion placeholder brand (see BRAND_GENERIC_* in lib/jumia/api.ts,
+  // already used as resolveBrand's own last-resort fallback) — there is
+  // nothing for a redraft to guess at, and guessing risks the AI
+  // confidently re-picking the identical brand from the same photos next
+  // time, repeating the identical block forever. Checked directly against
+  // the live restricted-brand list rather than by pattern-matching stored
+  // text, so this also catches the case where the push never reached
+  // Jumia at all — assertListingReady's own "forbidden" block never
+  // leaves a Jumia-side rejection to match against, unlike a genuine
+  // remote "not allowed to sell this brand" response.
+  const brandRestricted =
+    checkRestrictedBrand(row.brand as string | null, row.category_path as string | null).status === "forbidden" ||
+    /not allowed to sell this brand/i.test(rejectionText);
+
+  if (brandRestricted) {
+    const fallbackBrand = isFashionCategory(row.category_path as string | null) ? "Fashion" : "Generic";
+    await db.from("listings").update({
+      brand: fallbackBrand,
+      // Marked "user" so a LATER, unrelated redraft never confidently
+      // re-detects and reinstates the same restricted brand from the
+      // original photos — same reasoning note-assertion corrections use
+      // for a value that must not be silently overwritten again.
+      field_sources: { ...(row.field_sources as Record<string, string> | null), brand: "user" },
+      field_confidence: { ...(row.field_confidence as Record<string, unknown> | null), brand: { confidence: 1, source: "seller-required" } },
+      updated_at: new Date().toISOString(),
+    }).eq("id", listingId);
+    await replyText(phoneNumber, `🔧 ${label}: "${row.brand}" isn't a brand Jumia will list here, so I switched it to "${fallbackBrand}". Resubmitting…`);
+    await pushAndReport(userId, phoneNumber, listingId, label);
+    return;
+  }
+
   const remedy = classifyJumiaRejection(rejectionText);
 
   if (!isAutoFixable(remedy.kind)) {
@@ -2885,6 +2921,17 @@ async function handleFixAndResubmit(
     }
   }
 
+  await pushAndReport(userId, phoneNumber, listingId, label);
+}
+
+/** Push a listing and reply with the outcome — shared tail of every
+ *  "Fix & resubmit" path, deterministic or redrafted. */
+async function pushAndReport(
+  userId:      string,
+  phoneNumber: string,
+  listingId:   string,
+  label:       string,
+): Promise<void> {
   const result = await pushListingToJumia(userId, listingId);
 
   if (result.ok) {

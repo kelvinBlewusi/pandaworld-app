@@ -421,7 +421,17 @@ export async function resolveBrand(
   }
 
   // ── 3. Generic fallback (Fashion or plain, per categoryHint) ─────────────
-  return { code: genericFallback.code, name: brandName };
+  //
+  // Returns the FALLBACK's own name ("Generic"/"Fashion"), not the
+  // original unresolved brandName — a real, live bug: sending Generic's
+  // code alongside the original (unrecognised or restricted) brand name
+  // text meant Jumia's own QC, which validates the brand NAME independent
+  // of the code (see this function's doc comment: "Product category
+  // doesn't allow Generic brand" already proves Jumia inspects the name),
+  // saw the identical restricted brand again and rejected it again — a
+  // seller tapping "Fix & resubmit" on an unlistable brand saw no change
+  // at all, because the one field Jumia actually checks never changed.
+  return genericFallback;
 }
 
 // ─── Category code resolution ─────────────────────────────────────────────────
