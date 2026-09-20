@@ -45,6 +45,14 @@ export const JUMIA_RESTRICTED_WORDS: string[] = [
   "unlocked mtn mifi",
   "refurbished",
   "reconditioned",
+  // Confirmed live 2026-09-19: "DIY Wall Clock" description rejected with
+  // "The Attribute [description] contains the restricted words : second hand"
+  "second hand",
+  // Confirmed live 2026-09-17: "FreePods Pro ANC Wireless Headphones"
+  // description rejected with "The Attribute [description] contains the
+  // restricted words : supreme" — a superlative marketing claim, same
+  // class as "key features" above, not a brand name Jumia sells.
+  "supreme",
 
   // Vulgar / profanity
   "5h1t", "5hit", "a55", "ar5e", "arrse", "arse", "ass", "ass-fucker", "asses",
@@ -66,6 +74,12 @@ export const JUMIA_RESTRICTED_WORDS: string[] = [
   "donkeyribber", "doosh", "duche", "dyke", "fuck", "shit", "pussy",
 
   // Restricted brands / look-alikes
+  // "allure" confirmed live 2026-09-15: a production listing's jumia_error
+  // paired "The Attribute [description] contains the restricted words :
+  // allure" with "You have referred to a trademark that is protected, but
+  // you have not accurately specified the corresponding brand" — Chanel's
+  // Allure fragrance line, used generically in the description text.
+  "allure",
   "chanel", "hermes", "guerlain", "saint laurent", "berluti", "louis vuitton",
   "acne studios", "balmain", "isabel marant", "bio-oil", "bio oil",
   "urban decay", "urbandecay", "wahl", "gucci", "my ride 65", "ride 65",
@@ -105,8 +119,8 @@ export const JUMIA_RESTRICTED_WORDS: string[] = [
  */
 export function buildRestrictedWordsInstruction(): string {
   return `IMPORTANT — Jumia content guidelines forbid these terms; you MUST NOT use any of them, in any combination, in any field:
-- Marketing claims: "original", "brand new", "imported", "fairly used", "preowned", "London used", "UK used", "neatly used", "refurbished", "reconditioned", "express delivery", "next day delivery", "free installation", "indestructible", "no returns", "key features", "product line", "where to use", "100% human hair".
-- Branded names (unless this product is actually that brand confirmed by visible logo): Chanel, Gucci, Louis Vuitton, Rolex, Ray-Ban, Hermes, Versace, Armani, Tag Heuer, Bose, MAC, Bobbi Brown, Urban Decay, Yeezy, Tissot, Givenchy, Saint Laurent, Balmain, Hublot, Tom Ford, Swatch, Bio-Oil, Sebamed, Soundlink, Beoplay, Lighter, Speedo, Spy, Tobacco, Shisha, Hookah, Oriflame, Bio Oil.
+- Marketing claims: "original", "brand new", "imported", "fairly used", "second hand", "preowned", "London used", "UK used", "neatly used", "refurbished", "reconditioned", "express delivery", "next day delivery", "free installation", "indestructible", "no returns", "key features", "supreme", "product line", "where to use", "100% human hair".
+- Branded names (unless this product is actually that brand confirmed by visible logo): Chanel, Allure, Gucci, Louis Vuitton, Rolex, Ray-Ban, Hermes, Versace, Armani, Tag Heuer, Bose, MAC, Bobbi Brown, Urban Decay, Yeezy, Tissot, Givenchy, Saint Laurent, Balmain, Hublot, Tom Ford, Swatch, Bio-Oil, Sebamed, Soundlink, Beoplay, Lighter, Speedo, Spy, Tobacco, Shisha, Hookah, Oriflame, Bio Oil.
 - Inflated battery claims: any mAh number above 50,000 (60,000mah, 100,000mah etc.).
 - All profanity and vulgar language.
 - SKU and Konga references.
