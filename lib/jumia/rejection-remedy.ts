@@ -82,6 +82,15 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
     return { kind: "seller", explanation: "Two of the variants on this product have the same variation value (e.g. both marked the same size or colour) — Jumia needs them to differ." };
   }
 
+  // ── Our OWN pre-push hold, not a Jumia rejection — see
+  // resolveVariantRowVariation in lib/jumia/api.ts. A rerun redrafts the
+  // whole listing from the photo, but the seller's own typed variation
+  // value is exactly what didn't match the category's stocked options —
+  // redrafting it again is the same guess, not a different one.
+  if (/isn'?t one of this category'?s stocked options/.test(msg)) {
+    return { kind: "seller", explanation: "The variation value isn't one of this category's stocked options — pick one of the ones listed, or use the editor to add a new option." };
+  }
+
   // ── The product's name/title — a rerun rewrites this from scratch ─────
   //
   // runAutoAnalyze regenerates the title on every pass, so a rejection
