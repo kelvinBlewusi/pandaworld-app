@@ -137,6 +137,24 @@ describe("reconcileVariants", () => {
   });
 });
 
+describe("reconcileVariants — the live 'too' failure", () => {
+  // Verbatim, from a 20-product batch, 2026-09-20: an air fryer note.
+  // "too" isn't a connector, so it read as a second claimed option that
+  // matches nothing in the photo — the ENTIRE claim (including the "blue"
+  // that DID match) came back unresolved and every colour got dropped.
+  const NOTE = "The colors are black and we have blue too";
+  const PHOTO_COLOURS = ["Black", "Blue"];
+
+  it("does not read 'too' as a claimed option", () => {
+    expect(extractVariantClaim(NOTE)?.tokens).not.toContain("too");
+  });
+
+  it("resolves instead of wiping out every colour on the draft", () => {
+    const r = reconcileVariants(extractVariantClaim(NOTE), PHOTO_COLOURS);
+    expect(r.kind).toBe("restrict");
+  });
+});
+
 describe("variantClaimWarning", () => {
   it("is silent for a resolved or absent claim", () => {
     expect(variantClaimWarning({ kind: "no_claim" })).toBeNull();

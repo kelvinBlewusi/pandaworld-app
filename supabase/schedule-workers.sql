@@ -163,7 +163,33 @@ select cron.schedule(
 --   where content::jsonb ? 'thresholds'
 --   order by created desc limit 10;
 
+-- ── 5. Recompute jumia_categories.is_leaf daily ─────────────────────────────
+-- Safety net, independent of any category sync. is_leaf drives the AI's
+-- "prefer a leaf over a parent category" ranking; a sync writes it
+-- provisionally false on every page and relies on someone running the
+-- admin-only finalize step afterward to fix it up. Confirmed live,
+-- 2026-09-20: that step had apparently never completed — 27,719 of 27,720
+-- categories read is_leaf=false, silently making the whole leaf-preference
+-- feature a no-op. Once a day is plenty: the category tree itself barely
+-- changes, this only guards against a sync's finalize step being skipped,
+-- failing, or timing out.
+select cron.schedule(
+  'recompute-category-leaves',
+  '17 3 * * *',
+  $$
+  select net.http_get(
+    url     := 'https://pandaworldai.site/api/cron/recompute-category-leaves',
+    headers := jsonb_build_object(
+      'Authorization', 'Bearer ' || (
+        select decrypted_secret from vault.decrypted_secrets where name = 'cron_secret'
+      )
+    )
+  );
+  $$
+);
+
 -- ── Undo ────────────────────────────────────────────────────────────────────
 --   select cron.unschedule('analyze-jobs-worker');
 --   select cron.unschedule('jumia-feed-poll');
 --   select cron.unschedule('platform-health-check');
+--   select cron.unschedule('recompute-category-leaves');

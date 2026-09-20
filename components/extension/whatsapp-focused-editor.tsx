@@ -188,7 +188,20 @@ export function WhatsAppFocusedEditor({
   //
   // Sticky now: once opened it stays open, so the count never silently
   // decides what the seller is looking at.
-  const [variantsOpen, setVariantsOpen] = useState(false);
+  //
+  // Starts open when the ONE persisted row already carries a real
+  // variation string — a category with a single free-text variant axis
+  // (colour, say) can come out of auto-analyze with exactly one row whose
+  // `variation` is "Black", not the synthetic "Default" placeholder.
+  // Defaulting to collapsed hid that value behind "+ Add a variation",
+  // which reads as "nothing here" rather than "here's what the AI wrote,
+  // edit it" — the seller only found it by tapping Add, which then also
+  // appended a second, unwanted blank row alongside it.
+  const [variantsOpen, setVariantsOpen] = useState(() => {
+    if (initialVariants.length !== 1) return false;
+    const v = initialVariants[0].variation?.trim();
+    return !!v && v.toLowerCase() !== "default";
+  });
   const multiVariant = variantsOpen || variants.length > 1 || axesDef.length > 0;
 
   useEffect(() => {
