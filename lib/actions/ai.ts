@@ -1093,7 +1093,10 @@ function extractClassificationConfidence(
 
 export interface ProductDescription {
   title:           string;
-  brand:           string | null;       // null unless logo clearly visible
+  // Always null from this pass now — never read off a photographed logo.
+  // auto-analyze.ts fills the real default (Generic/Fashion, fashion-aware)
+  // unless the seller stated an actual brand in their own notes.
+  brand:           string | null;
   keywords:        string[];            // 5-10 search keywords
   summary:         string;              // one-sentence description
   // Universal Jumia listing fields the AI can infer from images. The
@@ -1219,7 +1222,7 @@ visually-similar products that live in very different parts of the catalogue.
 
 Rules:
 - title: Concise product name (model + product type + key specs, e.g. "WH-1000XM5 Wireless Noise-Cancelling Headphones" — note the BRAND "Sony" is OMITTED; brand goes in the brand field, NOT the title; Jumia rejects "Product name contains Brand name"). 5-12 words ideal but length is flexible. NO category names like "headphones for sale".
-- brand: ONLY fill if a brand logo or wordmark is clearly visible AND you are confident. Otherwise null.
+- brand: ALWAYS null. Never read a brand off a logo or wordmark in the photo — brand is filled separately, only from what the seller explicitly states in their own notes, and defaults to a Generic/Fashion placeholder otherwise.
 - keywords: 5-10 single-word lower-case keywords (no quotes, no underscores). Think of what a buyer would search for.
 - summary: One sentence describing what the product is and its key visible features.
 - description: LENGTH AND SHAPE ARE GOVERNED BY THE CONTENT STYLE BLOCK ABOVE — obey its minimum, and treat its guidance on tables and structure as instructions, not permissions. The only hard ceiling is 8000 characters including markup. Safe HTML tags (<p>, <ul>, <li>, <table>, <tr>, <td>, <br>, <strong>, <em>, <img>) are permitted; inline <img> with full URLs is allowed for spec diagrams or size charts. Marketing/promotional language is permitted ("premium", "best-in-class", "perfect for").

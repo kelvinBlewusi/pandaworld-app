@@ -36,6 +36,7 @@ import {
   CONTENT_LENGTH_FLOORS,
 } from "@/lib/ai/content-style-rules";
 import { canonicalKey, columnFor } from "@/lib/jumia/attribute-mapping";
+import { isFashionCategory } from "@/lib/jumia/fashion-category";
 import { aiReadNoteIntent } from "@/lib/actions/ai";
 import { verifyNoteIntent, type NoteIntent } from "@/lib/whatsapp/note-intent";
 import {
@@ -582,17 +583,27 @@ export async function runAutoAnalyze(
     }
   }
 
-  // Brand — Pass A's brand if confident, else "Generic" fallback so the
-  // required field is never empty. Per Jumia API docs, code 1045133 for
-  // Generic; resolveBrand maps the name → code at push time.
+  // Brand — every listing defaults to Generic (or Fashion, for a
+  // fashion-labelled category) so the required field is never empty.
+  // Pass A no longer even attempts to read a brand off a photographed
+  // logo (see its prompt) — a photo-detected brand is exactly what
+  // surfaces on Jumia's restricted/forbidden-brand lists and trademark
+  // rejections most often, for a product the seller may not be an
+  // authorised reseller of. Real brand names only ever reach `updates`
+  // via the note-intent/note-assertion handling further down, which
+  // reads what the SELLER actually wrote and unconditionally overrides
+  // this default — that's a seller's own words, which outrank a guess
+  // no matter how it was reached.
   if (canFill("brand") || !listing.brand) {
     if (!isUserEdited("brand")) {
-      const brandValue = description.brand && description.brand.trim() ? description.brand : "Generic";
+      const brandValue = isFashionCategory(chosen.path) ? "Fashion" : "Generic";
       updates.brand = brandValue;
       newSources["brand"] = "ai";
-      newConfidence["brand"] = description.brand
-        ? { confidence: 0.9, source: "image",    reasoning: "Logo visible in image" }
-        : { confidence: 0.5, source: "inferred", reasoning: "No brand logo detected — defaulted to Generic. Edit if you know the real brand." };
+      newConfidence["brand"] = {
+        confidence: 0.5,
+        source:     "inferred",
+        reasoning:  `Defaulted to "${brandValue}" — no brand stated in your notes. Mention the real brand in your listing notes if you're authorised to sell it, or edit this field.`,
+      };
     }
   }
 
