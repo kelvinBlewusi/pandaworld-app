@@ -15,16 +15,22 @@ import { buildJumiaPayload } from "@/lib/jumia/api";
 import type { ListingRow } from "@/lib/supabase/types";
 
 jest.mock("@/lib/jumia/categories", () => ({
-  getCategoryAttributes: jest.fn(),
-  getVariantAxes: jest.fn(async () => []),
+  getCategoryAttributes:   jest.fn(),
+  getVariantAxes:          jest.fn(async () => []),
+  getCategoryByCode:       jest.fn(async () => null),
+  fetchAttributesFromJumia: jest.fn(),
+  upsertAttributes:        jest.fn(),
 }));
 jest.mock("@/lib/jumia/brands", () => ({
   findBrandExact: jest.fn(async () => null),
 }));
 
-import { getCategoryAttributes } from "@/lib/jumia/categories";
+import { getCategoryAttributes, getCategoryByCode, fetchAttributesFromJumia, upsertAttributes } from "@/lib/jumia/categories";
 
-const mockGetCategoryAttributes = getCategoryAttributes as jest.Mock;
+const mockGetCategoryAttributes    = getCategoryAttributes as jest.Mock;
+const mockGetCategoryByCode        = getCategoryByCode as jest.Mock;
+const mockFetchAttributesFromJumia = fetchAttributesFromJumia as jest.Mock;
+const mockUpsertAttributes         = upsertAttributes as jest.Mock;
 
 const realFetch = global.fetch;
 beforeEach(() => {
@@ -76,6 +82,38 @@ describe("buildJumiaPayload — fail closed on an empty (unsynced) schema", () =
     const built = await buildJumiaPayload("token", baseListing, [], "GHS", "GH");
     expect(built.error).toBeUndefined();
     expect(built.products.length).toBe(1);
+  });
+
+  it("fetches the schema live and caches it, rather than failing closed, when nobody has ever pushed to this category before", async () => {
+    // The cache read (getCategoryAttributes) comes back empty — nobody has
+    // ever selected this category before — but the category itself is
+    // real and listable (has an attribute_set_sid), so a live fetch
+    // should succeed instead of the seller being told to manually re-pick
+    // it. Confirmed live, 2026-09-20: three products in one 20-product
+    // batch failed exactly this way.
+    mockGetCategoryAttributes.mockResolvedValue([]);
+    mockGetCategoryByCode.mockResolvedValue({ code: 500001, attribute_set_sid: "sid-live-fetch" });
+    mockFetchAttributesFromJumia.mockResolvedValue([
+      { name: "color_family", label: "Colour", type: "select", allowed_values: [], required: false, is_variant: false },
+    ]);
+
+    const built = await buildJumiaPayload("token", baseListing, [], "GHS", "GH");
+
+    expect(built.error).toBeUndefined();
+    expect(built.products.length).toBe(1);
+    expect(mockFetchAttributesFromJumia).toHaveBeenCalledWith("token", "sid-live-fetch");
+    expect(mockUpsertAttributes).toHaveBeenCalledWith(500001, expect.any(Array));
+  });
+
+  it("still fails closed when the on-demand fetch also comes up empty", async () => {
+    mockGetCategoryAttributes.mockResolvedValue([]);
+    mockGetCategoryByCode.mockResolvedValue({ code: 500001, attribute_set_sid: "sid-live-fetch" });
+    mockFetchAttributesFromJumia.mockResolvedValue([]);
+
+    const built = await buildJumiaPayload("token", baseListing, [], "GHS", "GH");
+
+    expect(built.error).toMatch(/JUMIA_NO_SCHEMA/);
+    expect(built.products).toEqual([]);
   });
 });
 
