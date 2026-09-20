@@ -29,6 +29,18 @@
 import prohibitedProductTypes from "@/data/jumia/prohibited-product-types.json";
 import restrictedBrandsData from "@/data/jumia/restricted-brands.json";
 
+/**
+ * Whole-word match for a (possibly multi-word) keyword against already-
+ * lowercased haystack text. `\b` alone would still let "meat" match inside
+ * "meatball" — using an explicit non-word-character (or string edge)
+ * boundary on both sides instead, which also handles a multi-word keyword
+ * like "camouflage clothing" the same way plain \b\b would.
+ */
+function matchesWholeKeyword(haystack: string, keyword: string): boolean {
+  const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:[^a-z0-9]|$)`, "i").test(haystack);
+}
+
 interface ProhibitedEntry {
   keyword:  string;
   category: string | null;
@@ -47,12 +59,20 @@ export interface ProhibitedCategoryCheck {
 }
 
 /**
- * Scan listing text (title/description/category path) for a keyword this
- * country's sheet flags. Substring match against each row's own keyword —
- * most rows are short product-type names ("Camouflage Clothing / Items",
- * "Weapons", "Ivory"), a few are long explanatory clauses that will rarely
- * match free text verbatim; that's a property of the source data, not a bug
- * here — it still catches the common short-keyword rows.
+ * Scan listing text (title/category path — see the caller, listing-ready.ts,
+ * for why description is deliberately excluded) for a keyword this
+ * country's sheet flags. Word-boundary match against each row's own
+ * keyword — most rows are short product-type names ("Camouflage Clothing /
+ * Items", "Weapons", "Ivory"), a few are long explanatory clauses that will
+ * rarely match free text verbatim; that's a property of the source data,
+ * not a bug here — it still catches the common short-keyword rows.
+ *
+ * Word-boundary rather than plain substring: a real 2026-09-19 rejection
+ * showed the bare 4-letter row "Meat" blocking an Air Fryer and a Blender
+ * outright, and "Battery"/"Food" warning on nearly every push in a
+ * 20-product batch — all from ordinary appliance description prose
+ * ("cook meat, fish or vegetables", "1x Battery") that happened to contain
+ * the word, not from the product itself being that type.
  */
 export function checkProhibitedCategory(countryCode: string, texts: (string | null | undefined)[]): ProhibitedCategoryCheck {
   const haystack = texts.filter(Boolean).join(" \n ").toLowerCase();
@@ -68,7 +88,7 @@ export function checkProhibitedCategory(countryCode: string, texts: (string | nu
     // explanatory clause after a newline that was never meant to be
     // matched verbatim, only the short keyword before it.
     const keyword = entry.keyword.split("\n")[0].trim().toLowerCase();
-    if (keyword.length < 4 || !haystack.includes(keyword)) continue;
+    if (keyword.length < 4 || !matchesWholeKeyword(haystack, keyword)) continue;
     if (seen.has(keyword)) continue;
     seen.add(keyword);
 

@@ -54,6 +54,17 @@ describe("classifyJumiaRejection", () => {
     expect(classifyJumiaRejection("Image resolution is invalid.").kind).toBe("seller");
   });
 
+  // Live rejection, 2026-09-19 batch: an Electric Kettle's brand isn't
+  // sellable in the shop's country. This used to fall through to
+  // "unknown" (auto-fixable), so "Fix & resubmit" kept redrafting and
+  // resubmitting the same forbidden brand — a rerun can never change it.
+  it("never auto-fixes a brand banned for the shop's country", () => {
+    const r = classifyJumiaRejection("You're not allowed to sell this brand in Ghana");
+    expect(r.kind).toBe("seller");
+    expect(isAutoFixable(r.kind)).toBe(false);
+    expect(r.explanation).toMatch(/brand/i);
+  });
+
   it("puts a seller-only cause ahead of the attribute pattern when both could match", () => {
     // "Price is required" contains "required", which the attribute rule
     // also matches. Order matters: an automatic re-push of a listing with

@@ -49,17 +49,23 @@ export type PreflightReason =
    *  form Jumia's rich-text rendering preserves. */
   | "line_breaks"
   /** A numeric value carried more decimal places than the schema allows
-   *  (often 0 — integer only) and was rounded to fit. */
+   *  (a non-zero count, e.g. 2) and was rounded to fit — trimming excess
+   *  precision, not changing what's being sold. */
   | "rounded_number"
   /** A numeric value violated the schema's notZeroOrNegative rule (zero
    *  or below) and no repair is safe to guess — dropped, same as an
    *  unmatched enum value. */
   | "invalid_number"
-  /** decimal_places===0 and the value still carries a fraction, AND Jumia
-   *  already rejected this exact attribute for the same reason once before
-   *  — dropped rather than silently rounded again, so a re-push doesn't
-   *  ship the identical shape a second time without the seller confirming
-   *  the number they meant. */
+  /** decimal_places===0 (a whole-number-only field, e.g. a litre capacity)
+   *  and the value still carries a fraction. Dropped rather than rounded —
+   *  unlike trimming precision on a 2-decimal field, rounding 1.7L to 1 or
+   *  2 changes what's actually being sold, and that is a guess only the
+   *  seller can make. Blocked on the FIRST attempt, not just a repeat: a
+   *  real 2026-09-19 rejection ("Attribute [capacity_liter] with the value
+   *  [1.7] should be a number without decimals") proved the schema already
+   *  knows this is invalid before ever sending it — waiting for Jumia to
+   *  say so once, then silently rounding and resending, cost a whole feed
+   *  submission for something detectable locally. */
   | "decimal_mismatch_blocked";
 
 export interface PreflightNote {
@@ -133,29 +139,6 @@ export interface PreflightOptions {
    * list useless as a gate.
    */
   carriedElsewhere?: Iterable<string>;
-
-  /**
-   * The listing's last recorded Jumia rejection text (raw jumia_error,
-   * already reduced to plain text — JSON or not, either survives the
-   * regex below). Used only to recognise when THIS SAME decimal-place
-   * mismatch was already rejected once, so a rerun doesn't silently round
-   * and resubmit the identical shape again — see the decimal_places branch
-   * below. Never used for anything else here.
-   */
-  priorRejectionText?: string | null;
-}
-
-/** Did Jumia already reject THIS attribute for a decimal/whole-number
- *  reason? Matched against the live wire shape ("Attribute [x] with the
- *  value [1.7] should be a number without decimals.") — narrow on purpose,
- *  since a false match here would block a push over an unrelated rejection. */
-function priorRejectionBlocksDecimal(name: string, priorRejectionText: string | null | undefined): boolean {
-  if (!priorRejectionText) return false;
-  const msg = priorRejectionText.toLowerCase();
-  const escaped = name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const namedPattern = new RegExp(`\\b(?:attribute|column)\\s*\\[\\s*${escaped}\\s*\\]`, "i");
-  if (!namedPattern.test(msg)) return false;
-  return /without decimals|not a valid number|decimal/i.test(msg);
 }
 
 /**
@@ -270,29 +253,33 @@ export function preflightAttributes(
         if (field.decimal_places != null && field.decimal_places >= 0) {
           const rounded = Number(num.toFixed(field.decimal_places));
           if (rounded !== num) {
-            // Jumia already rejected this exact attribute for carrying a
-            // fraction it doesn't allow — rounding again and resubmitting
-            // ships the identical shape a second time on a guess. Drop it
-            // instead (surfacing via missingRequired below when the field
-            // is required) so the seller has to confirm the real number
-            // rather than have it reshaped again silently.
-            if (field.decimal_places === 0 && priorRejectionBlocksDecimal(attr.name, options.priorRejectionText)) {
+            // decimal_places===0 means the field is a COUNT of something
+            // (a litre capacity, a piece count) — rounding 1.7 to 1 or 2 is
+            // a guess about what's actually being sold, not a precision
+            // trim. Block on the very first attempt rather than rounding
+            // and waiting for Jumia to say so: the schema already knows
+            // this value is invalid before anything is sent. Real
+            // rejection this shipped unrounded anyway (2026-09-19):
+            // "Attribute [capacity_liter] with the value [1.7] should be a
+            // number without decimals."
+            if (field.decimal_places === 0) {
               notes.push({
                 attribute: attr.name,
                 label:     field.label,
                 reason:    "decimal_mismatch_blocked",
-                detail:    `"${num}" isn't a whole number and Jumia already rejected this exact attribute for that — set a whole number yourself before resubmitting`,
+                detail:    `"${num}" isn't a whole number — this category needs one, so set it yourself before submitting`,
               });
               continue;
             }
+            // A non-zero decimal count (e.g. 2) is excess PRECISION, not a
+            // different quantity — trimming "1.2345" to "1.23" doesn't
+            // change what's being sold, so rounding here is safe.
             value = String(rounded);
             notes.push({
               attribute: attr.name,
               label:     field.label,
               reason:    "rounded_number",
-              detail: field.decimal_places === 0
-                ? `rounded "${num}" to a whole number`
-                : `rounded "${num}" to ${field.decimal_places} decimal place${field.decimal_places === 1 ? "" : "s"}`,
+              detail:    `rounded "${num}" to ${field.decimal_places} decimal place${field.decimal_places === 1 ? "" : "s"}`,
             });
           }
         }

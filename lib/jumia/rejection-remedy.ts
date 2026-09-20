@@ -106,6 +106,20 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
     return { kind: "rerun", explanation: "Jumia sees a trademarked term without a matching brand — redrafting should set the brand correctly or reword the title." };
   }
 
+  // ── Brand banned for this shop's country ────────────────────────────────
+  //
+  // Real rejection: "You're not allowed to sell this brand in Ghana." This
+  // is a country-level sell-ban Jumia enforces on their side — distinct
+  // from checkRestrictedBrand's own brand×category FORBIDDEN/QC matrix
+  // (lib/jumia/prohibited-catalog.ts), which has no entry for it. Without
+  // this branch the message fell through to "unknown", which IS
+  // auto-fixable — so a rerun (which never touches the brand a seller
+  // actually has) kept redrafting and resubmitting the same forbidden
+  // brand, wasting a push every time.
+  if (/not allowed to sell this brand/.test(msg)) {
+    return { kind: "seller", explanation: "Jumia doesn't allow this brand to be sold in this shop's country — a redraft can't change that; use a different brand or check with Jumia support." };
+  }
+
   if (/description/.test(msg) && /(short|50|length|characters)/.test(msg)) {
     return { kind: "rerun", explanation: "The description was too short for Jumia — redrafting will write a longer one." };
   }

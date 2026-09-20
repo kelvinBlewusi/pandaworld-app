@@ -455,6 +455,17 @@ export async function pushListingToJumia(
   }
 
   if (result.success) {
+    // Deliberately NOT clearing jumia_rerun_fingerprint/jumia_rerun_count
+    // here. "success" at this point only means Jumia's create call queued
+    // the listing as pending_approval — the real accept/reject verdict
+    // comes back later, asynchronously, from refreshPendingFeedStatus
+    // below, which is where that bookkeeping actually gets cleared (on a
+    // genuine "live" outcome). Clearing it here used to let an identical
+    // rejection (e.g. the same non-integer capacity_liter value redrafted
+    // unchanged) loop forever: every "Fix & resubmit" queued successfully,
+    // resetting the cap, only for the async review to reject it the same
+    // way again — see shouldBlockRepeatedAutoFix's doc comment, which this
+    // defeated for exactly the case it was written to catch.
     await db
       .from("listings")
       .update({
@@ -462,11 +473,6 @@ export async function pushListingToJumia(
         jumia_ref:                 result.jumia_ref,
         jumia_error:               null,
         jumia_synced_at:           new Date().toISOString(),
-        // Clear the auto-fix loop-cap bookkeeping — a successful push means
-        // whatever the last rejection was is resolved, so the next one (if
-        // any) is a fresh problem, not a repeat. See rejectionFingerprint.
-        jumia_rerun_fingerprint:   null,
-        jumia_rerun_count:         0,
         // Carried forward so refreshPendingFeedStatus can log this feed's
         // eventual per-SKU outcome against the content that produced it.
         jumia_payload_fingerprint: payloadFingerprint,
@@ -841,6 +847,15 @@ export async function refreshPendingFeedStatus(
       jumia_error: errorMsg,
       updated_at:  new Date().toISOString(),
     };
+    // This is the genuine resolution the "Fix & resubmit" loop-cap is
+    // waiting for — see the comment in the success branch above. Only clear
+    // it once Jumia has actually confirmed something live, not merely
+    // queued; a feed that comes back "failed" leaves the bookkeeping in
+    // place so a repeat of the same rejection is still recognised as one.
+    if (newStatus === "live") {
+      updates.jumia_rerun_fingerprint = null;
+      updates.jumia_rerun_count       = 0;
+    }
     // Take the sid/qc off a product that actually succeeded — details[0]
     // may well be the rejected one, which carries no usable sid.
     const succeeded = details.find((p) => p.productSid);
