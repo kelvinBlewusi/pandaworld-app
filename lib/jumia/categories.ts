@@ -790,6 +790,30 @@ export async function upsertAttributes(
     .upsert(rows, { onConflict: "category_code,name" });
 }
 
+/**
+ * Delete specific attributes from a category's cached schema.
+ *
+ * Exists for the "not_visible_attributes" rejection remedy
+ * (lib/jumia/rejection-remedy.ts): Jumia's `/catalog/attribute-sets/{sid}`
+ * endpoint can return an attribute as part of a shared attribute set that
+ * Jumia's real per-category push validation then rejects as "not visible
+ * for category" — a mismatch the sync process has no way to detect on its
+ * own. Once a live rejection names the offending attributes, removing them
+ * here is what actually clears it: preflightAttributes (lib/jumia/
+ * preflight.ts) already drops any attribute not present in the cached
+ * schema before every push, so a category this function has corrected
+ * self-heals with no redraft needed.
+ */
+export async function removeAttributesFromCache(categoryCode: number, names: string[]): Promise<void> {
+  if (!names.length) return;
+  const db = createServerClient();
+  await db
+    .from("jumia_category_attributes")
+    .delete()
+    .eq("category_code", categoryCode)
+    .in("name", names);
+}
+
 // ─── Batched sync helpers ─────────────────────────────────────────────────────
 //
 // The admin UI calls `fetchCategoriesPage(token, n)` once per Jumia page,

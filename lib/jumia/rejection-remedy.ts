@@ -46,6 +46,14 @@ export type RemedyKind =
    *  a bad title, an over-broad category, a short description, or a
    *  category-attribute value the schema rejects. */
   | "rerun"
+  /** Every attribute Jumia complained about is "not visible for category"
+   *  — our OWN cached schema is wrong (it lists an attribute Jumia's live
+   *  validation doesn't accept for this category), not the listing. Fixed
+   *  by removing exactly those attributes from the cache (see
+   *  removeAttributesFromCache in lib/jumia/categories.ts) and pushing
+   *  again — preflightAttributes already drops anything not in the
+   *  schema, so no redraft is needed once the cache is corrected. */
+  | "not_visible_attributes"
   /** Jumia already has this SKU. The push path generates a fresh suffix
    *  on the next attempt, so simply pushing again resolves it. */
   | "repush"
@@ -62,6 +70,27 @@ export interface Remedy {
   /** One line, addressed to the seller, in their terms rather than
    *  Jumia's. */
   explanation: string;
+}
+
+/**
+ * True when, after stripping out every "Attribute [x] is not visible for
+ * category [y]." complaint, nothing meaningful is left in the message —
+ * i.e. the ENTIRE rejection is that one complaint repeated across several
+ * attributes, not that complaint mixed with something else. A mixed
+ * message (say, a not-visible attribute alongside an invalid price) means
+ * more than a stale cache is wrong, so it should fall through to the
+ * generic rerun bucket instead of being treated as a pure cache-correction
+ * case.
+ *
+ * Tolerates one trailing truncated fragment ("Attribute [warranty_address]"
+ * with no closing clause) — the live rejection this branch was built from
+ * was itself cut off mid-sentence there.
+ */
+function isEntirelyNotVisibleAttributeComplaints(msg: string): boolean {
+  const stripped = msg
+    .replace(/attribute\s*\[\s*[^\]]+?\s*\]\s+is not visible for category\s*\[\s*[^\]]*\]\.?/gi, "")
+    .trim();
+  return stripped === "" || /^attribute\s*\[\s*[^\]]*\]?\.?$/i.test(stripped);
 }
 
 export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
@@ -280,6 +309,34 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
     return { kind: "seller", explanation: `Jumia needs ${field.toLowerCase()} set on this product — that's not something a redraft can supply.` };
   }
 
+  // ── Every complaint is "not visible for category" — OUR cache is wrong ──
+  //
+  // Checked before the generic attribute-problems bucket below, which
+  // would otherwise also match "is not visible for category" and send
+  // this down a rerun. A rerun can't fix this: runAutoAnalyze just refills
+  // the same attribute with a new value, and Jumia rejects it again for
+  // the same reason — the attribute isn't rejected because of what value
+  // it holds, it's rejected because our cached schema says this category
+  // accepts an attribute that Jumia's real per-category validation
+  // doesn't. Confirmed live, 2026-09-21 (category 1022994, "Compact
+  // Refrigerators" — checked directly against Jumia's own Vendor Center
+  // form): "Attribute [color_family] is not visible for category [Compact
+  // Refrigerators]. Attribute [main_material] is not visible for category
+  // [Compact Refrigerators]. ..." repeated across seven attributes.
+  // Removing exactly those attributes from the cache (see
+  // removeAttributesFromCache in lib/jumia/categories.ts) and pushing
+  // again is what actually clears it — preflightAttributes already drops
+  // anything not in the schema, so no redraft is needed once the cache is
+  // corrected. A message that mixes this complaint with a different kind
+  // of problem falls through to the generic rerun bucket instead, since
+  // that mix means something beyond a stale cache is also wrong.
+  if (/is not visible for category/.test(msg) && isEntirelyNotVisibleAttributeComplaints(msg)) {
+    return {
+      kind: "not_visible_attributes",
+      explanation: "Some of this category's fields aren't actually usable there — I'll remove them and resubmit.",
+    };
+  }
+
   // ── Attribute problems — the common, genuinely fixable case ────────────
   //
   // Matches both the bracketed live shape ("Attribute [x] is not visible
@@ -307,7 +364,7 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
 /** True when the system should attempt an automatic repair rather than
  *  handing straight back to the seller. */
 export function isAutoFixable(kind: RemedyKind): boolean {
-  return kind === "rerun" || kind === "repush" || kind === "unknown";
+  return kind === "rerun" || kind === "not_visible_attributes" || kind === "repush" || kind === "unknown";
 }
 
 /**
@@ -336,14 +393,17 @@ export function rejectionFingerprint(kind: RemedyKind, rejectionText: string): s
  *
  * "repush" is exempt: a duplicate-SKU rejection is resolved by a genuinely
  * fresh SKU each attempt (see pushListingToJumia's isRetry), so a second
- * attempt is not "the same fix repeating" the way a rerun is.
+ * attempt is not "the same fix repeating" the way a rerun is. "not_visible_
+ * attributes" is exempt for the same reason: each attempt removes the
+ * offending names from the cache before pushing again, so a second attempt
+ * pushes a genuinely corrected schema, not a repeat of the same guess.
  */
 export function shouldBlockRepeatedAutoFix(
   kind:  RemedyKind,
   fingerprint: string,
   prior: { fingerprint: string | null; count: number },
 ): boolean {
-  if (kind === "repush") return false;
+  if (kind === "repush" || kind === "not_visible_attributes") return false;
   return prior.fingerprint === fingerprint && prior.count >= 1;
 }
 
@@ -371,6 +431,29 @@ export function extractRejectedAttributeName(raw: string | null | undefined): st
   // An unfilled template placeholder ("[{0}]") is not a real name.
   if (name && /^\{.*\}$/.test(name)) return null;
   return name;
+}
+
+/**
+ * Pull EVERY attribute name out of a "not visible for category" rejection
+ * — unlike extractRejectedAttributeName above, which only ever returns the
+ * first match (built for "jump to this one field on the review page"),
+ * this powers removeAttributesFromCache, which needs the complete set
+ * Jumia complained about in one rejection so it can correct the cache in
+ * one pass rather than one automatic-repair cycle per attribute.
+ *
+ * A trailing truncated fragment ("Attribute [warranty_address]" with no
+ * closing "is not visible..." clause) never completes the pattern and is
+ * silently dropped — there's no confirmed category name to act on for it.
+ */
+export function extractNotVisibleAttributeNames(raw: string | null | undefined): string[] {
+  const msg = raw ?? "";
+  const re = /attribute\s*\[\s*([^\]]+?)\s*\]\s+is not visible for category/gi;
+  const names: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(msg)) !== null) {
+    names.push(match[1]);
+  }
+  return names;
 }
 
 /**
