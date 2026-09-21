@@ -13,8 +13,21 @@ const JUMIA_TOKEN_URL    = "https://auth-external.jumia.com/connect/token";
 // All Vendor API calls (products, feeds, orders) go to vendor-api.jumia.com.
 // Set JUMIA_API_ENV=staging to point to vendor-api-staging.jumia.com instead.
 // Useful for testing without touching real seller inventory.
+//
+// Anything other than exactly "staging" or "production" falls through to
+// production — the more dangerous direction to get wrong silently (a typo
+// meant to protect real seller inventory would instead push straight to
+// it). Warned once at import time rather than left silent, matching how
+// lib/supabase/server.ts treats an unrecognised SUPABASE_SERVICE_ROLE_KEY.
+const JUMIA_API_ENV = process.env.JUMIA_API_ENV;
+if (JUMIA_API_ENV && JUMIA_API_ENV !== "staging" && JUMIA_API_ENV !== "production") {
+  console.warn(
+    `[jumia] JUMIA_API_ENV="${JUMIA_API_ENV}" is not "staging" or "production" — falling through to production. ` +
+    `Did you mean JUMIA_API_ENV=staging?`,
+  );
+}
 export const JUMIA_API_BASE =
-  process.env.JUMIA_API_ENV === "staging"
+  JUMIA_API_ENV === "staging"
     ? "https://vendor-api-staging.jumia.com"
     : "https://vendor-api.jumia.com";
 

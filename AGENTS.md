@@ -485,7 +485,8 @@ billing system underneath. Single switch: `FREE_FOR_ALL_MODE` in
   account), and `GOOGLE_API_KEY` is the AI Studio fallback for generation,
   embeddings and extension-fill. Falls back to `GOOGLE_API_KEY` when unset,
   which is the state that 403s with `API_KEY_SERVICE_BLOCKED`.
-- `JUMIA_CLIENT_ID` + `JUMIA_CLIENT_SECRET` + `JUMIA_REDIRECT_URI` + `JUMIA_API_ENV` (`sandbox` | `production`)
+- `JUMIA_CLIENT_ID` + `JUMIA_CLIENT_SECRET` + `JUMIA_REDIRECT_URI` + `JUMIA_API_ENV` (`staging` | `production`,
+  defaults to `production` for any other value — see `JUMIA_API_BASE` in `lib/jumia/oauth.ts`)
 - `NEXT_PUBLIC_APP_URL` — `https://pandaworldai.site` in prod
 - `ADMIN_USER_IDS` — comma-separated Clerk userIds with admin bypass
 - `CRON_SECRET` — random string for `/api/cron/*` bearer auth
