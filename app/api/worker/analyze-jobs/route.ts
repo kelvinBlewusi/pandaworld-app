@@ -30,12 +30,23 @@ export const maxDuration = 60;
 // fail-secure if the secret isn't configured — this endpoint can spend a
 // seller's credits, so an unauthenticated caller must never reach it.
 
-// How many products one tick will take on. Each analysis measured ~22.7s
-// in production and they run concurrently here, so 3 fits inside
-// maxDuration with real margin while keeping the Gemini burst to roughly a
-// dozen calls. Raising this trades quota headroom for queue throughput —
-// scheduling the cron more often is the safer lever.
-const CLAIM_LIMIT = 3;
+// How many products one tick will take on. Lowered from 3 to 2 after the
+// 2026-09-21 staging canary: a 3-product batch died with no per-product
+// notice at all when one product's Gemini response threw mid-describe
+// (see lib/actions/ai.ts's parseAIResponse hardening in this same
+// change), which run inside one shared `await Promise.all(...)` in ONE
+// Vercel invocation — a crash severe enough to take the whole invocation
+// down with it (not just its own per-job try/catch) drags every OTHER
+// concurrently-claimed job down too, with none of them reaching
+// markJobDone/markJobFailed. Fewer concurrent jobs per tick means fewer
+// products caught in that blast radius, and more of the 60s maxDuration
+// budget per job if one product's Gemini call needs the full model-
+// fallback ladder. maxDuration itself is left at 60 — this project's plan
+// already runs it at what a Vercel Hobby function allows, so throughput is
+// the lever available here, not duration. Raising this trades quota
+// headroom and blast-radius safety for queue throughput — scheduling the
+// cron more often is the safer way to buy more throughput back.
+const CLAIM_LIMIT = 2;
 
 /**
  * Close out every batch that has settled but never got a closing message —
