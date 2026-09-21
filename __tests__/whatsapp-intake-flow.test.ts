@@ -84,6 +84,27 @@ jest.mock("@/lib/jumia/push-listing", () => ({
   pushListingToJumia: async () => { pushCallCount++; return pushResult; },
 }));
 
+// assessListingPushReadiness (lib/whatsapp/readiness.ts) is the ONE seam
+// this suite doesn't exercise for real — its own dry-run reaches Jumia
+// (getValidJumiaCredentials, resolveBrand, schema fetch), which none of
+// these fixtures seed a jumia_connections row for. Mocked down to just the
+// pure, already-real missingFieldLabels check these tests actually care
+// about (message volume / chunking / "needs price" phrasing) — the
+// assessor's own Jumia-dependent behaviour (decimal mismatches, variant
+// enums, fashion-Generic brand) has its own unit tests in
+// __tests__/whatsapp-readiness.test.ts.
+jest.mock("@/lib/whatsapp/readiness", () => ({
+  assessListingPushReadiness: async (_userId: string, listingId: string) => {
+    const { missingFieldLabels } = jest.requireActual("@/lib/jumia/push-listing");
+    const row = db.tables.listings.find((l) => l.id === listingId);
+    if (!row) return { ready: false, reasons: ["listing not found"] };
+    const missing = missingFieldLabels(row);
+    return missing.length > 0
+      ? { ready: false, reasons: missing.map((m: string) => `needs ${m}`) }
+      : { ready: true, reasons: [] };
+  },
+}));
+
 import { handleLinkedMessage } from "@/lib/whatsapp/intake";
 
 const USER  = "user_1";

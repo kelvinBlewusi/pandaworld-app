@@ -683,6 +683,15 @@ function buildAttributes(
    *  seller, so the caller can TELL them. Silent repair is still repair
    *  happening behind their back. */
   noteSink?: string[],
+  /** Collects the RAW preflight notes (with their .reason tag), for a
+   *  caller that needs to tell "dropped, push would still succeed"
+   *  (truncated, snapped_enum, rounded_number) apart from "dropped, and
+   *  Jumia would have rejected the whole feed over it" (decimal_mismatch_
+   *  blocked, invalid_enum, invalid_number) — see assessListingPushReadiness
+   *  in lib/whatsapp/readiness.ts. noteSink's own describeAdjustments()
+   *  output already collapses that distinction into seller-facing prose,
+   *  which is right for a human but not enough for Ready/Held logic. */
+  preflightNoteSink?: PreflightNote[],
 ): JumiaAttribute[] {
   const attrs: JumiaAttribute[] = [];
   const requiredNames = new Set(
@@ -822,6 +831,7 @@ function buildAttributes(
     console.info(`[Jumia preflight] ${summary} — ${preflight.notes.map((n) => `${n.attribute}: ${n.detail}`).join("; ")}`);
   }
   if (noteSink) noteSink.push(...describeAdjustments(preflight.notes));
+  if (preflightNoteSink) preflightNoteSink.push(...preflight.notes);
   return preflight.attributes.map((a) => ({ name: a.name, value: a.value, translations: [] }));
 }
 
@@ -1165,6 +1175,7 @@ function buildBaseProduct(
   noteSink?: string[],
   variantAxes: JumiaCategoryAttribute[] = [],
   blockers?: string[],
+  preflightNoteSink?: PreflightNote[],
 ) {
   const category   = resolveCategoryCode(listing);
   const images     = (listing.images ?? [])
@@ -1276,7 +1287,7 @@ function buildBaseProduct(
       })(),
     },
     stock:       listing.quantity ?? 1,
-    attributes:  buildAttributes(listing, schema, noteSink),
+    attributes:  buildAttributes(listing, schema, noteSink, preflightNoteSink),
     barcodeEan:  "",
     gtinBarcode: "",      // schema reference uses this name; harmless duplicate
     // additionalCategories: DEPRECATED per official spec (PDF page 5).
@@ -1311,6 +1322,10 @@ export function mapListingToJumiaProducts(
    *  see resolveVariantRowVariation. Unlike noteSink, a non-empty blockers
    *  array means the caller must not push the resulting products. */
   blockers?: string[],
+  /** See buildAttributes — raw preflight notes for a caller that needs to
+   *  tell a merely-dropped attribute apart from one that would have sunk
+   *  the whole push. */
+  preflightNoteSink?: PreflightNote[],
 ): JumiaProduct[] {
   // blockers only when base.variation will actually ship: with real
   // variant rows present, base is built (for its other shared fields) but
@@ -1319,7 +1334,7 @@ export function mapListingToJumiaProducts(
   // colour fallback nothing ever sends.
   const base = buildBaseProduct(
     listing, brand, currency, categoryAttributeSchema, noteSink, variantAxes,
-    variants.length ? undefined : blockers,
+    variants.length ? undefined : blockers, preflightNoteSink,
   );
 
   if (!variants.length) {
@@ -1539,6 +1554,14 @@ export interface JumiaPayloadBuild {
   missingRequired: string[];
   /** Set when the payload could not be built at all (no valid category). */
   error?:          string;
+  /** Every preflight note, RAW (with its .reason tag) rather than
+   *  stringified — a caller deciding Ready vs Held (assessListingPushReadiness,
+   *  lib/whatsapp/readiness.ts) needs to tell "dropped but harmless"
+   *  (truncated, snapped_enum, rounded_number) apart from "dropped, and
+   *  the real push would have failed over it" (decimal_mismatch_blocked,
+   *  invalid_enum, invalid_number) — `adjustments` alone can't make that
+   *  distinction once it's been turned into prose. */
+  preflightNotes:  PreflightNote[];
 }
 
 /**
@@ -1621,22 +1644,23 @@ export async function buildJumiaPayload(
   // itself is unreachable right now).
   if (categoryResolved && schema.length === 0) {
     return {
-      products: [], adjustments: [], missingRequired: [],
+      products: [], adjustments: [], missingRequired: [], preflightNotes: [],
       error: "JUMIA_NO_SCHEMA: This category's attribute list hasn't synced yet, so nothing can be validated before sending — try again in a moment, or open the category picker to re-select it and force a re-sync.",
     };
   }
 
   const adjustments: string[] = [];
   const blockers: string[] = [];
+  const preflightNotes: PreflightNote[] = [];
   try {
-    const products = mapListingToJumiaProducts(listing, variants, brand, currency, schema, adjustments, variantAxes, blockers);
+    const products = mapListingToJumiaProducts(listing, variants, brand, currency, schema, adjustments, variantAxes, blockers, preflightNotes);
 
     // A variant's own typed value that isn't one of the category's stocked
     // options (see resolveVariantRowVariation) — checked before the
     // content gate below since it's about the payload not being buildable
     // as typed at all, the same class of problem an empty schema is.
     if (blockers.length > 0) {
-      return { products: [], adjustments, missingRequired: [], error: blockers.join(" ") };
+      return { products: [], adjustments, missingRequired: [], preflightNotes, error: blockers.join(" ") };
     }
 
     // Last-mile content gate — restricted words plus the prohibited-
@@ -1645,13 +1669,13 @@ export async function buildJumiaPayload(
     const ready = assertListingReady(listing, countryCode, products);
     adjustments.push(...ready.warnings);
     if (!ready.ok) {
-      return { products: [], adjustments, missingRequired: [], error: ready.blockers.join(" ") };
+      return { products: [], adjustments, missingRequired: [], preflightNotes, error: ready.blockers.join(" ") };
     }
 
-    return { products, adjustments, missingRequired: missingRequiredFor(products, schema) };
+    return { products, adjustments, missingRequired: missingRequiredFor(products, schema), preflightNotes };
   } catch (e) {
     return {
-      products: [], adjustments, missingRequired: [],
+      products: [], adjustments, missingRequired: [], preflightNotes,
       error: (e as Error).message ?? "Failed to build payload",
     };
   }

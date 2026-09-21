@@ -117,6 +117,36 @@ describe("buildJumiaPayload — fail closed on an empty (unsynced) schema", () =
   });
 });
 
+describe("buildJumiaPayload — preflightNotes surfaces raw, reason-tagged notes", () => {
+  // Confirms the plumbing added for lib/whatsapp/readiness.ts's Ready/Held
+  // assessor end to end, through the REAL buildAttributes/preflightAttributes
+  // path (not a mock) — a caller deciding Ready vs Held needs the raw
+  // .reason tag; `adjustments` alone has already turned it into a sentence
+  // for a seller, losing the distinction between "harmless repair" and
+  // "this got dropped and the seller should know before submitting".
+  it("carries a decimal_mismatch_blocked note for a whole-number-only attribute given a fraction", async () => {
+    mockGetCategoryAttributes.mockResolvedValue([
+      { name: "capacity_litres", label: "Capacity (L)", type: "number", allowed_values: [], required: false, is_variant: false, decimal_places: 0 },
+    ]);
+    const listing = { ...baseListing, dynamic_attributes: { capacity_litres: "1.8" } };
+    const built = await buildJumiaPayload("token", listing, [], "GHS", "GH");
+
+    expect(built.error).toBeUndefined();
+    const note = built.preflightNotes.find((n) => n.attribute === "capacity_litres");
+    expect(note?.reason).toBe("decimal_mismatch_blocked");
+    // Dropped from the actual payload, not merely flagged.
+    expect(built.products[0].attributes.some((a: { name: string }) => a.name === "capacity_litres")).toBe(false);
+  });
+
+  it("carries no preflightNotes at all for a clean push", async () => {
+    mockGetCategoryAttributes.mockResolvedValue([
+      { name: "color_family", label: "Colour", type: "select", allowed_values: [], required: false, is_variant: false },
+    ]);
+    const built = await buildJumiaPayload("token", baseListing, [], "GHS", "GH");
+    expect(built.preflightNotes).toEqual([]);
+  });
+});
+
 describe("buildJumiaPayload — last-mile restricted-words gate", () => {
   beforeEach(() => {
     mockGetCategoryAttributes.mockResolvedValue([
