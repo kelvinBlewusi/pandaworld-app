@@ -145,6 +145,38 @@ describe("buildJumiaPayload — preflightNotes surfaces raw, reason-tagged notes
     const built = await buildJumiaPayload("token", baseListing, [], "GHS", "GH");
     expect(built.preflightNotes).toEqual([]);
   });
+
+  // Real category schema, category 1022979 "Coffee, Tea & Espresso
+  // Appliances" (staging canary, 2026-09-21) — declares six capacity-shaped
+  // fields. dynamic_attributes for the actual live listing carried NONE of
+  // them; "1.8L" only ever existed as prose in the title/description. This
+  // is a genuinely different gap from the one above: nothing was dropped
+  // by preflight, because nothing capacity-shaped was ever built in the
+  // first place for preflight to see — proving lib/whatsapp/readiness.ts's
+  // "no attribute named capacity* anywhere in the built payload" check has
+  // real data to detect, not just a hypothetical.
+  it("builds no capacity-shaped attribute at all when dynamic_attributes never captured one, even though the schema declares six", async () => {
+    mockGetCategoryAttributes.mockResolvedValue([
+      { name: "capacity",         label: "Capacity",         type: "number", allowed_values: [], required: false, is_variant: false, decimal_places: 0, not_zero_or_negative: true },
+      { name: "capacity_kg",      label: "Capactity KG",     type: "number", allowed_values: [], required: false, is_variant: false, decimal_places: 0 },
+      { name: "capacity_kva",     label: "Capacity KVA",     type: "number", allowed_values: [], required: false, is_variant: false, decimal_places: 0 },
+      { name: "capacity_liter",   label: "Capacity Liter",   type: "number", allowed_values: [], required: false, is_variant: false, decimal_places: 0, not_zero_or_negative: true },
+      { name: "capacity_litres",  label: "Capacity Litres",  type: "string", allowed_values: [], required: false, is_variant: false },
+      { name: "capacity_slices",  label: "Capacity Slices",  type: "string", allowed_values: [], required: false, is_variant: false },
+      { name: "color_family",     label: "Color family",     type: "select", allowed_values: [], required: false, is_variant: false },
+      { name: "manufacturer_txt", label: "From the Manufacturer", type: "textarea", allowed_values: [], required: false, is_variant: false },
+    ]);
+    const listing = {
+      ...baseListing,
+      title: "Electric Kettle - 1.8L Capacity",
+      dynamic_attributes: { color: "Silver", color_family: "Silver", product_weight: "1.2", manufacturer_txt: "N/A" },
+    };
+    const built = await buildJumiaPayload("token", listing, [], "GHS", "GH");
+
+    expect(built.error).toBeUndefined();
+    expect(built.preflightNotes).toEqual([]); // nothing to drop — nothing capacity-shaped was ever built
+    expect(built.products[0].attributes.some((a: { name: string }) => /capacity/i.test(a.name))).toBe(false);
+  });
 });
 
 describe("buildJumiaPayload — last-mile restricted-words gate", () => {
