@@ -61,6 +61,39 @@ const HOLD_WORTHY_PREFLIGHT_REASONS = new Set<PreflightReason>([
  *  needs: what a fashion listing must never end up with. */
 const GENERIC_BRAND_NAME = "generic";
 
+/**
+ * A decimal volume the seller stated (e.g. "1.8L") that never made it
+ * into ANY capacity-shaped structured attribute — a gap upstream of
+ * preflight entirely, since a value that was never captured has nothing
+ * for decimal_mismatch_blocked to catch.
+ *
+ * Confirmed live, 2026-09-21 ("Electric Kettle - 1.8L Capacity",
+ * category 1022979, staging canary): the category's own schema declares
+ * SIX capacity-shaped fields (capacity, capacity_liter, capacity_litres,
+ * capacity_kg, capacity_kva, capacity_slices) and none of them were
+ * populated — auto-analyze wrote "1.8L" into the title and description
+ * as prose only, so the built payload carried no capacity attribute at
+ * all for preflightAttributes to see, let alone block. The earlier
+ * decimal_mismatch_blocked check above only catches a value that DID
+ * make it into a whole-number-only attribute and then got dropped — this
+ * catches the case one step upstream, where it never arrived at all.
+ *
+ * Deliberately schema-free (checks the built attribute list, not the
+ * category's own declared fields) — the assessor doesn't have the
+ * resolved schema handy, and a decimal-with-volume-unit stated by the
+ * seller with no matching structured attribute anywhere in the payload is
+ * a strong enough signal on its own.
+ */
+function statedDecimalVolumeMissingFromPayload(
+  freeText:   string,
+  attributes: { name: string; value: unknown }[],
+): string | null {
+  const match = freeText.match(/\b\d+\.\d+\s*-?\s*(?:ml|millilitres?|milliliters?|l|litres?|liters?)\b/i);
+  if (!match) return null;
+  if (attributes.some((a) => /capacity/i.test(a.name))) return null;
+  return match[0].trim();
+}
+
 export async function assessListingPushReadiness(
   userId:    string,
   listingId: string,
@@ -114,6 +147,12 @@ export async function assessListingPushReadiness(
     if (HOLD_WORTHY_PREFLIGHT_REASONS.has(note.reason)) {
       reasons.push(`${note.label}: ${note.detail}`);
     }
+  }
+
+  const productAttrs = (preview.products[0] as { attributes?: { name: string; value: unknown }[] } | undefined)?.attributes ?? [];
+  const missedCapacity = statedDecimalVolumeMissingFromPayload(`${row.title ?? ""} ${row.description ?? ""}`, productAttrs);
+  if (missedCapacity) {
+    reasons.push(`capacity: you mentioned ${missedCapacity} but I couldn't fit it into a category field for this product — open Edit to set the capacity yourself`);
   }
 
   // Fashion category still carrying the plain (non-fashion) Generic brand

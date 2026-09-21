@@ -99,6 +99,59 @@ describe("assessListingPushReadiness — canary 1: kettle capacity must be a who
     expect(result.reasons.join(" ")).toContain("Capacity (L)");
     expect(result.reasons.join(" ")).toContain("isn't a whole number");
   });
+
+  // The actual staging canary root cause (2026-09-21, listing 5b9b1f52,
+  // category 1022979 "Coffee, Tea & Espresso Appliances"), confirmed
+  // directly against the live rows: the category's schema declares SIX
+  // capacity-shaped fields (capacity, capacity_liter, capacity_litres,
+  // capacity_kg, capacity_kva, capacity_slices) but auto-analyze's
+  // dynamic_attributes for this listing carried none of them — "1.8L"
+  // only ever existed as prose in the title/description. There was
+  // nothing for decimal_mismatch_blocked to catch because no capacity
+  // attribute was ever built in the first place — this is the gap one
+  // step upstream of that check.
+  it("holds when a stated decimal capacity never made it into any built attribute at all", async () => {
+    seedListing({
+      title: "Electric Kettle - 1.8L Capacity",
+      description: "Boil water quickly and efficiently for your favorite hot beverages with this sleek electric kettle. With a generous 1.8L capacity, it's perfect for making tea, coffee, or other hot drinks for the whole family.",
+      category_path: "Home & Office > Home & Kitchen > Kitchen & Dining > Small Appliances > Coffee, Tea & Espresso Appliances",
+    });
+    previewResult = {
+      ok: true, products: [{
+        brand: { code: 1045133, name: "Generic" },
+        // The real built attribute list for this listing — color,
+        // color_family, product_weight, manufacturer_txt, package_content,
+        // variation — and genuinely nothing capacity-shaped, matching what
+        // was actually observed in production.
+        attributes: [
+          { name: "color", value: "Silver" },
+          { name: "color_family", value: "Silver" },
+          { name: "product_weight", value: "1.2 kg" },
+          { name: "manufacturer_txt", value: "N/A" },
+          { name: "package_content", value: "1x Electric Kettle - 1.8L Capacity" },
+          { name: "variation", value: "Electric Kettle" },
+        ],
+      }],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(false);
+    expect(result.reasons.join(" ")).toContain("capacity");
+    expect(result.reasons.join(" ")).toContain("1.8L");
+  });
+
+  it("does not hold when a capacity WAS captured, even if the title also mentions the volume", async () => {
+    seedListing({ title: "Electric Kettle - 1.8L Capacity", category_path: "Home & Office > Appliances > Small Appliances > Kettles" });
+    previewResult = {
+      ok: true, products: [{
+        brand: { code: 1, name: "Generic" },
+        attributes: [{ name: "capacity_liter", value: "2" }],
+      }],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(true);
+  });
 });
 
 describe("assessListingPushReadiness — canary 2: variant value outside the category's stocked options", () => {
