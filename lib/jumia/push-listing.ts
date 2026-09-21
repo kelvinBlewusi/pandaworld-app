@@ -21,6 +21,7 @@ import {
   type FeedProductInfo,
 } from "@/lib/jumia/api";
 import { fingerprintListingContent, logFeedOutcome, type FeedOutcomeKind } from "@/lib/jumia/feed-outcomes";
+import type { PreflightNote } from "@/lib/jumia/preflight";
 import type { ListingRow, ListingStatus, VariantRow } from "@/lib/supabase/types";
 
 export interface PushListingVariantInput {
@@ -176,6 +177,10 @@ export type PreviewPayloadResult =
       missingRequired: string[];
       /** Everything validateListingForPush would reject on first. */
       blockers: string[];
+      /** Raw preflight notes (with .reason) — see JumiaPayloadBuild.preflightNotes.
+       *  A caller deciding Ready vs Held needs the reason tag; adjustments
+       *  alone has already lost it to seller-facing prose. */
+      preflightNotes: PreflightNote[];
     }
   | { ok: false; code: "not_found" | "not_connected" | "build_failed"; message: string };
 
@@ -247,6 +252,7 @@ export async function previewListingPayload(
     adjustments:     built.adjustments,
     missingRequired: built.missingRequired,
     blockers,
+    preflightNotes:  built.preflightNotes,
   };
 }
 

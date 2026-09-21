@@ -14,6 +14,7 @@ import { runAutoAnalyze } from "@/lib/actions/auto-analyze";
 import { getOrCreateCreditBalance, deductCredits } from "@/lib/billing/extension-credits";
 import { WHATSAPP_DRAFT_CREDIT_COST } from "@/lib/billing/credit-packs";
 import { pushListingToJumia, missingFieldLabels, refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
+import { assessListingPushReadiness } from "@/lib/whatsapp/readiness";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
 import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames } from "@/lib/jumia/rejection-remedy";
 import { removeAttributesFromCache } from "@/lib/jumia/categories";
@@ -2031,24 +2032,39 @@ export async function finalizeBatch(
   if (batchSize === 1) {
     const only = listings[0];
     if (only?.title) {
-      const missing = await describeMissingFields(only.id);
-      // Same warnings the multi-product path shows — a 1-product batch is
-      // the MOST likely place a seller writes a detailed note, so it is
-      // the last place that should swallow one.
-      const noteWarnings = (await noteWarningsFor(only.id)).map((w) => `\n⚠️ ${w}.`).join("");
+      // The single source of truth for Ready vs Held — see
+      // lib/whatsapp/readiness.ts's doc comment for why this replaced a
+      // bare missing-fields check: a listing can have every field filled
+      // and still be something a real push would reject or silently
+      // corrupt (a capacity Jumia needs whole, a variant value outside
+      // the category's stocked options, ...). noteWarningsFor's sale-date
+      // and variant-claim checks catch a case the payload builder can't
+      // (zero variant rows despite a stated claim, so there's nothing for
+      // it to validate against) — merged in alongside, not replaced.
+      const [assessment, noteWarnings] = await Promise.all([
+        assessListingPushReadiness(only.user_id as string, only.id),
+        noteWarningsFor(only.id),
+      ]);
+      const reasons = [...assessment.reasons, ...noteWarnings];
+      const ready = reasons.length === 0;
+      const heldText = reasons.length > 0 ? `\n⚠️ ${reasons.join("; ")}.` : "";
       await replyCta(
         phoneNumber,
-        (missing ? `✅ Product drafted: ${only.title}.\n⚠️ ${missing}` : `✅ Product drafted: ${only.title}. Ready to submit!`) + noteWarnings,
+        (ready ? `✅ Product drafted: ${only.title}. Ready to submit!` : `✅ Product drafted: ${only.title}.`) + heldText,
         "Edit product",
         focusedEditorUrl(only.id),
       );
+      // Never offer Submit on a Held product — confidence over optimism:
+      // a seller should never be handed a button that would fail or ship
+      // something other than what they typed.
       await replyButtons(
         phoneNumber,
-        `Reply *submit*, or say something like "change the price to 150" to edit it first.`,
-        [
-          { id: "submit all", title: "Submit ✅" },
-          { id: "restart",    title: "Restart 🔄" },
-        ],
+        ready
+          ? `Reply *submit*, or say something like "change the price to 150" to edit it first.`
+          : `Fix the above in the editor, then reply *submit*.`,
+        ready
+          ? [{ id: "submit all", title: "Submit ✅" }, { id: "restart", title: "Restart 🔄" }]
+          : [{ id: "restart", title: "Restart 🔄" }],
       );
       // A missing price is the one gap worth a follow-up question rather
       // than a warning: it is the commonest reason a draft never reaches
@@ -2075,10 +2091,46 @@ export async function finalizeBatch(
     return;
   }
 
-  const ready = listings
+  const drafted = listings
     .filter((l) => l.title && l.whatsapp_seq != null)
     .sort((a, b) => (a.whatsapp_seq as number) - (b.whatsapp_seq as number));
-  const readyToSubmitSeqs = ready.map((l) => l.whatsapp_seq as number);
+
+  // Ready vs Held for every drafted product, via the single "would this
+  // push?" brain (lib/whatsapp/readiness.ts) — see its doc comment for why
+  // a bare missing-fields check isn't enough. Concurrency-capped the same
+  // way handleSubmit caps actual pushes below: a batch's worth of
+  // simultaneous brand/schema lookups against Jumia would risk the same
+  // "200 req/min, max 4 req/sec" ceiling a real submit already respects,
+  // and most of a batch is typically still missing basic fields anyway —
+  // assessListingPushReadiness only reaches Jumia once those are filled.
+  const ASSESS_CONCURRENCY = 3;
+  const assessments: { ready: boolean; reasons: string[] }[] = new Array(drafted.length);
+  {
+    let cursor = 0;
+    const assessWorker = async (): Promise<void> => {
+      for (let i = cursor++; i < drafted.length; i = cursor++) {
+        const l = drafted[i];
+        const [assessment, noteWarnings] = await Promise.all([
+          assessListingPushReadiness(l.user_id as string, l.id),
+          noteWarningsFor(l.id),
+        ]);
+        // noteWarningsFor catches a case the payload builder structurally
+        // can't (zero variant rows despite a stated size/colour claim —
+        // there is nothing for it to validate against) — merged in
+        // alongside the assessor's own reasons, not replaced by them.
+        assessments[i] = {
+          ready:   assessment.ready && noteWarnings.length === 0,
+          reasons: [...assessment.reasons, ...noteWarnings],
+        };
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(ASSESS_CONCURRENCY, drafted.length) }, assessWorker),
+    );
+  }
+
+  const readyListings = drafted.filter((_, i) => assessments[i].ready);
+  const readyToSubmitSeqs = readyListings.map((l) => l.whatsapp_seq as number);
 
   // ONE status line per drafted product — Ready, or Held with why —
   // replacing what used to be a separate live message the moment EACH one
@@ -2087,21 +2139,23 @@ export async function finalizeBatch(
   // buttons: the same ~1024-char interactive-body cap that forces the
   // submit summary (handleSubmit) to plain text applies here too, and a
   // 20-line batch clears it easily.
-  if (ready.length > 0) {
-    const statusLines = await Promise.all(ready.map(async (l) => {
-      const [missing, noteWarnings] = await Promise.all([missingFieldsFor(l.id), noteWarningsFor(l.id)]);
-      const reasons = [...missing.map((m) => `needs ${m}`), ...noteWarnings];
-      return reasons.length > 0
-        ? `Product ${l.whatsapp_seq}: ⚠️ Held — ${reasons.join("; ")}.`
-        : `Product ${l.whatsapp_seq}: ✅ Ready — ${l.title}.`;
-    }));
+  if (drafted.length > 0) {
+    const statusLines = drafted.map((l, i) => {
+      const { ready, reasons } = assessments[i];
+      return ready
+        ? `Product ${l.whatsapp_seq}: ✅ Ready — ${l.title}.`
+        : `Product ${l.whatsapp_seq}: ⚠️ Held — ${reasons.join("; ")}.`;
+    });
     await replyText(phoneNumber, statusLines.join("\n"));
   }
 
-  // Now that the whole batch has settled, offer every ready product's
+  // Now that the whole batch has settled, offer every READY product's
   // "Submit product N" in ONE pass, so the status summary above and the
   // submit actions below read as two separate blocks rather than
-  // alternating pairs.
+  // alternating pairs. A Held product never gets a Submit affordance here
+  // — confidence over optimism: opening the editor (linked from its status
+  // line above) is the only action offered for one, never a button that
+  // would fail or ship something other than what the seller typed.
   //
   // A list holds ten rows; a button message holds three. That difference
   // is the whole point here.
@@ -2117,8 +2171,8 @@ export async function finalizeBatch(
   // Three or fewer still uses buttons: they render inline, with no extra
   // tap to open a sheet, and at that size there is no volume to save.
   if (readyToSubmitSeqs.length > 3) {
-    for (let i = 0; i < ready.length; i += LIST_MAX_ROWS) {
-      const chunk = ready.slice(i, i + LIST_MAX_ROWS);
+    for (let i = 0; i < readyListings.length; i += LIST_MAX_ROWS) {
+      const chunk = readyListings.slice(i, i + LIST_MAX_ROWS);
       await replyList(
         phoneNumber,
         i === 0 ? "Submit a specific product:" : "…and the rest:",
@@ -2140,17 +2194,19 @@ export async function finalizeBatch(
     );
   }
 
-  // Report what actually drafted, not what was promised.
-  //
-  // A product whose analysis failed for good has no title, so it is
-  // already absent from the buttons above — but the closing line still
-  // announced the full batch size, so a seller who asked for 4 and got 3
-  // was congratulated on 4 and left to notice the gap themselves. Worse,
-  // the missing numbers are exactly the ones they need in order to ask
-  // for a retry.
-  const draftedCount = readyToSubmitSeqs.length;
+  // Report what actually drafted, not what was promised — and not
+  // conflated with Ready/Held, which is a separate axis (a product can
+  // draft perfectly and still be Held pending a fix). A product whose
+  // analysis failed for good has no title at all, so it's absent from
+  // `drafted` here — but the closing line used to announce the full batch
+  // size regardless, so a seller who asked for 4 and got 3 was
+  // congratulated on 4 and left to notice the gap themselves. Worse, the
+  // missing numbers are exactly the ones they need in order to ask for a
+  // retry.
+  const draftedSeqs = drafted.map((l) => l.whatsapp_seq as number);
+  const draftedCount = draftedSeqs.length;
   const missingSeqs = Array.from({ length: batchSize }, (_, i) => i + 1)
-    .filter((seq) => !readyToSubmitSeqs.includes(seq));
+    .filter((seq) => !draftedSeqs.includes(seq));
 
   // Points at *retry N*, not *restart*. They are not interchangeable:
   // retry re-drafts just the products that failed, on the photos already
