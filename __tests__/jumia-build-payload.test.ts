@@ -177,6 +177,39 @@ describe("buildJumiaPayload — preflightNotes surfaces raw, reason-tagged notes
     expect(built.preflightNotes).toEqual([]); // nothing to drop — nothing capacity-shaped was ever built
     expect(built.products[0].attributes.some((a: { name: string }) => /capacity/i.test(a.name))).toBe(false);
   });
+
+  // Real category schema, category 1012714 "... Tee" (staging canary round
+  // 2, 2026-09-21): the category's true is_variant field is "size", not
+  // "variation". PER_VARIANT_ATTRIBUTE_NAMES (lib/jumia/api.ts) only ever
+  // treats the literal name "variation" as per-variant, so "size" goes out
+  // through the generic dynamic_attributes loop as ONE static top-level
+  // attribute — then base.attributes is spread unchanged into every
+  // variant product, so all three variants ship the exact same "size"
+  // value regardless of their own, correctly-per-variant `variation`. This
+  // is the confirmed source of the false "✅ Ready" the canary caught; it's
+  // reused here as the ground truth lib/whatsapp/readiness.ts's
+  // staleDuplicateVariantAttribute is written against.
+  it("duplicates a non-'variation' is_variant field identically across every variant, disagreeing with two of the three", async () => {
+    mockGetCategoryAttributes.mockResolvedValue([
+      { name: "size", label: "Size", type: "enum", allowed_values: ["S", "M", "L", "XL"], required: true, is_variant: true },
+      { name: "manufacturer_txt", label: "From the Manufacturer", type: "textarea", allowed_values: [], required: false, is_variant: false },
+    ]);
+    const listing = { ...baseListing, dynamic_attributes: { size: "M" } };
+    const variants = ["M", "L", "XL"].map((v, i) => ({
+      id: `v${i}`, listing_id: "listing-1", variation: v, seller_sku: `SKU-1-${v}`,
+      gtin: null, quantity: 1, global_price: null, sale_price: null,
+      sale_start_date: null, sale_end_date: null, created_at: "2026-01-01T00:00:00Z",
+    }));
+
+    const built = await buildJumiaPayload("token", listing, variants, "GHS", "GH");
+
+    expect(built.error).toBeUndefined();
+    expect(built.products.map((p) => p.variation)).toEqual(["M", "L", "XL"]);
+    const sizeValues = built.products.map(
+      (p) => p.attributes.find((a: { name: string }) => a.name === "size")?.value,
+    );
+    expect(sizeValues).toEqual(["M", "M", "M"]);
+  });
 });
 
 describe("buildJumiaPayload — last-mile restricted-words gate", () => {

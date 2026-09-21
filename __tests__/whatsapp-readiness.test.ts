@@ -152,6 +152,98 @@ describe("assessListingPushReadiness — canary 1: kettle capacity must be a who
     const result = await assessListingPushReadiness("user_1", "listing-1");
     expect(result.ready).toBe(true);
   });
+
+  // Round 2 of the same canary, read directly off a live POST
+  // /api/jumia/preview: capacity_litres for this category is cached as
+  // type "string", so checkNumericConstraint (gated on type === "number")
+  // never runs on it — a decimal value that DOES land in the attribute
+  // sails through preflightAttributes with no decimal_mismatch_blocked
+  // note at all. Round 1's "never made it in" test above doesn't cover
+  // this — the attribute IS present, just still fractional.
+  it("holds when a capacity attribute is present but still fractional (schema-mistyped field bypassing the numeric gate)", async () => {
+    seedListing({
+      title: "Electric Kettle - 1.8L Capacity",
+      category_path: "Home & Office > Home & Kitchen > Kitchen & Dining > Small Appliances > Coffee, Tea & Espresso Appliances",
+    });
+    previewResult = {
+      ok: true, products: [{
+        brand: { code: 1045133, name: "Generic" },
+        attributes: [{ name: "capacity_litres", value: "1.8" }],
+      }],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(false);
+    expect(result.reasons.join(" ")).toContain("capacity");
+    expect(result.reasons.join(" ")).toContain("1.8L");
+  });
+});
+
+describe("assessListingPushReadiness — canary 2 root cause: a stale attribute duplicated across variants", () => {
+  // The tee's actual defect, confirmed live off POST /api/jumia/preview
+  // (category 1012714): 3 variants (M/L/XL) each carried the correct
+  // per-variant `variation`, but every one of them ALSO carried a static
+  // "size" attribute stuck at "M" — right for the M variant, silently
+  // wrong for L and XL. No invalid_enum note, because "M" is itself a
+  // valid stocked size; only which variant it's attached to is wrong.
+  it("holds when a non-variation attribute is frozen at one value across variants that disagree with it", async () => {
+    seedListing({ title: "Navy Blue Cotton Crew Neck Tee", category_path: "Fashion > Men's Wear > Shirts" });
+    previewResult = {
+      ok: true,
+      products: [
+        { brand: { code: 1, name: "Fashion" }, variation: "M", attributes: [{ name: "size", value: "M" }] },
+        { brand: { code: 1, name: "Fashion" }, variation: "L", attributes: [{ name: "size", value: "M" }] },
+        { brand: { code: 1, name: "Fashion" }, variation: "XL", attributes: [{ name: "size", value: "M" }] },
+      ],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(false);
+    expect(result.reasons.join(" ")).toContain("size");
+    expect(result.reasons.join(" ")).toContain("stuck at the same value");
+  });
+
+  it("does not hold when the duplicated attribute genuinely tracks each variant", async () => {
+    seedListing({ title: "Navy Blue Cotton Crew Neck Tee", category_path: "Fashion > Men's Wear > Shirts" });
+    previewResult = {
+      ok: true,
+      products: [
+        { brand: { code: 1, name: "Fashion" }, variation: "M", attributes: [{ name: "size", value: "M" }] },
+        { brand: { code: 1, name: "Fashion" }, variation: "L", attributes: [{ name: "size", value: "L" }] },
+        { brand: { code: 1, name: "Fashion" }, variation: "XL", attributes: [{ name: "size", value: "XL" }] },
+      ],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(true);
+  });
+
+  it("does not hold a single-product (zero-variant) listing — nothing to disagree with", async () => {
+    seedListing({ title: "Digital Air Fryer 5L", category_path: "Home & Kitchen > Small Appliances" });
+    previewResult = {
+      ok: true,
+      products: [{ brand: { code: 1, name: "Panasonic" }, variation: "Black", attributes: [{ name: "color", value: "Black" }] }],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(true);
+  });
+
+  it("does not hold an unrelated attribute that merely happens to repeat a non-variation value", async () => {
+    // "Cotton" isn't one of the listing's own variation labels (M/L/XL),
+    // so it must never be mistaken for the stale-duplicate pattern.
+    seedListing({ title: "Navy Blue Cotton Crew Neck Tee", category_path: "Fashion > Men's Wear > Shirts" });
+    previewResult = {
+      ok: true,
+      products: [
+        { brand: { code: 1, name: "Fashion" }, variation: "M", attributes: [{ name: "main_material", value: "Cotton" }] },
+        { brand: { code: 1, name: "Fashion" }, variation: "L", attributes: [{ name: "main_material", value: "Cotton" }] },
+      ],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(true);
+  });
 });
 
 describe("assessListingPushReadiness — canary 2: variant value outside the category's stocked options", () => {

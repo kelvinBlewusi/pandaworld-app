@@ -62,36 +62,104 @@ const HOLD_WORTHY_PREFLIGHT_REASONS = new Set<PreflightReason>([
 const GENERIC_BRAND_NAME = "generic";
 
 /**
- * A decimal volume the seller stated (e.g. "1.8L") that never made it
- * into ANY capacity-shaped structured attribute — a gap upstream of
- * preflight entirely, since a value that was never captured has nothing
- * for decimal_mismatch_blocked to catch.
+ * A decimal volume the seller stated (e.g. "1.8L") that either never made
+ * it into any capacity-shaped structured attribute, or DID make it in but
+ * still carries a fractional value — two distinct upstream-of-preflight
+ * gaps that both leave a decimal capacity in front of Jumia unblocked.
  *
- * Confirmed live, 2026-09-21 ("Electric Kettle - 1.8L Capacity",
- * category 1022979, staging canary): the category's own schema declares
- * SIX capacity-shaped fields (capacity, capacity_liter, capacity_litres,
+ * Confirmed live, 2026-09-21 ("Electric Kettle - 1.8L Capacity", category
+ * 1022979, staging canary round 1): the category's own schema declares SIX
+ * capacity-shaped fields (capacity, capacity_liter, capacity_litres,
  * capacity_kg, capacity_kva, capacity_slices) and none of them were
- * populated — auto-analyze wrote "1.8L" into the title and description
- * as prose only, so the built payload carried no capacity attribute at
- * all for preflightAttributes to see, let alone block. The earlier
- * decimal_mismatch_blocked check above only catches a value that DID
- * make it into a whole-number-only attribute and then got dropped — this
- * catches the case one step upstream, where it never arrived at all.
+ * populated — auto-analyze wrote "1.8L" into the title and description as
+ * prose only, so the built payload carried no capacity attribute at all
+ * for preflightAttributes to see, let alone block.
  *
- * Deliberately schema-free (checks the built attribute list, not the
- * category's own declared fields) — the assessor doesn't have the
- * resolved schema handy, and a decimal-with-volume-unit stated by the
- * seller with no matching structured attribute anywhere in the payload is
- * a strong enough signal on its own.
+ * Round 2 of the same canary then showed the narrower half of this gap:
+ * checkNumericConstraint (lib/jumia/preflight.ts) only runs when the
+ * cached schema field has type === "number" — capacity_litres for this
+ * category is cached as type "string", so a decimal value that DOES land
+ * in it sails through preflightAttributes untouched, producing no
+ * decimal_mismatch_blocked note for the check above to catch. This
+ * function is deliberately schema-free (it checks the built attribute
+ * list's actual values, not the category's declared field types) so it
+ * catches that case too, without needing to know which specific field
+ * name Jumia happens to have mistyped.
  */
-function statedDecimalVolumeMissingFromPayload(
+function statedDecimalCapacityReason(
   freeText:   string,
   attributes: { name: string; value: unknown }[],
 ): string | null {
   const match = freeText.match(/\b\d+\.\d+\s*-?\s*(?:ml|millilitres?|milliliters?|l|litres?|liters?)\b/i);
   if (!match) return null;
-  if (attributes.some((a) => /capacity/i.test(a.name))) return null;
-  return match[0].trim();
+  const stated = match[0].trim();
+
+  const capacityAttrs = attributes.filter((a) => /capacity/i.test(a.name));
+  if (capacityAttrs.length === 0) {
+    return `capacity: you mentioned ${stated} but I couldn't fit it into a category field for this product — open Edit to set the capacity yourself`;
+  }
+
+  const carriesWholeNumber = capacityAttrs.some((a) => {
+    const n = Number(a.value);
+    return Number.isFinite(n) && Number.isInteger(n);
+  });
+  if (!carriesWholeNumber) {
+    return `capacity: you mentioned ${stated} but this category needs a whole number and it didn't get rounded — open Edit to set the capacity yourself`;
+  }
+
+  return null;
+}
+
+/**
+ * A non-"variation" attribute frozen at the SAME value across every
+ * variant product, even though the listing's variants genuinely differ —
+ * the true is_variant schema field for a category (e.g. "size") isn't
+ * always literally named "variation" (lib/jumia/api.ts's
+ * PER_VARIANT_ATTRIBUTE_NAMES only ever treats that one literal name as
+ * per-variant), so any OTHER is_variant field goes out as a single static
+ * top-level attribute that gets spread unchanged into every variant
+ * product — agreeing with whichever variant the static guess happened to
+ * match, silently wrong for every other one.
+ *
+ * Confirmed live, 2026-09-21 ("... Tee", category 1012714, staging canary
+ * round 2, read directly off POST /api/jumia/preview): 3 variants
+ * (M/L/XL) each carried the correct per-variant top-level `variation`, but
+ * every one of the three ALSO carried a static "size" attribute stuck at
+ * "M" — correct for the M variant, silently wrong for L and XL. Jumia
+ * raised no invalid_enum note because "M" is itself one of the category's
+ * valid stocked sizes; nothing about the value itself was wrong, only
+ * which variant it was attached to.
+ *
+ * Deliberately name-agnostic (does not hardcode "size") — it looks for
+ * any attribute whose value equals one of the listing's own variation
+ * labels, then checks whether that same attribute disagrees with its own
+ * product's variation on at least one OTHER product.
+ */
+function staleDuplicateVariantAttribute(
+  products: { variation?: string; attributes?: { name: string; value: unknown }[] }[],
+): string | null {
+  if (products.length < 2) return null;
+
+  const norm = (v: unknown) => String(v ?? "").trim().toLowerCase();
+  const variationValues = new Set(products.map((p) => norm(p.variation)).filter(Boolean));
+  if (variationValues.size < 2) return null;
+
+  const candidateNames = new Set<string>();
+  for (const p of products) {
+    for (const a of p.attributes ?? []) {
+      if (a.name.toLowerCase() === "variation") continue;
+      if (variationValues.has(norm(a.value))) candidateNames.add(a.name);
+    }
+  }
+
+  for (const name of Array.from(candidateNames)) {
+    const disagrees = products.some((p) => {
+      const attr = (p.attributes ?? []).find((a) => a.name === name);
+      return attr !== undefined && norm(attr.value) !== norm(p.variation);
+    });
+    if (disagrees) return name;
+  }
+  return null;
 }
 
 export async function assessListingPushReadiness(
@@ -149,10 +217,15 @@ export async function assessListingPushReadiness(
     }
   }
 
-  const productAttrs = (preview.products[0] as { attributes?: { name: string; value: unknown }[] } | undefined)?.attributes ?? [];
-  const missedCapacity = statedDecimalVolumeMissingFromPayload(`${row.title ?? ""} ${row.description ?? ""}`, productAttrs);
-  if (missedCapacity) {
-    reasons.push(`capacity: you mentioned ${missedCapacity} but I couldn't fit it into a category field for this product — open Edit to set the capacity yourself`);
+  const products = preview.products as { variation?: string; attributes?: { name: string; value: unknown }[]; brand?: { name?: string } }[];
+
+  const productAttrs = products[0]?.attributes ?? [];
+  const capacityReason = statedDecimalCapacityReason(`${row.title ?? ""} ${row.description ?? ""}`, productAttrs);
+  if (capacityReason) reasons.push(capacityReason);
+
+  const staleAttr = staleDuplicateVariantAttribute(products);
+  if (staleAttr) {
+    reasons.push(`${staleAttr}: stuck at the same value across every variant, but your variants differ — open Edit to set it per variant`);
   }
 
   // Fashion category still carrying the plain (non-fashion) Generic brand
@@ -162,7 +235,7 @@ export async function assessListingPushReadiness(
   // Generic here means either that recognition missed this category, or
   // the listing's own brand text happened to resolve to the wrong Generic
   // via the brand cache — either way, Ready would be wrong.
-  const builtBrandName = (preview.products[0] as { brand?: { name?: string } } | undefined)?.brand?.name;
+  const builtBrandName = products[0]?.brand?.name;
   if (
     builtBrandName?.toLowerCase() === GENERIC_BRAND_NAME &&
     isFashionCategory(row.category_path)
