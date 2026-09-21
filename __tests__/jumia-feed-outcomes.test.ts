@@ -8,7 +8,19 @@
  * actually change.
  */
 
-import { fingerprintListingContent } from "@/lib/jumia/feed-outcomes";
+import { FakeDb } from "./helpers/fake-supabase";
+
+const db = new FakeDb();
+jest.mock("@/lib/supabase/server", () => ({
+  createServerClient: () => db,
+}));
+
+let mockApiEnvName: "staging" | "production" = "production";
+jest.mock("@/lib/jumia/oauth", () => ({
+  get JUMIA_API_ENV_NAME() { return mockApiEnvName; },
+}));
+
+import { fingerprintListingContent, logFeedOutcome } from "@/lib/jumia/feed-outcomes";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
 
 function listing(patch: Partial<ListingRow> = {}) {
@@ -60,5 +72,27 @@ describe("fingerprintListingContent", () => {
     const a = fingerprintListingContent(listing(), [variant({ quantity: 5 })]);
     const b = fingerprintListingContent(listing(), [variant({ quantity: 50 })]);
     expect(a).not.toBe(b);
+  });
+});
+
+// Lets a rejection caught on the staging branch (STAGING.md) be told apart
+// from a real seller hitting the same thing in production — both currently
+// write into the same jumia_feed_outcomes table (one shared Supabase
+// project), so without this tag they're indistinguishable.
+describe("logFeedOutcome — source_env", () => {
+  beforeEach(() => {
+    db.tables.jumia_feed_outcomes = [];
+    mockApiEnvName = "production";
+  });
+
+  it("tags the row 'production' when JUMIA_API_ENV_NAME is production", async () => {
+    await logFeedOutcome({ listingId: "listing-1", outcome: "rejected", rawError: "some error" });
+    expect(db.tables.jumia_feed_outcomes[0]).toMatchObject({ source_env: "production" });
+  });
+
+  it("tags the row 'staging' when JUMIA_API_ENV_NAME is staging", async () => {
+    mockApiEnvName = "staging";
+    await logFeedOutcome({ listingId: "listing-1", outcome: "live" });
+    expect(db.tables.jumia_feed_outcomes[0]).toMatchObject({ source_env: "staging" });
   });
 });

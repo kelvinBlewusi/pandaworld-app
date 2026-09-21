@@ -15,6 +15,7 @@
 
 import { createHash } from "node:crypto";
 import { createServerClient } from "@/lib/supabase/server";
+import { JUMIA_API_ENV_NAME } from "@/lib/jumia/oauth";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
 
 /**
@@ -77,6 +78,12 @@ export async function logFeedOutcome(input: FeedOutcomeInput): Promise<void> {
       outcome:             input.outcome,
       raw_error:           input.rawError ?? null,
       payload_fingerprint: input.payloadFingerprint ?? null,
+      // Tags the row with whichever Jumia environment produced it, so a
+      // rejection caught on the staging branch (STAGING.md) can be told
+      // apart from a real seller hitting the same thing in production —
+      // both currently write into this one table (shared Supabase
+      // project), so without this they're indistinguishable.
+      source_env:          JUMIA_API_ENV_NAME,
     });
   } catch (e) {
     console.warn(`[feed-outcomes] failed to log outcome for ${input.listingId}: ${(e as Error).message}`);
