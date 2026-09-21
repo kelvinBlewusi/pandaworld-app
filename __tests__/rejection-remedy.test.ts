@@ -2,6 +2,7 @@ import {
   classifyJumiaRejection,
   isAutoFixable,
   extractRejectedAttributeName,
+  extractNotVisibleAttributeNames,
   extractRejectionText,
   rejectionFingerprint,
   shouldBlockRepeatedAutoFix,
@@ -16,8 +17,29 @@ describe("classifyJumiaRejection", () => {
     expect(isAutoFixable(r.kind)).toBe(true);
   });
 
-  it("treats a not-visible attribute as fixable", () => {
+  it("treats a not-visible attribute as a cache correction, not a rerun", () => {
     const r = classifyJumiaRejection("Attribute [color_family] is not visible for category [Laptops].");
+    expect(r.kind).toBe("not_visible_attributes");
+    expect(isAutoFixable(r.kind)).toBe(true);
+  });
+
+  // The exact live rejection this remedy kind was built from — a batch
+  // rejection naming seven attributes, one of them truncated mid-sentence.
+  // Confirmed by the seller directly against Jumia's own Vendor Center
+  // form: none of the seven are actually offered for this category.
+  it("classifies the live multi-attribute Compact Refrigerators rejection as a cache correction", () => {
+    const live = "Attribute [color_family] is not visible for category [Compact Refrigerators]. Attribute [main_material] is not visible for category [Compact Refrigerators]. Attribute [manufacturer_txt] is not visible for category [Compact Refrigerators]. Attribute [capacity_litres] is not visible for category [Compact Refrigerators]. Attribute [material_family] is not visible for category [Compact Refrigerators]. Attribute [note] is not visible for category [Compact Refrigerators]. Attribute [warranty_address]";
+    const r = classifyJumiaRejection(live);
+    expect(r.kind).toBe("not_visible_attributes");
+  });
+
+  // A mixed rejection — a not-visible attribute alongside a different kind
+  // of problem — means more than a stale cache is wrong, so it should
+  // still fall through to a full rerun rather than only clearing the
+  // cache and missing the other issue.
+  it("falls through to rerun when a not-visible complaint is mixed with a different problem", () => {
+    const mixed = "Attribute [color_family] is not visible for category [Laptops]. The column [product_weight] is missing from the file.";
+    const r = classifyJumiaRejection(mixed);
     expect(r.kind).toBe("rerun");
   });
 
@@ -339,6 +361,30 @@ describe("extractRejectedAttributeName", () => {
   });
 });
 
+describe("extractNotVisibleAttributeNames", () => {
+  it("pulls every attribute name out of the live multi-attribute rejection, dropping the truncated trailing fragment", () => {
+    const live = "Attribute [color_family] is not visible for category [Compact Refrigerators]. Attribute [main_material] is not visible for category [Compact Refrigerators]. Attribute [manufacturer_txt] is not visible for category [Compact Refrigerators]. Attribute [capacity_litres] is not visible for category [Compact Refrigerators]. Attribute [material_family] is not visible for category [Compact Refrigerators]. Attribute [note] is not visible for category [Compact Refrigerators]. Attribute [warranty_address]";
+    expect(extractNotVisibleAttributeNames(live)).toEqual([
+      "color_family",
+      "main_material",
+      "manufacturer_txt",
+      "capacity_litres",
+      "material_family",
+      "note",
+    ]);
+  });
+
+  it("returns a single name for a single-attribute rejection", () => {
+    expect(extractNotVisibleAttributeNames("Attribute [color_family] is not visible for category [Laptops].")).toEqual(["color_family"]);
+  });
+
+  it("returns an empty array when nothing matches", () => {
+    expect(extractNotVisibleAttributeNames("The column [product_weight] is missing from the file.")).toEqual([]);
+    expect(extractNotVisibleAttributeNames(null)).toEqual([]);
+    expect(extractNotVisibleAttributeNames(undefined)).toEqual([]);
+  });
+});
+
 describe("extractRejectionText", () => {
   it("returns plain text unchanged", () => {
     expect(extractRejectionText("You can't list products in this category.")).toBe("You can't list products in this category.");
@@ -417,5 +463,14 @@ describe("rejectionFingerprint + shouldBlockRepeatedAutoFix", () => {
   it("never blocks a repush (duplicate SKU), even at the same fingerprint", () => {
     const fp = rejectionFingerprint("repush", "Jumia already has this SKU.");
     expect(shouldBlockRepeatedAutoFix("repush", fp, { fingerprint: fp, count: 5 })).toBe(false);
+  });
+
+  // not_visible_attributes is exempt for the same reason repush is: each
+  // attempt removes the offending names from the cache before pushing
+  // again, so a second attempt pushes a genuinely corrected schema, not a
+  // repeat of the same guess.
+  it("never blocks a not_visible_attributes fix, even at the same fingerprint", () => {
+    const fp = rejectionFingerprint("not_visible_attributes", "Attribute [color_family] is not visible for category [Compact Refrigerators].");
+    expect(shouldBlockRepeatedAutoFix("not_visible_attributes", fp, { fingerprint: fp, count: 5 })).toBe(false);
   });
 });

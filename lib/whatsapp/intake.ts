@@ -15,7 +15,8 @@ import { getOrCreateCreditBalance, deductCredits } from "@/lib/billing/extension
 import { WHATSAPP_DRAFT_CREDIT_COST } from "@/lib/billing/credit-packs";
 import { pushListingToJumia, missingFieldLabels, refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
-import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix } from "@/lib/jumia/rejection-remedy";
+import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames } from "@/lib/jumia/rejection-remedy";
+import { removeAttributesFromCache } from "@/lib/jumia/categories";
 import { getValidJumiaCredentials, COUNTRY_CURRENCY, DEFAULT_JUMIA_COUNTRY, currencySymbol, currencyNameWord } from "@/lib/jumia/api";
 import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
 import { isFashionCategory } from "@/lib/jumia/fashion-category";
@@ -2725,11 +2726,42 @@ async function handleEdit(
  * steers a draft) — so a plain instruction here reaches every pass that
  * could act on it, with no new plumbing.
  */
+/**
+ * Undoes buildRerunContext's own wrapping. Without this, a listing
+ * rejected on two rerun cycles in a row had EACH rejection's "Jumia
+ * rejected the previous draft: ..." text nested inside the next one's
+ * "seller's own notes" section, since the listing's persisted user_prompt
+ * (see runAutoAnalyze's userPromptOverride persistence) is exactly what
+ * the NEXT rerun reads back as "originalNote". Two effects, both bad: the
+ * seller's actual original note gets pushed out of the 1000-char budget a
+ * little further each cycle, and the note-intent pass then reads Jumia's
+ * OWN rejection prose as if the seller had typed it — confirmed live,
+ * 2026-09-20: "material_family] Is Not Visible For Category" landed in
+ * the main_material field, extracted word-for-word out of a previous
+ * rejection message a rerun had nested into the note.
+ */
+function unwrapRerunContext(note: string | null): string | null {
+  if (!note) return note;
+  const marker = `The seller's own notes about this product: "`;
+  const idx = note.indexOf(marker);
+  if (idx === -1) {
+    // Pure synthetic commentary with no real note ever attached (the
+    // originalNote-less branch below) — nothing genuine to recover.
+    return /^Jumia rejected the previous draft:/.test(note) ? null : note;
+  }
+  // Not anchored on a closing quote — buildRerunContext truncates to
+  // 1000 chars, which can (and did, live) cut the string off mid-word
+  // before the closing quote ever appears.
+  const inner = note.slice(idx + marker.length).replace(/"$/, "");
+  return unwrapRerunContext(inner);
+}
+
 function buildRerunContext(
   rejectionText: string,
   categoryPath:  string | null,
   originalNote:  string | null,
 ): string {
+  originalNote = unwrapRerunContext(originalNote);
   const lower = rejectionText.toLowerCase();
   const hints: string[] = [];
 
@@ -2912,6 +2944,22 @@ async function handleFixAndResubmit(
 
   await replyText(phoneNumber, `🔧 ${label}: ${remedy.explanation} Fixing and resubmitting…`);
 
+  // A "not visible for category" rejection means OUR cached schema is
+  // wrong, not the listing — no redraft can fix an attribute that was
+  // never usable for this category to begin with. Remove exactly the
+  // attributes Jumia named from the cache and push again unchanged;
+  // preflightAttributes (lib/jumia/preflight.ts) already drops anything
+  // not in the schema, so the corrected cache is enough on its own.
+  if (remedy.kind === "not_visible_attributes") {
+    const categoryCode = row.category_code ? parseInt(row.category_code as string, 10) : NaN;
+    const names = extractNotVisibleAttributeNames(rejectionText);
+    if (categoryCode && names.length > 0) {
+      await removeAttributesFromCache(categoryCode, names);
+    }
+    await pushAndReport(userId, phoneNumber, listingId, label);
+    return;
+  }
+
   // Re-draft before re-pushing. Skipped only for a pure duplicate-SKU
   // rejection, where the payload was fine and the push path generates a
   // fresh suffix on its own — an AI call there would cost a credit to
@@ -2920,10 +2968,11 @@ async function handleFixAndResubmit(
   // capable attempt than the old attribute-only refill ever was.
   if (remedy.kind !== "repush") {
     try {
+      const trueOriginalNote = unwrapRerunContext((row.user_prompt as string | null) ?? null);
       const rerunContext = buildRerunContext(
         rejectionText,
         row.category_path as string | null,
-        (row.user_prompt as string | null) ?? null,
+        trueOriginalNote,
       );
       const result = await runAutoAnalyze(userId, listingId, rerunContext);
       if (!result.ok) {
@@ -2934,6 +2983,14 @@ async function handleFixAndResubmit(
         );
         return;
       }
+      // runAutoAnalyze persists whatever userPromptOverride it's given
+      // into listings.user_prompt (so a seller's own free-text edit is
+      // remembered for next time) — here that override was our own
+      // synthetic "Jumia rejected..." commentary, not anything the seller
+      // said. Restore the real note so the NEXT rerun (or anywhere
+      // user_prompt is shown back to the seller) sees what they actually
+      // wrote, not our diagnostic text nested inside it.
+      await db.from("listings").update({ user_prompt: trueOriginalNote }).eq("id", listingId);
     } catch (e) {
       console.error(`[whatsapp intake] fix-and-resubmit rerun failed for ${listingId}: ${(e as Error).message}`);
       await replyError(
