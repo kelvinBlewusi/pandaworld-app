@@ -31,6 +31,13 @@ export const JUMIA_API_BASE =
     ? "https://vendor-api-staging.jumia.com"
     : "https://vendor-api.jumia.com";
 
+/** Normalised environment name — mirrors JUMIA_API_BASE's own fallback
+ *  rule exactly, so anything that needs to record which environment a
+ *  push happened against (e.g. lib/jumia/feed-outcomes.ts's source_env)
+ *  agrees with it by construction rather than duplicating the check. */
+export const JUMIA_API_ENV_NAME: "staging" | "production" =
+  JUMIA_API_ENV === "staging" ? "staging" : "production";
+
 // openid is required; offline_access requests a refresh_token
 const SCOPES = "openid offline_access";
 
