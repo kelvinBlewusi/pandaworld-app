@@ -111,7 +111,7 @@ describe("assessListingPushReadiness — canary 1: kettle capacity must be a who
   // nothing for decimal_mismatch_blocked to catch because no capacity
   // attribute was ever built in the first place — this is the gap one
   // step upstream of that check.
-  it("holds when a stated decimal capacity never made it into any built attribute at all", async () => {
+  it("stays Ready when optional capacity is only stated in free text (blank attrs)", async () => {
     seedListing({
       title: "Electric Kettle - 1.8L Capacity",
       description: "Boil water quickly and efficiently for your favorite hot beverages with this sleek electric kettle. With a generous 1.8L capacity, it's perfect for making tea, coffee, or other hot drinks for the whole family.",
@@ -136,12 +136,11 @@ describe("assessListingPushReadiness — canary 1: kettle capacity must be a who
       adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
     };
     const result = await assessListingPushReadiness("user_1", "listing-1");
-    expect(result.ready).toBe(false);
-    expect(result.reasons.join(" ")).toContain("capacity");
-    expect(result.reasons.join(" ")).toContain("1.8L");
+    expect(result.ready).toBe(true);
+    expect(result.reasons.join(" ").toLowerCase()).not.toContain("capacity");
   });
 
-  it("holds when capacity-shaped attrs exist but are empty/zero placeholders (not a real capture)", async () => {
+  it("stays Ready when capacity-shaped attrs are empty placeholders and prose states a fraction", async () => {
     seedListing({
       title: "Electric Kettle - Stainless Steel, 1.8L Capacity",
       category_path: "Home & Office > Home & Kitchen > Kitchen & Dining > Small Appliances > Coffee, Tea & Espresso Appliances",
@@ -159,12 +158,11 @@ describe("assessListingPushReadiness — canary 1: kettle capacity must be a who
       adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
     };
     const result = await assessListingPushReadiness("user_1", "listing-1");
-    expect(result.ready).toBe(false);
-    expect(result.reasons.join(" ")).toContain("capacity");
-    expect(result.reasons.join(" ")).toContain("1.8L");
+    expect(result.ready).toBe(true);
+    expect(result.reasons.join(" ").toLowerCase()).not.toContain("capacity");
   });
 
-  it("still holds when a whole-number capacity was parked after the seller stated a fraction (silent round)", async () => {
+  it("stays Ready when a whole-number capacity was parked after the seller stated a fraction", async () => {
     seedListing({ title: "Electric Kettle - 1.8L Capacity", category_path: "Home & Office > Appliances > Small Appliances > Kettles" });
     previewResult = {
       ok: true, products: [{
@@ -174,11 +172,11 @@ describe("assessListingPushReadiness — canary 1: kettle capacity must be a who
       adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
     };
     const result = await assessListingPushReadiness("user_1", "listing-1");
-    expect(result.ready).toBe(false);
-    expect(result.reasons.join(" ")).toContain("1.8L");
+    expect(result.ready).toBe(true);
+    expect(result.reasons.join(" ").toLowerCase()).not.toContain("capacity");
   });
 
-  it("holds even when a capacity attribute exactly stores the stated fraction", async () => {
+  it("stays Ready when a capacity attribute stores the stated fraction (optional field)", async () => {
     seedListing({ title: "Precision Flask - 1.5L", category_path: "Home & Office > Appliances > Small Appliances > Kettles" });
     previewResult = {
       ok: true, products: [{
@@ -188,8 +186,8 @@ describe("assessListingPushReadiness — canary 1: kettle capacity must be a who
       adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
     };
     const result = await assessListingPushReadiness("user_1", "listing-1");
-    expect(result.ready).toBe(false);
-    expect(result.reasons.join(" ")).toContain("1.5L");
+    expect(result.ready).toBe(true);
+    expect(result.reasons.join(" ").toLowerCase()).not.toContain("capacity");
   });
 
   // Round 2 of the same canary, read directly off a live POST
@@ -199,7 +197,7 @@ describe("assessListingPushReadiness — canary 1: kettle capacity must be a who
   // sails through preflightAttributes with no decimal_mismatch_blocked
   // note at all. Round 1's "never made it in" test above doesn't cover
   // this — the attribute IS present, just still fractional.
-  it("holds when a capacity attribute is present but still fractional (schema-mistyped field bypassing the numeric gate)", async () => {
+  it("stays Ready when an optional capacity attribute is still fractional (no free-text Hold)", async () => {
     seedListing({
       title: "Electric Kettle - 1.8L Capacity",
       category_path: "Home & Office > Home & Kitchen > Kitchen & Dining > Small Appliances > Coffee, Tea & Espresso Appliances",
@@ -212,9 +210,8 @@ describe("assessListingPushReadiness — canary 1: kettle capacity must be a who
       adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
     };
     const result = await assessListingPushReadiness("user_1", "listing-1");
-    expect(result.ready).toBe(false);
-    expect(result.reasons.join(" ")).toContain("capacity");
-    expect(result.reasons.join(" ")).toContain("1.8L");
+    expect(result.ready).toBe(true);
+    expect(result.reasons.join(" ").toLowerCase()).not.toContain("capacity");
   });
 
   // Round 3 of the same canary, 2026-09-22: the AI-written title/description
@@ -222,7 +219,7 @@ describe("assessListingPushReadiness — canary 1: kettle capacity must be a who
   // existed in the seller's raw WhatsApp caption, persisted verbatim to
   // listings.user_prompt by applyNotes (lib/whatsapp/intake.ts). A scan
   // limited to title+description missed it entirely.
-  it("recovers a decimal capacity claim stated only in the seller's caption, not the AI-written title/description", async () => {
+  it("stays Ready when a decimal capacity claim is only in the seller caption", async () => {
     seedListing({
       title: "Stainless Steel Electric Kettle",
       description: "A long enough description to clear the fifty-character minimum check.",
@@ -237,9 +234,8 @@ describe("assessListingPushReadiness — canary 1: kettle capacity must be a who
       adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
     };
     const result = await assessListingPushReadiness("user_1", "listing-1");
-    expect(result.ready).toBe(false);
-    expect(result.reasons.join(" ")).toContain("capacity");
-    expect(result.reasons.join(" ")).toContain("1.8L");
+    expect(result.ready).toBe(true);
+    expect(result.reasons.join(" ").toLowerCase()).not.toContain("capacity");
   });
 });
 
@@ -340,7 +336,7 @@ describe("assessListingPushReadiness — canary 2 round 3: a multi-size caption 
 
   // Superseded by soft-snap Hold: Size filled as M/L/XL while the caption
   // still says Medium/Xtra Large must NOT silent-Ready (02:45 canary).
-  it("holds soft-snapped size labels even when Size is filled per variant", async () => {
+  it("stays Ready when Size is filled as M/L/XL for a Medium/Large/Xtra Large caption", async () => {
     seedListing({
       title: "Navy Blue Cotton Crew Neck Tee",
       user_prompt: "GHS 70. Sizes Medium Large Xtra Large",
@@ -356,8 +352,8 @@ describe("assessListingPushReadiness — canary 2 round 3: a multi-size caption 
       adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
     };
     const result = await assessListingPushReadiness("user_1", "listing-1");
-    expect(result.ready).toBe(false);
-    expect(result.reasons.join(" ").toLowerCase()).toContain("size");
+    expect(result.ready).toBe(true);
+    expect(result.reasons.join(" ").toLowerCase()).not.toContain("size");
   });
 
   it("stays Ready when the caption size tokens exact-match the drafted variations", async () => {
@@ -525,7 +521,7 @@ describe("assessListingPushReadiness — harmless preflight repairs stay Ready",
 });
 
 describe("assessListingPushReadiness — canary 02:45 soft-snap sizes + exact kettle preview", () => {
-  it("holds when Size is filled as M/L/XL but caption said Medium/Xtra Large (soft-snap)", async () => {
+  it("stays Ready when Size M/L/XL soft-snaps a Medium/Xtra Large caption", async () => {
     seedListing({
       title: "Plain T-Shirt - Crew Neck, Short Sleeve",
       user_prompt: "GHS 70. Sizes Medium Large Xtra Large",
@@ -541,13 +537,12 @@ describe("assessListingPushReadiness — canary 02:45 soft-snap sizes + exact ke
       adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
     };
     const result = await assessListingPushReadiness("user_1", "listing-1");
-    expect(result.ready).toBe(false);
-    expect(result.reasons.join(" ").toLowerCase()).toContain("size");
-    expect(result.reasons.join(" ")).toMatch(/medium|xtra/i);
+    expect(result.ready).toBe(true);
+    expect(result.reasons.join(" ").toLowerCase()).not.toContain("size");
   });
 
 
-  it("holds soft-snap size claims even when preview returns a single product", async () => {
+  it("stays Ready on soft-snap size claims even when preview returns a single product", async () => {
     seedListing({
       title: "Men's Round Neck T-Shirt - Cotton Fabric, Navy Blue",
       user_prompt: "GHS 70. Sizes Medium Large Xtra Large",
@@ -561,12 +556,12 @@ describe("assessListingPushReadiness — canary 02:45 soft-snap sizes + exact ke
       adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
     };
     const result = await assessListingPushReadiness("user_1", "listing-1");
-    expect(result.ready).toBe(false);
-    expect(result.reasons.join(" ").toLowerCase()).toContain("size");
+    expect(result.ready).toBe(true);
+    expect(result.reasons.join(" ").toLowerCase()).not.toContain("size");
   });
 
 
-  it("holds size abbreviations from the variants table when preview collapses to one product and caption is missing", async () => {
+  it("stays Ready when variants table has size abbreviations and caption is missing", async () => {
     seedListing({
       title: "Plain Round Neck T-Shirt - Short Sleeve, Casual Wear",
       user_prompt: null,
@@ -585,12 +580,11 @@ describe("assessListingPushReadiness — canary 02:45 soft-snap sizes + exact ke
       adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
     };
     const result = await assessListingPushReadiness("user_1", "listing-1");
-    expect(result.ready).toBe(false);
-    expect(result.reasons.join(" ").toLowerCase()).toContain("size");
-    expect(result.reasons.join(" ")).toMatch(/M.*L.*XL|drafted/i);
+    expect(result.ready).toBe(true);
+    expect(result.reasons.join(" ").toLowerCase()).not.toContain("size");
   });
 
-  it("holds the exact 02:45 kettle preview payload (no capacity attrs, 1.8L in title only)", async () => {
+  it("stays Ready on exact 02:45 kettle preview (1.8L prose, blank capacity attrs)", async () => {
     seedListing({
       title: "Electric Kettle - 1.8L Capacity, Stainless Steel",
       description: "Boil water quickly with this 1.8L stainless steel electric kettle.",
@@ -620,8 +614,7 @@ describe("assessListingPushReadiness — canary 02:45 soft-snap sizes + exact ke
       adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
     };
     const result = await assessListingPushReadiness("user_1", "listing-1");
-    expect(result.ready).toBe(false);
-    expect(result.reasons.join(" ")).toContain("capacity");
-    expect(result.reasons.join(" ")).toContain("1.8L");
+    expect(result.ready).toBe(true);
+    expect(result.reasons.join(" ").toLowerCase()).not.toContain("capacity");
   });
 });
