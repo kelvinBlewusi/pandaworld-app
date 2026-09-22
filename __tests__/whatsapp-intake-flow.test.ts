@@ -525,6 +525,69 @@ describe("a single-product batch whose analysis hard-failed", () => {
   });
 });
 
+describe("a multi-product batch with one hard-failed product", () => {
+  // Same production shape as the single-product case above, extended to a
+  // batch of several — a throw mid-Gemini (see lib/actions/ai.ts's
+  // parseAIResponse hardening in this same change) and a Vercel function-
+  // timeout kill are both silent at the point of failure and both retire
+  // to analysis_jobs.status='failed' the same way, without
+  // runQueuedAnalysis ever reaching its own replyError call. Confirmed
+  // live, 2026-09-21 staging canary: a 3-product batch went quiet on 2 of
+  // 3 products with nothing sent for either.
+  const FULL = {
+    description: "A long enough description to clear the fifty-character minimum check.",
+    category_code: "1234",
+    brand: "Panasonic",
+    images: ["https://cdn.test/a.jpg"],
+    status: "draft",
+    selling_price: 150,
+  };
+
+  it("sends a per-seq Fix/Retry bubble for the hard-failed product, alongside the other two drafting normally", async () => {
+    db.tables.listings = [
+      { id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: "Drafted product number 1", ...FULL },
+      { id: "listing-2", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 2, title: null, selling_price: null },
+      { id: "listing-3", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 3, title: "Drafted product number 3", ...FULL },
+    ];
+    db.tables.analysis_jobs = [
+      { id: "job-2", listing_id: "listing-2", batch_id: "batch-1", user_id: USER, phone_number: PHONE, seq: 2, batch_size: 3, status: "failed", attempts: 3, error: "Gave up after 3 attempts" },
+    ];
+    seedSession({ state: "awaiting_confirmation", batch_size: 3, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 3);
+
+    const bubble = sent.find((m) => m.kind === "cta" && m.body.includes("Product 2 couldn't be drafted after several tries"));
+    expect(bubble).toBeDefined();
+
+    // The other two still get their normal Ready/Held status line, and it
+    // says nothing about product 2 — that's the per-seq bubble's job.
+    const statusMessage = sent.find((m) => m.kind === "text" && m.body.includes("Product 1"));
+    expect(statusMessage?.body).toContain("Product 1: ✅ Ready");
+    expect(statusMessage?.body).toContain("Product 3: ✅ Ready");
+    expect(statusMessage?.body).not.toContain("Product 2");
+  });
+
+  it("does not send a per-seq bubble for a title-less product whose job never reached 'failed'", async () => {
+    db.tables.listings = [
+      { id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: "Drafted product number 1", ...FULL },
+      { id: "listing-2", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 2, title: null, selling_price: null },
+    ];
+    // No analysis_jobs row at all for listing-2 — e.g. still mid-retry
+    // elsewhere, or cleaned up. Nothing here confirms a silent death, so
+    // no per-seq bubble — only the existing combined "couldn't be
+    // drafted" summary further down still names it.
+    seedSession({ state: "awaiting_confirmation", batch_size: 2, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 2);
+
+    expect(sent.some((m) => m.body.includes("couldn't be drafted after several tries"))).toBe(false);
+  });
+});
+
 describe("message volume on a large batch", () => {
   // The live failure: a 10-product batch sent roughly 25 messages to one
   // recipient in about 30 seconds. Meta throttles per business/consumer

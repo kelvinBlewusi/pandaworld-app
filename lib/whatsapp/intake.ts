@@ -2095,6 +2095,32 @@ export async function finalizeBatch(
     .filter((l) => l.title && l.whatsapp_seq != null)
     .sort((a, b) => (a.whatsapp_seq as number) - (b.whatsapp_seq as number));
 
+  // A hard failure gets its OWN bubble, per product — the batchSize===1
+  // branch above already does this for a single product; this is the same
+  // rule for a batch of several. The combined "Done drafting N of M"
+  // headline further down still names every gap together, but a seller
+  // needs THIS product's own Fix/Retry buttons, not just its number folded
+  // into a list — and hardFailedListingIds is exactly the set that never
+  // got runQueuedAnalysis's own graceful failure reply (a title-less
+  // listing whose job status ISN'T 'failed' already got that reply, so is
+  // deliberately left alone here — see hardFailedListingIds's doc comment).
+  const notDrafted = listings.filter((l) => !l.title || l.whatsapp_seq == null);
+  if (notDrafted.length > 0) {
+    const hardFailed = await hardFailedListingIds(batchId);
+    for (const l of notDrafted) {
+      if (!hardFailed.has(l.id)) continue;
+      const seq = l.whatsapp_seq ?? "?";
+      await replyError(
+        phoneNumber,
+        `⚠️ Product ${seq} couldn't be drafted after several tries — sorry about that. You can retry, or fill it in yourself.`,
+        {
+          retryId: `retry product ${seq}`,
+          cta:     { label: `Fix product ${seq}`, url: focusedEditorUrl(l.id) },
+        },
+      );
+    }
+  }
+
   // Ready vs Held for every drafted product, via the single "would this
   // push?" brain (lib/whatsapp/readiness.ts) — see its doc comment for why
   // a bare missing-fields check isn't enough. Concurrency-capped the same
