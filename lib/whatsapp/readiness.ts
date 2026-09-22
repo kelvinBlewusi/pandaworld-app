@@ -94,15 +94,22 @@ function statedDecimalCapacityReason(
   if (!match) return null;
   const stated = match[0].trim();
 
+  // Only attributes with a real positive numeric value count as "captured".
+  // Empty strings, N/A, and zero placeholders (e.g. capacity_slices: 0 on a
+  // kettle schema) used to satisfy Number.isInteger and silently Ready a
+  // listing whose seller-stated 1.8L never landed in a capacity field —
+  // confirmed live 2026-09-22 staging canary (title carried 1.8L, UI capacity
+  // blank, WhatsApp still ✅ Ready).
   const capacityAttrs = attributes.filter((a) => /capacity/i.test(a.name));
-  if (capacityAttrs.length === 0) {
+  const numericCapacity = capacityAttrs
+    .map((a) => Number(a.value))
+    .filter((n) => Number.isFinite(n) && n > 0);
+
+  if (numericCapacity.length === 0) {
     return `capacity: you mentioned ${stated} but I couldn't fit it into a category field for this product — open Edit to set the capacity yourself`;
   }
 
-  const carriesWholeNumber = capacityAttrs.some((a) => {
-    const n = Number(a.value);
-    return Number.isFinite(n) && Number.isInteger(n);
-  });
+  const carriesWholeNumber = numericCapacity.some((n) => Number.isInteger(n));
   if (!carriesWholeNumber) {
     return `capacity: you mentioned ${stated} but this category needs a whole number and it didn't get rounded — open Edit to set the capacity yourself`;
   }

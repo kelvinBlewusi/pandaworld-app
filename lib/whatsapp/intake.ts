@@ -245,15 +245,32 @@ async function noteWarningsFor(listingId: string): Promise<string[]> {
   // options AND there are none" is the condition itself.
   const claim = extractVariantClaim(note);
   if (claim) {
-    const { count } = await db
+    const { data: variantRows } = await db
       .from("variants")
-      .select("id", { count: "exact", head: true })
+      .select("variation")
       .eq("listing_id", listingId);
-    if ((count ?? 0) === 0) {
+    const labels = (variantRows ?? [])
+      .map((v: { variation?: string | null }) => String(v.variation ?? "").trim())
+      .filter(Boolean);
+
+    if (labels.length === 0) {
       warnings.push(
         `you wrote "${claim.source}" — I couldn't tell which options that leaves, so none were added. ` +
         `Tap Edit to set the ones you actually stock`,
       );
+    } else {
+      // Exact label match only (case-insensitive). Soft-snaps like
+      // "Medium"→M or "Xtra Large"→XL must Hold with one ask — silent Ready
+      // after a soft-snap is the false confidence the 2026-09-22 tee canary
+      // showed (variants M/L/XL, caption still said Xtra Large).
+      const byLower = new Map(labels.map((l) => [l.toLowerCase(), l]));
+      const unmatched = claim.tokens.filter((t) => !byLower.has(t.toLowerCase()));
+      if (unmatched.length > 0) {
+        warnings.push(
+          `you wrote "${claim.source}" — I drafted ${labels.join(", ")}, but that doesn't match what you typed exactly. ` +
+          `Open Edit to confirm the sizes/options you actually stock`,
+        );
+      }
     }
   }
 
