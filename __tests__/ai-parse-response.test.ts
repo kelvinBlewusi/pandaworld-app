@@ -10,7 +10,7 @@
  * inside the describe/analyze pipeline.
  */
 
-import { parseAIResponse } from "@/lib/actions/ai";
+import { parseAIResponse } from "@/lib/ai/parse-ai-response";
 
 describe("parseAIResponse — control characters inside string literals", () => {
   it("parses a clean response unchanged", () => {
