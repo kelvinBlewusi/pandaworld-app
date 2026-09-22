@@ -2153,10 +2153,23 @@ export async function finalizeBatch(
     const assessWorker = async (): Promise<void> => {
       for (let i = cursor++; i < drafted.length; i = cursor++) {
         const l = drafted[i];
-        const [assessment, noteWarnings] = await Promise.all([
-          assessListingPushReadiness(l.user_id as string, l.id),
-          noteWarningsFor(l.id),
-        ]);
+        let assessment: { ready: boolean; reasons: string[] };
+        let noteWarnings: string[];
+        try {
+          [assessment, noteWarnings] = await Promise.all([
+            assessListingPushReadiness(l.user_id as string, l.id),
+            noteWarningsFor(l.id),
+          ]);
+        } catch (e) {
+          // Never let an assessor crash read as Ready — staging 2026-09-22
+          // canaries kept scoring ✅ Ready while capacity/size Holds should
+          // have fired; degrading to Held on throw is the safe default.
+          assessment = {
+            ready: false,
+            reasons: [`couldn't verify readiness (${(e as Error).message || "error"}) — open Edit before submitting`],
+          };
+          noteWarnings = [];
+        }
         // noteWarningsFor catches a case the payload builder structurally
         // can't (zero variant rows despite a stated size/colour claim —
         // there is nothing for it to validate against) — merged in
