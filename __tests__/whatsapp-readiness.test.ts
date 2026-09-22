@@ -163,7 +163,7 @@ describe("assessListingPushReadiness — canary 1: kettle capacity must be a who
     expect(result.reasons.join(" ")).toContain("1.8L");
   });
 
-  it("does not hold when a capacity WAS captured, even if the title also mentions the volume", async () => {
+  it("still holds when a whole-number capacity was parked after the seller stated a fraction (silent round)", async () => {
     seedListing({ title: "Electric Kettle - 1.8L Capacity", category_path: "Home & Office > Appliances > Small Appliances > Kettles" });
     previewResult = {
       ok: true, products: [{
@@ -173,7 +173,22 @@ describe("assessListingPushReadiness — canary 1: kettle capacity must be a who
       adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
     };
     const result = await assessListingPushReadiness("user_1", "listing-1");
-    expect(result.ready).toBe(true);
+    expect(result.ready).toBe(false);
+    expect(result.reasons.join(" ")).toContain("1.8L");
+  });
+
+  it("holds even when a capacity attribute exactly stores the stated fraction", async () => {
+    seedListing({ title: "Precision Flask - 1.5L", category_path: "Home & Office > Appliances > Small Appliances > Kettles" });
+    previewResult = {
+      ok: true, products: [{
+        brand: { code: 1, name: "Generic" },
+        attributes: [{ name: "capacity_liter", value: "1.5" }],
+      }],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(false);
+    expect(result.reasons.join(" ")).toContain("1.5L");
   });
 
   // Round 2 of the same canary, read directly off a live POST
