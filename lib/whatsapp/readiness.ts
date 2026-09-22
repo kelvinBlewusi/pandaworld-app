@@ -186,6 +186,40 @@ function blankSizeClaimReason(
 }
 
 /**
+ * Seller listed multiple sizes in caption/notes ("Sizes Medium Large Xtra
+ * Large") but the drafted variation labels are abbreviations (M/L/XL) that
+ * do not exact-match those tokens. blankSizeClaimReason misses this when
+ * Size IS filled (staging canary 2026-09-22 02:45: size:M on every
+ * variant → blank-Size Hold returned null → WhatsApp ✅ Ready). Soft-snaps
+ * must Hold with one ask — never silent Ready.
+ */
+function softSnapSizeClaimReason(
+  freeText: string,
+  products: { variation?: string }[],
+): string | null {
+  if (!/\bsizes?\b/i.test(freeText)) return null;
+  if (products.length < 2) return null;
+
+  const sizeWords = sizeWordsIn(freeText);
+  if (sizeWords.size < 2) return null;
+
+  const labels = products
+    .map((p) => String(p.variation ?? "").trim())
+    .filter(Boolean);
+  if (labels.length < 2) return null;
+
+  const byLower = new Map(labels.map((l) => [l.toLowerCase(), l]));
+  // Exact match only — "medium" ≠ "m", "xtra large" ≠ "xl"
+  const unmatched = Array.from(sizeWords).filter((w) => !byLower.has(w));
+  if (unmatched.length === 0) return null;
+
+  return (
+    `size: you wrote sizes ${Array.from(sizeWords).join(", ")} but I drafted ` +
+    `${labels.join(", ")} — open Edit to confirm the sizes you actually stock`
+  );
+}
+
+/**
  * A non-"variation" attribute frozen at the SAME value across every
  * variant product, even though the listing's variants genuinely differ —
  * the true is_variant schema field for a category (e.g. "size") isn't
@@ -315,6 +349,9 @@ export async function assessListingPushReadiness(
 
   const blankSizeReason = blankSizeClaimReason(freeText, products);
   if (blankSizeReason) reasons.push(blankSizeReason);
+
+  const softSnapReason = softSnapSizeClaimReason(freeText, products);
+  if (softSnapReason) reasons.push(softSnapReason);
 
   // Fashion category still carrying the plain (non-fashion) Generic brand
   // — a real, confirmed Jumia rejection class ("Product category doesn't

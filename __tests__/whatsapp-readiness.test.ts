@@ -322,10 +322,32 @@ describe("assessListingPushReadiness — canary 2 round 3: a multi-size caption 
     expect(result.reasons.join(" ")).toContain("was never filled");
   });
 
-  it("does not hold when the Size field IS filled somewhere, even with a multi-size caption", async () => {
+  // Superseded by soft-snap Hold: Size filled as M/L/XL while the caption
+  // still says Medium/Xtra Large must NOT silent-Ready (02:45 canary).
+  it("holds soft-snapped size labels even when Size is filled per variant", async () => {
     seedListing({
       title: "Navy Blue Cotton Crew Neck Tee",
       user_prompt: "GHS 70. Sizes Medium Large Xtra Large",
+      category_path: "Fashion > Men's Wear > Shirts",
+    });
+    previewResult = {
+      ok: true,
+      products: [
+        { brand: { code: 1, name: "Fashion" }, variation: "M",  attributes: [{ name: "size", value: "M" }] },
+        { brand: { code: 1, name: "Fashion" }, variation: "L",  attributes: [{ name: "size", value: "L" }] },
+        { brand: { code: 1, name: "Fashion" }, variation: "XL", attributes: [{ name: "size", value: "XL" }] },
+      ],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(false);
+    expect(result.reasons.join(" ").toLowerCase()).toContain("size");
+  });
+
+  it("stays Ready when the caption size tokens exact-match the drafted variations", async () => {
+    seedListing({
+      title: "Navy Blue Cotton Crew Neck Tee",
+      user_prompt: "GHS 70. Sizes M L XL",
       category_path: "Fashion > Men's Wear > Shirts",
     });
     previewResult = {
@@ -483,5 +505,63 @@ describe("assessListingPushReadiness — harmless preflight repairs stay Ready",
     const result = await assessListingPushReadiness("user_1", "listing-1");
     expect(result.ready).toBe(true);
     expect(result.reasons).toEqual([]);
+  });
+});
+
+describe("assessListingPushReadiness — canary 02:45 soft-snap sizes + exact kettle preview", () => {
+  it("holds when Size is filled as M/L/XL but caption said Medium/Xtra Large (soft-snap)", async () => {
+    seedListing({
+      title: "Plain T-Shirt - Crew Neck, Short Sleeve",
+      user_prompt: "GHS 70. Sizes Medium Large Xtra Large",
+      category_path: "Fashion > Men > Clothing > T-Shirts",
+    });
+    previewResult = {
+      ok: true,
+      products: [
+        { brand: { code: 1, name: "Fashion" }, variation: "M", attributes: [{ name: "size", value: "M" }, { name: "product_weight", value: "0.2" }] },
+        { brand: { code: 1, name: "Fashion" }, variation: "L", attributes: [{ name: "size", value: "L" }, { name: "product_weight", value: "0.2" }] },
+        { brand: { code: 1, name: "Fashion" }, variation: "XL", attributes: [{ name: "size", value: "XL" }, { name: "product_weight", value: "0.2" }] },
+      ],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(false);
+    expect(result.reasons.join(" ").toLowerCase()).toContain("size");
+    expect(result.reasons.join(" ")).toMatch(/medium|xtra/i);
+  });
+
+  it("holds the exact 02:45 kettle preview payload (no capacity attrs, 1.8L in title only)", async () => {
+    seedListing({
+      title: "Electric Kettle - 1.8L Capacity, Stainless Steel",
+      description: "Boil water quickly with this 1.8L stainless steel electric kettle.",
+      user_prompt: "GHS 120. Capacity 1.8L",
+      category_path: "Home & Office > Home & Kitchen > Kitchen & Dining > Small Appliances > Coffee, Tea & Espresso Appliances",
+    });
+    previewResult = {
+      ok: true,
+      products: [{
+        brand: { code: 1045133, name: "Generic" },
+        variation: "Default",
+        attributes: [
+          { name: "variation", value: "Default" },
+          { name: "color", value: "Silver" },
+          { name: "color_family", value: "Grey" },
+          { name: "main_material", value: "Stainless Steel" },
+          { name: "material_family", value: "Metal" },
+          { name: "production_country", value: "China" },
+          { name: "warranty_duration", value: "None" },
+          { name: "warranty_address", value: "N/A" },
+          { name: "product_warranty", value: "N/A" },
+          { name: "manufacturer_txt", value: "Generic" },
+          { name: "product_weight", value: "1.5 kg" },
+          { name: "package_content", value: "1x Electric Kettle" },
+        ],
+      }],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(false);
+    expect(result.reasons.join(" ")).toContain("capacity");
+    expect(result.reasons.join(" ")).toContain("1.8L");
   });
 });
