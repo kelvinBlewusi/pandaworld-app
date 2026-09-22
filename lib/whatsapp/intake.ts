@@ -317,9 +317,6 @@ async function shopCurrencyForListing(listingId: string): Promise<string> {
  *  else in this codebase and stay that way here. */
 async function applyNotes(listingId: string, text: string): Promise<void> {
   if (!text) return;
-  // Bare Mode I close markers and lone "done" are flow control, not seller
-  // notes — never let them touch user_prompt (even as an append).
-  if (/^(?:done|\d{1,2})$/i.test(text.trim())) return;
   const db = createServerClient();
   const currency = await shopCurrencyForListing(listingId);
   // APPEND, never replace. applyNotes used to overwrite user_prompt, so a
