@@ -33,7 +33,7 @@ export const maxDuration = 60;
 // How many products one tick will take on. Lowered from 3 to 2 after the
 // 2026-09-21 staging canary: a 3-product batch died with no per-product
 // notice at all when one product's Gemini response threw mid-describe
-// (see lib/actions/ai.ts's parseAIResponse hardening in this same
+// (see lib/ai/parse-ai-response.ts's hardening in this same
 // change), which run inside one shared `await Promise.all(...)` in ONE
 // Vercel invocation — a crash severe enough to take the whole invocation
 // down with it (not just its own per-job try/catch) drags every OTHER

@@ -527,8 +527,8 @@ describe("a single-product batch whose analysis hard-failed", () => {
 
 describe("a multi-product batch with one hard-failed product", () => {
   // Same production shape as the single-product case above, extended to a
-  // batch of several — a throw mid-Gemini (see lib/actions/ai.ts's
-  // parseAIResponse hardening in this same change) and a Vercel function-
+  // batch of several — a throw mid-Gemini (see lib/ai/parse-ai-response.ts's
+  // hardening in this same change) and a Vercel function-
   // timeout kill are both silent at the point of failure and both retire
   // to analysis_jobs.status='failed' the same way, without
   // runQueuedAnalysis ever reaching its own replyError call. Confirmed
