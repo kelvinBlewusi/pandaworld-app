@@ -88,44 +88,17 @@ const GENERIC_BRAND_NAME = "generic";
  */
 function statedDecimalCapacityReason(
   freeText:   string,
-  attributes: { name: string; value: unknown }[],
+  _attributes: { name: string; value: unknown }[],
 ): string | null {
   const match = freeText.match(/\b\d+\.\d+\s*-?\s*(?:ml|millilitres?|milliliters?|l|litres?|liters?)\b/i);
   if (!match) return null;
   const stated = match[0].trim();
-
-  // Only attributes with a real positive numeric value count as "captured".
-  // Empty strings, N/A, and zero placeholders (e.g. capacity_slices: 0 on a
-  // kettle schema) used to satisfy Number.isInteger and silently Ready a
-  // listing whose seller-stated 1.8L never landed in a capacity field —
-  // confirmed live 2026-09-22 staging canary (title carried 1.8L, UI capacity
-  // blank, WhatsApp still ✅ Ready).
-  const capacityAttrs = attributes.filter((a) => /capacity/i.test(a.name));
-  const numericCapacity = capacityAttrs
-    .map((a) => Number(a.value))
-    .filter((n) => Number.isFinite(n) && n > 0);
-
-  if (numericCapacity.length === 0) {
-    return `capacity: you mentioned ${stated} but I couldn't fit it into a category field for this product — open Edit to set the capacity yourself`;
-  }
-
-  const carriesWholeNumber = numericCapacity.some((n) => Number.isInteger(n));
-  if (!carriesWholeNumber) {
-    return `capacity: you mentioned ${stated} but this category needs a whole number and it didn't get rounded — open Edit to set the capacity yourself`;
-  }
-
-  return null;
+  // Always Hold. Silent Ready after rounding, blank capacity, or an exact
+  // fractional attr all failed live canaries (kettle 1.8L / air fryer 5.5L
+  // kept scoring Ready on staging 2026-09-22). One clear ask.
+  return `capacity: you mentioned ${stated} — this category needs a whole number; open Edit to set it`;
 }
 
-/**
- * Distinct size-shaped words mentioned in free text ("Sizes Medium Large
- * Xtra Large" → ["medium", "large", "xtra large"]). Deliberately restricted
- * to full words/abbreviations that are never ordinary prose on their own
- * (no bare "s"/"m"/"l") — a product description mentioning "a large
- * capacity kettle" once must not read as a size claim; TWO OR MORE
- * distinct matches is the bar for "the seller is listing size options",
- * not just describing the product.
- */
 function sizeWordsIn(freeText: string): Set<string> {
   const matches = freeText.match(
     /\b(?:xx?s|xx?l|xxxl|(?:extra|xtra)[- ]?small|(?:extra|xtra)[- ]?large|small|medium|large)\b/gi,
