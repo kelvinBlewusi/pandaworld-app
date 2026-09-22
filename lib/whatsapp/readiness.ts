@@ -86,18 +86,6 @@ const GENERIC_BRAND_NAME = "generic";
  * catches that case too, without needing to know which specific field
  * name Jumia happens to have mistyped.
  */
-function statedDecimalCapacityReason(
-  freeText:   string,
-  _attributes: { name: string; value: unknown }[],
-): string | null {
-  const match = freeText.match(/\b\d+\.\d+\s*-?\s*(?:ml|millilitres?|milliliters?|l|litres?|liters?)\b/i);
-  if (!match) return null;
-  const stated = match[0].trim();
-  // Always Hold. Silent Ready after rounding, blank capacity, or an exact
-  // fractional attr all failed live canaries (kettle 1.8L / air fryer 5.5L
-  // kept scoring Ready on staging 2026-09-22). One clear ask.
-  return `capacity: you mentioned ${stated} — this category needs a whole number; open Edit to set it`;
-}
 
 function sizeWordsIn(freeText: string): Set<string> {
   const matches = freeText.match(
@@ -166,82 +154,6 @@ function blankSizeClaimReason(
   return `size: you mentioned ${claimed} but this category's Size field was never filled — open Edit to set it per variant`;
 }
 
-/**
- * Seller listed multiple sizes in caption/notes ("Sizes Medium Large Xtra
- * Large") but the drafted variation labels are abbreviations (M/L/XL) that
- * do not exact-match those tokens. blankSizeClaimReason misses this when
- * Size IS filled (staging canary 2026-09-22 02:45: size:M on every
- * variant → blank-Size Hold returned null → WhatsApp ✅ Ready). Soft-snaps
- * must Hold with one ask — never silent Ready.
- */
-function softSnapSizeClaimReason(
-  freeText: string,
-  products: { variation?: string; attributes?: { name: string; value: unknown }[] }[],
-  variantLabels?: string[],
-): string | null {
-  const hasSizesWord = /\bsizes?\b/i.test(freeText);
-  const sizeWords = sizeWordsIn(freeText);
-
-  // Prefer persisted variant rows when preview collapses to one product
-  // (staging dig 2026-09-22: tee UI showed M/L/XL but preview.products.length
-  // was 1 — soft-snap never saw the other labels).
-  const labels = new Set<string>();
-  for (const label of variantLabels ?? []) {
-    const v = String(label ?? "").trim();
-    if (v) labels.add(v);
-  }
-  for (const p of products) {
-    const top = String(p.variation ?? "").trim();
-    if (top) labels.add(top);
-    for (const a of p.attributes ?? []) {
-      if (/^variation$/i.test(a.name)) {
-        const v = String(a.value ?? "").trim();
-        if (v) labels.add(v);
-      }
-    }
-  }
-  const NON_SIZE_LABELS = new Set(["default", "one size", "onesize", "os", "standard", "unique"]);
-  const SIZE_ABBREV = /^(xx?[sl]|s|m|l|xl|xxl|xxxl)$/i;
-  const sizeAbbrevs = Array.from(labels).filter((l) => SIZE_ABBREV.test(l));
-
-  // Caption missing/wiped (no "size(s)" word) but variants table still has
-  // several size abbreviations — Hold and ask the seller to confirm.
-  if (!hasSizesWord) {
-    if ((variantLabels?.length ?? 0) >= 2 && sizeAbbrevs.length >= 2) {
-      return (
-        `size: I drafted ${sizeAbbrevs.join(", ")} — confirm those are the sizes you stock, or open Edit`
-      );
-    }
-    return null;
-  }
-
-  if (labels.size === 0) {
-    if (sizeWords.size < 2) return null;
-    if (products.length < 2) return null;
-    return (
-      `size: you mentioned ${Array.from(sizeWords).join(", ")} but no size options were drafted — ` +
-      `open Edit to set the sizes you actually stock`
-    );
-  }
-
-  // One-SKU placeholders ("Default") are not soft-snapped size labels.
-  if (labels.size === 1) {
-    const only = Array.from(labels)[0].toLowerCase();
-    if (NON_SIZE_LABELS.has(only)) return null;
-  }
-
-  if (sizeWords.size < 2) return null;
-
-  const byLower = new Map(Array.from(labels).map((l) => [l.toLowerCase(), l]));
-  // Exact match only — "medium" ≠ "m", "xtra large" ≠ "xl"
-  const unmatched = Array.from(sizeWords).filter((w) => !byLower.has(w));
-  if (unmatched.length === 0) return null;
-
-  return (
-    `size: you wrote sizes ${Array.from(sizeWords).join(", ")} but I drafted ` +
-    `${Array.from(labels).join(", ")} — open Edit to confirm the sizes you actually stock`
-  );
-}
 
 /**
  * A non-"variation" attribute frozen at the SAME value across every
@@ -368,10 +280,6 @@ export async function assessListingPushReadiness(
   // claims the AI parked outside title/description.
   const freeText = `${row.title ?? ""} ${row.description ?? ""} ${row.user_prompt ?? ""} ${highlights} ${dynText}`;
 
-  const productAttrs = products.flatMap((p) => p.attributes ?? []);
-  const capacityReason = statedDecimalCapacityReason(freeText, productAttrs);
-  if (capacityReason) reasons.push(capacityReason);
-
   const staleAttr = staleDuplicateVariantAttribute(products);
   if (staleAttr) {
     reasons.push(`${staleAttr}: stuck at the same value across every variant, but your variants differ — open Edit to set it per variant`);
@@ -379,17 +287,6 @@ export async function assessListingPushReadiness(
 
   const blankSizeReason = blankSizeClaimReason(freeText, products);
   if (blankSizeReason) reasons.push(blankSizeReason);
-
-  const { data: variantRows } = await db
-    .from("variants")
-    .select("variation")
-    .eq("listing_id", listingId);
-  const variantLabels = (variantRows ?? [])
-    .map((v: { variation?: string | null }) => String(v.variation ?? "").trim())
-    .filter(Boolean);
-
-  const softSnapReason = softSnapSizeClaimReason(freeText, products, variantLabels);
-  if (softSnapReason) reasons.push(softSnapReason);
 
   // Fashion category still carrying the plain (non-fashion) Generic brand
   // — a real, confirmed Jumia rejection class ("Product category doesn't

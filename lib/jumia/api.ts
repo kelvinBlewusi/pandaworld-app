@@ -1417,9 +1417,18 @@ export function mapListingToJumiaProducts(
       // Per-variant attributes: clone the listing-level attributes and
       // prepend a unique `variation` entry. Listing-level attributes
       // already had "variation" stripped in buildAttributes.
+      //
+      // Product flip 2026-09-22: when the variation label is itself a size
+      // abbreviation (M/L/XL/…), overwrite any cloned listing-level `size`
+      // (or size-like) attribute so it matches THIS variant — staging dig
+      // tee 144c7a6d had variants M/L/XL but listing-level size stuck at M.
       attributes: [
         { name: "variation", value: variation, translations: [] as never[] },
-        ...base.attributes,
+        ...base.attributes.map((a) => {
+          if (!/^size$/i.test(a.name)) return a;
+          if (!/^(xx?[sl]|s|m|l|xl|xxl|xxxl)$/i.test(variation)) return a;
+          return { ...a, value: variation };
+        }),
       ],
     };
   });
