@@ -103,7 +103,15 @@ function sizeWordsIn(freeText: string): Set<string> {
   const matches = freeText.match(
     /\b(?:xx?s|xx?l|xxxl|(?:extra|xtra)[- ]?small|(?:extra|xtra)[- ]?large|small|medium|large)\b/gi,
   ) ?? [];
-  return new Set(matches.map((m) => m.toLowerCase()));
+  const set = new Set(matches.map((m) => m.toLowerCase()));
+  // Sellers often write "Sizes M L XL" — bare letter tokens are not in the
+  // prose list above, but they exact-match drafted variation labels.
+  if (/\bsizes?\b/i.test(freeText)) {
+    for (const m of freeText.match(/\b(?:xx?[sl]|[sml]|xl|xxl|xxxl)\b/gi) ?? []) {
+      set.add(m.toLowerCase());
+    }
+  }
+  return set;
 }
 
 /**
@@ -169,17 +177,19 @@ function blankSizeClaimReason(
 function softSnapSizeClaimReason(
   freeText: string,
   products: { variation?: string; attributes?: { name: string; value: unknown }[] }[],
+  variantLabels?: string[],
 ): string | null {
-  if (!/\bsizes?\b/i.test(freeText)) return null;
-
+  const hasSizesWord = /\bsizes?\b/i.test(freeText);
   const sizeWords = sizeWordsIn(freeText);
-  if (sizeWords.size < 2) return null;
 
-  // Collect variation labels from top-level variation AND attributes named
-  // variation — a single-product preview (or one variant focused in UI)
-  // must still Hold when the caption listed several non-exact size words
-  // (02:45/03:08 canaries scored Ready while unit tests with 3 products Held).
+  // Prefer persisted variant rows when preview collapses to one product
+  // (staging dig 2026-09-22: tee UI showed M/L/XL but preview.products.length
+  // was 1 — soft-snap never saw the other labels).
   const labels = new Set<string>();
+  for (const label of variantLabels ?? []) {
+    const v = String(label ?? "").trim();
+    if (v) labels.add(v);
+  }
   for (const p of products) {
     const top = String(p.variation ?? "").trim();
     if (top) labels.add(top);
@@ -190,9 +200,23 @@ function softSnapSizeClaimReason(
       }
     }
   }
+  const NON_SIZE_LABELS = new Set(["default", "one size", "onesize", "os", "standard", "unique"]);
+  const SIZE_ABBREV = /^(xx?[sl]|s|m|l|xl|xxl|xxxl)$/i;
+  const sizeAbbrevs = Array.from(labels).filter((l) => SIZE_ABBREV.test(l));
+
+  // Caption missing/wiped (no "size(s)" word) but variants table still has
+  // several size abbreviations — Hold and ask the seller to confirm.
+  if (!hasSizesWord) {
+    if ((variantLabels?.length ?? 0) >= 2 && sizeAbbrevs.length >= 2) {
+      return (
+        `size: I drafted ${sizeAbbrevs.join(", ")} — confirm those are the sizes you stock, or open Edit`
+      );
+    }
+    return null;
+  }
+
   if (labels.size === 0) {
-    // Multi-variant blank size is blankSizeClaimReason's job; a single
-    // empty product with a chatty caption is not enough to soft-snap Hold.
+    if (sizeWords.size < 2) return null;
     if (products.length < 2) return null;
     return (
       `size: you mentioned ${Array.from(sizeWords).join(", ")} but no size options were drafted — ` +
@@ -200,13 +224,13 @@ function softSnapSizeClaimReason(
     );
   }
 
-  // One-SKU placeholders ("Default") are not soft-snapped size labels —
-  // "Sizes Medium Large … one size only" on a beanie must stay Ready.
-  const NON_SIZE_LABELS = new Set(["default", "one size", "onesize", "os", "standard", "unique"]);
+  // One-SKU placeholders ("Default") are not soft-snapped size labels.
   if (labels.size === 1) {
     const only = Array.from(labels)[0].toLowerCase();
     if (NON_SIZE_LABELS.has(only)) return null;
   }
+
+  if (sizeWords.size < 2) return null;
 
   const byLower = new Map(Array.from(labels).map((l) => [l.toLowerCase(), l]));
   // Exact match only — "medium" ≠ "m", "xtra large" ≠ "xl"
@@ -356,7 +380,15 @@ export async function assessListingPushReadiness(
   const blankSizeReason = blankSizeClaimReason(freeText, products);
   if (blankSizeReason) reasons.push(blankSizeReason);
 
-  const softSnapReason = softSnapSizeClaimReason(freeText, products);
+  const { data: variantRows } = await db
+    .from("variants")
+    .select("variation")
+    .eq("listing_id", listingId);
+  const variantLabels = (variantRows ?? [])
+    .map((v: { variation?: string | null }) => String(v.variation ?? "").trim())
+    .filter(Boolean);
+
+  const softSnapReason = softSnapSizeClaimReason(freeText, products, variantLabels);
   if (softSnapReason) reasons.push(softSnapReason);
 
   // Fashion category still carrying the plain (non-fashion) Generic brand
