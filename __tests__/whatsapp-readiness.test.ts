@@ -177,6 +177,31 @@ describe("assessListingPushReadiness — canary 1: kettle capacity must be a who
     expect(result.reasons.join(" ")).toContain("capacity");
     expect(result.reasons.join(" ")).toContain("1.8L");
   });
+
+  // Round 3 of the same canary, 2026-09-22: the AI-written title/description
+  // this time didn't repeat the seller's own "1.8L" at all — it only ever
+  // existed in the seller's raw WhatsApp caption, persisted verbatim to
+  // listings.user_prompt by applyNotes (lib/whatsapp/intake.ts). A scan
+  // limited to title+description missed it entirely.
+  it("recovers a decimal capacity claim stated only in the seller's caption, not the AI-written title/description", async () => {
+    seedListing({
+      title: "Stainless Steel Electric Kettle",
+      description: "A long enough description to clear the fifty-character minimum check.",
+      user_prompt: "GHS 120. Capacity 1.8L",
+      category_path: "Home & Office > Home & Kitchen > Kitchen & Dining > Small Appliances > Coffee, Tea & Espresso Appliances",
+    });
+    previewResult = {
+      ok: true, products: [{
+        brand: { code: 1045133, name: "Generic" },
+        attributes: [{ name: "color", value: "Silver" }],
+      }],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(false);
+    expect(result.reasons.join(" ")).toContain("capacity");
+    expect(result.reasons.join(" ")).toContain("1.8L");
+  });
 });
 
 describe("assessListingPushReadiness — canary 2 root cause: a stale attribute duplicated across variants", () => {
@@ -239,6 +264,87 @@ describe("assessListingPushReadiness — canary 2 root cause: a stale attribute 
         { brand: { code: 1, name: "Fashion" }, variation: "M", attributes: [{ name: "main_material", value: "Cotton" }] },
         { brand: { code: 1, name: "Fashion" }, variation: "L", attributes: [{ name: "main_material", value: "Cotton" }] },
       ],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(true);
+  });
+});
+
+describe("assessListingPushReadiness — canary 2 round 3: a multi-size caption with a blank Size field", () => {
+  // The same tee, round 3, 2026-09-22: this time the listing-level "size"
+  // dynamic attribute was never set at all (round 2 had it frozen at "M" —
+  // a different failure shape of the same gap). staleDuplicateVariantAttribute
+  // above has nothing to catch when the field is genuinely absent, not
+  // merely wrong, so this needs its own check anchored on the seller's own
+  // caption ("Sizes Medium Large Xtra Large").
+  it("holds when the caption lists several sizes but no product carries a Size value at all", async () => {
+    seedListing({
+      title: "Navy Blue Cotton Crew Neck Tee",
+      user_prompt: "GHS 70. Sizes Medium Large Xtra Large",
+      category_path: "Fashion > Men's Wear > Shirts",
+    });
+    previewResult = {
+      ok: true,
+      products: [
+        { brand: { code: 1, name: "Fashion" }, variation: "M",  attributes: [{ name: "main_material", value: "Cotton" }] },
+        { brand: { code: 1, name: "Fashion" }, variation: "L",  attributes: [{ name: "main_material", value: "Cotton" }] },
+        { brand: { code: 1, name: "Fashion" }, variation: "XL", attributes: [{ name: "main_material", value: "Cotton" }] },
+      ],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(false);
+    expect(result.reasons.join(" ")).toContain("size");
+    expect(result.reasons.join(" ")).toContain("was never filled");
+  });
+
+  it("does not hold when the Size field IS filled somewhere, even with a multi-size caption", async () => {
+    seedListing({
+      title: "Navy Blue Cotton Crew Neck Tee",
+      user_prompt: "GHS 70. Sizes Medium Large Xtra Large",
+      category_path: "Fashion > Men's Wear > Shirts",
+    });
+    previewResult = {
+      ok: true,
+      products: [
+        { brand: { code: 1, name: "Fashion" }, variation: "M",  attributes: [{ name: "size", value: "M" }] },
+        { brand: { code: 1, name: "Fashion" }, variation: "L",  attributes: [{ name: "size", value: "L" }] },
+        { brand: { code: 1, name: "Fashion" }, variation: "XL", attributes: [{ name: "size", value: "XL" }] },
+      ],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(true);
+  });
+
+  it("does not hold ordinary prose that mentions two size words but never calls them sizes, even with real variants", async () => {
+    seedListing({
+      title: "Adjustable Gardening Gloves",
+      description: "Stretchy fit — comfortable across a medium to large hand.",
+      category_path: "Home & Kitchen > Small Appliances",
+    });
+    previewResult = {
+      ok: true,
+      products: [
+        { brand: { code: 1, name: "Panasonic" }, variation: "Green", attributes: [{ name: "color", value: "Green" }] },
+        { brand: { code: 1, name: "Panasonic" }, variation: "Blue",  attributes: [{ name: "color", value: "Blue" }] },
+      ],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(true);
+  });
+
+  it("does not hold a single-product listing even if its description happens to list several sizes", async () => {
+    seedListing({
+      title: "One-Size Beanie",
+      user_prompt: "Sizes Medium Large Xtra Large all fit the same, one size only",
+      category_path: "Fashion > Men's Wear > Shirts",
+    });
+    previewResult = {
+      ok: true,
+      products: [{ brand: { code: 1, name: "Fashion" }, variation: "Default", attributes: [] }],
       adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
     };
     const result = await assessListingPushReadiness("user_1", "listing-1");

@@ -111,6 +111,74 @@ function statedDecimalCapacityReason(
 }
 
 /**
+ * Distinct size-shaped words mentioned in free text ("Sizes Medium Large
+ * Xtra Large" → ["medium", "large", "xtra large"]). Deliberately restricted
+ * to full words/abbreviations that are never ordinary prose on their own
+ * (no bare "s"/"m"/"l") — a product description mentioning "a large
+ * capacity kettle" once must not read as a size claim; TWO OR MORE
+ * distinct matches is the bar for "the seller is listing size options",
+ * not just describing the product.
+ */
+function sizeWordsIn(freeText: string): Set<string> {
+  const matches = freeText.match(
+    /\b(?:xx?s|xx?l|xxxl|(?:extra|xtra)[- ]?small|(?:extra|xtra)[- ]?large|small|medium|large)\b/gi,
+  ) ?? [];
+  return new Set(matches.map((m) => m.toLowerCase()));
+}
+
+/**
+ * A multi-size claim in the seller's own words ("Sizes Medium Large Xtra
+ * Large") whose category-required Size axis never got a value at all —
+ * distinct from staleDuplicateVariantAttribute above (which catches a
+ * value that IS present but frozen wrong): this catches the field being
+ * genuinely blank in every product, so there is nothing for that check to
+ * find as "duplicated".
+ *
+ * Confirmed live, 2026-09-22 (staging canary round 3, same tee as round
+ * 2's canary): 3 variant rows (M/L/XL) existed and each carried the
+ * correct per-variant `variation`, but this time the listing-level "size"
+ * dynamic attribute was never set at all (round 2's canary had it frozen
+ * at "M" — a different failure shape of the same underlying gap: the
+ * category's true is_variant field isn't literally named "variation", so
+ * nothing in the pipeline is responsible for filling it per-variant).
+ * missingRequiredFor (lib/jumia/api.ts) only flags this when the schema
+ * marks the field required; a seller who explicitly listed several sizes
+ * deserves a Hold whether or not Jumia's own schema happens to make that
+ * field mandatory, because a blank Size on a listing the seller just said
+ * has "Medium Large Xtra Large" would confuse every buyer who opens it,
+ * required or not.
+ *
+ * Deliberately name-agnostic like staleDuplicateVariantAttribute, but
+ * anchored on /size/i rather than by matching listing's variation values —
+ * there's nothing to match against here, since the field is empty.
+ */
+function blankSizeClaimReason(
+  freeText: string,
+  products: { attributes?: { name: string; value: unknown }[] }[],
+): string | null {
+  // Two guards against reading ordinary prose as a size claim:
+  //   - the word "size"/"sizes" has to actually appear ("fits medium to
+  //     large hands" mentions two size words but never calls them sizes)
+  //   - there has to be more than one product, i.e. real variants — a
+  //     single-SKU listing has no "per variant" Size to leave blank
+  if (!/\bsizes?\b/i.test(freeText)) return null;
+  if (products.length < 2) return null;
+
+  const sizeWords = sizeWordsIn(freeText);
+  if (sizeWords.size < 2) return null;
+
+  const hasSizeValue = products.some((p) =>
+    (p.attributes ?? []).some(
+      (a) => /size/i.test(a.name) && String(a.value ?? "").trim() !== "",
+    ),
+  );
+  if (hasSizeValue) return null;
+
+  const claimed = Array.from(sizeWords).join(", ");
+  return `size: you mentioned ${claimed} but this category's Size field was never filled — open Edit to set it per variant`;
+}
+
+/**
  * A non-"variation" attribute frozen at the SAME value across every
  * variant product, even though the listing's variants genuinely differ —
  * the true is_variant schema field for a category (e.g. "size") isn't
@@ -169,7 +237,7 @@ export async function assessListingPushReadiness(
   const db = createServerClient();
   const { data } = await db
     .from("listings")
-    .select("title, description, selling_price, category_code, category_path, brand, images")
+    .select("title, description, selling_price, category_code, category_path, brand, images, user_prompt")
     .eq("id", listingId)
     .maybeSingle();
 
@@ -219,14 +287,27 @@ export async function assessListingPushReadiness(
 
   const products = preview.products as { variation?: string; attributes?: { name: string; value: unknown }[]; brand?: { name?: string } }[];
 
+  // Every free-text source the seller actually wrote — title and
+  // description are AI-written and may paraphrase or drop what the
+  // seller said, but user_prompt is their verbatim WhatsApp caption/notes
+  // (see lib/whatsapp/intake.ts's applyNotes) and is the most reliable
+  // signal of what they actually claimed. Confirmed live, 2026-09-22
+  // (staging canary round 3): a kettle's caption ("Capacity 1.8L") is
+  // exactly the text a title/description-only scan can miss if the AI
+  // phrases the title differently than the seller did.
+  const freeText = `${row.title ?? ""} ${row.description ?? ""} ${row.user_prompt ?? ""}`;
+
   const productAttrs = products[0]?.attributes ?? [];
-  const capacityReason = statedDecimalCapacityReason(`${row.title ?? ""} ${row.description ?? ""}`, productAttrs);
+  const capacityReason = statedDecimalCapacityReason(freeText, productAttrs);
   if (capacityReason) reasons.push(capacityReason);
 
   const staleAttr = staleDuplicateVariantAttribute(products);
   if (staleAttr) {
     reasons.push(`${staleAttr}: stuck at the same value across every variant, but your variants differ — open Edit to set it per variant`);
   }
+
+  const blankSizeReason = blankSizeClaimReason(freeText, products);
+  if (blankSizeReason) reasons.push(blankSizeReason);
 
   // Fashion category still carrying the plain (non-fashion) Generic brand
   // — a real, confirmed Jumia rejection class ("Product category doesn't
