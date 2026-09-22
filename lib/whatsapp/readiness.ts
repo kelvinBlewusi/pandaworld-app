@@ -195,27 +195,54 @@ function blankSizeClaimReason(
  */
 function softSnapSizeClaimReason(
   freeText: string,
-  products: { variation?: string }[],
+  products: { variation?: string; attributes?: { name: string; value: unknown }[] }[],
 ): string | null {
   if (!/\bsizes?\b/i.test(freeText)) return null;
-  if (products.length < 2) return null;
 
   const sizeWords = sizeWordsIn(freeText);
   if (sizeWords.size < 2) return null;
 
-  const labels = products
-    .map((p) => String(p.variation ?? "").trim())
-    .filter(Boolean);
-  if (labels.length < 2) return null;
+  // Collect variation labels from top-level variation AND attributes named
+  // variation — a single-product preview (or one variant focused in UI)
+  // must still Hold when the caption listed several non-exact size words
+  // (02:45/03:08 canaries scored Ready while unit tests with 3 products Held).
+  const labels = new Set<string>();
+  for (const p of products) {
+    const top = String(p.variation ?? "").trim();
+    if (top) labels.add(top);
+    for (const a of p.attributes ?? []) {
+      if (/^variation$/i.test(a.name)) {
+        const v = String(a.value ?? "").trim();
+        if (v) labels.add(v);
+      }
+    }
+  }
+  if (labels.size === 0) {
+    // Multi-variant blank size is blankSizeClaimReason's job; a single
+    // empty product with a chatty caption is not enough to soft-snap Hold.
+    if (products.length < 2) return null;
+    return (
+      `size: you mentioned ${Array.from(sizeWords).join(", ")} but no size options were drafted — ` +
+      `open Edit to set the sizes you actually stock`
+    );
+  }
 
-  const byLower = new Map(labels.map((l) => [l.toLowerCase(), l]));
+  // One-SKU placeholders ("Default") are not soft-snapped size labels —
+  // "Sizes Medium Large … one size only" on a beanie must stay Ready.
+  const NON_SIZE_LABELS = new Set(["default", "one size", "onesize", "os", "standard", "unique"]);
+  if (labels.size === 1) {
+    const only = Array.from(labels)[0].toLowerCase();
+    if (NON_SIZE_LABELS.has(only)) return null;
+  }
+
+  const byLower = new Map(Array.from(labels).map((l) => [l.toLowerCase(), l]));
   // Exact match only — "medium" ≠ "m", "xtra large" ≠ "xl"
   const unmatched = Array.from(sizeWords).filter((w) => !byLower.has(w));
   if (unmatched.length === 0) return null;
 
   return (
     `size: you wrote sizes ${Array.from(sizeWords).join(", ")} but I drafted ` +
-    `${labels.join(", ")} — open Edit to confirm the sizes you actually stock`
+    `${Array.from(labels).join(", ")} — open Edit to confirm the sizes you actually stock`
   );
 }
 
@@ -278,7 +305,7 @@ export async function assessListingPushReadiness(
   const db = createServerClient();
   const { data } = await db
     .from("listings")
-    .select("title, description, selling_price, category_code, category_path, brand, images, user_prompt")
+    .select("title, description, selling_price, category_code, category_path, brand, images, user_prompt, highlights, dynamic_attributes")
     .eq("id", listingId)
     .maybeSingle();
 
@@ -336,9 +363,15 @@ export async function assessListingPushReadiness(
   // (staging canary round 3): a kettle's caption ("Capacity 1.8L") is
   // exactly the text a title/description-only scan can miss if the AI
   // phrases the title differently than the seller did.
-  const freeText = `${row.title ?? ""} ${row.description ?? ""} ${row.user_prompt ?? ""}`;
+  const highlights = Array.isArray((row as ListingRow & { highlights?: unknown }).highlights)
+    ? ((row as ListingRow & { highlights?: string[] }).highlights ?? []).join(" ")
+    : String((row as ListingRow & { highlights?: unknown }).highlights ?? "");
+  const dynText = JSON.stringify((row as ListingRow & { dynamic_attributes?: unknown }).dynamic_attributes ?? {});
+  // user_prompt is the WhatsApp caption; highlights/dyn often echo capacity/size
+  // claims the AI parked outside title/description.
+  const freeText = `${row.title ?? ""} ${row.description ?? ""} ${row.user_prompt ?? ""} ${highlights} ${dynText}`;
 
-  const productAttrs = products[0]?.attributes ?? [];
+  const productAttrs = products.flatMap((p) => p.attributes ?? []);
   const capacityReason = statedDecimalCapacityReason(freeText, productAttrs);
   if (capacityReason) reasons.push(capacityReason);
 
