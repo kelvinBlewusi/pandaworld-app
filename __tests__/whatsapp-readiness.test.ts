@@ -140,6 +140,29 @@ describe("assessListingPushReadiness — canary 1: kettle capacity must be a who
     expect(result.reasons.join(" ")).toContain("1.8L");
   });
 
+  it("holds when capacity-shaped attrs exist but are empty/zero placeholders (not a real capture)", async () => {
+    seedListing({
+      title: "Electric Kettle - Stainless Steel, 1.8L Capacity",
+      category_path: "Home & Office > Home & Kitchen > Kitchen & Dining > Small Appliances > Coffee, Tea & Espresso Appliances",
+    });
+    previewResult = {
+      ok: true, products: [{
+        brand: { code: 1045133, name: "Generic" },
+        attributes: [
+          { name: "color", value: "Silver" },
+          { name: "capacity_slices", value: 0 },
+          { name: "capacity_kg", value: "" },
+          { name: "capacity", value: "N/A" },
+        ],
+      }],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(false);
+    expect(result.reasons.join(" ")).toContain("capacity");
+    expect(result.reasons.join(" ")).toContain("1.8L");
+  });
+
   it("does not hold when a capacity WAS captured, even if the title also mentions the volume", async () => {
     seedListing({ title: "Electric Kettle - 1.8L Capacity", category_path: "Home & Office > Appliances > Small Appliances > Kettles" });
     previewResult = {

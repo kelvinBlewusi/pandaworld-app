@@ -33,6 +33,13 @@ describe("extractVariantClaim", () => {
     const c = extractVariantClaim("Only red and blue are available");
     expect(c?.source).toBe("Only red and blue are available");
   });
+
+  it("extracts a WhatsApp-style Sizes caption list", () => {
+    const c = extractVariantClaim("GHS 70. Sizes Medium Large Xtra Large");
+    expect(c).not.toBeNull();
+    expect(c!.tokens).toEqual(["medium", "large", "xtra", "large"]);
+    expect(c!.source.toLowerCase()).toContain("sizes");
+  });
 });
 
 describe("reconcileVariants — the live failure", () => {
