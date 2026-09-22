@@ -57,6 +57,7 @@ beforeEach(() => {
     ok: true, products: [{ brand: { code: 1, name: "Panasonic" } }],
     adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
   };
+  db.tables.variants = [];
 });
 
 describe("assessListingPushReadiness — cheap field checks short-circuit", () => {
@@ -562,6 +563,31 @@ describe("assessListingPushReadiness — canary 02:45 soft-snap sizes + exact ke
     const result = await assessListingPushReadiness("user_1", "listing-1");
     expect(result.ready).toBe(false);
     expect(result.reasons.join(" ").toLowerCase()).toContain("size");
+  });
+
+
+  it("holds size abbreviations from the variants table when preview collapses to one product and caption is missing", async () => {
+    seedListing({
+      title: "Plain Round Neck T-Shirt - Short Sleeve, Casual Wear",
+      user_prompt: null,
+      category_path: "Fashion > Men's Fashion > Clothing > Shirts > T-Shirts",
+    });
+    db.tables.variants = [
+      { id: "v1", listing_id: "listing-1", variation: "M" },
+      { id: "v2", listing_id: "listing-1", variation: "L" },
+      { id: "v3", listing_id: "listing-1", variation: "XL" },
+    ];
+    previewResult = {
+      ok: true,
+      products: [
+        { brand: { code: 1, name: "Fashion" }, variation: "M", attributes: [{ name: "size", value: "M" }] },
+      ],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(false);
+    expect(result.reasons.join(" ").toLowerCase()).toContain("size");
+    expect(result.reasons.join(" ")).toMatch(/M.*L.*XL|drafted/i);
   });
 
   it("holds the exact 02:45 kettle preview payload (no capacity attrs, 1.8L in title only)", async () => {
