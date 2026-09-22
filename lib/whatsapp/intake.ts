@@ -317,9 +317,35 @@ async function shopCurrencyForListing(listingId: string): Promise<string> {
  *  else in this codebase and stay that way here. */
 async function applyNotes(listingId: string, text: string): Promise<void> {
   if (!text) return;
+  // Bare Mode I close markers and lone "done" are flow control, not seller
+  // notes — never let them touch user_prompt (even as an append).
+  if (/^(?:done|\d{1,2})$/i.test(text.trim())) return;
   const db = createServerClient();
   const currency = await shopCurrencyForListing(listingId);
-  const updates: Record<string, unknown> = { user_prompt: text.slice(0, 1000), updated_at: new Date().toISOString() };
+  // APPEND, never replace. applyNotes used to overwrite user_prompt, so a
+  // later Mode I marker adjacent text, a short follow-up, or a second
+  // caption wipe could erase "Sizes Medium Large Xtra Large" before
+  // finalizeBatch's soft-snap Hold ran — staging 03:08 canary: tee preview
+  // had 3 size products but WhatsApp still ✅ Ready because freeText no
+  // longer contained the seller's size claim. Doc comments above this
+  // helper already said append; the write must match.
+  const { data: existingRow } = await db
+    .from("listings")
+    .select("user_prompt")
+    .eq("id", listingId)
+    .maybeSingle();
+  const existing = String((existingRow?.user_prompt as string | null) ?? "").trim();
+  const incoming = text.trim();
+  let merged = incoming;
+  if (existing) {
+    // Dedup exact repeats (album retries / Meta redeliveries).
+    if (existing === incoming || existing.endsWith(incoming) || existing.includes(incoming)) {
+      merged = existing;
+    } else {
+      merged = `${existing}\n${incoming}`;
+    }
+  }
+  const updates: Record<string, unknown> = { user_prompt: merged.slice(0, 1000), updated_at: new Date().toISOString() };
   const price = extractPrice(text, currency);
   const stock = extractStock(text);
   if (price != null) updates.selling_price = price;
