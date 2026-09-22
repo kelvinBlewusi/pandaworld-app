@@ -181,15 +181,15 @@ describe("buildJumiaPayload — preflightNotes surfaces raw, reason-tagged notes
   // Real category schema, category 1012714 "... Tee" (staging canary round
   // 2, 2026-09-21): the category's true is_variant field is "size", not
   // "variation". PER_VARIANT_ATTRIBUTE_NAMES (lib/jumia/api.ts) only ever
-  // treats the literal name "variation" as per-variant, so "size" goes out
-  // through the generic dynamic_attributes loop as ONE static top-level
-  // attribute — then base.attributes is spread unchanged into every
-  // variant product, so all three variants ship the exact same "size"
-  // value regardless of their own, correctly-per-variant `variation`. This
-  // is the confirmed source of the false "✅ Ready" the canary caught; it's
-  // reused here as the ground truth lib/whatsapp/readiness.ts's
-  // staleDuplicateVariantAttribute is written against.
-  it("duplicates a non-'variation' is_variant field identically across every variant, disagreeing with two of the three", async () => {
+  // treats the literal name "variation" as per-variant, so "size" originally
+  // went out through the generic dynamic_attributes loop as ONE static
+  // top-level attribute, cloned unchanged into every variant product — the
+  // confirmed source of the false "✅ Ready" the canary caught. PR #163
+  // fixed this at the source: when a variant's `variation` is itself a size
+  // abbreviation, the cloned "size" attribute is overwritten to match it.
+  // This asserts that fix — each variant now carries its own size — rather
+  // than the bug it replaced.
+  it("overwrites a non-'variation' is_variant field to match each variant's own size-shaped variation", async () => {
     mockGetCategoryAttributes.mockResolvedValue([
       { name: "size", label: "Size", type: "enum", allowed_values: ["S", "M", "L", "XL"], required: true, is_variant: true },
       { name: "manufacturer_txt", label: "From the Manufacturer", type: "textarea", allowed_values: [], required: false, is_variant: false },
@@ -208,7 +208,7 @@ describe("buildJumiaPayload — preflightNotes surfaces raw, reason-tagged notes
     const sizeValues = built.products.map(
       (p) => p.attributes.find((a: { name: string }) => a.name === "size")?.value,
     );
-    expect(sizeValues).toEqual(["M", "M", "M"]);
+    expect(sizeValues).toEqual(["M", "L", "XL"]);
   });
 });
 
