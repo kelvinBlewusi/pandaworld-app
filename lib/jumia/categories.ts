@@ -979,12 +979,28 @@ export async function recomputeIsLeafForAllCategories(): Promise<{
   // Page through in 1000-row chunks — Supabase's hard server-side max_rows
   // (default 1000) means a single .range(0, 99_999) call would still cap
   // at 1000 rows. Without paging, recompute would only see the first 1000
-  // alphabetical rows and mark everything past that as a leaf.
+  // rows and mark everything past that as a leaf.
+  //
+  // .order("code") is load-bearing, not cosmetic (added 2026-09-23, real
+  // incident): every OTHER paginated read in this file orders before
+  // .range() (getLeafCategories, getListableCategories,
+  // getAllCategoriesForTree) — this was the one that didn't. Without a
+  // stable sort, Postgres gives no guarantee that two separate .range()
+  // calls see the same row order, so the 28 sequential pages here could
+  // silently skip or duplicate rows across calls. That corrupts the
+  // parentPaths set below regardless of how correct its own O(n) logic
+  // is — confirmed live: the daily "recompute-category-leaves" cron had
+  // run and reported success for at least 3 consecutive days while
+  // 22,473 of 27,862 categories still read is_leaf=false, on a table
+  // nothing else had written to in that window. code is the table's
+  // primary key (see upsertCategories' onConflict), so it's a safe,
+  // stable, unique sort for pagination.
   const all = await selectAllPaginated<{ code: number; path: string; is_leaf: boolean | null }>(
     (from, to) =>
       db
         .from("jumia_categories")
         .select("code, path, is_leaf")
+        .order("code")
         .range(from, to),
   );
   if (all.length === 0) return { updated: 0, total: 0 };

@@ -52,7 +52,7 @@ jest.mock("@/lib/jumia/categories", () => ({
   },
 }));
 
-import { resolveNonLeafCategory } from "@/lib/actions/auto-analyze";
+import { resolveNonLeafCategory, ensureLeafCategory } from "@/lib/actions/auto-analyze";
 
 function row(patch: Partial<JumiaCategoryRow> & { code: number; path: string }): JumiaCategoryRow {
   return {
@@ -137,5 +137,57 @@ describe("resolveNonLeafCategory — leaf descendants exist", () => {
 
     expect(fetchFromJumiaCalls).toHaveLength(0);
     expect(upsertCalls).toHaveLength(0);
+  });
+});
+
+describe("ensureLeafCategory — never bails to manual pick (2026-09-23 seller direction)", () => {
+  const LEAF_A = row({ code: 1016095, path: "Electronics > Home Appliances > Refrigerators & Freezers > Refrigerators", is_leaf: true, attribute_set_sid: "sid-a" });
+  const pool = [NON_LEAF, LEAF_A];
+
+  const originalRanked = { primary: { code: NON_LEAF.code, name: "Refrigerators & Freezers", path: NON_LEAF.path, confidence: 0.8 }, alternates: [], needsUserConfirmation: false };
+  const originalFilled = { dynamic_attributes: { weight: "5kg" }, field_sources: { weight: "ai" as const }, field_confidence: {} };
+
+  it("leaves ranked/filled untouched when the chosen category is already a leaf", async () => {
+    const alreadyLeaf = { primary: { code: LEAF_A.code, name: "Refrigerators", path: LEAF_A.path, confidence: 0.9 }, alternates: [], needsUserConfirmation: false };
+    const result = await ensureLeafCategory(alreadyLeaf, originalFilled, pool, ["https://cdn.test/a.jpg"], null, null, undefined, null);
+    expect(result.ranked).toBe(alreadyLeaf);
+    expect(result.filled).toBe(originalFilled);
+    expect(rankCalls).toHaveLength(0);
+  });
+
+  it("leaves ranked/filled untouched when the chosen code isn't in listableCategories at all", async () => {
+    const unknown = { primary: { code: 999999, name: "Unknown", path: "Unknown", confidence: 0.5 }, alternates: [], needsUserConfirmation: false };
+    const result = await ensureLeafCategory(unknown, originalFilled, pool, ["https://cdn.test/a.jpg"], null, null, undefined, null);
+    expect(result.ranked).toBe(unknown);
+    expect(result.filled).toBe(originalFilled);
+  });
+
+  it("swaps in the resolved leaf when the chosen category is non-leaf and a leaf descendant exists", async () => {
+    rankResult = { primary: { code: 1016095, name: "Refrigerators", path: LEAF_A.path, confidence: 0.9 }, alternates: [], needsUserConfirmation: false };
+    fillResult = { dynamic_attributes: { color: "Silver" }, field_sources: { color: "ai" }, field_confidence: {} };
+
+    const result = await ensureLeafCategory(originalRanked, originalFilled, pool, ["https://cdn.test/a.jpg"], null, null, undefined, null);
+
+    expect(result.ranked.primary?.code).toBe(1016095);
+    expect(result.filled.dynamic_attributes).toEqual({ color: "Silver" });
+  });
+
+  // The exact real-world regression, 2026-09-23: a seller tapped "Fix &
+  // resubmit" and was told "Couldn't find a confident category match —
+  // pick one manually" — a hard requirement violation (every category is
+  // meant to be auto-picked). This must return the ORIGINAL pick, not a
+  // null/failure signal a caller could turn into that message.
+  it("falls back to the original non-leaf ranked/filled — never a bail signal — when no leaf descendant exists", async () => {
+    const noChildren = [NON_LEAF]; // no leaves anywhere under it
+    const result = await ensureLeafCategory(originalRanked, originalFilled, noChildren, ["https://cdn.test/a.jpg"], null, null, undefined, null);
+
+    expect(result).toEqual({ ranked: originalRanked, filled: originalFilled });
+  });
+
+  it("falls back to the original non-leaf ranked/filled — never a bail signal — when the model can't pick a leaf either", async () => {
+    rankResult = { primary: null, alternates: [], needsUserConfirmation: true };
+    const result = await ensureLeafCategory(originalRanked, originalFilled, pool, ["https://cdn.test/a.jpg"], null, null, undefined, null);
+
+    expect(result).toEqual({ ranked: originalRanked, filled: originalFilled });
   });
 });
