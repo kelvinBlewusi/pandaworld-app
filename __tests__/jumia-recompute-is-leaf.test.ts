@@ -21,17 +21,34 @@ interface CategoryRow {
 function makeFakeDb(rows: CategoryRow[]) {
   const table = rows.map((r) => ({ ...r }));
   const upserted: Array<{ code: number; is_leaf: boolean }> = [];
+  const orderCalls: string[] = [];
 
   return {
     table,
     upserted,
+    orderCalls,
     from(name: string) {
       if (name !== "jumia_categories") throw new Error(`unexpected table ${name}`);
       return {
         select() {
           return {
-            range(from: number, to: number) {
-              return Promise.resolve({ data: table.slice(from, to + 1), error: null });
+            // .order() must come before .range() here — real incident,
+            // 2026-09-23: this call site was the one paginated read in
+            // categories.ts missing it, so Postgres gave no guarantee two
+            // separate .range() calls saw a consistent row order, which
+            // silently corrupted the whole recompute for days despite the
+            // daily cron reporting success every time. Enforced here by
+            // only exposing .range() from the object .order() returns —
+            // calling .range() directly off .select() (skipping .order())
+            // throws, same as it would against a real, unmocked client
+            // missing the method.
+            order(col: string) {
+              orderCalls.push(col);
+              return {
+                range(from: number, to: number) {
+                  return Promise.resolve({ data: table.slice(from, to + 1), error: null });
+                },
+              };
             },
           };
         },
@@ -125,5 +142,28 @@ describe("recomputeIsLeafForAllCategories", () => {
     const result = await recomputeIsLeafForAllCategories();
 
     expect(result).toEqual({ updated: 2, total: 2 });
+  });
+
+  // Real incident, 2026-09-23: the paginated read here was the one call
+  // site in categories.ts missing .order() before .range(). Without a
+  // stable sort, Postgres has no obligation to return the same row order
+  // across the ~28 separate .range() calls a 27,862-row table needs,
+  // which can silently skip or duplicate rows between pages — the daily
+  // "recompute-category-leaves" cron reported success for 3 straight days
+  // while 22,473 categories still read is_leaf=false, on a table nothing
+  // else had touched in that window. A missing .order() here has no other
+  // visible symptom until pagination genuinely spans multiple pages
+  // against a real (non-mocked) Postgres instance, so this asserts the
+  // call directly rather than relying on a fixture large enough to
+  // reproduce the instability.
+  it("orders by the primary key before paginating, so multi-page reads stay stable", async () => {
+    fakeDb = makeFakeDb([
+      { code: 1, path: "Home & Office > Home Decor", is_leaf: false },
+      { code: 2, path: "Home & Office > Home Decor > Curtains", is_leaf: false },
+    ]);
+
+    await recomputeIsLeafForAllCategories();
+
+    expect(fakeDb.orderCalls).toEqual(["code"]);
   });
 });
