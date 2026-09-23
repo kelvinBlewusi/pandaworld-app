@@ -25,9 +25,10 @@ jest.mock("@/lib/jumia/brands", () => ({
   findBrandExact: jest.fn(async () => null),
 }));
 
-import { getCategoryAttributes, getCategoryByCode, fetchAttributesFromJumia, upsertAttributes } from "@/lib/jumia/categories";
+import { getCategoryAttributes, getVariantAxes, getCategoryByCode, fetchAttributesFromJumia, upsertAttributes } from "@/lib/jumia/categories";
 
 const mockGetCategoryAttributes    = getCategoryAttributes as jest.Mock;
+const mockGetVariantAxes           = getVariantAxes as jest.Mock;
 const mockGetCategoryByCode        = getCategoryByCode as jest.Mock;
 const mockFetchAttributesFromJumia = fetchAttributesFromJumia as jest.Mock;
 const mockUpsertAttributes         = upsertAttributes as jest.Mock;
@@ -194,6 +195,9 @@ describe("buildJumiaPayload — preflightNotes surfaces raw, reason-tagged notes
       { name: "size", label: "Size", type: "enum", allowed_values: ["S", "M", "L", "XL"], required: true, is_variant: true },
       { name: "manufacturer_txt", label: "From the Manufacturer", type: "textarea", allowed_values: [], required: false, is_variant: false },
     ]);
+    mockGetVariantAxes.mockResolvedValueOnce([
+      { name: "size", label: "Size", type: "enum", allowed_values: ["S", "M", "L", "XL"], required: true, is_variant: true, min_length: null, max_length: null },
+    ]);
     const listing = { ...baseListing, dynamic_attributes: { size: "M" } };
     const variants = ["M", "L", "XL"].map((v, i) => ({
       id: `v${i}`, listing_id: "listing-1", variation: v, seller_sku: `SKU-1-${v}`,
@@ -209,6 +213,44 @@ describe("buildJumiaPayload — preflightNotes surfaces raw, reason-tagged notes
       (p) => p.attributes.find((a: { name: string }) => a.name === "size")?.value,
     );
     expect(sizeValues).toEqual(["M", "L", "XL"]);
+  });
+
+  // Real production incident, 2026-09-23, category 1013693 ("... Sandals"):
+  // the category's true is_variant attribute is "size", holding NUMERIC
+  // shoe sizes (40/41/42/43) — not a clothing letter size. The fix above
+  // used to key off a fixed regex (XS/S/M/L/XL/XXL/XXXL) rather than the
+  // category's own schema, so a numeric size never matched it: the static
+  // listing-level `size` attribute stayed frozen at one value (e.g. "42")
+  // across every variant instead of tracking each one's own size. Jumia
+  // saw all four variants claiming the same size and rejected three of
+  // them: "Duplicate Variation on Product with parentSKU [...] and
+  // variation [42]." This is the same bug as the letter-size case above,
+  // just for an axis whose values don't look like a letter size — proving
+  // the fix is driven by variantAxes (the category's real schema), not by
+  // guessing from the value's shape.
+  it("overwrites a non-'variation' is_variant field for a NUMERIC size axis too, not just letter sizes", async () => {
+    mockGetCategoryAttributes.mockResolvedValue([
+      { name: "size", label: "Size", type: "enum", allowed_values: ["40", "41", "42", "43"], required: true, is_variant: true },
+      { name: "heel_type", label: "Heel Type", type: "enum", allowed_values: [], required: false, is_variant: false },
+    ]);
+    mockGetVariantAxes.mockResolvedValueOnce([
+      { name: "size", label: "Size", type: "enum", allowed_values: ["40", "41", "42", "43"], required: true, is_variant: true, min_length: null, max_length: null },
+    ]);
+    const listing = { ...baseListing, dynamic_attributes: { size: "42" } };
+    const variants = ["40", "41", "42", "43"].map((v, i) => ({
+      id: `v${i}`, listing_id: "listing-1", variation: v, seller_sku: `PA-TEST-${v}`,
+      gtin: null, quantity: 1, global_price: null, sale_price: null,
+      sale_start_date: null, sale_end_date: null, created_at: "2026-01-01T00:00:00Z",
+    }));
+
+    const built = await buildJumiaPayload("token", listing, variants, "GHS", "GH");
+
+    expect(built.error).toBeUndefined();
+    expect(built.products.map((p) => p.variation)).toEqual(["40", "41", "42", "43"]);
+    const sizeValues = built.products.map(
+      (p) => p.attributes.find((a: { name: string }) => a.name === "size")?.value,
+    );
+    expect(sizeValues).toEqual(["40", "41", "42", "43"]);
   });
 });
 

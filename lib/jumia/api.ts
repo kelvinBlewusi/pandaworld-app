@@ -1367,6 +1367,29 @@ export function mapListingToJumiaProducts(
   // We strip the shared "variation" out of buildAttributes (above) and
   // inject the per-variant value here, so each product's attributes
   // array carries its own unique label.
+  //
+  // BUT the literal name "variation" is only Jumia's linking field, not
+  // necessarily its dedup key: PER_VARIANT_ATTRIBUTE_NAMES (lib/jumia/api.ts)
+  // only ever treats "variation" as per-variant, yet a category's REAL
+  // is_variant attribute is very often named something else entirely —
+  // "size" for clothing/shoes, "capacity" for appliances, etc. (getVariantAxes
+  // is what actually resolves the category's true axis). Confirmed live,
+  // 2026-09-23 (category 1013693, sandals): the axis is named "size", not
+  // "variation" — this category's schema has no "variation" attribute at
+  // all. Real payload sent for parentSku PA-MUDIF5R5's 4 variants, size
+  // values 40/41/42/43: the STATIC listing-level `size` attribute (cloned
+  // from base.attributes below) stayed at one value across all four, since
+  // the letter-size-only regex this used to be scoped to (XS/S/M/L/XL/…)
+  // never matches a numeric shoe size — so Jumia saw four variants all
+  // claiming the same size and rejected three of them as duplicates,
+  // "Duplicate Variation ... and variation [42]".
+  //
+  // The general fix: use variantAxes (the category's own real schema, not
+  // a guessed value-shape pattern) to find which attribute(s) the category
+  // ACTUALLY declares as its variant axis, and always overwrite those with
+  // this variant's own resolved value — whatever that axis is named and
+  // whatever shape its values take.
+  const variantAxisNames = new Set(variantAxes.map((a) => a.name.toLowerCase()));
   const products = variants.map((v) => {
     // Deliberately NOT base.variation here — base.variation may now be a
     // detected colour (see buildBaseProduct), and sharing that across
@@ -1418,15 +1441,18 @@ export function mapListingToJumiaProducts(
       // prepend a unique `variation` entry. Listing-level attributes
       // already had "variation" stripped in buildAttributes.
       //
-      // Product flip 2026-09-22: when the variation label is itself a size
-      // abbreviation (M/L/XL/…), overwrite any cloned listing-level `size`
-      // (or size-like) attribute so it matches THIS variant — staging dig
-      // tee 144c7a6d had variants M/L/XL but listing-level size stuck at M.
+      // Overwrite every attribute the category's OWN schema declares as
+      // its variant axis (variantAxisNames, above) so it matches THIS
+      // variant — not just an attribute literally named "size" holding a
+      // clothing letter size. A numeric shoe size, a capacity, or any
+      // other axis name gets the identical per-variant treatment, since
+      // the thing that makes an attribute "the variant axis" is the
+      // category's own schema (is_variant: true), never the shape of the
+      // value itself.
       attributes: [
         { name: "variation", value: variation, translations: [] as never[] },
         ...base.attributes.map((a) => {
-          if (!/^size$/i.test(a.name)) return a;
-          if (!/^(xx?[sl]|s|m|l|xl|xxl|xxxl)$/i.test(variation)) return a;
+          if (!variantAxisNames.has(a.name.toLowerCase())) return a;
           return { ...a, value: variation };
         }),
       ],
