@@ -14,6 +14,20 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 //   /sign-up(.*)  — Clerk hosted UI
 //   /api/paystack/webhook — incoming webhook signed by Paystack HMAC
 //   /api/webhooks/clerk    — incoming Clerk webhook
+//   /api/jumia/connect     — Jumia OAuth kickoff. Normally requires a Clerk
+//                            session (reads it itself via auth() below), but
+//                            the WhatsApp connect-from-chat flow calls it with
+//                            a one-time ?wa_token= instead (see
+//                            lib/jumia/connect-token.ts) — a seller tapping
+//                            that link from WhatsApp has no browser Clerk
+//                            session at all. Leaving this off the allowlist
+//                            meant auth.protect() redirected every such tap
+//                            to /sign-in before the route's own wa_token
+//                            handling ever ran, so "Connect Jumia" from
+//                            WhatsApp always dead-ended on a Clerk sign-in
+//                            card instead of Jumia's authorize page. Same
+//                            shape as /api/jumia/callback below, which
+//                            already had to be public for the same reason.
 //   /api/jumia/callback    — Jumia OAuth post-redirect
 //   /api/cron/(.*)         — Vercel cron, bearer-token authorised
 //   /api/worker/(.*)       — the background job worker, called by pg_cron via
@@ -65,6 +79,7 @@ const isPublicRoute = createRouteMatcher([
   '/sign-up(.*)',
   '/api/paystack/webhook',
   '/api/webhooks/clerk',
+  '/api/jumia/connect',
   '/api/jumia/callback',
   '/api/cron/(.*)',
   '/api/worker/(.*)',
