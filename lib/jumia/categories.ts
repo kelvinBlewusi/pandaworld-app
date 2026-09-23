@@ -770,7 +770,28 @@ export async function upsertAttributes(
 ) {
   if (!attributes.length) return;
   const db  = createServerClient();
-  const rows = attributes.map((a, i) => ({
+
+  // Never resurrect an attribute a live Jumia rejection already proved
+  // isn't usable for this category — see removeAttributesFromCache and
+  // the jumia_excluded_attributes migration. Without this filter, the
+  // very next cold-cache fetch for this category (a different listing,
+  // a nightly or admin resync) would silently re-insert Jumia's own
+  // wrong schema response, and every future listing filed here would
+  // start hitting the identical "not visible for category" rejection
+  // again — this is the one choke point every caller (auto-analyze's
+  // prefetch/fallback/leaf-resolution paths, the admin full-catalog
+  // sync) writes through, so filtering here covers all of them at once.
+  const { data: excludedRows } = await db
+    .from("jumia_excluded_attributes")
+    .select("name")
+    .eq("category_code", categoryCode);
+  const excluded = new Set((excludedRows ?? []).map((r: { name: string }) => r.name));
+  const attrsToWrite = excluded.size > 0
+    ? attributes.filter((a) => !excluded.has(a.name))
+    : attributes;
+  if (!attrsToWrite.length) return;
+
+  const rows = attrsToWrite.map((a, i) => ({
     category_code:  categoryCode,
     name:           a.name,
     label:          a.label,
@@ -791,7 +812,8 @@ export async function upsertAttributes(
 }
 
 /**
- * Delete specific attributes from a category's cached schema.
+ * Delete specific attributes from a category's cached schema, and record
+ * them as permanently excluded so a future resync can't bring them back.
  *
  * Exists for the "not_visible_attributes" rejection remedy
  * (lib/jumia/rejection-remedy.ts): Jumia's `/catalog/attribute-sets/{sid}`
@@ -799,10 +821,20 @@ export async function upsertAttributes(
  * Jumia's real per-category push validation then rejects as "not visible
  * for category" — a mismatch the sync process has no way to detect on its
  * own. Once a live rejection names the offending attributes, removing them
- * here is what actually clears it: preflightAttributes (lib/jumia/
- * preflight.ts) already drops any attribute not present in the cached
- * schema before every push, so a category this function has corrected
- * self-heals with no redraft needed.
+ * here is what clears the listing that hit it: preflightAttributes
+ * (lib/jumia/preflight.ts) already drops any attribute not present in the
+ * cached schema before every push, so a category this function has
+ * corrected self-heals with no redraft needed.
+ *
+ * The delete alone used to be the whole fix, and it didn't last: the next
+ * cold-cache fetch for this category — a DIFFERENT listing, a nightly or
+ * admin resync — called upsertAttributes with Jumia's own still-wrong
+ * schema and silently reinserted the same names, so every future listing
+ * filed here started hitting the identical rejection again, one at a
+ * time. Writing to jumia_excluded_attributes here is what makes the fix
+ * apply to every future listing in this category, not just the one whose
+ * rejection surfaced it — upsertAttributes checks this table and refuses
+ * to reinsert anything it lists.
  */
 export async function removeAttributesFromCache(categoryCode: number, names: string[]): Promise<void> {
   if (!names.length) return;
@@ -812,6 +844,19 @@ export async function removeAttributesFromCache(categoryCode: number, names: str
     .delete()
     .eq("category_code", categoryCode)
     .in("name", names);
+
+  // Record the exclusion permanently (jumia_excluded_attributes) — a
+  // plain delete alone doesn't last. Without this, upsertAttributes
+  // would silently re-insert these same names the next time anything
+  // resyncs this category's schema from Jumia (a different listing's
+  // cold-cache fetch, a nightly or admin resync), and the category would
+  // regress to rejecting every listing filed there again, one at a time.
+  await db
+    .from("jumia_excluded_attributes")
+    .upsert(
+      names.map((name) => ({ category_code: categoryCode, name })),
+      { onConflict: "category_code,name" },
+    );
 }
 
 // ─── Batched sync helpers ─────────────────────────────────────────────────────
