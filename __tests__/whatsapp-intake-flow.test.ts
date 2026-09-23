@@ -560,10 +560,13 @@ describe("noteWarningsFor — variant-claim vs drafted-label matching (finalizeB
     expect(draftMsg?.body).not.toContain("doesn't match what you typed exactly");
   });
 
-  // The protection this must not regress, 2026-09-22 tee canary: "Xtra
-  // Large" and "XL" share no literal word in common, so a claim of
-  // "Xtra Large" against a drafted "XL" still Holds with one ask.
-  it("still Holds a genuine soft-snap mismatch — 'Xtra Large' vs 'XL' share no literal word", async () => {
+  // 2026-09-23 seller decision: a wording mismatch (2026-09-22 tee canary
+  // shape — "Xtra Large" vs drafted "XL", no literal word in common) is a
+  // SOFT warning, not an automatic Hold. Once the dry-run (here, the
+  // mocked assessListingPushReadiness — every required field is present)
+  // already says the push would succeed, second-guessing the wording is a
+  // false Hold, so this now goes Ready same as the sandals case.
+  it("goes Ready on a wording mismatch once the push itself would succeed — 'Xtra Large' vs 'XL'", async () => {
     seedDraftedWithClaim("Sizes Medium Large Xtra Large", ["M", "L", "XL"]);
     seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
     sent.length = 0;
@@ -572,8 +575,42 @@ describe("noteWarningsFor — variant-claim vs drafted-label matching (finalizeB
     await finalizeBatch("batch-1", PHONE, 1);
 
     const draftMsg = sent.find((m) => m.kind === "cta");
-    expect(draftMsg?.body).toContain("doesn't match what you typed exactly");
+    expect(draftMsg?.body).toContain("Ready to submit");
+    expect(draftMsg?.body).not.toContain("doesn't match what you typed exactly");
+  });
+
+  // The wording-mismatch note is still surfaced as useful context — just
+  // no longer the thing that Holds — when the listing is Held anyway for
+  // an unrelated reason the dry-run itself catches (here, no price).
+  it("still surfaces the wording-mismatch note as context when Held for an unrelated reason", async () => {
+    seedDraftedWithClaim("Sizes Medium Large Xtra Large", ["M", "L", "XL"]);
+    db.tables.listings[0].selling_price = null;
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 1);
+
+    const draftMsg = sent.find((m) => m.kind === "cta");
     expect(draftMsg?.body).not.toContain("Ready to submit");
+    expect(draftMsg?.body).toContain("doesn't match what you typed exactly");
+  });
+
+  // A claim that lost every option entirely (zero variant rows) stays a
+  // hard block regardless of push-readiness — that's lost data, not a
+  // wording quibble, so it is never waved through just because the rest
+  // of the payload would push fine.
+  it("still Holds when a stated claim resolved to zero variants, even though the push itself would succeed", async () => {
+    seedDraftedWithClaim("Sizes Medium Large Xtra Large", []);
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 1);
+
+    const draftMsg = sent.find((m) => m.kind === "cta");
+    expect(draftMsg?.body).not.toContain("Ready to submit");
+    expect(draftMsg?.body).toContain("so none were added");
   });
 });
 
