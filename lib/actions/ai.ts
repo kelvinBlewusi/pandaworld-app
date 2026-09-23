@@ -10,6 +10,7 @@ import {
   logActiveBackendOnce,
   type GeminiPart,
 } from "@/lib/ai/gemini-client";
+import { parseAIResponse } from "@/lib/ai/parse-ai-response";
 import {
   getListableCategories,
   getCategoryAttributes,
@@ -34,9 +35,11 @@ import {
 import {
   buildContentPolicyInstructions,
   isRestrictedBrand,
+  isJumiaHouseBrand,
   stripBrandFromTitle,
 } from "@/lib/ai/jumia-content-policy";
 import { buildNoteIntentPrompt } from "@/lib/whatsapp/note-intent";
+import { buildAllowedValueMatchPrompt, resolveMatchedValue } from "@/lib/jumia/variant-value-match";
 import {
   buildDescriptionAndHighlightsStyleBlock,
   buildDescriptionStyleBlock,
@@ -650,20 +653,12 @@ async function callGemini(
 }
 
 // ─── Parse + validate AI response ────────────────────────────────────────────
-
-function parseAIResponse(raw: string): Record<string, unknown> {
-  const cleaned = raw
-    .replace(/```json\s*/gi, "")
-    .replace(/```\s*/g, "")
-    .trim();
-
-  // Find the JSON object
-  const start = cleaned.indexOf("{");
-  const end   = cleaned.lastIndexOf("}");
-  if (start === -1 || end === -1) throw new Error("No JSON object in AI response");
-
-  return JSON.parse(cleaned.slice(start, end + 1));
-}
+//
+// parseAIResponse itself lives in lib/ai/parse-ai-response.ts, not here —
+// this file starts with "use server", so every top-level export here is a
+// Next.js Server Action and must be async. parseAIResponse is synchronous;
+// see that module's own doc comment for the full story (and the build
+// failure that moved it there).
 
 // ─── Resolve category from AI result ─────────────────────────────────────────
 
@@ -778,7 +773,15 @@ function buildCoreResult(
   if (aiBrandRestricted) {
     console.info(`[AI Pass A] AI claimed restricted brand "${aiBrand}" — overriding to Generic for QC safety.`);
   }
-  const brandValue = brandConfidence >= BRAND_CONFIDENCE_THRESHOLD && aiBrand && !aiBrandRestricted
+  // Jumia's own watermark isn't a product brand — see isJumiaHouseBrand's
+  // doc comment. Unlike a restricted brand, Jumia never rejects this one
+  // (it's a genuinely valid brand code), so it ships live silently wrong
+  // if not caught here.
+  const aiBrandIsJumia = isJumiaHouseBrand(aiBrand);
+  if (aiBrandIsJumia) {
+    console.info(`[AI Pass A] AI picked Jumia's own house brand "${aiBrand}" (likely a watermark) — overriding to Generic.`);
+  }
+  const brandValue = brandConfidence >= BRAND_CONFIDENCE_THRESHOLD && aiBrand && !aiBrandRestricted && !aiBrandIsJumia
     ? aiBrand
     : "Generic";
 
@@ -807,7 +810,7 @@ function buildCoreResult(
   //   - Above threshold + AI detected a real brand → high (image source)
   //   - Below threshold OR no AI brand → "Generic" fallback (inferred, low)
   field_sources["brand"] = "ai";
-  if (brandConfidence >= BRAND_CONFIDENCE_THRESHOLD && aiBrand && !aiBrandRestricted) {
+  if (brandConfidence >= BRAND_CONFIDENCE_THRESHOLD && aiBrand && !aiBrandRestricted && !aiBrandIsJumia) {
     field_confidence["brand"] = {
       confidence: brandConfidence,
       source:     "image",
@@ -818,6 +821,12 @@ function buildCoreResult(
       confidence: 0.3,
       source:     "inferred",
       reasoning:  `Detected restricted brand "${aiBrand}". Jumia requires brand-authorisation paperwork for this name — defaulted to Generic. Update only if you can prove authorisation.`,
+    };
+  } else if (aiBrandIsJumia && aiBrand) {
+    field_confidence["brand"] = {
+      confidence: 0.3,
+      source:     "inferred",
+      reasoning:  `Detected "${aiBrand}" — that's Jumia's own marketplace branding (often a watermark on the photo), not the product's actual brand. Defaulted to Generic. Update if you know the real brand.`,
     };
   } else {
     field_confidence["brand"] = {
@@ -1077,7 +1086,10 @@ function extractClassificationConfidence(
 
 export interface ProductDescription {
   title:           string;
-  brand:           string | null;       // null unless logo clearly visible
+  // Always null from this pass now — never read off a photographed logo.
+  // auto-analyze.ts fills the real default (Generic/Fashion, fashion-aware)
+  // unless the seller stated an actual brand in their own notes.
+  brand:           string | null;
   keywords:        string[];            // 5-10 search keywords
   summary:         string;              // one-sentence description
   // Universal Jumia listing fields the AI can infer from images. The
@@ -1203,7 +1215,7 @@ visually-similar products that live in very different parts of the catalogue.
 
 Rules:
 - title: Concise product name (model + product type + key specs, e.g. "WH-1000XM5 Wireless Noise-Cancelling Headphones" — note the BRAND "Sony" is OMITTED; brand goes in the brand field, NOT the title; Jumia rejects "Product name contains Brand name"). 5-12 words ideal but length is flexible. NO category names like "headphones for sale".
-- brand: ONLY fill if a brand logo or wordmark is clearly visible AND you are confident. Otherwise null.
+- brand: ALWAYS null. Never read a brand off a logo or wordmark in the photo — brand is filled separately, only from what the seller explicitly states in their own notes, and defaults to a Generic/Fashion placeholder otherwise.
 - keywords: 5-10 single-word lower-case keywords (no quotes, no underscores). Think of what a buyer would search for.
 - summary: One sentence describing what the product is and its key visible features.
 - description: LENGTH AND SHAPE ARE GOVERNED BY THE CONTENT STYLE BLOCK ABOVE — obey its minimum, and treat its guidance on tables and structure as instructions, not permissions. The only hard ceiling is 8000 characters including markup. Safe HTML tags (<p>, <ul>, <li>, <table>, <tr>, <td>, <br>, <strong>, <em>, <img>) are permitted; inline <img> with full URLs is allowed for spec diagrams or size charts. Marketing/promotional language is permitted ("premium", "best-in-class", "perfect for").
@@ -1220,16 +1232,11 @@ Rules:
 - production_country: Pick based on general knowledge — country of likely manufacture for this product/brand (e.g. "China" for unbranded electronics, "Vietnam" for many sneakers, "Ghana" for hand-made local goods, "USA" for many Apple products, "Germany" for many automotive accessories). Use the country name in English. Override the default with whatever country the seller's text specifies if any.
 - intended_use_case: Short phrase identifying what the product is FOR — e.g. "agricultural pesticide spraying", "household carpet cleaning", "office stationery", "outdoor camping". Null only if completely unclear.
 - environment: Exactly one of {home, farm, garden, office, workshop, industrial, outdoor, personal, unknown}. "home" = lived-in indoor spaces. "farm" = agriculture / ranch / crops. "garden" = backyard / lawn / small-scale outdoor plant care. "workshop" = handyman / DIY / hobby builds. "industrial" = factory / commercial scale. "outdoor" = recreation outside the home (camping, sports). "personal" = items worn or carried on the body (clothing, accessories). Use "unknown" instead of guessing.
-- variations: Distinct product variants. Two ways to populate this, and the seller's text WINS whenever it says anything about variants:
-    1. The seller's text explicitly states the variant options (e.g. "comes in red, blue and green", "sizes S/M/L available", "this one is the red version") — use EXACTLY what they said, verbatim as the label, even if the images only show one of them. Do not second-guess or expand on it; the seller knows their own stock better than the photo does. If the seller states only ONE variant (e.g. "the variation is red" — a single-SKU listing that just needs its option named), treat that single stated value as the whole variations list, not multiple variants that don't exist.
-    2. No seller text about variants — fall back to what the images show, and be CONSERVATIVE: only populate when the images clearly show multiple choices the buyer can pick between.
-    IMPORTANT: these are the only two cases. If the seller's text is clearly TRYING to say something about which options are or aren't available/in stock, but it's garbled, ambiguous, or you can't confidently extract a clean list from it (typos, broken grammar, a phrase that doesn't map cleanly to any colour/size you can see), do NOT fall back to case 2 and invent variants from the photo instead — a catalogue/stock photo showing several colour options does not mean the seller actually stocks all of them. Treat this the same as case 1 with only a partial, low-confidence read: include ONLY the specific option(s) you're genuinely confident the text confirms (could be zero), never pad the rest out from the image. Getting a seller's stock availability wrong on a live marketplace is worse than asking them to add variants manually.
-    Examples of when to populate from images alone:
-      * Garden tool set with separate pieces shown: ["3 Set (Trowel, Fork & Cultivator)", "Hoe only", "Trowel only", "Fork only"]
-      * Spice multipack: ["Pack of 3", "Pack of 6", "Pack of 12"]
-      * Phone case in multiple colours laid out: ["Black", "Navy Blue", "Rose Gold"]
-      * Apparel in sizes: ["Small", "Medium", "Large"]
-    Leave EMPTY ([]) when neither of the above applies:
+- variations: Distinct product variants. Every listing defaults to ONE variant (leave this EMPTY, []) unless the SELLER's text explicitly says otherwise — never populate this from the photos alone, no matter how many colours/sizes/pieces the images show:
+    The seller's text explicitly states the variant options (e.g. "comes in red, blue and green", "sizes S/M/L available", "this one is the red version") — use EXACTLY what they said, verbatim as the label, even if the images only show one of them. Do not second-guess or expand on it; the seller knows their own stock better than the photo does. If the seller states only ONE variant (e.g. "the variation is red" — a single-SKU listing that just needs its option named), treat that single stated value as the whole variations list, not multiple variants that don't exist.
+    If the seller's text is clearly TRYING to say something about which options are or aren't available/in stock, but it's garbled, ambiguous, or you can't confidently extract a clean list from it (typos, broken grammar, a phrase that doesn't map cleanly to any colour/size you can see), include ONLY the specific option(s) you're genuinely confident the text confirms (could be zero) — never pad it out with anything the photo shows that the text didn't confirm.
+    Leave EMPTY ([]) in every other case, including:
+      * The images clearly show multiple colours/sizes/pieces/configurations but the seller's text says nothing about variants at all — a catalogue/stock photo showing several options does not mean the seller actually stocks all of them; a single-SKU listing (variation "...") is the correct default until the seller says otherwise.
       * One product shown from multiple angles, no seller text about variants
       * Product has one colour / one size / one configuration, no seller text about variants
       * Unsure
@@ -1478,7 +1485,7 @@ export interface RankingResult {
 
 export async function aiPassB_rankCategory(
   imageUrls:  string[],
-  candidates: Array<{ code: number; name: string; path: string }>,
+  candidates: Array<{ code: number; name: string; path: string; is_leaf?: boolean }>,
   userContext?: string | null,
   // From Pass A — anchors the rank model so it disambiguates
   // visually-similar candidates by what the product is actually FOR.
@@ -1514,7 +1521,7 @@ export async function aiPassB_rankCategory(
   const rankVisionModel = await resolveModel(rankUserId, "vision", { forceBestModel: opts.forceBestModel });
 
   const candidateList = candidates
-    .map((c, i) => `${i + 1}. ${c.code} — ${c.path}`)
+    .map((c, i) => `${i + 1}. ${c.code} — ${c.path}${c.is_leaf === false ? " [PARENT category — has more specific sub-categories on Jumia]" : ""}`)
     .join("\n");
 
   const ctxSection = userContext && userContext.trim()
@@ -1529,7 +1536,7 @@ export async function aiPassB_rankCategory(
       ? `\nPRIMARY USE CASE: ${useCase ?? "(not specified)"}\nENVIRONMENT: ${environment ?? "unknown"}\n`
       : "";
 
-  const prompt = `You are a Jumia category classification expert. Look at the product images and pick the single best Jumia listable category for them from the candidates below. Candidates can be either leaves or listable parents — both are valid choices.
+  const prompt = `You are a Jumia category classification expert. Look at the product images and pick the single best Jumia listable category for them from the candidates below. A candidate marked [PARENT category] has more specific sub-categories on Jumia; a candidate with no such mark is a leaf (Jumia's most specific level for that branch).
 
 CANDIDATES:
 ${candidateList}
@@ -1541,7 +1548,8 @@ Rules:
 4. You MUST choose from the candidates above. Do not invent new codes.
 5. When two candidates look visually similar (e.g. carpet cleaner vs farm sprayer, yoga mat vs camping mat, kitchen knife vs hunting knife), pick the one whose path matches the PRIMARY USE CASE and ENVIRONMENT above. Visual similarity alone is not enough — a handheld pump-and-tank used on a farm belongs under Agriculture, not Home Cleaning.
 6. Jumia QC ALWAYS rejects wrong-category listings. Phone cases must NOT be filed under Mobile Phones; they belong in Mobile Accessories > Phone Cases. Headphone cables go under Audio Accessories, not Headphones. Pick the leaf or listable parent whose path matches the product's primary identity, not its parent category.
-7. If the visible brand is a luxury / restricted brand (Rolex, Gucci, Bose, MAC, Ray-Ban, Yeezy, Chanel etc.) the seller will likely fail brand-permission QC regardless of the category you pick — but pick the category accurately anyway; the brand-permission flag is handled separately downstream.
+7. Prefer a LEAF candidate over one marked [PARENT category] when both are plausible matches for this product — Jumia frequently rejects a listing filed directly under a parent as too broad ("You can't list products in this category ... choose a different (more specific) category"), even though the parent itself is selectable and has its own attribute set. Only pick a [PARENT category] candidate when it is genuinely the best fit and no leaf candidate on this list covers the product.
+8. If the visible brand is a luxury / restricted brand (Rolex, Gucci, Bose, MAC, Ray-Ban, Yeezy, Chanel etc.) the seller will likely fail brand-permission QC regardless of the category you pick — but pick the category accurately anyway; the brand-permission flag is handled separately downstream.
 ${ctxSection}
 Return ONLY valid JSON, no markdown:
 {
@@ -1733,10 +1741,17 @@ Return ONLY valid JSON, no markdown:
 // errors (API key missing, network completely down).
 
 export interface CandidateWithSchema {
-  code:   number;
-  name:   string;
-  path:   string;
-  attrs:  JumiaCategoryAttribute[];
+  code:    number;
+  name:    string;
+  path:    string;
+  attrs:   JumiaCategoryAttribute[];
+  /** See CategoryCandidate's own doc comment (lib/jumia/category-search.ts)
+   *  — whether Jumia has no more-specific child under this one. Surfaced
+   *  to the model so it can prefer a leaf over a listable parent when
+   *  both are plausible; Jumia rejects a listing filed directly under a
+   *  parent it considers too broad ("You can't list products in this
+   *  category ... choose a more specific category"). */
+  is_leaf: boolean;
 }
 
 export interface PickAndFillResult {
@@ -1834,7 +1849,8 @@ export async function aiPassBC_pickAndFill(
           return `    - ${a.name}: ${a.label}${valStr}${a.required ? " [REQUIRED]" : ""}`;
         }).join("\n");
 
-    return `${i + 1}. CODE ${c.code} — ${c.path}\n${attrLines}`;
+    const specificity = c.is_leaf ? "" : " [PARENT category — has more specific sub-categories on Jumia]";
+    return `${i + 1}. CODE ${c.code} — ${c.path}${specificity}\n${attrLines}`;
   }).join("\n\n");
 
   const ctxSection = userContext && userContext.trim()
@@ -1867,24 +1883,26 @@ ${policyBlock}
 
 OUTPUT RULES:
 1. chosen_code MUST be one of the candidate codes above, or null. Do not invent a code that isn't listed. These candidates came from a text search that can miss badly — if NONE of them is a genuine home for this product (e.g. the product is a wall-art print and the candidates are all kitchen utensils), set chosen_code to null and say why in reasoning. Do NOT settle for the least-wrong one: a listing the seller categorises themselves is far better than a confidently wrong category, which Jumia rejects outright. Only pick a candidate you'd actually defend as the right shelf for this product.
-2. dynamic_attributes keys MUST be attribute names from your chosen category's list (the names shown after "- " on each schema line). NEVER include attributes from a different candidate.
-3. For attributes with an allowed list, pick exactly one value from that list. Otherwise omit.
-4. Skip any attribute you can't determine — null/omit is better than guessing. EXCEPT for required-by-Jumia fields where general online knowledge can give you a sensible answer (e.g. typical material for a known product line) — fill those with moderate confidence.
-5. Disambiguate visually-similar candidates by PRIMARY USE CASE + ENVIRONMENT — a farm sprayer goes under Agriculture, not Home Cleaning.
-6. Confidence is 0..1, and it means "how well does this category actually fit this product" — NOT "how sure am I this is the best of the three offered". If the best candidate is only a loose fit, that's a LOW confidence even when it's clearly better than the other two. Be honest. Set needsConfirmation=true if your top pick is below 0.75 OR within 0.15 of your second choice.
-7. ALWAYS include these dynamic_attributes keys, even if the chosen category's schema doesn't list them (Jumia silently drops unknown keys; the cost of including is zero, the cost of omitting is a missed buyer-trust signal):
+2. When a candidate is marked "[PARENT category — has more specific sub-categories on Jumia]" AND one of the OTHER candidates is a more specific match for the same product, prefer the more specific one — Jumia frequently rejects a listing filed directly under a parent category as too broad ("You can't list products in this category ... choose a different (more specific) category"), even though the parent has its own attribute set and looks selectable. Only choose a PARENT candidate when it is genuinely the best fit and no more specific candidate on the list covers this product.
+3. dynamic_attributes keys MUST be attribute names from your chosen category's list (the names shown after "- " on each schema line). NEVER include attributes from a different candidate.
+4. For attributes with an allowed list, pick exactly one value from that list. Otherwise omit.
+5. Skip any attribute you can't determine — null/omit is better than guessing. EXCEPT for required-by-Jumia fields where general online knowledge can give you a sensible answer (e.g. typical material for a known product line) — fill those with moderate confidence.
+6. Disambiguate visually-similar candidates by PRIMARY USE CASE + ENVIRONMENT — a farm sprayer goes under Agriculture, not Home Cleaning.
+7. Confidence is 0..1, and it means "how well does this category actually fit this product" — NOT "how sure am I this is the best of the three offered". If the best candidate is only a loose fit, that's a LOW confidence even when it's clearly better than the other two. Be honest. Set needsConfirmation=true if your top pick is below 0.75 OR within 0.15 of your second choice.
+8. ALWAYS include these dynamic_attributes keys, even if the chosen category's schema doesn't list them (Jumia silently drops unknown keys; the cost of including is zero, the cost of omitting is a missed buyer-trust signal):
    - product_note: A short, friendly note thanking the buyer and asking for a review once they receive the item. The default is fine: "Dear Customer, once you receive your item, please take a moment to share your feedback and leave a review. Thank you for shopping with us!"
-   - what_is_in_the_box: A real, product-specific MULTI-LINE LIST in Jumia's preferred format. EACH item is on its OWN LINE, starting with a count like "1x", "2x", etc. NEVER a single line / paragraph. NEVER just a number like "1". If the seller's context states what's included, use EXACTLY that (reformatted into this list style) — it always wins over guessing from images. Otherwise read the images for clues (charger? case? cable? manual?).
+   - what_is_in_the_box: A real, product-specific MULTI-LINE LIST of what is actually BEING SOLD, in Jumia's preferred format. EACH item is on its OWN LINE, starting with a count like "1x", "2x", etc. NEVER a single line / paragraph. NEVER just a number like "1". If the seller's context states what's included, use EXACTLY that (reformatted into this list style) — it always wins over guessing from images. Otherwise list ONLY the product itself plus any accessory clearly visible in the images — do NOT add "User Manual" or "Original Packaging" as generic filler; most listings don't actually include either, and an inaccurate guess is worse than a short, accurate list.
        CORRECT format examples (newline-separated, one item per line):
-         "1x Smartphone\\n1x USB-C Charger\\n1x USB Cable\\n1x User Manual"
-         "1x Drone\\n1x Remote Controller\\n2x Batteries\\n1x Charger\\n4x Spare Propellers\\n1x Carrying Case"
-         "1x Volcano Humidifier\\n1x Power Adapter\\n1x User Manual"
+         "1x Smartphone\\n1x USB-C Charger\\n1x USB Cable" (charger/cable visible in the photos)
+         "1x Drone\\n1x Remote Controller\\n2x Batteries\\n1x Charger\\n4x Spare Propellers\\n1x Carrying Case" (full accessory kit visible)
+         "1x Volcano Humidifier" (product only, nothing else visible)
        WRONG (do not produce):
          "1"                                      — just a digit
          "1x Smartphone 1x Charger 1x Manual"     — all on one line
          "Smartphone, charger, manual"            — missing counts
-       If the image only shows the product itself with no accessories, default to:
-         "1x [Product Name]\\n1x User Manual (if applicable)\\n1x Original Packaging"
+         "1x Kettle\\n1x User Manual\\n1x Original Packaging" — manual/packaging added without evidence
+       If the image only shows the product itself with no accessories, state just the product:
+         "1x [Product Name]"
        NEVER omit this field.
 ${ctxSection}
 Return ONLY valid JSON, no markdown:
@@ -2248,6 +2266,47 @@ export async function aiReadNoteIntent(note: string): Promise<unknown> {
     return parseAIResponse(raw);
   } catch (e) {
     console.warn(`[aiReadNoteIntent] failed (non-fatal): ${(e as Error).message}`);
+    return null;
+  }
+}
+
+/**
+ * AI-assisted fallback for reconcileDraftVariation (lib/jumia/api.ts): when
+ * a seller-stated variant value doesn't literally match any of a
+ * category's own allowed values — not even after casing/plural/
+ * spelling-pair snapping (snapToAllowedWithSynonyms) — ask a model to
+ * match it BY MEANING against that exact, closed list instead of falling
+ * back to the "..." placeholder. See lib/jumia/variant-value-match.ts for
+ * why this is safe: the model can only ever return one of the values it
+ * was given, or none at all — it never gets to invent a new option, so a
+ * wrong answer here is "missed a match", never "made one up".
+ *
+ * Never throws — a failed match just means the caller's own fallback
+ * stands, exactly as before this existed.
+ */
+export async function aiMatchAllowedValue(
+  stated:       string,
+  allowed:      string[],
+  noteContext?: string | null,
+): Promise<string | null> {
+  const trimmed = stated.trim();
+  if (!trimmed || allowed.length === 0) return null;
+  if (USE_MOCK_AI) return null;
+
+  const prompt = buildAllowedValueMatchPrompt(trimmed, allowed, noteContext);
+
+  // Same reasoning as aiReadNoteIntent: pin the one model every seller's
+  // note gets read with, so two sellers who wrote the same thing get the
+  // same match regardless of plan tier.
+  const textModel = await resolveModel(null, "text", { forceBestModel: true });
+
+  try {
+    const raw = await callGemini(prompt, [], textModel);
+    const parsed = parseAIResponse(raw) as { match?: unknown };
+    const candidate = typeof parsed.match === "string" ? parsed.match : "";
+    return resolveMatchedValue(candidate, allowed);
+  } catch (e) {
+    console.warn(`[aiMatchAllowedValue] failed (non-fatal): ${(e as Error).message}`);
     return null;
   }
 }

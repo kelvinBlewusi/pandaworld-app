@@ -20,6 +20,8 @@ import {
   getFeedProductDetails,
   type FeedProductInfo,
 } from "@/lib/jumia/api";
+import { fingerprintListingContent, logFeedOutcome, type FeedOutcomeKind } from "@/lib/jumia/feed-outcomes";
+import type { PreflightNote } from "@/lib/jumia/preflight";
 import type { ListingRow, ListingStatus, VariantRow } from "@/lib/supabase/types";
 
 export interface PushListingVariantInput {
@@ -175,6 +177,10 @@ export type PreviewPayloadResult =
       missingRequired: string[];
       /** Everything validateListingForPush would reject on first. */
       blockers: string[];
+      /** Raw preflight notes (with .reason) — see JumiaPayloadBuild.preflightNotes.
+       *  A caller deciding Ready vs Held needs the reason tag; adjustments
+       *  alone has already lost it to seller-facing prose. */
+      preflightNotes: PreflightNote[];
     }
   | { ok: false; code: "not_found" | "not_connected" | "build_failed"; message: string };
 
@@ -246,6 +252,7 @@ export async function previewListingPayload(
     adjustments:     built.adjustments,
     missingRequired: built.missingRequired,
     blockers,
+    preflightNotes:  built.preflightNotes,
   };
 }
 
@@ -327,6 +334,10 @@ export async function pushListingToJumia(
       return { ok: false, code: "validation", message: variationErrors.join(" ") };
     }
   }
+
+  // Computed once, from the content as typed — see fingerprintListingContent's
+  // own doc comment for why seller_sku is excluded (it changes on every retry).
+  const payloadFingerprint = fingerprintListingContent(row, variants);
 
   // ── Get valid Jumia token + shopId ───────────────────────────────────────
   let accessToken: string;
@@ -450,19 +461,28 @@ export async function pushListingToJumia(
   }
 
   if (result.success) {
+    // Deliberately NOT clearing jumia_rerun_fingerprint/jumia_rerun_count
+    // here. "success" at this point only means Jumia's create call queued
+    // the listing as pending_approval — the real accept/reject verdict
+    // comes back later, asynchronously, from refreshPendingFeedStatus
+    // below, which is where that bookkeeping actually gets cleared (on a
+    // genuine "live" outcome). Clearing it here used to let an identical
+    // rejection (e.g. the same non-integer capacity_liter value redrafted
+    // unchanged) loop forever: every "Fix & resubmit" queued successfully,
+    // resetting the cap, only for the async review to reject it the same
+    // way again — see shouldBlockRepeatedAutoFix's doc comment, which this
+    // defeated for exactly the case it was written to catch.
     await db
       .from("listings")
       .update({
-        status:                  "pending_approval",
-        jumia_ref:               result.jumia_ref,
-        jumia_error:             null,
-        jumia_synced_at:         new Date().toISOString(),
-        // Clear the auto-fix loop-cap bookkeeping — a successful push means
-        // whatever the last rejection was is resolved, so the next one (if
-        // any) is a fresh problem, not a repeat. See rejectionFingerprint.
-        jumia_rerun_fingerprint: null,
-        jumia_rerun_count:       0,
-        updated_at:              new Date().toISOString(),
+        status:                    "pending_approval",
+        jumia_ref:                 result.jumia_ref,
+        jumia_error:               null,
+        jumia_synced_at:           new Date().toISOString(),
+        // Carried forward so refreshPendingFeedStatus can log this feed's
+        // eventual per-SKU outcome against the content that produced it.
+        jumia_payload_fingerprint: payloadFingerprint,
+        updated_at:                new Date().toISOString(),
       })
       .eq("id", listingId);
 
@@ -479,6 +499,11 @@ export async function pushListingToJumia(
   // as a missing price, so it comes back the same way: a validation error
   // naming the fields, with the draft left intact to fix.
   if (result.blocked === "missing_required") {
+    await logFeedOutcome({
+      listingId, feedId: null, sellerSku: row.sku, country,
+      categoryCode: row.category_code, outcome: "blocked_locally",
+      rawError: result.error, payloadFingerprint,
+    });
     // Hand the claim back. Nothing reached Jumia, so the listing must
     // return to a state it can be pushed from once the seller fills the
     // gaps — otherwise it sits at 'processing' forever: the feed cron only
@@ -494,6 +519,19 @@ export async function pushListingToJumia(
   if (errMsg.includes("401") || errMsg.includes("403") || errMsg.toLowerCase().includes("unauthor")) {
     await markNeedsReconnect(db, userId);
   }
+
+  // result.raw is only ever non-null when Jumia's create-feed endpoint
+  // actually answered (see pushProductsToJumia) — every local-refusal
+  // branch there (no schema yet, a blocked variant value, restricted
+  // words/brand/category) returns raw: null. That's the difference
+  // between a string worth writing a regression test against (Jumia's own
+  // wording) and one that is ours to begin with.
+  await logFeedOutcome({
+    listingId, feedId: result.jumia_ref, sellerSku: row.sku, country,
+    categoryCode: row.category_code,
+    outcome: result.raw != null ? "rejected" : "blocked_locally",
+    rawError: result.error ?? "Unknown error from Jumia", payloadFingerprint,
+  });
 
   await db
     .from("listings")
@@ -538,30 +576,70 @@ export interface FeedResolution {
   rejectedSkus: string[];
 }
 
-/** First human-readable reason we can find, preferring the per-product
- *  errors (which name the actual variant's problem) over the feed-level
- *  ones. Jumia sometimes hands back objects rather than strings. */
-function firstErrorText(rejected: FeedProductInfo[], feedErrors: unknown[]): string | null {
+/**
+ * Every distinct human-readable rejection reason we can find, across ALL
+ * rejected items and the feed-level errors — not just the first.
+ *
+ * A real batch can fail several SKUs for genuinely DIFFERENT reasons in
+ * one feed (a variation value AND a decimal capacity, say). Storing only
+ * the first one meant a seller who fixed problem A and tapped "Fix &
+ * resubmit" only found out about problem B on the NEXT round trip, one
+ * tap at a time — the same rejection surfaced piecemeal instead of all at
+ * once. classifyJumiaRejection/buildRerunContext both work by testing
+ * wire-format substrings against whatever text they're handed, so joining
+ * every distinct reason (not paraphrasing them) lets a single redraft
+ * address everything Jumia actually said, when the underlying fixes don't
+ * conflict — and lets the seller see the whole picture even when they
+ * don't.
+ *
+ * Per-product reasons come first (they name the actual variant's
+ * problem), then feed-level ones, each reason kept exactly once. Jumia
+ * sometimes hands back objects rather than strings.
+ */
+function allErrorTexts(rejected: FeedProductInfo[], feedErrors: unknown[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (text: string) => {
+    const trimmed = text.trim();
+    if (trimmed && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      out.push(trimmed);
+    }
+  };
   for (const item of rejected) {
-    const first = item.errors.find((e) => typeof e === "string" && e.trim());
-    if (first) return first;
+    for (const e of item.errors) {
+      if (typeof e === "string") add(e);
+    }
   }
   for (const e of feedErrors) {
-    if (typeof e === "string" && e.trim()) return e;
-    if (e && typeof e === "object") return JSON.stringify(e);
+    if (typeof e === "string") add(e);
+    else if (e && typeof e === "object") add(JSON.stringify(e));
   }
-  return null;
+  return out;
+}
+
+type ResolutionCounts = { liveCount: number; totalCount: number; rejectedSkus: string[] };
+
+/** One resolution's message text, in the seller's terms — shared by the
+ *  single-listing notify below and the batched one, so the two render
+ *  identically for the same input. Says what actually happened, including
+ *  the partial case: a feed where four variants went live and one was
+ *  rejected used to be reported to the seller (when it was reported at
+ *  all) as a flat failure, which contradicted the four live products
+ *  sitting in their Vendor Center. */
+function resolutionLine(name: string, newStatus: string, errorMsg: string | null, counts: ResolutionCounts): string {
+  const partial = newStatus === "live" && counts.totalCount > counts.liveCount && counts.liveCount > 0;
+  return newStatus !== "live"
+    ? `⚠️ "${name}" was rejected by Jumia: ${errorMsg ?? "see the app for details"}`
+    : partial
+      ? `✅ "${name}" is live on Jumia — ${counts.liveCount} of ${counts.totalCount} variants went through.\n\n⚠️ Jumia rejected ${counts.rejectedSkus.length ? counts.rejectedSkus.join(", ") : "the rest"}. You can fix and resubmit just those from your listings.`
+      : `🎉 "${name}" is now live on Jumia!`;
 }
 
 /**
  * Tell a WhatsApp seller their listing resolved. Only fires for listings
  * that came from the chat flow — a web-app listing's seller watches the
  * app instead.
- *
- * Says what actually happened, including the partial case: a feed where
- * four variants went live and one was rejected used to be reported to the
- * seller (when it was reported at all) as a flat failure, which
- * contradicted the four live products sitting in their Vendor Center.
  *
  * Best-effort throughout: a failed lookup or send must never turn a
  * successful status refresh into an error for the caller.
@@ -570,9 +648,7 @@ async function notifyListingResolved(
   listingId: string,
   newStatus: string,
   errorMsg: string | null,
-  counts: { liveCount: number; totalCount: number; rejectedSkus: string[] } = {
-    liveCount: 0, totalCount: 0, rejectedSkus: [],
-  },
+  counts: ResolutionCounts = { liveCount: 0, totalCount: 0, rejectedSkus: [] },
 ): Promise<void> {
   try {
     const db = createServerClient();
@@ -591,13 +667,7 @@ async function notifyListingResolved(
     if (!wa.connected || !wa.phoneNumber) return;
 
     const name = (row.title as string | null) ?? "Your product";
-    const partial = newStatus === "live" && counts.totalCount > counts.liveCount && counts.liveCount > 0;
-
-    const text = newStatus !== "live"
-      ? `⚠️ "${name}" was rejected by Jumia: ${errorMsg ?? "see the app for details"}`
-      : partial
-        ? `✅ "${name}" is live on Jumia — ${counts.liveCount} of ${counts.totalCount} variants went through.\n\n⚠️ Jumia rejected ${counts.rejectedSkus.length ? counts.rejectedSkus.join(", ") : "the rest"}. You can fix and resubmit just those from your listings.`
-        : `🎉 "${name}" is now live on Jumia!`;
+    const text = resolutionLine(name, newStatus, errorMsg, counts);
 
     // A rejection gets a way out of it. Without this the message is a dead
     // end: Jumia's own wording ("The column [product_weight] is missing
@@ -617,10 +687,192 @@ async function notifyListingResolved(
   }
 }
 
+export interface ResolvedListingNotice {
+  listingId:    string;
+  title:        string | null;
+  /** The product's position in its WhatsApp batch (Product 1, Product 2,
+   *  ...) — used to label a "Fix product N" button/row when several
+   *  listings resolve in one cron pass, since "Fix & resubmit" alone
+   *  doesn't say which product it applies to. */
+  whatsappSeq:  number | null;
+  batchId:      string;
+  newStatus:    string;
+  errorMsg:     string | null;
+  counts:       ResolutionCounts;
+}
+
+/**
+ * Turn one refreshPendingFeedStatus result into a ResolvedListingNotice
+ * for the cron route to collect, or null when there's nothing to notify
+ * about — either the status didn't actually change this pass, or the
+ * listing has no whatsapp_batch_id (a web-app-only listing, which never
+ * had a WhatsApp notification to send in the first place — the same
+ * early-return notifyListingResolved has always had for this case).
+ *
+ * Pulled out of the cron route itself so this filtering has a test
+ * without needing to exercise the whole HTTP handler.
+ */
+export function toResolvedNotice(
+  listing: { id: string; title: string | null; whatsapp_batch_id: string | null; whatsapp_seq?: number | null },
+  before:  string,
+  result:  FeedResolution,
+): ResolvedListingNotice | null {
+  if (result.status === before || !listing.whatsapp_batch_id) return null;
+  return {
+    listingId:   listing.id,
+    title:       listing.title,
+    whatsappSeq: listing.whatsapp_seq ?? null,
+    batchId:     listing.whatsapp_batch_id,
+    newStatus:   result.status,
+    errorMsg:    result.error,
+    counts:      { liveCount: result.liveCount, totalCount: result.totalCount, rejectedSkus: result.rejectedSkus },
+  };
+}
+
+/**
+ * Notify one seller about every listing that resolved for ONE
+ * whatsapp_batch_id in a single cron pass — one message instead of one
+ * per listing.
+ *
+ * Real risk this closes: a 20-product "submit all" has Jumia resolve each
+ * product's async review at its own pace, often spread across many of the
+ * per-minute cron ticks (app/api/cron/jumia-feeds) rather than all at
+ * once. Before this, EVERY resolution called notifyListingResolved
+ * individually, so a batch could trickle in up to one "🎉 X is live!" /
+ * "⚠️ X was rejected" message per product — a real contributor to the
+ * ~108-message/20-product evidence behind the draft-phase fix in this same
+ * area (see finalizeBatch in lib/whatsapp/intake.ts).
+ *
+ * The single-item case renders IDENTICALLY to notifyListingResolved
+ * (same wording, same Fix & resubmit button) via the shared
+ * resolutionLine — this is the common case in practice, since most cron
+ * ticks resolve at most one or two products per batch, and nothing about
+ * that experience should change.
+ *
+ * When 2+ listings from the SAME batch resolve in the SAME tick, the
+ * message collapses into one combined summary text, plus a SEPARATE way
+ * to act on it — because a rejection buried in a wall of text with
+ * nothing to tap is a dead end. Real live example this closes: a
+ * 2-product batch where one went live and one was rejected for a
+ * category problem (a genuinely auto-fixable rejection —
+ * classifyJumiaRejection treats "can't list products in this category" as
+ * kind: "rerun") got a plain-text summary and a generic "Review listings"
+ * link that didn't even show the rejection reason or offer a retry —
+ * Fix & resubmit was reachable in principle but not in practice.
+ *
+ *   - 1-3 items: reply-buttons hold three per message (Meta's own cap), so
+ *     every REJECTED item gets its own "Fix product N" button in one
+ *     message. A live item needs no button — nothing to fix.
+ *   - 4+ items: a list holds up to 10 rows in ONE message (see sendList's
+ *     own doc comment on why this replaced button-message chunking) — so
+ *     EVERY item, live or rejected, gets a row, each labelled with its
+ *     status. Tapping a rejected row fixes it; tapping an already-live
+ *     row just confirms it's already live (see handleFixAndResubmit's own
+ *     early-return for a listing with nothing to fix) — one mechanism for
+ *     the whole list rather than two different tap behaviours to explain.
+ */
+export async function notifyBatchResolved(
+  phoneNumber: string,
+  batchId:     string,
+  items:       ResolvedListingNotice[],
+): Promise<void> {
+  if (items.length === 0) return;
+  try {
+    const { sendTextIfConfigured, sendButtonsIfConfigured, sendListIfConfigured, LIST_MAX_ROWS } = await import("@/lib/whatsapp/client");
+
+    if (items.length === 1) {
+      const item = items[0];
+      const name = item.title ?? "Your product";
+      const text = resolutionLine(name, item.newStatus, item.errorMsg, item.counts);
+      if (item.newStatus !== "live") {
+        await sendButtonsIfConfigured(phoneNumber, text, [{ id: `fix:${item.listingId}`, title: "Fix & resubmit" }]);
+        return;
+      }
+      await sendTextIfConfigured(phoneNumber, text);
+      return;
+    }
+
+    const rejected = items.filter((i) => i.newStatus !== "live");
+    const liveCount = items.length - rejected.length;
+    const lines = items.map((i) => resolutionLine(i.title ?? "Your product", i.newStatus, i.errorMsg, i.counts));
+    const header = rejected.length === 0
+      ? `🎉 Since your last update: ${liveCount} more product${liveCount === 1 ? "" : "s"} went live on Jumia!`
+      : liveCount === 0
+        ? `⚠️ Since your last update: ${rejected.length} product${rejected.length === 1 ? "" : "s"} ${rejected.length === 1 ? "was" : "were"} rejected by Jumia.`
+        : `Since your last update: ${liveCount} went live, ${rejected.length} rejected.`;
+
+    await sendTextIfConfigured(phoneNumber, [header, "", ...lines].join("\n"));
+
+    if (rejected.length === 0) return;
+
+    const label = (i: ResolvedListingNotice) => i.whatsappSeq != null ? `Product ${i.whatsappSeq}` : (i.title ?? "product");
+
+    if (items.length <= 3) {
+      await sendButtonsIfConfigured(
+        phoneNumber,
+        "Fix what didn't go through:",
+        rejected.map((i) => ({ id: `fix:${i.listingId}`, title: `Fix ${label(i)}`.slice(0, 20) })),
+      );
+      return;
+    }
+
+    const rows = items.map((i) => ({
+      id:          `fix:${i.listingId}`,
+      title:       label(i),
+      description: i.newStatus === "live"
+        ? "✅ Live on Jumia"
+        : `⚠️ Rejected — ${i.errorMsg ?? "see details"}`,
+    }));
+    for (let idx = 0; idx < rows.length; idx += LIST_MAX_ROWS) {
+      const chunk = rows.slice(idx, idx + LIST_MAX_ROWS);
+      await sendListIfConfigured(
+        phoneNumber,
+        idx === 0 ? "Tap a product to fix it, or see a live one's details:" : "…and the rest:",
+        "Pick a product",
+        chunk,
+      );
+    }
+  } catch (e) {
+    console.warn(`[push-listing] batch resolve notification failed for batch ${batchId}: ${(e as Error).message}`);
+  }
+}
+
+/**
+ * Fan out every listing that genuinely resolved in one cron pass for ONE
+ * user — grouped by whatsapp_batch_id (see notifyBatchResolved) so a
+ * multi-product batch gets at most one message per tick, not one per
+ * listing. A listing with no whatsapp_batch_id (a web-app-only seller)
+ * never reaches here to begin with — the cron route only adds an item for
+ * this when one is present, matching notifyListingResolved's own
+ * early-return for the same case.
+ *
+ * The seller's WhatsApp connection is looked up ONCE and reused across
+ * every batch, rather than once per batch or per listing.
+ */
+export async function notifyResolvedListings(userId: string, resolved: ResolvedListingNotice[]): Promise<void> {
+  if (resolved.length === 0) return;
+  try {
+    const { getWhatsAppConnection } = await import("@/lib/whatsapp/link");
+    const wa = await getWhatsAppConnection(userId);
+    if (!wa.connected || !wa.phoneNumber) return;
+
+    const byBatch = new Map<string, ResolvedListingNotice[]>();
+    for (const item of resolved) {
+      if (!byBatch.has(item.batchId)) byBatch.set(item.batchId, []);
+      byBatch.get(item.batchId)!.push(item);
+    }
+    for (const [batchId, items] of Array.from(byBatch)) {
+      await notifyBatchResolved(wa.phoneNumber, batchId, items);
+    }
+  } catch (e) {
+    console.warn(`[push-listing] notifyResolvedListings failed for user ${userId}: ${(e as Error).message}`);
+  }
+}
+
 export async function refreshPendingFeedStatus(
   accessToken: string,
   listing: { id: string; status: string; jumia_ref: string | null },
-  opts: { allowNonPending?: boolean } = {},
+  opts: { allowNonPending?: boolean; skipNotify?: boolean } = {},
 ): Promise<FeedResolution> {
   const isPending = listing.status === "pending_approval";
   if ((!isPending && !opts.allowNonPending) || !listing.jumia_ref) {
@@ -659,7 +911,8 @@ export async function refreshPendingFeedStatus(
       ? "live"
       : liveCount > 0 ? "live" : "failed";
 
-    const reason = firstErrorText(rejected, feedStatus.errors);
+    const reasons = allErrorTexts(rejected, feedStatus.errors);
+    const reason = reasons.length ? reasons.join(" | ") : null;
     const errorMsg = failedCount === 0
       ? null
       : liveCount > 0
@@ -675,6 +928,15 @@ export async function refreshPendingFeedStatus(
       jumia_error: errorMsg,
       updated_at:  new Date().toISOString(),
     };
+    // This is the genuine resolution the "Fix & resubmit" loop-cap is
+    // waiting for — see the comment in the success branch above. Only clear
+    // it once Jumia has actually confirmed something live, not merely
+    // queued; a feed that comes back "failed" leaves the bookkeeping in
+    // place so a repeat of the same rejection is still recognised as one.
+    if (newStatus === "live") {
+      updates.jumia_rerun_fingerprint = null;
+      updates.jumia_rerun_count       = 0;
+    }
     // Take the sid/qc off a product that actually succeeded — details[0]
     // may well be the rejected one, which carries no usable sid.
     const succeeded = details.find((p) => p.productSid);
@@ -682,12 +944,44 @@ export async function refreshPendingFeedStatus(
     if (succeeded?.qcStatus)   updates.jumia_qc_status   = succeeded.qcStatus;
 
     const db = createServerClient();
-    await db.from("listings").update(updates).eq("id", listing.id);
+    const { data: updatedRows } = await db
+      .from("listings")
+      .update(updates)
+      .eq("id", listing.id)
+      .select("category_code, jumia_payload_fingerprint");
+    const updatedRow = (updatedRows as { category_code?: string | null; jumia_payload_fingerprint?: string | null }[] | null)?.[0];
+
+    // One outcome row per product Jumia actually itemised, so a feed with
+    // a partial rejection logs the SKU that failed rather than the whole
+    // listing — falls back to one listing-level row when Jumia gave no
+    // per-item detail at all. No per-listing "country" here (this function
+    // never has the seller's credentials in scope, only the feed's own
+    // response) — left null rather than threading it through every caller.
+    const outcomeItems = details.length > 0
+      ? details.map((p) => ({
+          sellerSku: p.sellerSku,
+          outcome:   (rejected.includes(p) ? "rejected" : "live") as FeedOutcomeKind,
+          rawError:  rejected.includes(p) ? (p.errors.find((e) => e.trim()) ?? reason ?? null) : null,
+        }))
+      : [{ sellerSku: null, outcome: (newStatus === "live" ? "live" : "rejected") as FeedOutcomeKind, rawError: errorMsg }];
+
+    await Promise.all(outcomeItems.map((item) => logFeedOutcome({
+      listingId:          listing.id,
+      feedId:             listing.jumia_ref,
+      sellerSku:          item.sellerSku,
+      categoryCode:       updatedRow?.category_code ?? null,
+      outcome:            item.outcome,
+      rawError:           item.rawError,
+      payloadFingerprint: updatedRow?.jumia_payload_fingerprint ?? null,
+    })));
 
     // Only the pending → resolved transition is news. Re-checking an
     // already-resolved listing (what /api/jumia/diagnose does) must not
-    // message the seller again.
-    if (isPending) {
+    // message the seller again. skipNotify is the OTHER way a caller opts
+    // out of this — the per-minute cron (app/api/cron/jumia-feeds) sets it
+    // so it can batch every resolution from one whatsapp_batch_id into a
+    // single message instead of one per listing (see notifyBatchResolved).
+    if (isPending && !opts.skipNotify) {
       await notifyListingResolved(listing.id, newStatus, errorMsg, { liveCount, totalCount, rejectedSkus });
     }
     return { status: newStatus, error: errorMsg, liveCount, totalCount, rejectedSkus };

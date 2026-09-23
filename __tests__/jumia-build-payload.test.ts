@@ -15,16 +15,23 @@ import { buildJumiaPayload } from "@/lib/jumia/api";
 import type { ListingRow } from "@/lib/supabase/types";
 
 jest.mock("@/lib/jumia/categories", () => ({
-  getCategoryAttributes: jest.fn(),
-  getVariantAxes: jest.fn(async () => []),
+  getCategoryAttributes:   jest.fn(),
+  getVariantAxes:          jest.fn(async () => []),
+  getCategoryByCode:       jest.fn(async () => null),
+  fetchAttributesFromJumia: jest.fn(),
+  upsertAttributes:        jest.fn(),
 }));
 jest.mock("@/lib/jumia/brands", () => ({
   findBrandExact: jest.fn(async () => null),
 }));
 
-import { getCategoryAttributes } from "@/lib/jumia/categories";
+import { getCategoryAttributes, getVariantAxes, getCategoryByCode, fetchAttributesFromJumia, upsertAttributes } from "@/lib/jumia/categories";
 
-const mockGetCategoryAttributes = getCategoryAttributes as jest.Mock;
+const mockGetCategoryAttributes    = getCategoryAttributes as jest.Mock;
+const mockGetVariantAxes           = getVariantAxes as jest.Mock;
+const mockGetCategoryByCode        = getCategoryByCode as jest.Mock;
+const mockFetchAttributesFromJumia = fetchAttributesFromJumia as jest.Mock;
+const mockUpsertAttributes         = upsertAttributes as jest.Mock;
 
 const realFetch = global.fetch;
 beforeEach(() => {
@@ -76,6 +83,174 @@ describe("buildJumiaPayload — fail closed on an empty (unsynced) schema", () =
     const built = await buildJumiaPayload("token", baseListing, [], "GHS", "GH");
     expect(built.error).toBeUndefined();
     expect(built.products.length).toBe(1);
+  });
+
+  it("fetches the schema live and caches it, rather than failing closed, when nobody has ever pushed to this category before", async () => {
+    // The cache read (getCategoryAttributes) comes back empty — nobody has
+    // ever selected this category before — but the category itself is
+    // real and listable (has an attribute_set_sid), so a live fetch
+    // should succeed instead of the seller being told to manually re-pick
+    // it. Confirmed live, 2026-09-20: three products in one 20-product
+    // batch failed exactly this way.
+    mockGetCategoryAttributes.mockResolvedValue([]);
+    mockGetCategoryByCode.mockResolvedValue({ code: 500001, attribute_set_sid: "sid-live-fetch" });
+    mockFetchAttributesFromJumia.mockResolvedValue([
+      { name: "color_family", label: "Colour", type: "select", allowed_values: [], required: false, is_variant: false },
+    ]);
+
+    const built = await buildJumiaPayload("token", baseListing, [], "GHS", "GH");
+
+    expect(built.error).toBeUndefined();
+    expect(built.products.length).toBe(1);
+    expect(mockFetchAttributesFromJumia).toHaveBeenCalledWith("token", "sid-live-fetch");
+    expect(mockUpsertAttributes).toHaveBeenCalledWith(500001, expect.any(Array));
+  });
+
+  it("still fails closed when the on-demand fetch also comes up empty", async () => {
+    mockGetCategoryAttributes.mockResolvedValue([]);
+    mockGetCategoryByCode.mockResolvedValue({ code: 500001, attribute_set_sid: "sid-live-fetch" });
+    mockFetchAttributesFromJumia.mockResolvedValue([]);
+
+    const built = await buildJumiaPayload("token", baseListing, [], "GHS", "GH");
+
+    expect(built.error).toMatch(/JUMIA_NO_SCHEMA/);
+    expect(built.products).toEqual([]);
+  });
+});
+
+describe("buildJumiaPayload — preflightNotes surfaces raw, reason-tagged notes", () => {
+  // Confirms the plumbing added for lib/whatsapp/readiness.ts's Ready/Held
+  // assessor end to end, through the REAL buildAttributes/preflightAttributes
+  // path (not a mock) — a caller deciding Ready vs Held needs the raw
+  // .reason tag; `adjustments` alone has already turned it into a sentence
+  // for a seller, losing the distinction between "harmless repair" and
+  // "this got dropped and the seller should know before submitting".
+  it("carries a decimal_mismatch_blocked note for a whole-number-only attribute given a fraction", async () => {
+    mockGetCategoryAttributes.mockResolvedValue([
+      { name: "capacity_litres", label: "Capacity (L)", type: "number", allowed_values: [], required: false, is_variant: false, decimal_places: 0 },
+    ]);
+    const listing = { ...baseListing, dynamic_attributes: { capacity_litres: "1.8" } };
+    const built = await buildJumiaPayload("token", listing, [], "GHS", "GH");
+
+    expect(built.error).toBeUndefined();
+    const note = built.preflightNotes.find((n) => n.attribute === "capacity_litres");
+    expect(note?.reason).toBe("decimal_mismatch_blocked");
+    // Dropped from the actual payload, not merely flagged.
+    expect(built.products[0].attributes.some((a: { name: string }) => a.name === "capacity_litres")).toBe(false);
+  });
+
+  it("carries no preflightNotes at all for a clean push", async () => {
+    mockGetCategoryAttributes.mockResolvedValue([
+      { name: "color_family", label: "Colour", type: "select", allowed_values: [], required: false, is_variant: false },
+    ]);
+    const built = await buildJumiaPayload("token", baseListing, [], "GHS", "GH");
+    expect(built.preflightNotes).toEqual([]);
+  });
+
+  // Real category schema, category 1022979 "Coffee, Tea & Espresso
+  // Appliances" (staging canary, 2026-09-21) — declares six capacity-shaped
+  // fields. dynamic_attributes for the actual live listing carried NONE of
+  // them; "1.8L" only ever existed as prose in the title/description. This
+  // is a genuinely different gap from the one above: nothing was dropped
+  // by preflight, because nothing capacity-shaped was ever built in the
+  // first place for preflight to see — proving lib/whatsapp/readiness.ts's
+  // "no attribute named capacity* anywhere in the built payload" check has
+  // real data to detect, not just a hypothetical.
+  it("builds no capacity-shaped attribute at all when dynamic_attributes never captured one, even though the schema declares six", async () => {
+    mockGetCategoryAttributes.mockResolvedValue([
+      { name: "capacity",         label: "Capacity",         type: "number", allowed_values: [], required: false, is_variant: false, decimal_places: 0, not_zero_or_negative: true },
+      { name: "capacity_kg",      label: "Capactity KG",     type: "number", allowed_values: [], required: false, is_variant: false, decimal_places: 0 },
+      { name: "capacity_kva",     label: "Capacity KVA",     type: "number", allowed_values: [], required: false, is_variant: false, decimal_places: 0 },
+      { name: "capacity_liter",   label: "Capacity Liter",   type: "number", allowed_values: [], required: false, is_variant: false, decimal_places: 0, not_zero_or_negative: true },
+      { name: "capacity_litres",  label: "Capacity Litres",  type: "string", allowed_values: [], required: false, is_variant: false },
+      { name: "capacity_slices",  label: "Capacity Slices",  type: "string", allowed_values: [], required: false, is_variant: false },
+      { name: "color_family",     label: "Color family",     type: "select", allowed_values: [], required: false, is_variant: false },
+      { name: "manufacturer_txt", label: "From the Manufacturer", type: "textarea", allowed_values: [], required: false, is_variant: false },
+    ]);
+    const listing = {
+      ...baseListing,
+      title: "Electric Kettle - 1.8L Capacity",
+      dynamic_attributes: { color: "Silver", color_family: "Silver", product_weight: "1.2", manufacturer_txt: "N/A" },
+    };
+    const built = await buildJumiaPayload("token", listing, [], "GHS", "GH");
+
+    expect(built.error).toBeUndefined();
+    expect(built.preflightNotes).toEqual([]); // nothing to drop — nothing capacity-shaped was ever built
+    expect(built.products[0].attributes.some((a: { name: string }) => /capacity/i.test(a.name))).toBe(false);
+  });
+
+  // Real category schema, category 1012714 "... Tee" (staging canary round
+  // 2, 2026-09-21): the category's true is_variant field is "size", not
+  // "variation". PER_VARIANT_ATTRIBUTE_NAMES (lib/jumia/api.ts) only ever
+  // treats the literal name "variation" as per-variant, so "size" originally
+  // went out through the generic dynamic_attributes loop as ONE static
+  // top-level attribute, cloned unchanged into every variant product — the
+  // confirmed source of the false "✅ Ready" the canary caught. PR #163
+  // fixed this at the source: when a variant's `variation` is itself a size
+  // abbreviation, the cloned "size" attribute is overwritten to match it.
+  // This asserts that fix — each variant now carries its own size — rather
+  // than the bug it replaced.
+  it("overwrites a non-'variation' is_variant field to match each variant's own size-shaped variation", async () => {
+    mockGetCategoryAttributes.mockResolvedValue([
+      { name: "size", label: "Size", type: "enum", allowed_values: ["S", "M", "L", "XL"], required: true, is_variant: true },
+      { name: "manufacturer_txt", label: "From the Manufacturer", type: "textarea", allowed_values: [], required: false, is_variant: false },
+    ]);
+    mockGetVariantAxes.mockResolvedValueOnce([
+      { name: "size", label: "Size", type: "enum", allowed_values: ["S", "M", "L", "XL"], required: true, is_variant: true, min_length: null, max_length: null },
+    ]);
+    const listing = { ...baseListing, dynamic_attributes: { size: "M" } };
+    const variants = ["M", "L", "XL"].map((v, i) => ({
+      id: `v${i}`, listing_id: "listing-1", variation: v, seller_sku: `SKU-1-${v}`,
+      gtin: null, quantity: 1, global_price: null, sale_price: null,
+      sale_start_date: null, sale_end_date: null, created_at: "2026-01-01T00:00:00Z",
+    }));
+
+    const built = await buildJumiaPayload("token", listing, variants, "GHS", "GH");
+
+    expect(built.error).toBeUndefined();
+    expect(built.products.map((p) => p.variation)).toEqual(["M", "L", "XL"]);
+    const sizeValues = built.products.map(
+      (p) => p.attributes.find((a: { name: string }) => a.name === "size")?.value,
+    );
+    expect(sizeValues).toEqual(["M", "L", "XL"]);
+  });
+
+  // Real production incident, 2026-09-23, category 1013693 ("... Sandals"):
+  // the category's true is_variant attribute is "size", holding NUMERIC
+  // shoe sizes (40/41/42/43) — not a clothing letter size. The fix above
+  // used to key off a fixed regex (XS/S/M/L/XL/XXL/XXXL) rather than the
+  // category's own schema, so a numeric size never matched it: the static
+  // listing-level `size` attribute stayed frozen at one value (e.g. "42")
+  // across every variant instead of tracking each one's own size. Jumia
+  // saw all four variants claiming the same size and rejected three of
+  // them: "Duplicate Variation on Product with parentSKU [...] and
+  // variation [42]." This is the same bug as the letter-size case above,
+  // just for an axis whose values don't look like a letter size — proving
+  // the fix is driven by variantAxes (the category's real schema), not by
+  // guessing from the value's shape.
+  it("overwrites a non-'variation' is_variant field for a NUMERIC size axis too, not just letter sizes", async () => {
+    mockGetCategoryAttributes.mockResolvedValue([
+      { name: "size", label: "Size", type: "enum", allowed_values: ["40", "41", "42", "43"], required: true, is_variant: true },
+      { name: "heel_type", label: "Heel Type", type: "enum", allowed_values: [], required: false, is_variant: false },
+    ]);
+    mockGetVariantAxes.mockResolvedValueOnce([
+      { name: "size", label: "Size", type: "enum", allowed_values: ["40", "41", "42", "43"], required: true, is_variant: true, min_length: null, max_length: null },
+    ]);
+    const listing = { ...baseListing, dynamic_attributes: { size: "42" } };
+    const variants = ["40", "41", "42", "43"].map((v, i) => ({
+      id: `v${i}`, listing_id: "listing-1", variation: v, seller_sku: `PA-TEST-${v}`,
+      gtin: null, quantity: 1, global_price: null, sale_price: null,
+      sale_start_date: null, sale_end_date: null, created_at: "2026-01-01T00:00:00Z",
+    }));
+
+    const built = await buildJumiaPayload("token", listing, variants, "GHS", "GH");
+
+    expect(built.error).toBeUndefined();
+    expect(built.products.map((p) => p.variation)).toEqual(["40", "41", "42", "43"]);
+    const sizeValues = built.products.map(
+      (p) => p.attributes.find((a: { name: string }) => a.name === "size")?.value,
+    );
+    expect(sizeValues).toEqual(["40", "41", "42", "43"]);
   });
 });
 

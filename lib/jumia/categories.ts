@@ -790,6 +790,30 @@ export async function upsertAttributes(
     .upsert(rows, { onConflict: "category_code,name" });
 }
 
+/**
+ * Delete specific attributes from a category's cached schema.
+ *
+ * Exists for the "not_visible_attributes" rejection remedy
+ * (lib/jumia/rejection-remedy.ts): Jumia's `/catalog/attribute-sets/{sid}`
+ * endpoint can return an attribute as part of a shared attribute set that
+ * Jumia's real per-category push validation then rejects as "not visible
+ * for category" — a mismatch the sync process has no way to detect on its
+ * own. Once a live rejection names the offending attributes, removing them
+ * here is what actually clears it: preflightAttributes (lib/jumia/
+ * preflight.ts) already drops any attribute not present in the cached
+ * schema before every push, so a category this function has corrected
+ * self-heals with no redraft needed.
+ */
+export async function removeAttributesFromCache(categoryCode: number, names: string[]): Promise<void> {
+  if (!names.length) return;
+  const db = createServerClient();
+  await db
+    .from("jumia_category_attributes")
+    .delete()
+    .eq("category_code", categoryCode)
+    .in("name", names);
+}
+
 // ─── Batched sync helpers ─────────────────────────────────────────────────────
 //
 // The admin UI calls `fetchCategoriesPage(token, n)` once per Jumia page,
@@ -876,13 +900,31 @@ export async function fetchCategoriesPage(
 }
 
 /**
- * Read every category's path from Supabase, compute is_leaf for each
- * (a row is a leaf iff no other row's path starts with this row's path
- * followed by " > "), and batch-update. Single DB read + ~5 batch updates
- * — typically <1s.
+ * Read every category's path from Supabase, compute is_leaf for each, and
+ * batch-update.
  *
- * Called once at the end of a batched sync, AFTER the last page is in.
- * Safe to call ad-hoc to repair stale is_leaf values.
+ * A row is a leaf iff no other row's path is exactly this row's path plus
+ * one more " > segment" — i.e. iff no other row is its DIRECT child. That
+ * is enough to also catch a deeper descendant: a category with a
+ * grandchild necessarily has a child too (Jumia's category feed returns
+ * every level, including non-leaf "department" rows, not just leaves — an
+ * intermediate path is never a gap that only shows up several levels down
+ * on some other row), so the check never needs to look past one level.
+ *
+ * That distinction is why this function was rewritten: the previous
+ * version compared every row's path against every OTHER row's path with
+ * `startsWith` — an O(n²) scan, ~768,000,000 string comparisons for the
+ * live 27,720-row table. That's almost certainly why is_leaf sat wrong
+ * for nearly every category in production (confirmed live, 2026-09-20:
+ * 27,719 of 27,720 rows read is_leaf=false) even though the admin "sync
+ * finalize" step that calls this exists and someone plausibly did click
+ * it — comparing immediate parents only is a single O(n) pass instead.
+ *
+ * Called once at the end of a batched sync, AFTER the last page is in, and
+ * on a schedule (see the "recompute-category-leaves" cron in
+ * supabase/schedule-workers.sql) as a safety net — the sync's own
+ * provisional is_leaf=false on every page write means this can silently
+ * go stale again if a future sync's finalize step ever fails to run.
  */
 export async function recomputeIsLeafForAllCategories(): Promise<{
   updated: number;
@@ -902,17 +944,21 @@ export async function recomputeIsLeafForAllCategories(): Promise<{
   );
   if (all.length === 0) return { updated: 0, total: 0 };
 
-  const lowerPaths = all.map((r) => r.path.toLowerCase());
+  // Every row's immediate parent path — i.e. every row's path with its
+  // last " > segment" stripped. A row is non-leaf iff its own path is in
+  // this set.
+  const parentPaths = new Set<string>();
+  for (const row of all) {
+    const idx = row.path.lastIndexOf(" > ");
+    if (idx >= 0) parentPaths.add(row.path.slice(0, idx).toLowerCase());
+  }
 
   // Compute is_leaf for each row. Only write back if it changed.
   const updates: Array<{ code: number; is_leaf: boolean }> = [];
-  for (let i = 0; i < all.length; i++) {
-    const myPath = lowerPaths[i];
-    const isLeaf = !lowerPaths.some(
-      (p, j) => j !== i && p.startsWith(myPath + " > ")
-    );
-    if (Boolean(all[i].is_leaf) !== isLeaf) {
-      updates.push({ code: all[i].code, is_leaf: isLeaf });
+  for (const row of all) {
+    const isLeaf = !parentPaths.has(row.path.toLowerCase());
+    if (Boolean(row.is_leaf) !== isLeaf) {
+      updates.push({ code: row.code, is_leaf: isLeaf });
     }
   }
 

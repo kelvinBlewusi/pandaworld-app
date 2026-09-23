@@ -35,6 +35,12 @@ const CONNECTORS = new Set([
   "colours", "colors", "option", "options", "variant", "variants", "one",
   "ones", "size", "sizes", "version", "versions", "them", "this", "that",
   "i", "we", "my", "our", "it", "for", "of", "to", "sale", "sell", "selling",
+  // Additive fillers. "we have blue too" / "black, and also red" name
+  // exactly as many options as without the filler word — treating "too"
+  // or "also" as a candidate option name is what made a live batch drop a
+  // seller's whole colour claim, because neither one is ever going to
+  // match a colour/size the photo actually shows.
+  "too", "also",
 ]);
 
 /** Markers that introduce a restriction on what's in stock. Each captures
@@ -51,6 +57,11 @@ const CLAIM_PATTERNS: RegExp[] = [
   /\b(?:i|we)\s+(?:only\s+)?(?:have|got|stock)\s+(?:only\s+)?([^.!?\n]+)/i,
   // "available: red, blue" / "in stock - red"
   /\b(?:available|in\s+stock)\s*[:\-]\s*([^.!?\n]+)/i,
+  // "Sizes Medium Large Xtra Large" / "Size: S, M, L" — WhatsApp captions
+  // routinely list sizes this way; without this pattern extractVariantClaim
+  // returns null and noteWarningsFor never Holds even when the draft soft-
+  // snapped "Xtra Large" → XL (staging canary 2026-09-22).
+  /\bsizes?\s*[:\-]?\s*([^.!?\n]+)/i,
   // Bare "only red and blue" — last, so the fuller forms above win.
   /\bonly\s+([^.!?\n]+)/i,
 ];

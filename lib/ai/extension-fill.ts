@@ -61,7 +61,7 @@ function hintFor(f: HarvestedField): string {
   if (l.includes("name") && !l.includes("brand")) {
     return " — see CONTENT STYLE below for the exact title format. NEVER a single generic word (e.g. \"Generic\", \"Product\") — that has happened in production and is worse than leaving it blank.";
   }
-  if (l.includes("brand")) return " — ONLY if a logo/wordmark is clearly visible; otherwise omit.";
+  if (l.includes("brand")) return " — ALWAYS omit. Never read a brand off a logo or wordmark in the photo; only fill this if the seller's notes explicitly state a real brand name (applyBrandDefault in the route handles the Generic/Fashion fallback otherwise).";
   if (l.includes("description")) return " — see CONTENT STYLE below for the exact structure and tone.";
   if (l.includes("highlight")) return " — see CONTENT STYLE below for the exact bullet format.";
   if (l.includes("box")) return " — one item per line as <p>1x Item<br>1x Item</p> — a real line break between each item, never all on one line (Jumia's format).";

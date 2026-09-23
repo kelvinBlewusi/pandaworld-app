@@ -13,14 +13,14 @@
  */
 
 import { createServerClient } from "@/lib/supabase/server";
-import { columnFor, readAttributeValue } from "@/lib/jumia/attribute-mapping";
-import { preflightAttributes, summarisePreflight, snapToAllowed, type PreflightNote } from "@/lib/jumia/preflight";
-import { refreshAccessToken, JUMIA_API_BASE } from "@/lib/jumia/oauth";
+import { columnFor, readAttributeValue, aliasesForColumn, type MappedColumn } from "@/lib/jumia/attribute-mapping";
+import { preflightAttributes, summarisePreflight, snapToAllowedWithSynonyms, type PreflightNote } from "@/lib/jumia/preflight";
+import { refreshAccessToken, JumiaTokenError, JUMIA_API_BASE } from "@/lib/jumia/oauth";
 import { mockCategories } from "@/lib/mock/categories";
 import { findBrandExact } from "@/lib/jumia/brands";
 import { stripBrandFromTitle } from "@/lib/ai/jumia-content-policy";
 import { encrypt, decrypt } from "@/lib/security/token-crypto";
-import { getCategoryAttributes, getVariantAxes, type JumiaCategoryAttribute } from "@/lib/jumia/categories";
+import { getCategoryAttributes, getVariantAxes, getCategoryByCode, fetchAttributesFromJumia, upsertAttributes, type JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import { isFashionCategory } from "@/lib/jumia/fashion-category";
 import { assertListingReady } from "@/lib/jumia/listing-ready";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
@@ -95,6 +95,140 @@ export function countryForCurrency(currency: string): string {
   return hit?.[0] ?? DEFAULT_JUMIA_COUNTRY;
 }
 
+// ─── Token refresh ──────────────────────────────────────────────────────────
+
+/**
+ * Jumia's documented refresh-error codes that mean the connection is
+ * really, definitively dead — the refresh_token itself has been revoked
+ * or was never valid for this client. Anything else (a network error, a
+ * timeout, a 5xx, an error code we don't recognise) is treated as
+ * transient: the access token might still have a few minutes of life
+ * left, and the next call — this cron tick, the next page load — gets
+ * another chance. Getting this wrong in the strict direction is what
+ * turned "Jumia had a bad moment" into "reconnect your account", every
+ * single day, for every seller.
+ */
+const DEFINITIVE_AUTH_DEATH_CODES = new Set(["invalid_grant", "invalid_token", "unauthorized_client"]);
+
+export function isDefinitiveAuthDeath(status: number, code: string | undefined): boolean {
+  return !!code && DEFINITIVE_AUTH_DEATH_CODES.has(code);
+}
+
+const REFRESH_LOCK_POLL_MS     = 400;
+const REFRESH_LOCK_MAX_WAIT_MS = 4_000;
+const REFRESH_LOCK_STALE_AFTER = "30 seconds";
+
+/**
+ * The ONE place a Jumia connection's access token is ever refreshed —
+ * getValidJumiaCredentials, the feed-poll cron, and the connection health
+ * check all route through this instead of each calling refreshAccessToken
+ * inline.
+ *
+ * Two things every inline refresh got wrong on its own:
+ *
+ * 1. Wrong credentials. A seller's refresh_token is bound to THEIR OWN
+ *    Vendor Center application (app_id/app_secret) — refreshAccessToken
+ *    falls back to this platform's own JUMIA_CLIENT_ID/SECRET when no
+ *    client is passed, which Jumia's auth server rejects outright for a
+ *    token issued to a different client. Every caller now has to pass the
+ *    connection's own app_id/app_secret — there is no safe default.
+ *
+ * 2. Racing rotations. Jumia rotates the refresh_token on every successful
+ *    refresh and invalidates the previous one (its own "Refresh Token Best
+ *    Practices"). Two callers noticing the same expiring token at once —
+ *    the cron, a page load's health check, an in-flight push — and both
+ *    refreshing independently each get back a DIFFERENT new refresh_token;
+ *    whichever write loses persists a token Jumia has already thrown away,
+ *    and the connection dies for good the next time it's needed. The
+ *    claim_jumia_refresh_lock() row lock (see the migration) makes only
+ *    one of them actually call Jumia; the rest wait for it to finish and
+ *    reuse what it got.
+ */
+export async function refreshJumiaConnection(
+  db:                ReturnType<typeof createServerClient>,
+  userId:            string,
+  refreshTokenPlain: string,
+  appId:             string | undefined,
+  appSecret:         string | undefined,
+): Promise<{ accessToken: string; tokenExpiresAt: string }> {
+  const { data: claimedRows, error: claimError } = await db.rpc("claim_jumia_refresh_lock", {
+    p_user_id:    userId,
+    p_stale_after: REFRESH_LOCK_STALE_AFTER,
+  });
+  if (claimError) {
+    console.warn(`[Jumia refresh] lock claim failed for ${userId}: ${claimError.message}`);
+  }
+  const won = !claimError && Array.isArray(claimedRows) && claimedRows.length > 0;
+
+  if (!won) {
+    // Someone else is already refreshing this connection — wait for them
+    // rather than racing a second refresh that would invalidate whichever
+    // rotated refresh_token loses.
+    const deadline = Date.now() + REFRESH_LOCK_MAX_WAIT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, REFRESH_LOCK_POLL_MS));
+      const { data: row } = await db
+        .from("jumia_connections")
+        .select("access_token, token_expires_at, refresh_locked_at, status")
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (!row) break;
+      if (row.status === "needs_reconnect") throw new Error("JUMIA_RECONNECT_REQUIRED");
+      const stillLocked = row.refresh_locked_at
+        && Date.now() - new Date(row.refresh_locked_at as string).getTime() < 30_000;
+      const hasHeadroom = row.token_expires_at
+        && new Date(row.token_expires_at as string).getTime() > Date.now() + 60_000;
+      if (!stillLocked && hasHeadroom) {
+        return {
+          accessToken:    decrypt(row.access_token as string),
+          tokenExpiresAt: row.token_expires_at as string,
+        };
+      }
+    }
+    // Gave up waiting rather than hang forever — fail open into our own
+    // refresh attempt below. A redundant refresh is wasteful, not unsafe,
+    // on its own; the loss only happens when two refreshes land AT ONCE,
+    // which the lock already prevented for whichever call won it.
+  }
+
+  try {
+    const fresh = await refreshAccessToken(refreshTokenPlain, appId, appSecret);
+    const tokenExpiresAt = new Date(Date.now() + fresh.expires_in * 1000).toISOString();
+    const { error: writeError } = await db.from("jumia_connections").update({
+      access_token:      encrypt(fresh.access_token),
+      // Always store whatever Jumia returned — never fall back to the old
+      // refresh_token. Jumia has already invalidated it as part of this
+      // same rotation, so keeping it around just means the NEXT refresh
+      // fails with a definitive, unrecoverable error.
+      refresh_token:      fresh.refresh_token ? encrypt(fresh.refresh_token) : null,
+      token_expires_at:    tokenExpiresAt,
+      status:              "active",
+      refresh_locked_at:   null,
+      updated_at:          new Date().toISOString(),
+    }).eq("user_id", userId);
+    if (writeError) {
+      // A refreshed token we failed to persist is worse than not
+      // refreshing at all — every later read decrypts the OLD row and
+      // may retry with a refresh_token Jumia has already rotated away.
+      console.error(`[Jumia refresh] got a fresh token for ${userId} but the DB write failed: ${writeError.message}`);
+      throw new Error(`JUMIA_REFRESH_PERSIST_FAILED: ${writeError.message}`);
+    }
+    return { accessToken: fresh.access_token, tokenExpiresAt };
+  } catch (e) {
+    await db.from("jumia_connections").update({ refresh_locked_at: null }).eq("user_id", userId);
+
+    if (e instanceof JumiaTokenError && isDefinitiveAuthDeath(e.status, e.code)) {
+      console.error(`[Jumia refresh] definitive auth death for ${userId}: ${e.message}`);
+      await markNeedsReconnect(db, userId);
+      throw new Error("JUMIA_RECONNECT_REQUIRED");
+    }
+    // Transient: network error, timeout, 5xx, or an error we don't
+    // recognise as definitive. Status is left untouched on purpose.
+    console.warn(`[Jumia refresh] transient failure for ${userId}: ${(e as Error).message}`);
+    throw new Error("JUMIA_REFRESH_TRANSIENT");
+  }
+}
+
 // ─── Token + shopId retrieval ─────────────────────────────────────────────────
 
 export async function getValidJumiaCredentials(userId: string): Promise<{
@@ -111,9 +245,8 @@ export async function getValidJumiaCredentials(userId: string): Promise<{
     .eq("user_id", userId)
     .maybeSingle();
 
-  if (error || !conn)                     throw new Error("JUMIA_NOT_CONNECTED");
-  if (conn.status === "revoked")          throw new Error("JUMIA_NOT_CONNECTED");
-  if (conn.status === "needs_reconnect")  throw new Error("JUMIA_RECONNECT_REQUIRED");
+  if (error || !conn)            throw new Error("JUMIA_NOT_CONNECTED");
+  if (conn.status === "revoked") throw new Error("JUMIA_NOT_CONNECTED");
 
   // "credential_auth" is the sentinel stored when credentials were saved but
   // the seller hasn't yet completed the OAuth authorization code flow.
@@ -129,43 +262,28 @@ export async function getValidJumiaCredentials(userId: string): Promise<{
   let accessToken = decrypt(conn.access_token as string);
   const refreshTokenPlain = conn.refresh_token ? decrypt(conn.refresh_token as string) : null;
 
-  // Auto-refresh within 5 minutes of expiry. If the refresh itself fails
-  // (typically because the seller deleted the OAuth application from their
-  // Vendor Center → Applications), mark the connection as needs_reconnect
-  // and surface a clear error the UI can route to the onboarding page.
-  if (conn.token_expires_at) {
-    const expiresAt = new Date(conn.token_expires_at as string).getTime();
-    if (Date.now() >= expiresAt - 5 * 60 * 1000) {
-      if (!refreshTokenPlain) {
-        await markNeedsReconnect(db, userId);
-        throw new Error("JUMIA_RECONNECT_REQUIRED");
-      }
-      const appId     = (conn.app_id     ?? undefined) as string | undefined;
-      const appSecret = conn.app_secret ? decrypt(conn.app_secret as string) : undefined;
-      try {
-        const fresh = await refreshAccessToken(
-          refreshTokenPlain,
-          appId,
-          appSecret,
-        );
-        const newExpiry = new Date(Date.now() + fresh.expires_in * 1000).toISOString();
-        await db.from("jumia_connections").update({
-          access_token:     encrypt(fresh.access_token),
-          refresh_token:    encrypt(fresh.refresh_token ?? refreshTokenPlain),
-          token_expires_at: newExpiry,
-          status:           "active",            // recover from past needs_reconnect
-          updated_at:       new Date().toISOString(),
-        }).eq("user_id", userId);
-        accessToken = fresh.access_token;
-      } catch (e) {
-        // Refresh failed — most likely the app was deleted on Jumia's side.
-        // Mark the connection as needs_reconnect so the UI can prompt
-        // the seller to redo onboarding.
-        console.error("[Jumia] refresh failed, marking needs_reconnect:", (e as Error).message);
-        await markNeedsReconnect(db, userId);
-        throw new Error("JUMIA_RECONNECT_REQUIRED");
-      }
+  const expiresAtMs  = conn.token_expires_at ? new Date(conn.token_expires_at as string).getTime() : 0;
+  const needsRefresh = !conn.token_expires_at || Date.now() >= expiresAtMs - 5 * 60 * 1000;
+
+  if (needsRefresh) {
+    if (!refreshTokenPlain) {
+      await markNeedsReconnect(db, userId);
+      throw new Error("JUMIA_RECONNECT_REQUIRED");
     }
+    // Always attempted, even when status already reads needs_reconnect —
+    // a refresh_token can outlive a single earlier failure (Jumia's own
+    // refresh tokens run ~1 year vs. the access token's much shorter
+    // life), so a past network blip or a lost lock race must never
+    // permanently block a refresh_token that still works.
+    const appId     = (conn.app_id     ?? undefined) as string | undefined;
+    const appSecret = conn.app_secret ? decrypt(conn.app_secret as string) : undefined;
+    const fresh     = await refreshJumiaConnection(db, userId, refreshTokenPlain, appId, appSecret);
+    accessToken = fresh.accessToken;
+  } else if (conn.status === "needs_reconnect") {
+    // The token still has headroom, but a PAST refresh already hit a
+    // definitive failure — that's the one case with nothing left to try
+    // short of the seller reauthorising.
+    throw new Error("JUMIA_RECONNECT_REQUIRED");
   }
 
   let shopId = (conn.shop_id ?? "") as string;
@@ -179,10 +297,10 @@ export async function getValidJumiaCredentials(userId: string): Promise<{
 }
 
 /**
- * Mark a connection as needing reconnect. Called when the OAuth refresh
- * fails (usually because the seller deleted the OAuth app from their
- * Vendor Center → Applications). The UI watches for this status and
- * shows a persistent banner directing the seller to /onboarding/connect.
+ * Mark a connection as needing reconnect. Called only on a DEFINITIVE
+ * auth failure — see isDefinitiveAuthDeath — never on a network error, a
+ * timeout, or a 5xx. The UI watches for this status and shows a
+ * persistent banner directing the seller to /onboarding/connect.
  */
 export async function markNeedsReconnect(
   userIdOrDb: string | ReturnType<typeof createServerClient>,
@@ -200,10 +318,17 @@ export async function markNeedsReconnect(
     db = userIdOrDb;
     userId = userIdArg!;
   }
-  await db.from("jumia_connections").update({
+  const { error } = await db.from("jumia_connections").update({
     status:     "needs_reconnect",
     updated_at: new Date().toISOString(),
   }).eq("user_id", userId);
+  if (error) {
+    // Confirmed live, 2026-09-20: this write silently failed for EVERY
+    // connection for months — the table's check constraint didn't allow
+    // this value at all, and nothing here ever looked at the result.
+    // Loud now on purpose; see the migration that fixed the constraint.
+    console.error(`[Jumia] markNeedsReconnect failed to persist for ${userId}: ${error.message}`);
+  }
 }
 
 /**
@@ -421,7 +546,17 @@ export async function resolveBrand(
   }
 
   // ── 3. Generic fallback (Fashion or plain, per categoryHint) ─────────────
-  return { code: genericFallback.code, name: brandName };
+  //
+  // Returns the FALLBACK's own name ("Generic"/"Fashion"), not the
+  // original unresolved brandName — a real, live bug: sending Generic's
+  // code alongside the original (unrecognised or restricted) brand name
+  // text meant Jumia's own QC, which validates the brand NAME independent
+  // of the code (see this function's doc comment: "Product category
+  // doesn't allow Generic brand" already proves Jumia inspects the name),
+  // saw the identical restricted brand again and rejected it again — a
+  // seller tapping "Fix & resubmit" on an unlistable brand saw no change
+  // at all, because the one field Jumia actually checks never changed.
+  return genericFallback;
 }
 
 // ─── Category code resolution ─────────────────────────────────────────────────
@@ -513,6 +648,34 @@ const CARRIED_OUTSIDE_ATTRIBUTES: string[] = [
   ...Array.from(PER_VARIANT_ATTRIBUTE_NAMES),
 ];
 
+/**
+ * Which spelling of a column-backed field THIS category's schema actually
+ * declares. Jumia uses different attribute names for the same logical
+ * field across categories (color/colour, weight/weight_kg/product_weight,
+ * warranty/warranty_text/product_warranty, …) — sending the wrong one
+ * doesn't just fail to match a nicer name, it gets the whole attribute
+ * dropped by preflightAttributes as "not visible for category" and the
+ * value is lost, even though the category genuinely accepts that field
+ * under its own name.
+ *
+ * `defaultName` is tried first (preserves today's behaviour whenever the
+ * schema uses the name already hardcoded here or the schema is empty/
+ * unknown), then every other known alias for `column`, in the order
+ * declared in ATTRIBUTE_TO_COLUMN. Falls back to `defaultName` if the
+ * schema declares none of them — preflightAttributes still reports that
+ * correctly as "not_in_schema" for a category that truly doesn't accept
+ * the field at all.
+ */
+function resolveAttrName(schema: JumiaCategoryAttribute[], defaultName: string, column: MappedColumn): string {
+  if (schema.length === 0) return defaultName;
+  const bySchema = new Set(schema.map((f) => f.name.toLowerCase()));
+  if (bySchema.has(defaultName.toLowerCase())) return defaultName;
+  for (const alias of aliasesForColumn(column)) {
+    if (bySchema.has(alias.toLowerCase())) return alias;
+  }
+  return defaultName;
+}
+
 function buildAttributes(
   listing: ListingRow,
   schema: JumiaCategoryAttribute[],
@@ -520,6 +683,15 @@ function buildAttributes(
    *  seller, so the caller can TELL them. Silent repair is still repair
    *  happening behind their back. */
   noteSink?: string[],
+  /** Collects the RAW preflight notes (with their .reason tag), for a
+   *  caller that needs to tell "dropped, push would still succeed"
+   *  (truncated, snapped_enum, rounded_number) apart from "dropped, and
+   *  Jumia would have rejected the whole feed over it" (decimal_mismatch_
+   *  blocked, invalid_enum, invalid_number) — see assessListingPushReadiness
+   *  in lib/whatsapp/readiness.ts. noteSink's own describeAdjustments()
+   *  output already collapses that distinction into seller-facing prose,
+   *  which is right for a human but not enough for Ready/Held logic. */
+  preflightNoteSink?: PreflightNote[],
 ): JumiaAttribute[] {
   const attrs: JumiaAttribute[] = [];
   const requiredNames = new Set(
@@ -532,32 +704,56 @@ function buildAttributes(
     }
   };
 
-  add("color",              listing.color);
-  add("color_family",       listing.color_family);
-  add("main_material",      listing.main_material);
-  add("material_family",    listing.material_family);
-  add("model",              listing.model);
-  add("product_line",       listing.product_line);
-  add("production_country", listing.production_country);
-  add("warranty_duration",  listing.warranty_duration);
-  add("warranty_type",      listing.warranty_type);
-  add("warranty_address",   listing.warranty_address);
-  add("product_warranty",   listing.warranty_text);
-  add("youtube_id",         listing.youtube_id);
-  add("short_description",  listing.highlights);
+  add(resolveAttrName(schema, "color",              "color"),              listing.color);
+  add(resolveAttrName(schema, "color_family",       "color_family"),       listing.color_family);
+  add(resolveAttrName(schema, "main_material",      "main_material"),      listing.main_material);
+  add(resolveAttrName(schema, "material_family",    "material_family"),    listing.material_family);
+  add(resolveAttrName(schema, "model",              "model"),              listing.model);
+  add(resolveAttrName(schema, "product_line",       "product_line"),       listing.product_line);
+  add(resolveAttrName(schema, "production_country", "production_country"), listing.production_country);
+  add(resolveAttrName(schema, "warranty_duration",  "warranty_duration"),  listing.warranty_duration);
+  add(resolveAttrName(schema, "warranty_type",      "warranty_type"),      listing.warranty_type);
+  add(resolveAttrName(schema, "warranty_address",   "warranty_address"),   listing.warranty_address);
+  add(resolveAttrName(schema, "product_warranty",   "warranty_text"),      listing.warranty_text);
+  add(resolveAttrName(schema, "youtube_id",         "youtube_id"),         listing.youtube_id);
+  add(resolveAttrName(schema, "short_description",  "highlights"),         listing.highlights);
   add("manufacturer_txt",   listing.brand);
 
-  if (listing.weight_kg != null) add("product_weight", `${listing.weight_kg} kg`);
+  if (listing.weight_kg != null) {
+    add(resolveAttrName(schema, "product_weight", "weight_kg"), `${listing.weight_kg} kg`);
+  }
 
-  const measures = [
-    listing.size_l != null ? `L: ${listing.size_l} cm` : null,
-    listing.size_w != null ? `W: ${listing.size_w} cm` : null,
-    listing.size_h != null ? `H: ${listing.size_h} cm` : null,
-  ].filter(Boolean).join(" × ");
-  if (measures) add("product_measures", measures);
+  // Some categories declare length/width/height as three SEPARATE
+  // attributes (their own required-ness, their own number type) rather
+  // than one free-text "product_measures" field. Collapsing into the
+  // combined string unconditionally meant those categories never received
+  // size_l/size_w/size_h under their own names — Jumia rejected
+  // "product_measures" as not visible for the category AND separately
+  // reported size_l/size_w/size_h missing, for a value the seller had
+  // actually supplied. Prefer whichever shape this category's schema
+  // actually declares; only fall back to the combined field when none of
+  // the three individual names are present (including when the schema is
+  // empty/unknown, matching prior behaviour exactly).
+  const dimensionNames = {
+    size_l: schema.length > 0 ? aliasesForColumn("size_l").find((n) => schema.some((f) => f.name.toLowerCase() === n.toLowerCase())) : undefined,
+    size_w: schema.length > 0 ? aliasesForColumn("size_w").find((n) => schema.some((f) => f.name.toLowerCase() === n.toLowerCase())) : undefined,
+    size_h: schema.length > 0 ? aliasesForColumn("size_h").find((n) => schema.some((f) => f.name.toLowerCase() === n.toLowerCase())) : undefined,
+  };
+  if (dimensionNames.size_l || dimensionNames.size_w || dimensionNames.size_h) {
+    if (dimensionNames.size_l && listing.size_l != null) add(dimensionNames.size_l, String(listing.size_l));
+    if (dimensionNames.size_w && listing.size_w != null) add(dimensionNames.size_w, String(listing.size_w));
+    if (dimensionNames.size_h && listing.size_h != null) add(dimensionNames.size_h, String(listing.size_h));
+  } else {
+    const measures = [
+      listing.size_l != null ? `L: ${listing.size_l} cm` : null,
+      listing.size_w != null ? `W: ${listing.size_w} cm` : null,
+      listing.size_h != null ? `H: ${listing.size_h} cm` : null,
+    ].filter(Boolean).join(" × ");
+    if (measures) add("product_measures", measures);
+  }
 
   if (listing.certifications?.length) {
-    add("certifications", listing.certifications.join(", "));
+    add(resolveAttrName(schema, "certifications", "certifications"), listing.certifications.join(", "));
   }
 
   // Merge in category-specific dynamic attributes (AI-detected + seller-edited)
@@ -628,14 +824,14 @@ function buildAttributes(
   // snap-then-drop, so a casing or plural near-miss is corrected rather
   // than silently losing the seller an attribute they did supply.
   const preflight = preflightAttributes(attrs, schema, {
-    carriedElsewhere:   CARRIED_OUTSIDE_ATTRIBUTES,
-    priorRejectionText: listing.jumia_error,
+    carriedElsewhere: CARRIED_OUTSIDE_ATTRIBUTES,
   });
   const summary = summarisePreflight(preflight);
   if (summary) {
     console.info(`[Jumia preflight] ${summary} — ${preflight.notes.map((n) => `${n.attribute}: ${n.detail}`).join("; ")}`);
   }
   if (noteSink) noteSink.push(...describeAdjustments(preflight.notes));
+  if (preflightNoteSink) preflightNoteSink.push(...preflight.notes);
   return preflight.attributes.map((a) => ({ name: a.name, value: a.value, translations: [] }));
 }
 
@@ -690,45 +886,18 @@ function isSingleColour(value: string): boolean {
  * color_family already got is applied here too, now checked against the
  * category's real allowed spellings instead of shipped as typed.
  */
-/** British/American (and similar) spelling pairs seen in Jumia's own
- *  attribute sets — "Grey" typed/detected where the category's schema
- *  declares "Gray" (real rejection: "Attribute [variation] with invalid
- *  value [Grey]"). snapToAllowed can't bridge these: they're not a casing
- *  or plural difference, they're a different word for the same colour. */
-const SPELLING_PAIRS: [string, string][] = [
-  ["grey", "gray"],
-  ["colour", "color"],
-];
-
-function spellingSynonym(value: string, allowed: string[]): string | null {
-  const lower = value.toLowerCase();
-  for (const [a, b] of SPELLING_PAIRS) {
-    let alt: string | null = null;
-    if (lower === a) alt = b;
-    else if (lower === b) alt = a;
-    else if (lower.includes(a)) alt = lower.replace(a, b);
-    else if (lower.includes(b)) alt = lower.replace(b, a);
-    if (alt) {
-      const match = allowed.find((x) => x.toLowerCase() === alt);
-      if (match) return match;
-    }
-  }
-  return null;
-}
-
 /** Snap a variation value to the category's own variant-axis spelling —
- *  shared tail of both resolvers below. A no-op when no axis data is
- *  available (snapToAllowed already no-ops on an empty allowed list; the
- *  explicit check just skips the spelling-synonym pass too). */
+ *  shared tail of both resolvers below. snapToAllowedWithSynonyms (see
+ *  lib/jumia/preflight.ts) covers both a casing/plural near-miss and a
+ *  British/American spelling pair ("Grey" -> "Gray") in one call, and is
+ *  the same function the draft-time reconciliation in auto-analyze.ts and
+ *  preflightAttributes' own enum check use — one shared table so the
+ *  three cannot drift on which spelling pairs they know about. A no-op
+ *  when no axis data is available. */
 function snapVariationSpelling(trimmed: string, allowed: string[], noteSink?: string[]): string {
   if (allowed.length === 0) return trimmed;
 
-  const synonym = spellingSynonym(trimmed, allowed);
-  if (synonym) {
-    noteSink?.push(`variation "${trimmed}" corrected to "${synonym}"`);
-    return synonym;
-  }
-  const snapped = snapToAllowed(trimmed, allowed);
+  const snapped = snapToAllowedWithSynonyms(trimmed, allowed);
   if (snapped && snapped !== trimmed) {
     noteSink?.push(`variation "${trimmed}" corrected to "${snapped}"`);
     return snapped;
@@ -737,23 +906,105 @@ function snapVariationSpelling(trimmed: string, allowed: string[], noteSink?: st
 }
 
 /**
- * The base (zero-variant) product's OWN variation, derived from the
- * listing's colour field(s) — see buildBaseProduct's doc comment on why a
- * detected colour is used here. Keeps isSingleColour's broad separator
- * check (comma/slash/pipe/&/"and") because this value comes from a COLOUR
+ * The variation to send when there's nothing to go on: no colour the
+ * seller stated themselves, no persisted variant row — just a single-SKU
+ * product with nothing distinguishing it. Every listing defaults to this
+ * rather than a guessed colour or the meaningless literal "Default",
+ * unless the seller actually said what the variant is (see
+ * buildBaseProduct's doc comment on the seller-notes gate).
+ *
+ * Jumia's own Vendor Center offers "..." as a genuine, selectable
+ * placeholder in every variant-axis dropdown for exactly this "nothing to
+ * pick" situation (the same convention reconcileDraftVariation and
+ * resolveColorFallbackVariation already rely on below), so that ships
+ * whenever the category's axis is unrestricted or explicitly lists "..."
+ * as one of its own options. A category whose axis is a closed list that
+ * does NOT offer "..." has nothing safe to send without seller input —
+ * held via `blockers` rather than guessing one of the category's
+ * unrelated options.
+ */
+function resolveDefaultVariation(
+  variantAxes: JumiaCategoryAttribute[],
+  blockers?:   string[],
+): string {
+  const allowed = variantAxes.flatMap((a) => a.allowed_values ?? []);
+  if (allowed.length === 0 || allowed.includes("...")) return "...";
+
+  const shown = allowed.length > 8
+    ? `${allowed.slice(0, 8).join(", ")}, and ${allowed.length - 8} more`
+    : allowed.join(", ");
+  blockers?.push(
+    `This category needs a variation picked from its own stocked options (${shown}) — mention it in your listing notes, or pick one in the editor.`,
+  );
+  return "...";
+}
+
+/**
+ * The base (zero-variant) product's OWN variation, derived from a colour
+ * the SELLER stated themselves — see buildBaseProduct's doc comment on why
+ * this is only ever called with a seller-specified colour, never an
+ * AI-guessed one. Keeps isSingleColour's broad separator check
+ * (comma/slash/pipe/&/"and") because this value comes from a COLOUR
  * column specifically, where a joined string overwhelmingly means multiple
  * colourways, not a composite label — unlike a variant row's own typed
  * value (see resolveVariantRowVariation below), which routinely legitimately
  * joins several DIFFERENT attributes ("8GB / 128GB / Navy").
+ *
+ * Same local hold as resolveVariantRowVariation, and for the identical
+ * reason: a category whose variant axis is something OTHER than colour
+ * (sizes, lengths in inches, capacities) can never accept a colour value no
+ * matter how it's spelled. Real rejection this closed, live, back when this
+ * fallback ran on every AI-guessed colour rather than only a seller-stated
+ * one: a Baby Carrier with zero persisted variant rows shipped "Blue" as
+ * its variation into a category whose axis is entirely shoe/strap lengths
+ * in inches — "Attribute [variation] with invalid value [Blue]".
  */
 function resolveColorFallbackVariation(
   rawColor:    string,
   variantAxes: JumiaCategoryAttribute[],
   noteSink?:   string[],
+  blockers?:   string[],
 ): string {
   const trimmed = rawColor.trim();
-  if (!trimmed || !isSingleColour(trimmed)) return "Default";
-  return snapVariationSpelling(trimmed, variantAxes.flatMap((a) => a.allowed_values ?? []), noteSink);
+  if (!trimmed || !isSingleColour(trimmed)) return resolveDefaultVariation(variantAxes, blockers);
+
+  const allowed = variantAxes.flatMap((a) => a.allowed_values ?? []);
+  const snapped = snapVariationSpelling(trimmed, allowed, noteSink);
+
+  // Same "nothing matched" test as resolveVariantRowVariation: an axis
+  // that declares options, none of which is this colour even after
+  // synonym/spelling snapping.
+  if (
+    allowed.length > 0 &&
+    snapped === trimmed &&
+    !allowed.some((a) => a.toLowerCase() === trimmed.toLowerCase())
+  ) {
+    // Same fallback reconcileDraftVariation uses at draft time — Jumia's
+    // own Vendor Center offers "..." as a genuine, accepted placeholder
+    // for exactly this category shape (confirmed live: a Baby Carrier in
+    // a "Backpacks & Carriers" category whose entire axis is inch/letter
+    // sizes, no colour option at all, so a colour-derived guess can NEVER
+    // match here no matter how many times it's redrafted). Unlike
+    // resolveVariantRowVariation's block, THIS value was never typed by a
+    // seller — it's the automatic colour fallback for a zero-variant
+    // product — so there's no seller-facing dropdown to send them to fix
+    // it in; holding the push here just repeats the identical block on
+    // every redraft. Only takes this path when the category actually
+    // offers "..." as one of its own options; otherwise still holds the
+    // push, since there is nothing safe to send.
+    if (allowed.includes("...")) {
+      noteSink?.push(`variation "${trimmed}" isn't one of this category's stocked options — sent as "..." instead`);
+      return "...";
+    }
+    const shown = allowed.length > 8
+      ? `${allowed.slice(0, 8).join(", ")}, and ${allowed.length - 8} more`
+      : allowed.join(", ");
+    blockers?.push(
+      `Variation "${trimmed}" isn't one of this category's stocked options (${shown}) — pick one of those, or use the editor if you genuinely stock a new one.`,
+    );
+  }
+
+  return snapped;
 }
 
 /**
@@ -768,12 +1019,23 @@ function resolveColorFallbackVariation(
  * own allowed values. Real rejection this closes: "Attribute [color_family]
  * with invalid value [Yellow,Red,Orange,White,Blue]" — five distinct,
  * individually-valid colours sent as one string.
+ *
+ * When the axis DOES declare allowed values and the typed one is neither
+ * an exact/near match NOR provably a joined list, this now HOLDS the push
+ * (via `blockers`) rather than shipping the unmatched value as typed. Real
+ * rejection this closes, live and repeated: "Attribute [variation] with
+ * invalid value [Navy Blue]" — "Navy Blue" was never in the category's own
+ * colour list, and "Fix & resubmit" kept redrafting and resubmitting the
+ * identical value because nothing local ever checked it against the axis.
+ * Naming the actual stocked options up front is strictly more useful to
+ * the seller than a rejection Jumia won't explain further.
  */
 function resolveVariantRowVariation(
   raw:         string,
   fallback:    string,
   variantAxes: JumiaCategoryAttribute[],
   noteSink?:   string[],
+  blockers?:   string[],
 ): string {
   const trimmed = raw.trim();
   if (!trimmed) return fallback;
@@ -788,7 +1050,73 @@ function resolveVariantRowVariation(
       return fallback;
     }
   }
-  return snapVariationSpelling(trimmed, allowed, noteSink);
+
+  const snapped = snapVariationSpelling(trimmed, allowed, noteSink);
+
+  // snapVariationSpelling only changes the value when it found a match —
+  // an unchanged result plus "not literally in the allowed list" means
+  // nothing matched at all (as opposed to already being a correct,
+  // unchanged value).
+  if (
+    allowed.length > 0 &&
+    snapped === trimmed &&
+    !allowed.some((a) => a.toLowerCase() === trimmed.toLowerCase())
+  ) {
+    const shown = allowed.length > 8
+      ? `${allowed.slice(0, 8).join(", ")}, and ${allowed.length - 8} more`
+      : allowed.join(", ");
+    blockers?.push(
+      `Variation "${trimmed}" isn't one of this category's stocked options (${shown}) — pick one of those, or use the editor if you genuinely stock a new one.`,
+    );
+  }
+
+  return snapped;
+}
+
+/**
+ * Reconcile an AI-drafted variant's variation LABEL against the category's
+ * own variant axis, at DRAFT time — before it ever reaches a push.
+ *
+ * The "Describe" pass (lib/actions/ai.ts) invents variation labels ("13.3
+ * inch", "Silver") purely from what's visible in the photos, before the
+ * category — and therefore its variant-axis schema — is even resolved. A
+ * category whose axis is a closed list (screen sizes, shoe lengths) can
+ * reject ANY value that isn't literally one of its own options, no matter
+ * how it's spelled — the exact failure resolveVariantRowVariation already
+ * guards against at push time, just too late to avoid a rejection round
+ * trip and a confusing edit for the seller.
+ *
+ * Real Jumia behaviour, confirmed live in Vendor Center for exactly this
+ * shape of category: its own Variation dropdown offers "..." as a
+ * selectable, accepted placeholder alongside the real options — a seller
+ * unsure which one applies can defer the choice rather than being forced
+ * to guess. Mirroring that convention here means a draft that can't be
+ * confidently placed in the category's own list still lands editable and
+ * pushable, instead of shipping a free-text guess Jumia will reject.
+ *
+ * - No axis restriction at all (allowed_values empty) → the AI's label is
+ *   kept exactly as drafted; free text is genuinely fine here.
+ * - The label matches one of the axis's own options (exactly, or after the
+ *   same casing/plural/spelling-synonym snap resolveVariantRowVariation
+ *   already applies) → snapped to the category's own spelling.
+ *   Otherwise → "..." rather than the AI's unmatched guess.
+ */
+export function reconcileDraftVariation(
+  rawLabel:    string,
+  variantAxes: JumiaCategoryAttribute[],
+): string {
+  const trimmed = rawLabel.trim();
+  if (!trimmed) return trimmed;
+
+  const allowed = variantAxes.flatMap((a) => a.allowed_values ?? []);
+  if (allowed.length === 0) return trimmed;
+
+  const snapped = snapVariationSpelling(trimmed, allowed);
+  const matched = snapped !== trimmed || allowed.some((a) => a.toLowerCase() === trimmed.toLowerCase());
+  if (matched) return snapped;
+
+  console.info(`[Jumia draft-variation] "${trimmed}" isn't one of this category's stocked options — drafted as "..." instead`);
+  return "...";
 }
 
 /**
@@ -846,6 +1174,8 @@ function buildBaseProduct(
   schema: JumiaCategoryAttribute[] = [],
   noteSink?: string[],
   variantAxes: JumiaCategoryAttribute[] = [],
+  blockers?: string[],
+  preflightNoteSink?: PreflightNote[],
 ) {
   const category   = resolveCategoryCode(listing);
   const images     = (listing.images ?? [])
@@ -883,10 +1213,22 @@ function buildBaseProduct(
   //
   // This is the base product's OWN variation — used as-is only when the
   // listing has zero variant rows (a genuinely simple, single-SKU
-  // product). There's no dedup risk in that case since exactly one
-  // product ships, so a detected colour is strictly more useful to the
-  // seller/buyer than the meaningless literal "Default" placeholder.
-  // Falls back to "Default" only when there's no colour either.
+  // product). Every listing defaults to "..." here (see
+  // resolveDefaultVariation) — the same one-SKU-unless-stated default the
+  // "Describe" pass now applies to whether it drafts variant rows at all
+  // (lib/actions/ai.ts) — no matter what colour the AI thinks it sees in
+  // the photos, or what category this is. `color`/`color_family` only
+  // drive this value when the SELLER stated it themselves: a note like
+  // "the colour is navy" gets verified and written back with
+  // field_confidence.color.source === "seller-required" (see
+  // auto-analyze.ts's note-intent/note-assertion handling), which is the
+  // one signal here that distinguishes an actual seller statement from an
+  // AI guess at what's in the photo. An AI-guessed colour used to drive
+  // this unconditionally, which routinely produced a specific-sounding
+  // variation ("Blue") the seller never confirmed they stock in exactly
+  // that shade — and, when the category's variant axis was something else
+  // entirely (sizes, lengths), a guaranteed rejection (see
+  // resolveColorFallbackVariation's doc comment).
   //
   // This must NOT be reused as the fallback for a VARIANT that's missing
   // its own typed variation (see mapListingToJumiaProducts below) — that
@@ -896,8 +1238,12 @@ function buildBaseProduct(
   // the same value when colour was combined (e.g. "black and green"),
   // which Jumia dedup-rejected. The push route validates upstream (empty
   // variation → 422) so the seller is told to type a label instead.
-  const colorVariation   = (listing.color ?? listing.color_family ?? "").trim();
-  const defaultVariation = resolveColorFallbackVariation(colorVariation, variantAxes, noteSink);
+  const sellerStatedColor = listing.field_confidence?.color?.source === "seller-required"
+    ? (listing.color ?? "").trim()
+    : "";
+  const defaultVariation = sellerStatedColor
+    ? resolveColorFallbackVariation(sellerStatedColor, variantAxes, noteSink, blockers)
+    : resolveDefaultVariation(variantAxes, blockers);
 
   // Match Jumia Postman spec exactly:
   //   POST /feeds/products/create
@@ -941,7 +1287,7 @@ function buildBaseProduct(
       })(),
     },
     stock:       listing.quantity ?? 1,
-    attributes:  buildAttributes(listing, schema, noteSink),
+    attributes:  buildAttributes(listing, schema, noteSink, preflightNoteSink),
     barcodeEan:  "",
     gtinBarcode: "",      // schema reference uses this name; harmless duplicate
     // additionalCategories: DEPRECATED per official spec (PDF page 5).
@@ -972,8 +1318,24 @@ export function mapListingToJumiaProducts(
    *  callers that don't have it handy — variation values pass through with
    *  only the isSingleColour check, same as before this existed. */
   variantAxes: JumiaCategoryAttribute[] = [],
+  /** Optional sink for reasons the push must be HELD rather than sent —
+   *  see resolveVariantRowVariation. Unlike noteSink, a non-empty blockers
+   *  array means the caller must not push the resulting products. */
+  blockers?: string[],
+  /** See buildAttributes — raw preflight notes for a caller that needs to
+   *  tell a merely-dropped attribute apart from one that would have sunk
+   *  the whole push. */
+  preflightNoteSink?: PreflightNote[],
 ): JumiaProduct[] {
-  const base = buildBaseProduct(listing, brand, currency, categoryAttributeSchema, noteSink, variantAxes);
+  // blockers only when base.variation will actually ship: with real
+  // variant rows present, base is built (for its other shared fields) but
+  // its OWN variation is deliberately discarded below in favour of each
+  // variant's typed value — blocking on it here would hold a push over a
+  // colour fallback nothing ever sends.
+  const base = buildBaseProduct(
+    listing, brand, currency, categoryAttributeSchema, noteSink, variantAxes,
+    variants.length ? undefined : blockers, preflightNoteSink,
+  );
 
   if (!variants.length) {
     // No persisted variants → one product entry using the listing's own
@@ -1005,6 +1367,29 @@ export function mapListingToJumiaProducts(
   // We strip the shared "variation" out of buildAttributes (above) and
   // inject the per-variant value here, so each product's attributes
   // array carries its own unique label.
+  //
+  // BUT the literal name "variation" is only Jumia's linking field, not
+  // necessarily its dedup key: PER_VARIANT_ATTRIBUTE_NAMES (lib/jumia/api.ts)
+  // only ever treats "variation" as per-variant, yet a category's REAL
+  // is_variant attribute is very often named something else entirely —
+  // "size" for clothing/shoes, "capacity" for appliances, etc. (getVariantAxes
+  // is what actually resolves the category's true axis). Confirmed live,
+  // 2026-09-23 (category 1013693, sandals): the axis is named "size", not
+  // "variation" — this category's schema has no "variation" attribute at
+  // all. Real payload sent for parentSku PA-MUDIF5R5's 4 variants, size
+  // values 40/41/42/43: the STATIC listing-level `size` attribute (cloned
+  // from base.attributes below) stayed at one value across all four, since
+  // the letter-size-only regex this used to be scoped to (XS/S/M/L/XL/…)
+  // never matches a numeric shoe size — so Jumia saw four variants all
+  // claiming the same size and rejected three of them as duplicates,
+  // "Duplicate Variation ... and variation [42]".
+  //
+  // The general fix: use variantAxes (the category's own real schema, not
+  // a guessed value-shape pattern) to find which attribute(s) the category
+  // ACTUALLY declares as its variant axis, and always overwrite those with
+  // this variant's own resolved value — whatever that axis is named and
+  // whatever shape its values take.
+  const variantAxisNames = new Set(variantAxes.map((a) => a.name.toLowerCase()));
   const products = variants.map((v) => {
     // Deliberately NOT base.variation here — base.variation may now be a
     // detected colour (see buildBaseProduct), and sharing that across
@@ -1023,7 +1408,7 @@ export function mapListingToJumiaProducts(
     // Axis-spelling discipline for a variant's own typed value — see
     // resolveVariantRowVariation's doc comment on why this is intentionally
     // less aggressive than the base product's colour-only fallback above.
-    const variation = resolveVariantRowVariation(rawVariation, MISSING_VARIANT_VARIATION, variantAxes, noteSink);
+    const variation = resolveVariantRowVariation(rawVariation, MISSING_VARIANT_VARIATION, variantAxes, noteSink, blockers);
     return {
       ...base,
       sellerSku:  v.seller_sku ?? `${listing.sku}-${v.id.slice(0, 4)}`,
@@ -1055,9 +1440,21 @@ export function mapListingToJumiaProducts(
       // Per-variant attributes: clone the listing-level attributes and
       // prepend a unique `variation` entry. Listing-level attributes
       // already had "variation" stripped in buildAttributes.
+      //
+      // Overwrite every attribute the category's OWN schema declares as
+      // its variant axis (variantAxisNames, above) so it matches THIS
+      // variant — not just an attribute literally named "size" holding a
+      // clothing letter size. A numeric shoe size, a capacity, or any
+      // other axis name gets the identical per-variant treatment, since
+      // the thing that makes an attribute "the variant axis" is the
+      // category's own schema (is_variant: true), never the shape of the
+      // value itself.
       attributes: [
         { name: "variation", value: variation, translations: [] as never[] },
-        ...base.attributes,
+        ...base.attributes.map((a) => {
+          if (!variantAxisNames.has(a.name.toLowerCase())) return a;
+          return { ...a, value: variation };
+        }),
       ],
     };
   });
@@ -1192,6 +1589,14 @@ export interface JumiaPayloadBuild {
   missingRequired: string[];
   /** Set when the payload could not be built at all (no valid category). */
   error?:          string;
+  /** Every preflight note, RAW (with its .reason tag) rather than
+   *  stringified — a caller deciding Ready vs Held (assessListingPushReadiness,
+   *  lib/whatsapp/readiness.ts) needs to tell "dropped but harmless"
+   *  (truncated, snapped_enum, rounded_number) apart from "dropped, and
+   *  the real push would have failed over it" (decimal_mismatch_blocked,
+   *  invalid_enum, invalid_number) — `adjustments` alone can't make that
+   *  distinction once it's been turned into prose. */
+  preflightNotes:  PreflightNote[];
 }
 
 /**
@@ -1217,15 +1622,44 @@ export async function buildJumiaPayload(
   let schema: JumiaCategoryAttribute[] = [];
   let variantAxes: JumiaCategoryAttribute[] = [];
   let categoryResolved = false;
+  let resolvedCode = 0;
   try {
     const { code } = resolveCategoryCode(listing);
     categoryResolved = true;
+    resolvedCode = code;
     [schema, variantAxes] = await Promise.all([
       getCategoryAttributes(code),
       getVariantAxes(code),
     ]);
   } catch {
     // No valid category — mapListingToJumiaProducts reports it properly.
+  }
+
+  // A cache miss here doesn't mean this category is broken — it means
+  // NOBODY has ever pushed to it before (getCategoryAttributes is a pure
+  // cache read; nothing populates it in the background). Confirmed live,
+  // 2026-09-20: three products in one batch failed here purely because
+  // their categories (Drilling Hammers, Moisturizers, Standing Fans) had
+  // never been selected by any listing before, while the auto-analyze
+  // pipeline's OWN on-demand fetch-and-cache (lib/actions/auto-analyze.ts)
+  // had no access token to use at draft time — the seller's Jumia
+  // connection was mid-reconnect that same session. One live fetch here,
+  // same as auto-analyze already does, means a category doesn't have to
+  // wait for the seller to notice and manually re-pick it.
+  if (categoryResolved && schema.length === 0 && resolvedCode) {
+    try {
+      const catRow = await getCategoryByCode(resolvedCode);
+      if (catRow?.attribute_set_sid) {
+        const fresh = await fetchAttributesFromJumia(accessToken, catRow.attribute_set_sid);
+        if (fresh.length > 0) {
+          await upsertAttributes(resolvedCode, fresh);
+          schema = fresh;
+          variantAxes = fresh.filter((a) => a.is_variant);
+        }
+      }
+    } catch (e) {
+      console.warn(`[Jumia push] on-demand schema fetch failed for category ${resolvedCode}: ${(e as Error).message}`);
+    }
   }
 
   // Fail closed rather than pass every attribute through unchecked.
@@ -1240,17 +1674,29 @@ export async function buildJumiaPayload(
   // Blue]" went out unvalidated because this category's schema hadn't
   // synced. Refusing to push is recoverable (the seller waits for the sync
   // or nudges it); shipping unvalidated attributes and letting Jumia
-  // discover the problem is not — it costs the whole feed.
+  // discover the problem is not — it costs the whole feed. Reached only
+  // when the on-demand fetch just above also came up empty (e.g. Jumia
+  // itself is unreachable right now).
   if (categoryResolved && schema.length === 0) {
     return {
-      products: [], adjustments: [], missingRequired: [],
+      products: [], adjustments: [], missingRequired: [], preflightNotes: [],
       error: "JUMIA_NO_SCHEMA: This category's attribute list hasn't synced yet, so nothing can be validated before sending — try again in a moment, or open the category picker to re-select it and force a re-sync.",
     };
   }
 
   const adjustments: string[] = [];
+  const blockers: string[] = [];
+  const preflightNotes: PreflightNote[] = [];
   try {
-    const products = mapListingToJumiaProducts(listing, variants, brand, currency, schema, adjustments, variantAxes);
+    const products = mapListingToJumiaProducts(listing, variants, brand, currency, schema, adjustments, variantAxes, blockers, preflightNotes);
+
+    // A variant's own typed value that isn't one of the category's stocked
+    // options (see resolveVariantRowVariation) — checked before the
+    // content gate below since it's about the payload not being buildable
+    // as typed at all, the same class of problem an empty schema is.
+    if (blockers.length > 0) {
+      return { products: [], adjustments, missingRequired: [], preflightNotes, error: blockers.join(" ") };
+    }
 
     // Last-mile content gate — restricted words plus the prohibited-
     // category/restricted-brand catalog, run right before anything is
@@ -1258,13 +1704,13 @@ export async function buildJumiaPayload(
     const ready = assertListingReady(listing, countryCode, products);
     adjustments.push(...ready.warnings);
     if (!ready.ok) {
-      return { products: [], adjustments, missingRequired: [], error: ready.blockers.join(" ") };
+      return { products: [], adjustments, missingRequired: [], preflightNotes, error: ready.blockers.join(" ") };
     }
 
-    return { products, adjustments, missingRequired: missingRequiredFor(products, schema) };
+    return { products, adjustments, missingRequired: missingRequiredFor(products, schema), preflightNotes };
   } catch (e) {
     return {
-      products: [], adjustments, missingRequired: [],
+      products: [], adjustments, missingRequired: [], preflightNotes,
       error: (e as Error).message ?? "Failed to build payload",
     };
   }

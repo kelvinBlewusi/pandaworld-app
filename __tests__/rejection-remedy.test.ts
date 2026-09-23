@@ -2,6 +2,7 @@ import {
   classifyJumiaRejection,
   isAutoFixable,
   extractRejectedAttributeName,
+  extractNotVisibleAttributeNames,
   extractRejectionText,
   rejectionFingerprint,
   shouldBlockRepeatedAutoFix,
@@ -16,8 +17,29 @@ describe("classifyJumiaRejection", () => {
     expect(isAutoFixable(r.kind)).toBe(true);
   });
 
-  it("treats a not-visible attribute as fixable", () => {
+  it("treats a not-visible attribute as a cache correction, not a rerun", () => {
     const r = classifyJumiaRejection("Attribute [color_family] is not visible for category [Laptops].");
+    expect(r.kind).toBe("not_visible_attributes");
+    expect(isAutoFixable(r.kind)).toBe(true);
+  });
+
+  // The exact live rejection this remedy kind was built from — a batch
+  // rejection naming seven attributes, one of them truncated mid-sentence.
+  // Confirmed by the seller directly against Jumia's own Vendor Center
+  // form: none of the seven are actually offered for this category.
+  it("classifies the live multi-attribute Compact Refrigerators rejection as a cache correction", () => {
+    const live = "Attribute [color_family] is not visible for category [Compact Refrigerators]. Attribute [main_material] is not visible for category [Compact Refrigerators]. Attribute [manufacturer_txt] is not visible for category [Compact Refrigerators]. Attribute [capacity_litres] is not visible for category [Compact Refrigerators]. Attribute [material_family] is not visible for category [Compact Refrigerators]. Attribute [note] is not visible for category [Compact Refrigerators]. Attribute [warranty_address]";
+    const r = classifyJumiaRejection(live);
+    expect(r.kind).toBe("not_visible_attributes");
+  });
+
+  // A mixed rejection — a not-visible attribute alongside a different kind
+  // of problem — means more than a stale cache is wrong, so it should
+  // still fall through to a full rerun rather than only clearing the
+  // cache and missing the other issue.
+  it("falls through to rerun when a not-visible complaint is mixed with a different problem", () => {
+    const mixed = "Attribute [color_family] is not visible for category [Laptops]. The column [product_weight] is missing from the file.";
+    const r = classifyJumiaRejection(mixed);
     expect(r.kind).toBe("rerun");
   });
 
@@ -52,6 +74,17 @@ describe("classifyJumiaRejection", () => {
 
   it("never auto-fixes an image problem", () => {
     expect(classifyJumiaRejection("Image resolution is invalid.").kind).toBe("seller");
+  });
+
+  // Live rejection, 2026-09-19 batch: an Electric Kettle's brand isn't
+  // sellable in the shop's country. This used to fall through to
+  // "unknown" (auto-fixable), so "Fix & resubmit" kept redrafting and
+  // resubmitting the same forbidden brand — a rerun can never change it.
+  it("never auto-fixes a brand banned for the shop's country", () => {
+    const r = classifyJumiaRejection("You're not allowed to sell this brand in Ghana");
+    expect(r.kind).toBe("seller");
+    expect(isAutoFixable(r.kind)).toBe(false);
+    expect(r.explanation).toMatch(/brand/i);
   });
 
   it("puts a seller-only cause ahead of the attribute pattern when both could match", () => {
@@ -110,6 +143,48 @@ describe("classifyJumiaRejection — the full Jumia error catalogue", () => {
     // otherwise claim — but minting a fresh SKU suffix (what "repush"
     // does) changes nothing about which variation values collide.
     const r = classifyJumiaRejection("Duplicate Variation on Product with seller sku [abc123] and Product set parent sku [xyz789]");
+    expect(r.kind).toBe("seller");
+    expect(isAutoFixable(r.kind)).toBe(false);
+  });
+
+  // Real live rejection (listings.jumia_error, 2026-09-19 batch), the
+  // FULL composite message refreshPendingFeedStatus actually stores —
+  // not just the bare Jumia fragment — since that composite text is what
+  // classifyJumiaRejection is called with in production
+  // (handleFixAndResubmit reads it straight off the listing row). A
+  // different wire shape ("Product with parentSKU [X] and variation [Y]")
+  // than the one above ("Product with seller sku [x] and Product set
+  // parent sku [y]"), so worth its own fixture even though both share the
+  // same "duplicate variation" trigger.
+  it("catches a duplicate VARIATION inside the full multi-variant status line Jumia actually sent", () => {
+    const r = classifyJumiaRejection(
+      "1 of 4 variants went live. Jumia rejected PA-MU8ULMI7-BLK, PA-MU8ULMI7-GRN, PA-MU8ULMI7-BLU: " +
+      "Duplicate Variation on Product with parentSKU [PA-MU8ULMI7] and variation [XXL]",
+    );
+    expect(r.kind).toBe("seller");
+    expect(isAutoFixable(r.kind)).toBe(false);
+  });
+
+  // Our OWN pre-push hold (lib/jumia/api.ts resolveVariantRowVariation),
+  // not a Jumia rejection — a rerun can't do any better than the first
+  // guess since it's the seller's own typed value that didn't match.
+  it("never auto-fixes our own 'not a stocked option' variation hold", () => {
+    const r = classifyJumiaRejection(
+      `Variation "Navy Blue" isn't one of this category's stocked options (Black, Blue, Grey, Red, White) — pick one of those, or use the editor if you genuinely stock a new one.`,
+    );
+    expect(r.kind).toBe("seller");
+    expect(isAutoFixable(r.kind)).toBe(false);
+  });
+
+  // Real live rejection (listings.jumia_error, 2026-09-19 batch, Baby
+  // Carrier): Jumia's OWN async verdict for the identical problem the
+  // local hold above exists to catch before push — the local check missed
+  // this one (the category's variant-axis schema hadn't synced yet), and
+  // without this branch it fell through to the generic attribute pattern
+  // below and came back "rerun" — wrong, since a rerun re-derives variant
+  // labels from the SAME photos and reproduces the same guess.
+  it("never auto-fixes Jumia's own 'invalid variation value' rejection either", () => {
+    const r = classifyJumiaRejection("Attribute [variation] with invalid value [Navy Blue].");
     expect(r.kind).toBe("seller");
     expect(isAutoFixable(r.kind)).toBe(false);
   });
@@ -286,6 +361,30 @@ describe("extractRejectedAttributeName", () => {
   });
 });
 
+describe("extractNotVisibleAttributeNames", () => {
+  it("pulls every attribute name out of the live multi-attribute rejection, dropping the truncated trailing fragment", () => {
+    const live = "Attribute [color_family] is not visible for category [Compact Refrigerators]. Attribute [main_material] is not visible for category [Compact Refrigerators]. Attribute [manufacturer_txt] is not visible for category [Compact Refrigerators]. Attribute [capacity_litres] is not visible for category [Compact Refrigerators]. Attribute [material_family] is not visible for category [Compact Refrigerators]. Attribute [note] is not visible for category [Compact Refrigerators]. Attribute [warranty_address]";
+    expect(extractNotVisibleAttributeNames(live)).toEqual([
+      "color_family",
+      "main_material",
+      "manufacturer_txt",
+      "capacity_litres",
+      "material_family",
+      "note",
+    ]);
+  });
+
+  it("returns a single name for a single-attribute rejection", () => {
+    expect(extractNotVisibleAttributeNames("Attribute [color_family] is not visible for category [Laptops].")).toEqual(["color_family"]);
+  });
+
+  it("returns an empty array when nothing matches", () => {
+    expect(extractNotVisibleAttributeNames("The column [product_weight] is missing from the file.")).toEqual([]);
+    expect(extractNotVisibleAttributeNames(null)).toEqual([]);
+    expect(extractNotVisibleAttributeNames(undefined)).toEqual([]);
+  });
+});
+
 describe("extractRejectionText", () => {
   it("returns plain text unchanged", () => {
     expect(extractRejectionText("You can't list products in this category.")).toBe("You can't list products in this category.");
@@ -295,10 +394,14 @@ describe("extractRejectionText", () => {
     expect(extractRejectionText(JSON.stringify({ message: "Description too short." }))).toBe("Description too short.");
   });
 
-  it("falls back through errorMessage, then error, then the first of errors[]", () => {
+  it("falls back through errorMessage, then error, then all of errors[] joined", () => {
     expect(extractRejectionText(JSON.stringify({ errorMessage: "A" }))).toBe("A");
     expect(extractRejectionText(JSON.stringify({ error: "B" }))).toBe("B");
-    expect(extractRejectionText(JSON.stringify({ errors: ["C", "D"] }))).toBe("C");
+    expect(extractRejectionText(JSON.stringify({ errors: ["C", "D"] }))).toBe("C | D");
+  });
+
+  it("prefers a single message/errorMessage/error field over errors[] even when both are present", () => {
+    expect(extractRejectionText(JSON.stringify({ message: "Primary reason.", errors: ["C", "D"] }))).toBe("Primary reason.");
   });
 
   it("unwraps a JSON-encoded plain string", () => {
@@ -360,5 +463,14 @@ describe("rejectionFingerprint + shouldBlockRepeatedAutoFix", () => {
   it("never blocks a repush (duplicate SKU), even at the same fingerprint", () => {
     const fp = rejectionFingerprint("repush", "Jumia already has this SKU.");
     expect(shouldBlockRepeatedAutoFix("repush", fp, { fingerprint: fp, count: 5 })).toBe(false);
+  });
+
+  // not_visible_attributes is exempt for the same reason repush is: each
+  // attempt removes the offending names from the cache before pushing
+  // again, so a second attempt pushes a genuinely corrected schema, not a
+  // repeat of the same guess.
+  it("never blocks a not_visible_attributes fix, even at the same fingerprint", () => {
+    const fp = rejectionFingerprint("not_visible_attributes", "Attribute [color_family] is not visible for category [Compact Refrigerators].");
+    expect(shouldBlockRepeatedAutoFix("not_visible_attributes", fp, { fingerprint: fp, count: 5 })).toBe(false);
   });
 });

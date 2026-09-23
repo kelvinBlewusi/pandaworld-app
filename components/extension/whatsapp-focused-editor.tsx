@@ -188,7 +188,20 @@ export function WhatsAppFocusedEditor({
   //
   // Sticky now: once opened it stays open, so the count never silently
   // decides what the seller is looking at.
-  const [variantsOpen, setVariantsOpen] = useState(false);
+  //
+  // Starts open when the ONE persisted row already carries a real
+  // variation string — a category with a single free-text variant axis
+  // (colour, say) can come out of auto-analyze with exactly one row whose
+  // `variation` is "Black", not the synthetic "Default" placeholder.
+  // Defaulting to collapsed hid that value behind "+ Add a variation",
+  // which reads as "nothing here" rather than "here's what the AI wrote,
+  // edit it" — the seller only found it by tapping Add, which then also
+  // appended a second, unwanted blank row alongside it.
+  const [variantsOpen, setVariantsOpen] = useState(() => {
+    if (initialVariants.length !== 1) return false;
+    const v = initialVariants[0].variation?.trim();
+    return !!v && v.toLowerCase() !== "default";
+  });
   const multiVariant = variantsOpen || variants.length > 1 || axesDef.length > 0;
 
   useEffect(() => {
@@ -201,6 +214,16 @@ export function WhatsAppFocusedEditor({
       })
       .catch(() => setSchemaAxes([]));
   }, [categoryCode]);
+
+  // Same rule as the full editor: a category whose ONLY variant axis is a
+  // fixed list (screen sizes, shoe lengths) can't accept anything else for
+  // its Variation field — Jumia's own Vendor Center shows exactly this
+  // axis's options as a dropdown, not free text. Scoped to exactly one
+  // axis; two or more is what the "Variant axes" picker below is for.
+  const singleAxisVariationOptions =
+    schemaAxes.length === 1 && schemaAxes[0].allowed_values.length > 0
+      ? schemaAxes[0].allowed_values
+      : undefined;
 
   // Rebuild variant rows from active axis values (Color, Size, etc.), same
   // logic as the full editor — leaves variants alone when no axes are
@@ -622,6 +645,7 @@ export function WhatsAppFocusedEditor({
                 onUpdate={(field, value) => updateVariant(v.id, field, value)}
                 onToggleCollapse={() => toggleCollapse(v.id)}
                 onDelete={() => deleteVariant(v.id)}
+                variationOptions={singleAxisVariationOptions}
               />
             ))}
           </div>

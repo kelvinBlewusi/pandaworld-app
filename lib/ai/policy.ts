@@ -95,18 +95,22 @@ export const AI_DYNAMIC_ATTR_DEFAULTS: Record<string, string> = {
   //
   // Jumia's preferred format is a multi-line "1x Item" list (NOT a prose
   // paragraph and NOT just a count number). The Pass A / combined prompt
-  // is told to write a real product-specific list like:
+  // is told to write a real product-specific list of what's actually
+  // being sold — the product plus any accessory visibly bundled in the
+  // photos, e.g.:
   //     1x Smartphone
   //     1x USB-C charger
-  //     1x User manual
   //     1x Protective case
+  // Deliberately does NOT default to adding "User manual" or "Original
+  // packaging" — most listings don't actually include either, and a
+  // seller can always state real extras via their own notes, which
+  // always wins over this canned fallback.
   //
   // This canned fallback only fires when the model returns nothing usable.
   // The route's post-hoc filler also substitutes the listing title into
   // the placeholder so it reads "1x Volcano Humidifier" instead of just
   // "1x Product unit".
-  what_is_in_the_box:
-    "1x Product unit\n1x User manual (if applicable)\n1x Original packaging",
+  what_is_in_the_box: "1x Product unit",
   from_the_manufacturer: "N/A",
 };
 

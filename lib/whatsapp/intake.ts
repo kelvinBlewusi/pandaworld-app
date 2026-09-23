@@ -14,9 +14,13 @@ import { runAutoAnalyze } from "@/lib/actions/auto-analyze";
 import { getOrCreateCreditBalance, deductCredits } from "@/lib/billing/extension-credits";
 import { WHATSAPP_DRAFT_CREDIT_COST } from "@/lib/billing/credit-packs";
 import { pushListingToJumia, missingFieldLabels, refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
+import { assessListingPushReadiness } from "@/lib/whatsapp/readiness";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
-import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix } from "@/lib/jumia/rejection-remedy";
+import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames } from "@/lib/jumia/rejection-remedy";
+import { removeAttributesFromCache } from "@/lib/jumia/categories";
 import { getValidJumiaCredentials, COUNTRY_CURRENCY, DEFAULT_JUMIA_COUNTRY, currencySymbol, currencyNameWord } from "@/lib/jumia/api";
+import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
+import { isFashionCategory } from "@/lib/jumia/fashion-category";
 import { getJumiaConnectionKind, testJumiaCredentials, saveJumiaCredentialsForUser, disconnectJumiaForUser } from "@/lib/jumia/credentials";
 import { createConnectToken } from "@/lib/jumia/connect-token";
 import { parseGlobalCommand, type GlobalCommand } from "@/lib/whatsapp/commands";
@@ -54,8 +58,10 @@ import { enqueueAnalysisJobs, nudgeWorker, isBatchSettled, type AnalysisJob } fr
  * Flow: link -> "how many products?" (awaiting_count) -> for each product,
  * photos + notes then "done" (awaiting_photos, batch-scoped, no AI calls
  * yet) -> once the LAST product's "done" arrives, every product in the
- * batch is analyzed together (concurrently, with a live per-product
- * update as each finishes) -> one consolidated review link
+ * batch is analyzed together (concurrently, with only a low-confidence-
+ * category prompt sent live per product — everything else about how each
+ * one drafted is reported once, in finalizeBatch's own summary, once the
+ * whole batch settles) -> one consolidated review link
  * (awaiting_confirmation) -> "submit" / "submit 2 4" / "2: change the
  * price to 150" (or free-form phrasing the AI fallback in
  * lib/whatsapp/intent.ts interprets) all handled right here, no app visit
@@ -239,15 +245,32 @@ async function noteWarningsFor(listingId: string): Promise<string[]> {
   // options AND there are none" is the condition itself.
   const claim = extractVariantClaim(note);
   if (claim) {
-    const { count } = await db
+    const { data: variantRows } = await db
       .from("variants")
-      .select("id", { count: "exact", head: true })
+      .select("variation")
       .eq("listing_id", listingId);
-    if ((count ?? 0) === 0) {
+    const labels = (variantRows ?? [])
+      .map((v: { variation?: string | null }) => String(v.variation ?? "").trim())
+      .filter(Boolean);
+
+    if (labels.length === 0) {
       warnings.push(
         `you wrote "${claim.source}" — I couldn't tell which options that leaves, so none were added. ` +
         `Tap Edit to set the ones you actually stock`,
       );
+    } else {
+      // Exact label match only (case-insensitive). Soft-snaps like
+      // "Medium"→M or "Xtra Large"→XL must Hold with one ask — silent Ready
+      // after a soft-snap is the false confidence the 2026-09-22 tee canary
+      // showed (variants M/L/XL, caption still said Xtra Large).
+      const byLower = new Map(labels.map((l) => [l.toLowerCase(), l]));
+      const unmatched = claim.tokens.filter((t) => !byLower.has(t.toLowerCase()));
+      if (unmatched.length > 0) {
+        warnings.push(
+          `you wrote "${claim.source}" — I drafted ${labels.join(", ")}, but that doesn't match what you typed exactly. ` +
+          `Open Edit to confirm the sizes/options you actually stock`,
+        );
+      }
     }
   }
 
@@ -296,7 +319,30 @@ async function applyNotes(listingId: string, text: string): Promise<void> {
   if (!text) return;
   const db = createServerClient();
   const currency = await shopCurrencyForListing(listingId);
-  const updates: Record<string, unknown> = { user_prompt: text.slice(0, 1000), updated_at: new Date().toISOString() };
+  // APPEND, never replace. applyNotes used to overwrite user_prompt, so a
+  // later Mode I marker adjacent text, a short follow-up, or a second
+  // caption wipe could erase "Sizes Medium Large Xtra Large" before
+  // finalizeBatch's soft-snap Hold ran — staging 03:08 canary: tee preview
+  // had 3 size products but WhatsApp still ✅ Ready because freeText no
+  // longer contained the seller's size claim. Doc comments above this
+  // helper already said append; the write must match.
+  const { data: existingRow } = await db
+    .from("listings")
+    .select("user_prompt")
+    .eq("id", listingId)
+    .maybeSingle();
+  const existing = String((existingRow?.user_prompt as string | null) ?? "").trim();
+  const incoming = text.trim();
+  let merged = incoming;
+  if (existing) {
+    // Dedup exact repeats (album retries / Meta redeliveries).
+    if (existing === incoming || existing.endsWith(incoming) || existing.includes(incoming)) {
+      merged = existing;
+    } else {
+      merged = `${existing}\n${incoming}`;
+    }
+  }
+  const updates: Record<string, unknown> = { user_prompt: merged.slice(0, 1000), updated_at: new Date().toISOString() };
   const price = extractPrice(text, currency);
   const stock = extractStock(text);
   if (price != null) updates.selling_price = price;
@@ -502,18 +548,24 @@ async function handleGlobalCommand(
  */
 /**
  * The end of a batch — every product submitted, session already reset.
- * Carries a button because this was the one place the flow still stopped
- * dead: the seller had nothing to tap and no stated phrase to type, so
- * listing a second batch meant guessing. The id is "restart", the same
- * canonical phrase the typed command uses (see lib/whatsapp/commands.ts),
- * so a tap and a typed *restart* run the identical path — and the body
- * still names the phrase for clients that can't render buttons.
+ *
+ * Used to carry a "Create new listing" button here, on the reasoning that
+ * the seller had nothing else to tap. That button fires the instant
+ * submission completes — before Jumia has resolved a single product — so
+ * a seller who tapped it straight away could start a whole new batch
+ * before ever seeing whether the one they just submitted actually went
+ * live. The resolution messages (notifyBatchResolved/
+ * notifyListingResolved, lib/jumia/push-listing.ts) still arrive
+ * regardless of what the seller does next — restart doesn't suppress
+ * them — but nothing here should actively invite moving on before that.
+ * No button now; *restart* (typed) is still how a seller starts a new
+ * batch, same canonical phrase the global command already recognises
+ * (lib/whatsapp/commands.ts).
  */
 function sendBatchDoneMessage(phoneNumber: string): Promise<void> {
-  return replyButtons(
+  return replyText(
     phoneNumber,
-    "🎉 That's the whole batch submitted! I'll message you here as each one goes live.\n\nWant to list something else? Tap below or reply *restart*.",
-    [{ id: "restart", title: "Create new listing" }],
+    "🎉 That's the whole batch submitted! I'll message you here as each one goes live.\n\nOnce you've seen how these went, reply *restart* to list something else.",
   );
 }
 
@@ -1818,34 +1870,16 @@ export async function runQueuedAnalysis(job: AnalysisJob): Promise<void> {
     return;
   }
 
-  // Gives access to the focused single-product editor the moment this
-  // product's draft is ready, rather than making the seller wait for the
-  // batch-wide summary. Only worth doing mid-batch when there ARE other
-  // products still drafting; a 1-product batch's single "drafted" event
-  // folds straight into finalizeBatch's combined message instead.
-  if (batchSize > 1) {
-    // One message, not two. This used to send the "✅ Product N drafted"
-    // line and then a bare follow-up reading only "Still needs: price." —
-    // which never named a product, so in a batch the seller could not tell
-    // WHICH one was missing a price, and the warning arrived detached from
-    // the Edit button that fixes it. Confirmed from a live 2-product
-    // batch: "Still needs: price." and "Ready to submit." arrived as two
-    // anonymous messages under two drafted products.
-    const missing = await missingFieldsFor(job.listing_id);
-    const noteWarnings = await noteWarningsFor(job.listing_id);
-    await replyCta(
-      phoneNumber,
-      [
-        `✅ Product ${seq} drafted: ${result.title ?? "(untitled)"}.`,
-        missing.length > 0
-          ? `⚠️ Product ${seq} still needs ${missing.join(" and ")} — tap *Edit product ${seq}* below to add it.`
-          : "Ready to submit.",
-        ...noteWarnings.map((w) => `⚠️ Product ${seq}: ${w}.`),
-      ].join("\n"),
-      `Edit product ${seq}`,
-      focusedEditorUrl(job.listing_id),
-    );
-  }
+  // No live "✅ Product N drafted" message here for a multi-product batch
+  // (batchSize > 1) — this used to fire the moment EVERY product finished,
+  // which is most of where a real 20-product batch's ~108 bot messages
+  // came from (2026-09-19 live batch, see the module doc comment above).
+  // finalizeBatch now reports every product's Ready/Held status in ONE
+  // summary once the whole batch settles, derived from the same
+  // missingFieldsFor/noteWarningsFor this used to call per-product. A
+  // 1-product batch still gets its single "drafted" message, but that one
+  // comes from finalizeBatch too (batchSize === 1 branch) — there is
+  // nothing to consolidate at that size, so no reason for two code paths.
 
   // Low-confidence category pick — surfaced right here in chat (for every
   // batch size) instead of only on a web confidence banner most
@@ -1989,6 +2023,33 @@ async function applyChatPrice(
 }
 
 /**
+ * Listings whose analysis job hit its retry cap without ever reaching
+ * runQueuedAnalysis's own graceful failure reply.
+ *
+ * status='done' with no title already means runQueuedAnalysis got far
+ * enough to call replyError itself before returning — that job is marked
+ * done regardless of whether the draft it produced is usable, precisely
+ * so finalizeBatch can tell "handled" apart from "never handled" here.
+ * status='failed' is the OTHER kind: claim_analysis_jobs retired the job
+ * itself after repeated crashes (a Vercel function-timeout kill, live and
+ * confirmed, is silent at the platform level — no catch block, no
+ * replyError, nothing runs), so nobody ever told the seller anything.
+ */
+async function hardFailedListingIds(batchId: string): Promise<Set<string>> {
+  const db = createServerClient();
+  const { data, error } = await db
+    .from("analysis_jobs")
+    .select("listing_id")
+    .eq("batch_id", batchId)
+    .eq("status", "failed");
+  if (error) {
+    console.warn(`[whatsapp intake] hard-failed lookup failed for batch ${batchId}: ${error.message}`);
+    return new Set();
+  }
+  return new Set((data ?? []).map((r) => r.listing_id as string));
+}
+
+/**
  * Close out a batch once every job has settled — the tail of what used to
  * be startBatchAnalysis, called by the worker that finished the last job.
  *
@@ -2011,45 +2072,170 @@ export async function finalizeBatch(
   if (batchSize === 1) {
     const only = listings[0];
     if (only?.title) {
-      const missing = await describeMissingFields(only.id);
-      // Same warnings the multi-product path shows — a 1-product batch is
-      // the MOST likely place a seller writes a detailed note, so it is
-      // the last place that should swallow one.
-      const noteWarnings = (await noteWarningsFor(only.id)).map((w) => `\n⚠️ ${w}.`).join("");
+      // The single source of truth for Ready vs Held — see
+      // lib/whatsapp/readiness.ts's doc comment for why this replaced a
+      // bare missing-fields check: a listing can have every field filled
+      // and still be something a real push would reject or silently
+      // corrupt (a capacity Jumia needs whole, a variant value outside
+      // the category's stocked options, ...). noteWarningsFor's sale-date
+      // and variant-claim checks catch a case the payload builder can't
+      // (zero variant rows despite a stated claim, so there's nothing for
+      // it to validate against) — merged in alongside, not replaced.
+      const [assessment, noteWarnings] = await Promise.all([
+        assessListingPushReadiness(only.user_id as string, only.id),
+        noteWarningsFor(only.id),
+      ]);
+      const reasons = [...assessment.reasons, ...noteWarnings];
+      const ready = reasons.length === 0;
+      const heldText = reasons.length > 0 ? `\n⚠️ ${reasons.join("; ")}.` : "";
       await replyCta(
         phoneNumber,
-        (missing ? `✅ Product drafted: ${only.title}.\n⚠️ ${missing}` : `✅ Product drafted: ${only.title}. Ready to submit!`) + noteWarnings,
+        (ready ? `✅ Product drafted: ${only.title}. Ready to submit!` : `✅ Product drafted: ${only.title}.`) + heldText,
         "Edit product",
         focusedEditorUrl(only.id),
       );
+      // Never offer Submit on a Held product — confidence over optimism:
+      // a seller should never be handed a button that would fail or ship
+      // something other than what they typed.
       await replyButtons(
         phoneNumber,
-        `Reply *submit*, or say something like "change the price to 150" to edit it first.`,
-        [
-          { id: "submit all", title: "Submit ✅" },
-          { id: "restart",    title: "Restart 🔄" },
-        ],
+        ready
+          ? `Reply *submit*, or say something like "change the price to 150" to edit it first.`
+          : `Fix the above in the editor, then reply *submit*.`,
+        ready
+          ? [{ id: "submit all", title: "Submit ✅" }, { id: "restart", title: "Restart 🔄" }]
+          : [{ id: "restart", title: "Restart 🔄" }],
       );
       // A missing price is the one gap worth a follow-up question rather
       // than a warning: it is the commonest reason a draft never reaches
       // Jumia, and it is the only missing field a seller can supply in a
       // single word without opening the editor.
       await askForNextMissingPrice(phoneNumber, batchId);
+      return;
     }
-    // else: the product's own failure message (sent by runQueuedAnalysis)
-    // already covers what happened — nothing to add.
+    // No title: runQueuedAnalysis's own graceful failure reply already
+    // covered this UNLESS the job never got that far — a hard crash or a
+    // platform timeout kill mid-analysis, silent by nature, is the one
+    // case with nobody ever telling the seller anything went wrong.
+    if (only && (await hardFailedListingIds(batchId)).has(only.id)) {
+      const seq = only.whatsapp_seq ?? 1;
+      await replyError(
+        phoneNumber,
+        `⚠️ Product couldn't be drafted after several tries — sorry about that. You can retry, or fill it in yourself.`,
+        {
+          retryId: `retry product ${seq}`,
+          cta:     { label: `Fix product ${seq}`, url: focusedEditorUrl(only.id) },
+        },
+      );
+    }
     return;
   }
 
-  // Every "Edit product N" link already went out live as each product
-  // finished — now that the whole batch has settled, offer every ready
-  // product's "Submit product N" in ONE pass, so edits and submits read as
-  // two separate blocks rather than alternating pairs.
-  const ready = listings
+  const drafted = listings
     .filter((l) => l.title && l.whatsapp_seq != null)
     .sort((a, b) => (a.whatsapp_seq as number) - (b.whatsapp_seq as number));
-  const readyToSubmitSeqs = ready.map((l) => l.whatsapp_seq as number);
 
+  // A hard failure gets its OWN bubble, per product — the batchSize===1
+  // branch above already does this for a single product; this is the same
+  // rule for a batch of several. The combined "Done drafting N of M"
+  // headline further down still names every gap together, but a seller
+  // needs THIS product's own Fix/Retry buttons, not just its number folded
+  // into a list — and hardFailedListingIds is exactly the set that never
+  // got runQueuedAnalysis's own graceful failure reply (a title-less
+  // listing whose job status ISN'T 'failed' already got that reply, so is
+  // deliberately left alone here — see hardFailedListingIds's doc comment).
+  const notDrafted = listings.filter((l) => !l.title || l.whatsapp_seq == null);
+  if (notDrafted.length > 0) {
+    const hardFailed = await hardFailedListingIds(batchId);
+    for (const l of notDrafted) {
+      if (!hardFailed.has(l.id)) continue;
+      const seq = l.whatsapp_seq ?? "?";
+      await replyError(
+        phoneNumber,
+        `⚠️ Product ${seq} couldn't be drafted after several tries — sorry about that. You can retry, or fill it in yourself.`,
+        {
+          retryId: `retry product ${seq}`,
+          cta:     { label: `Fix product ${seq}`, url: focusedEditorUrl(l.id) },
+        },
+      );
+    }
+  }
+
+  // Ready vs Held for every drafted product, via the single "would this
+  // push?" brain (lib/whatsapp/readiness.ts) — see its doc comment for why
+  // a bare missing-fields check isn't enough. Concurrency-capped the same
+  // way handleSubmit caps actual pushes below: a batch's worth of
+  // simultaneous brand/schema lookups against Jumia would risk the same
+  // "200 req/min, max 4 req/sec" ceiling a real submit already respects,
+  // and most of a batch is typically still missing basic fields anyway —
+  // assessListingPushReadiness only reaches Jumia once those are filled.
+  const ASSESS_CONCURRENCY = 3;
+  const assessments: { ready: boolean; reasons: string[] }[] = new Array(drafted.length);
+  {
+    let cursor = 0;
+    const assessWorker = async (): Promise<void> => {
+      for (let i = cursor++; i < drafted.length; i = cursor++) {
+        const l = drafted[i];
+        let assessment: { ready: boolean; reasons: string[] };
+        let noteWarnings: string[];
+        try {
+          [assessment, noteWarnings] = await Promise.all([
+            assessListingPushReadiness(l.user_id as string, l.id),
+            noteWarningsFor(l.id),
+          ]);
+        } catch (e) {
+          // Never let an assessor crash read as Ready — staging 2026-09-22
+          // canaries kept scoring ✅ Ready while capacity/size Holds should
+          // have fired; degrading to Held on throw is the safe default.
+          assessment = {
+            ready: false,
+            reasons: [`couldn't verify readiness (${(e as Error).message || "error"}) — open Edit before submitting`],
+          };
+          noteWarnings = [];
+        }
+        // noteWarningsFor catches a case the payload builder structurally
+        // can't (zero variant rows despite a stated size/colour claim —
+        // there is nothing for it to validate against) — merged in
+        // alongside the assessor's own reasons, not replaced by them.
+        assessments[i] = {
+          ready:   assessment.ready && noteWarnings.length === 0,
+          reasons: [...assessment.reasons, ...noteWarnings],
+        };
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(ASSESS_CONCURRENCY, drafted.length) }, assessWorker),
+    );
+  }
+
+  const readyListings = drafted.filter((_, i) => assessments[i].ready);
+  const readyToSubmitSeqs = readyListings.map((l) => l.whatsapp_seq as number);
+
+  // ONE status line per drafted product — Ready, or Held with why —
+  // replacing what used to be a separate live message the moment EACH one
+  // finished (runQueuedAnalysis). Real 20-product batch, 2026-09-19: ~108
+  // bot messages total, and this was most of them. Plain text, not
+  // buttons: the same ~1024-char interactive-body cap that forces the
+  // submit summary (handleSubmit) to plain text applies here too, and a
+  // 20-line batch clears it easily.
+  if (drafted.length > 0) {
+    const statusLines = drafted.map((l, i) => {
+      const { ready, reasons } = assessments[i];
+      return ready
+        ? `Product ${l.whatsapp_seq}: ✅ Ready — ${l.title}.`
+        : `Product ${l.whatsapp_seq}: ⚠️ Held — ${reasons.join("; ")}.`;
+    });
+    await replyText(phoneNumber, statusLines.join("\n"));
+  }
+
+  // Now that the whole batch has settled, offer every READY product's
+  // "Submit product N" in ONE pass, so the status summary above and the
+  // submit actions below read as two separate blocks rather than
+  // alternating pairs. A Held product never gets a Submit affordance here
+  // — confidence over optimism: opening the editor (linked from its status
+  // line above) is the only action offered for one, never a button that
+  // would fail or ship something other than what the seller typed.
+  //
   // A list holds ten rows; a button message holds three. That difference
   // is the whole point here.
   //
@@ -2064,8 +2250,8 @@ export async function finalizeBatch(
   // Three or fewer still uses buttons: they render inline, with no extra
   // tap to open a sheet, and at that size there is no volume to save.
   if (readyToSubmitSeqs.length > 3) {
-    for (let i = 0; i < ready.length; i += LIST_MAX_ROWS) {
-      const chunk = ready.slice(i, i + LIST_MAX_ROWS);
+    for (let i = 0; i < readyListings.length; i += LIST_MAX_ROWS) {
+      const chunk = readyListings.slice(i, i + LIST_MAX_ROWS);
       await replyList(
         phoneNumber,
         i === 0 ? "Submit a specific product:" : "…and the rest:",
@@ -2087,17 +2273,19 @@ export async function finalizeBatch(
     );
   }
 
-  // Report what actually drafted, not what was promised.
-  //
-  // A product whose analysis failed for good has no title, so it is
-  // already absent from the buttons above — but the closing line still
-  // announced the full batch size, so a seller who asked for 4 and got 3
-  // was congratulated on 4 and left to notice the gap themselves. Worse,
-  // the missing numbers are exactly the ones they need in order to ask
-  // for a retry.
-  const draftedCount = readyToSubmitSeqs.length;
+  // Report what actually drafted, not what was promised — and not
+  // conflated with Ready/Held, which is a separate axis (a product can
+  // draft perfectly and still be Held pending a fix). A product whose
+  // analysis failed for good has no title at all, so it's absent from
+  // `drafted` here — but the closing line used to announce the full batch
+  // size regardless, so a seller who asked for 4 and got 3 was
+  // congratulated on 4 and left to notice the gap themselves. Worse, the
+  // missing numbers are exactly the ones they need in order to ask for a
+  // retry.
+  const draftedSeqs = drafted.map((l) => l.whatsapp_seq as number);
+  const draftedCount = draftedSeqs.length;
   const missingSeqs = Array.from({ length: batchSize }, (_, i) => i + 1)
-    .filter((seq) => !readyToSubmitSeqs.includes(seq));
+    .filter((seq) => !draftedSeqs.includes(seq));
 
   // Points at *retry N*, not *restart*. They are not interchangeable:
   // retry re-drafts just the products that failed, on the photos already
@@ -2673,11 +2861,42 @@ async function handleEdit(
  * steers a draft) — so a plain instruction here reaches every pass that
  * could act on it, with no new plumbing.
  */
+/**
+ * Undoes buildRerunContext's own wrapping. Without this, a listing
+ * rejected on two rerun cycles in a row had EACH rejection's "Jumia
+ * rejected the previous draft: ..." text nested inside the next one's
+ * "seller's own notes" section, since the listing's persisted user_prompt
+ * (see runAutoAnalyze's userPromptOverride persistence) is exactly what
+ * the NEXT rerun reads back as "originalNote". Two effects, both bad: the
+ * seller's actual original note gets pushed out of the 1000-char budget a
+ * little further each cycle, and the note-intent pass then reads Jumia's
+ * OWN rejection prose as if the seller had typed it — confirmed live,
+ * 2026-09-20: "material_family] Is Not Visible For Category" landed in
+ * the main_material field, extracted word-for-word out of a previous
+ * rejection message a rerun had nested into the note.
+ */
+function unwrapRerunContext(note: string | null): string | null {
+  if (!note) return note;
+  const marker = `The seller's own notes about this product: "`;
+  const idx = note.indexOf(marker);
+  if (idx === -1) {
+    // Pure synthetic commentary with no real note ever attached (the
+    // originalNote-less branch below) — nothing genuine to recover.
+    return /^Jumia rejected the previous draft:/.test(note) ? null : note;
+  }
+  // Not anchored on a closing quote — buildRerunContext truncates to
+  // 1000 chars, which can (and did, live) cut the string off mid-word
+  // before the closing quote ever appears.
+  const inner = note.slice(idx + marker.length).replace(/"$/, "");
+  return unwrapRerunContext(inner);
+}
+
 function buildRerunContext(
   rejectionText: string,
   categoryPath:  string | null,
   originalNote:  string | null,
 ): string {
+  originalNote = unwrapRerunContext(originalNote);
   const lower = rejectionText.toLowerCase();
   const hints: string[] = [];
 
@@ -2738,7 +2957,7 @@ async function handleFixAndResubmit(
   const db = createServerClient();
   const { data: row } = await db
     .from("listings")
-    .select("id, whatsapp_seq, title, jumia_error, category_code, category_path, user_prompt, jumia_rerun_fingerprint, jumia_rerun_count")
+    .select("id, whatsapp_seq, title, status, brand, field_sources, field_confidence, jumia_error, category_code, category_path, user_prompt, jumia_rerun_fingerprint, jumia_rerun_count")
     .eq("id", listingId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -2749,6 +2968,24 @@ async function handleFixAndResubmit(
   }
 
   const label = row.whatsapp_seq != null ? `Product ${row.whatsapp_seq}` : (row.title as string | null) ?? "That product";
+
+  // A tap with nothing to fix — e.g. the seller tapped a LIVE row in the
+  // "Pick a product" list notifyBatchResolved sends when several products
+  // resolve in one tick (lib/jumia/push-listing.ts), which puts every
+  // item — live or rejected — behind the same fix:<listingId> id rather
+  // than inventing a second tap behaviour to explain. Without this,
+  // extractRejectionText(null) => "" => classifyJumiaRejection("") =>
+  // kind: "unknown" => isAutoFixable === true, which would happily
+  // redraft-and-repush a product Jumia already approved.
+  if (!row.jumia_error) {
+    await replyText(
+      phoneNumber,
+      row.status === "live"
+        ? `✅ ${label} is already live on Jumia — nothing to fix.`
+        : `${label} hasn't been rejected by Jumia — nothing to fix here yet.`,
+    );
+    return;
+  }
 
   // Anything the seller alone can supply blocks the push regardless of
   // what Jumia complained about — check it before spending an AI call.
@@ -2766,6 +3003,40 @@ async function handleFixAndResubmit(
   // of the time, and both the classifier and the rerun context below want
   // the human-readable form, not a string full of braces and quotes.
   const rejectionText = extractRejectionText(row.jumia_error as string | null);
+
+  // A brand Jumia (or our own restricted-brand list) won't allow for this
+  // category has exactly one always-safe answer: Jumia's own Generic/
+  // Fashion placeholder brand (see BRAND_GENERIC_* in lib/jumia/api.ts,
+  // already used as resolveBrand's own last-resort fallback) — there is
+  // nothing for a redraft to guess at, and guessing risks the AI
+  // confidently re-picking the identical brand from the same photos next
+  // time, repeating the identical block forever. Checked directly against
+  // the live restricted-brand list rather than by pattern-matching stored
+  // text, so this also catches the case where the push never reached
+  // Jumia at all — assertListingReady's own "forbidden" block never
+  // leaves a Jumia-side rejection to match against, unlike a genuine
+  // remote "not allowed to sell this brand" response.
+  const brandRestricted =
+    checkRestrictedBrand(row.brand as string | null, row.category_path as string | null).status === "forbidden" ||
+    /not allowed to sell this brand/i.test(rejectionText);
+
+  if (brandRestricted) {
+    const fallbackBrand = isFashionCategory(row.category_path as string | null) ? "Fashion" : "Generic";
+    await db.from("listings").update({
+      brand: fallbackBrand,
+      // Marked "user" so a LATER, unrelated redraft never confidently
+      // re-detects and reinstates the same restricted brand from the
+      // original photos — same reasoning note-assertion corrections use
+      // for a value that must not be silently overwritten again.
+      field_sources: { ...(row.field_sources as Record<string, string> | null), brand: "user" },
+      field_confidence: { ...(row.field_confidence as Record<string, unknown> | null), brand: { confidence: 1, source: "seller-required" } },
+      updated_at: new Date().toISOString(),
+    }).eq("id", listingId);
+    await replyText(phoneNumber, `🔧 ${label}: "${row.brand}" isn't a brand Jumia will list here, so I switched it to "${fallbackBrand}". Resubmitting…`);
+    await pushAndReport(userId, phoneNumber, listingId, label);
+    return;
+  }
+
   const remedy = classifyJumiaRejection(rejectionText);
 
   if (!isAutoFixable(remedy.kind)) {
@@ -2808,6 +3079,22 @@ async function handleFixAndResubmit(
 
   await replyText(phoneNumber, `🔧 ${label}: ${remedy.explanation} Fixing and resubmitting…`);
 
+  // A "not visible for category" rejection means OUR cached schema is
+  // wrong, not the listing — no redraft can fix an attribute that was
+  // never usable for this category to begin with. Remove exactly the
+  // attributes Jumia named from the cache and push again unchanged;
+  // preflightAttributes (lib/jumia/preflight.ts) already drops anything
+  // not in the schema, so the corrected cache is enough on its own.
+  if (remedy.kind === "not_visible_attributes") {
+    const categoryCode = row.category_code ? parseInt(row.category_code as string, 10) : NaN;
+    const names = extractNotVisibleAttributeNames(rejectionText);
+    if (categoryCode && names.length > 0) {
+      await removeAttributesFromCache(categoryCode, names);
+    }
+    await pushAndReport(userId, phoneNumber, listingId, label);
+    return;
+  }
+
   // Re-draft before re-pushing. Skipped only for a pure duplicate-SKU
   // rejection, where the payload was fine and the push path generates a
   // fresh suffix on its own — an AI call there would cost a credit to
@@ -2816,10 +3103,11 @@ async function handleFixAndResubmit(
   // capable attempt than the old attribute-only refill ever was.
   if (remedy.kind !== "repush") {
     try {
+      const trueOriginalNote = unwrapRerunContext((row.user_prompt as string | null) ?? null);
       const rerunContext = buildRerunContext(
         rejectionText,
         row.category_path as string | null,
-        (row.user_prompt as string | null) ?? null,
+        trueOriginalNote,
       );
       const result = await runAutoAnalyze(userId, listingId, rerunContext);
       if (!result.ok) {
@@ -2830,6 +3118,14 @@ async function handleFixAndResubmit(
         );
         return;
       }
+      // runAutoAnalyze persists whatever userPromptOverride it's given
+      // into listings.user_prompt (so a seller's own free-text edit is
+      // remembered for next time) — here that override was our own
+      // synthetic "Jumia rejected..." commentary, not anything the seller
+      // said. Restore the real note so the NEXT rerun (or anywhere
+      // user_prompt is shown back to the seller) sees what they actually
+      // wrote, not our diagnostic text nested inside it.
+      await db.from("listings").update({ user_prompt: trueOriginalNote }).eq("id", listingId);
     } catch (e) {
       console.error(`[whatsapp intake] fix-and-resubmit rerun failed for ${listingId}: ${(e as Error).message}`);
       await replyError(
@@ -2841,6 +3137,17 @@ async function handleFixAndResubmit(
     }
   }
 
+  await pushAndReport(userId, phoneNumber, listingId, label);
+}
+
+/** Push a listing and reply with the outcome — shared tail of every
+ *  "Fix & resubmit" path, deterministic or redrafted. */
+async function pushAndReport(
+  userId:      string,
+  phoneNumber: string,
+  listingId:   string,
+  label:       string,
+): Promise<void> {
   const result = await pushListingToJumia(userId, listingId);
 
   if (result.ok) {

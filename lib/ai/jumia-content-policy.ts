@@ -67,6 +67,27 @@ export function isRestrictedBrand(brand: string | null | undefined): boolean {
   return JUMIA_RESTRICTED_BRANDS.has(brand.toLowerCase().trim());
 }
 
+// ─── Jumia's own house brand — a false positive, not a real brand ───────────
+//
+// jumia_brands (Jumia's own synced catalog) carries "Jumia" itself as a
+// real, listable brand code (1061295), plus a family of house-label
+// variants ("Jumia Mall", "Jumia Deals", "Jumia Book", "Jumia Shoes", ...).
+// A real, live-and-unnoticed case: a kettle drafted from a photo carrying
+// Jumia's own watermark (extremely common — most seller reference photos
+// are screenshots or crops of an existing Jumia listing) got "Jumia" set
+// as its brand. Because "Jumia" is a genuinely valid brand code, Jumia
+// never rejects the push over it — the listing goes live silently wrong,
+// and neither the classify-and-rerun loop nor a QC error ever catches it,
+// unlike a restricted brand (which Jumia DOES reject and this codebase
+// already guards against via isRestrictedBrand). Only a human noticing
+// caught it here. Guarded the same way: strip it before it ever reaches
+// the listing, don't wait for evidence that never arrives.
+export function isJumiaHouseBrand(brand: string | null | undefined): boolean {
+  if (!brand) return false;
+  const normalized = brand.toLowerCase().trim();
+  return normalized === "jumia" || normalized.startsWith("jumia ");
+}
+
 // ─── Brand-in-title safety net ───────────────────────────────────────────────
 //
 // Jumia rejects any listing whose title contains the brand name with a
@@ -360,6 +381,14 @@ BRAND & ANTI-COUNTERFEIT RULES:
         Ben Nye.
       Apparel: Yeezy.
       Misc: Rubik's, VigRX, Oriflame.
+  - NEVER pick "Jumia" or any Jumia house-label ("Jumia Mall", "Jumia
+    Deals", "Jumia Book", etc.) as the product's brand. It's a real,
+    listable brand code, so Jumia will NOT reject it if you pick it
+    wrong — which is exactly the danger: a "Jumia" watermark or logo
+    visible in the photo (common — many reference photos are screenshots
+    or crops of an existing Jumia listing) is the MARKETPLACE'S own
+    branding, not evidence of who actually makes the product. Treat a
+    Jumia watermark exactly like no logo being visible at all.
   - Never invent a brand. When no logo is visible: ${isFashion
       ? "use \"Fashion\" as the fallback for this category, NOT \"Generic\" — Jumia rejects \"Generic\" as a brand on Fashion categories."
       : "\"Generic\" is a valid fallback."}
@@ -379,17 +408,25 @@ ALWAYS-INCLUDED DYNAMIC ATTRIBUTES (never omit, write a real product-specific va
   - product_note: A buyer-feedback nudge (the standard "thanks, please leave
     a review when you receive your order" message). The default is fine
     unless the seller has a more specific message to convey.
-  - what_is_in_the_box: A real item list based on the images, formatted
-    as a MULTI-LINE list with each item on its OWN line, starting with
-    a count like "1x" or "2x". This is the format Jumia displays on the
-    product page — a comma-joined paragraph or just a digit do NOT
-    render correctly. Examples (each item on its own line, \\n between):
-      Phone:   "1x Smartphone\\n1x USB-C Charger\\n1x USB Cable\\n1x User Manual"
-      Drone:   "1x Drone\\n1x Remote Controller\\n2x Batteries\\n1x Charger\\n4x Spare Propellers\\n1x Carrying Case"
-      Kettle:  "1x Electric Kettle\\n1x User Manual"
+  - what_is_in_the_box: A real item list of what is actually BEING SOLD,
+    formatted as a MULTI-LINE list with each item on its OWN line,
+    starting with a count like "1x" or "2x". This is the format Jumia
+    displays on the product page — a comma-joined paragraph or just a
+    digit do NOT render correctly. List ONLY the product itself and any
+    accessory clearly visible in the images (e.g. a charger bundled in
+    the same photo) — do NOT add "User Manual" or "Original Packaging"
+    as generic filler. Most listings don't actually include either, and
+    an inaccurate guess is worse than a short, accurate list. Only add an
+    item like a manual, case, or extra accessory if it's visibly present
+    in the images OR the seller's own notes say it's included — the
+    seller's stated contents always win over guessing from images.
+    Examples (each item on its own line, \\n between):
+      Phone with charger/cable visible: "1x Smartphone\\n1x USB-C Charger\\n1x USB Cable"
+      Drone with full kit visible:      "1x Drone\\n1x Remote Controller\\n2x Batteries\\n1x Charger\\n4x Spare Propellers\\n1x Carrying Case"
+      Kettle, product only:             "1x Electric Kettle"
     NEVER omit this. If only the product is visible with no accessories,
-    default to:
-      "1x [Product Name]\\n1x User Manual (if applicable)\\n1x Original Packaging"
+    state just the product:
+      "1x [Product Name]"
     NEVER write just "1" or a count number alone — that's a parse error,
     not a value.
 

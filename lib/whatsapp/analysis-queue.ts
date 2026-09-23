@@ -259,6 +259,54 @@ export async function isBatchSettled(batchId: string): Promise<boolean> {
   return (count ?? 0) === 0;
 }
 
+export interface SettledBatch {
+  batch_id:     string;
+  phone_number: string;
+  batch_size:   number;
+}
+
+/**
+ * Batches with zero queued/running jobs left, whose seller session is
+ * still 'analyzing' — i.e. settled but never finalized.
+ *
+ * Exists because a job's terminal transition to 'failed' happens INSIDE
+ * claim_analysis_jobs's own stale-reclaim retirement, as a side effect of
+ * a claim attempt that finds attempts already exhausted. That row is
+ * never handed back to the caller, so a settle-check keyed off "batch_ids
+ * of jobs claimed this tick" never runs again for a batch whose last job
+ * fails this way — confirmed live: a single-product batch whose one job
+ * hit Vercel's 60s function timeout three times in a row sat in
+ * whatsapp_sessions.state = 'analyzing' forever, with no failure notice
+ * ever reaching the seller.
+ *
+ * Cheap and safe to call every tick, including one that claimed no new
+ * work — that is exactly the tick an orphaned batch like this needs to be
+ * caught on. claimBatchFinalization's own conditional UPDATE makes
+ * finalizing the same batch twice, or racing another worker over it, a
+ * no-op rather than a double-send.
+ *
+ * The DB function pins its match to whatsapp_sessions.batch_id, not just
+ * phone_number — an earlier version matched any settled batch for the
+ * phone number, which let a stale batch abandoned by a past "restart"
+ * resurface and get finalized in place of (and ahead of) the batch the
+ * session is actually waiting on right now, the moment the phone next went
+ * back into 'analyzing' for something new. Confirmed live, 2026-09-20: a
+ * 20-product batch's closing summary never arrived because a leftover
+ * 2-product batch won that race first and flipped the session out of
+ * 'analyzing' before the real batch was even done.
+ */
+export async function findUnfinalizedSettledBatches(): Promise<SettledBatch[]> {
+  const db = createServerClient();
+  const { data, error } = await withRetry("findUnfinalizedSettledBatches", () =>
+    db.rpc("find_unfinalized_settled_batches"),
+  );
+  if (error) {
+    console.warn(`[analysis-queue] settled-batch scan failed: ${error}`);
+    return [];
+  }
+  return (data ?? []) as SettledBatch[];
+}
+
 /**
  * Win the right to close out a batch, exactly once.
  *

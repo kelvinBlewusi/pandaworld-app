@@ -91,8 +91,16 @@ export function assertListingReady(
   blockers.push(...words.blockers);
   warnings.push(...words.warnings);
 
+  // Deliberately NOT listing.description here. A real 2026-09-19 batch
+  // showed the bare keyword "Meat" blocking an Air Fryer and a Blender
+  // outright, and "Battery"/"Food" warning on nearly every push — both
+  // from ordinary appliance description prose ("cook meat, fish or
+  // vegetables") mentioning the word, not the product itself being that
+  // type. Title and category_path are short and specific to WHAT the
+  // product actually is; description is long-form marketing copy that
+  // routinely mentions materials, ingredients and use-cases in passing.
   const categoryCheck = checkProhibitedCategory(countryCode, [
-    listing.title, listing.description, listing.category_path,
+    listing.title, listing.category_path,
   ]);
   if (categoryCheck.blocked) {
     blockers.push(

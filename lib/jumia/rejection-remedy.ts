@@ -46,6 +46,14 @@ export type RemedyKind =
    *  a bad title, an over-broad category, a short description, or a
    *  category-attribute value the schema rejects. */
   | "rerun"
+  /** Every attribute Jumia complained about is "not visible for category"
+   *  — our OWN cached schema is wrong (it lists an attribute Jumia's live
+   *  validation doesn't accept for this category), not the listing. Fixed
+   *  by removing exactly those attributes from the cache (see
+   *  removeAttributesFromCache in lib/jumia/categories.ts) and pushing
+   *  again — preflightAttributes already drops anything not in the
+   *  schema, so no redraft is needed once the cache is corrected. */
+  | "not_visible_attributes"
   /** Jumia already has this SKU. The push path generates a fresh suffix
    *  on the next attempt, so simply pushing again resolves it. */
   | "repush"
@@ -62,6 +70,27 @@ export interface Remedy {
   /** One line, addressed to the seller, in their terms rather than
    *  Jumia's. */
   explanation: string;
+}
+
+/**
+ * True when, after stripping out every "Attribute [x] is not visible for
+ * category [y]." complaint, nothing meaningful is left in the message —
+ * i.e. the ENTIRE rejection is that one complaint repeated across several
+ * attributes, not that complaint mixed with something else. A mixed
+ * message (say, a not-visible attribute alongside an invalid price) means
+ * more than a stale cache is wrong, so it should fall through to the
+ * generic rerun bucket instead of being treated as a pure cache-correction
+ * case.
+ *
+ * Tolerates one trailing truncated fragment ("Attribute [warranty_address]"
+ * with no closing clause) — the live rejection this branch was built from
+ * was itself cut off mid-sentence there.
+ */
+function isEntirelyNotVisibleAttributeComplaints(msg: string): boolean {
+  const stripped = msg
+    .replace(/attribute\s*\[\s*[^\]]+?\s*\]\s+is not visible for category\s*\[\s*[^\]]*\]\.?/gi, "")
+    .trim();
+  return stripped === "" || /^attribute\s*\[\s*[^\]]*\]?\.?$/i.test(stripped);
 }
 
 export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
@@ -82,6 +111,35 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
     return { kind: "seller", explanation: "Two of the variants on this product have the same variation value (e.g. both marked the same size or colour) — Jumia needs them to differ." };
   }
 
+  // ── Our OWN pre-push hold, not a Jumia rejection — see
+  // resolveVariantRowVariation in lib/jumia/api.ts. A rerun redrafts the
+  // whole listing from the photo, but the seller's own typed variation
+  // value is exactly what didn't match the category's stocked options —
+  // redrafting it again is the same guess, not a different one.
+  if (/isn'?t one of this category'?s stocked options/.test(msg)) {
+    return { kind: "seller", explanation: "The variation value isn't one of this category's stocked options — pick one of the ones listed, or use the editor to add a new option." };
+  }
+
+  // ── Jumia's OWN async rejection for the same problem the local hold
+  // above exists to catch before push ever happens.
+  //
+  // Confirmed live (2026-09-19 batch, Baby Carrier): "Attribute [variation]
+  // with invalid value [Navy Blue]." — the local check in
+  // resolveVariantRowVariation didn't catch this one (the category's
+  // variant-axis schema hadn't synced at push time), so it fell through to
+  // the generic "Attribute [...]" pattern below and was misclassified
+  // "rerun". That's wrong for the identical reason the local hold's own
+  // branch above exists: runAutoAnalyze re-derives variant labels from the
+  // SAME photos on every pass (see the variant-persist step in
+  // lib/actions/auto-analyze.ts), so a rerun reproduces the same invalid
+  // guess, not a different one. Checked before the generic attribute
+  // pattern, and narrowly on the literal "variation" attribute name only —
+  // "Attribute [color_family] with invalid value [...]" and similar stay
+  // "rerun", since those ARE dynamic attributes a rerun regenerates fully.
+  if (/attribute\s*\[\s*variation\s*\]\s*with invalid value/.test(msg)) {
+    return { kind: "seller", explanation: "The variation value Jumia has isn't one of this category's stocked options — pick one of the ones listed, or use the editor to add a new option." };
+  }
+
   // ── The product's name/title — a rerun rewrites this from scratch ─────
   //
   // runAutoAnalyze regenerates the title on every pass, so a rejection
@@ -95,6 +153,20 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
   }
   if (/trademark.{0,80}protected.{0,80}brand/.test(msg)) {
     return { kind: "rerun", explanation: "Jumia sees a trademarked term without a matching brand — redrafting should set the brand correctly or reword the title." };
+  }
+
+  // ── Brand banned for this shop's country ────────────────────────────────
+  //
+  // Real rejection: "You're not allowed to sell this brand in Ghana." This
+  // is a country-level sell-ban Jumia enforces on their side — distinct
+  // from checkRestrictedBrand's own brand×category FORBIDDEN/QC matrix
+  // (lib/jumia/prohibited-catalog.ts), which has no entry for it. Without
+  // this branch the message fell through to "unknown", which IS
+  // auto-fixable — so a rerun (which never touches the brand a seller
+  // actually has) kept redrafting and resubmitting the same forbidden
+  // brand, wasting a push every time.
+  if (/not allowed to sell this brand/.test(msg)) {
+    return { kind: "seller", explanation: "Jumia doesn't allow this brand to be sold in this shop's country — a redraft can't change that; use a different brand or check with Jumia support." };
   }
 
   if (/description/.test(msg) && /(short|50|length|characters)/.test(msg)) {
@@ -237,6 +309,34 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
     return { kind: "seller", explanation: `Jumia needs ${field.toLowerCase()} set on this product — that's not something a redraft can supply.` };
   }
 
+  // ── Every complaint is "not visible for category" — OUR cache is wrong ──
+  //
+  // Checked before the generic attribute-problems bucket below, which
+  // would otherwise also match "is not visible for category" and send
+  // this down a rerun. A rerun can't fix this: runAutoAnalyze just refills
+  // the same attribute with a new value, and Jumia rejects it again for
+  // the same reason — the attribute isn't rejected because of what value
+  // it holds, it's rejected because our cached schema says this category
+  // accepts an attribute that Jumia's real per-category validation
+  // doesn't. Confirmed live, 2026-09-21 (category 1022994, "Compact
+  // Refrigerators" — checked directly against Jumia's own Vendor Center
+  // form): "Attribute [color_family] is not visible for category [Compact
+  // Refrigerators]. Attribute [main_material] is not visible for category
+  // [Compact Refrigerators]. ..." repeated across seven attributes.
+  // Removing exactly those attributes from the cache (see
+  // removeAttributesFromCache in lib/jumia/categories.ts) and pushing
+  // again is what actually clears it — preflightAttributes already drops
+  // anything not in the schema, so no redraft is needed once the cache is
+  // corrected. A message that mixes this complaint with a different kind
+  // of problem falls through to the generic rerun bucket instead, since
+  // that mix means something beyond a stale cache is also wrong.
+  if (/is not visible for category/.test(msg) && isEntirelyNotVisibleAttributeComplaints(msg)) {
+    return {
+      kind: "not_visible_attributes",
+      explanation: "Some of this category's fields aren't actually usable there — I'll remove them and resubmit.",
+    };
+  }
+
   // ── Attribute problems — the common, genuinely fixable case ────────────
   //
   // Matches both the bracketed live shape ("Attribute [x] is not visible
@@ -264,7 +364,7 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
 /** True when the system should attempt an automatic repair rather than
  *  handing straight back to the seller. */
 export function isAutoFixable(kind: RemedyKind): boolean {
-  return kind === "rerun" || kind === "repush" || kind === "unknown";
+  return kind === "rerun" || kind === "not_visible_attributes" || kind === "repush" || kind === "unknown";
 }
 
 /**
@@ -293,14 +393,17 @@ export function rejectionFingerprint(kind: RemedyKind, rejectionText: string): s
  *
  * "repush" is exempt: a duplicate-SKU rejection is resolved by a genuinely
  * fresh SKU each attempt (see pushListingToJumia's isRetry), so a second
- * attempt is not "the same fix repeating" the way a rerun is.
+ * attempt is not "the same fix repeating" the way a rerun is. "not_visible_
+ * attributes" is exempt for the same reason: each attempt removes the
+ * offending names from the cache before pushing again, so a second attempt
+ * pushes a genuinely corrected schema, not a repeat of the same guess.
  */
 export function shouldBlockRepeatedAutoFix(
   kind:  RemedyKind,
   fingerprint: string,
   prior: { fingerprint: string | null; count: number },
 ): boolean {
-  if (kind === "repush") return false;
+  if (kind === "repush" || kind === "not_visible_attributes") return false;
   return prior.fingerprint === fingerprint && prior.count >= 1;
 }
 
@@ -331,6 +434,29 @@ export function extractRejectedAttributeName(raw: string | null | undefined): st
 }
 
 /**
+ * Pull EVERY attribute name out of a "not visible for category" rejection
+ * — unlike extractRejectedAttributeName above, which only ever returns the
+ * first match (built for "jump to this one field on the review page"),
+ * this powers removeAttributesFromCache, which needs the complete set
+ * Jumia complained about in one rejection so it can correct the cache in
+ * one pass rather than one automatic-repair cycle per attribute.
+ *
+ * A trailing truncated fragment ("Attribute [warranty_address]" with no
+ * closing "is not visible..." clause) never completes the pattern and is
+ * silently dropped — there's no confirmed category name to act on for it.
+ */
+export function extractNotVisibleAttributeNames(raw: string | null | undefined): string[] {
+  const msg = raw ?? "";
+  const re = /attribute\s*\[\s*([^\]]+?)\s*\]\s+is not visible for category/gi;
+  const names: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(msg)) !== null) {
+    names.push(match[1]);
+  }
+  return names;
+}
+
+/**
  * Reduce a stored jumia_error value to plain, human-readable text.
  *
  * The column holds a JSON-stringified Jumia error object most of the
@@ -340,20 +466,27 @@ export function extractRejectedAttributeName(raw: string | null | undefined): st
  * rarely breaks a keyword match), but anything that hands this text
  * onward — a rerun's AI prompt, a seller-facing message — needs the
  * clean form, not a blob of braces and quotes.
+ *
+ * A rejected feed can carry several distinct problems in one `errors[]`
+ * array (a variation value AND a decimal capacity, say) — joining all of
+ * them, rather than only `errors[0]`, is what lets a rerun's AI prompt and
+ * a seller-facing message address everything Jumia reported instead of
+ * one reason at a time.
  */
 export function extractRejectionText(raw: string | null | undefined): string {
   if (!raw) return "";
   try {
     const parsed = JSON.parse(raw);
     if (typeof parsed === "string") return parsed;
-    const candidates = [
-      parsed?.message,
-      parsed?.errorMessage,
-      parsed?.error,
-      Array.isArray(parsed?.errors) ? parsed.errors[0] : undefined,
-    ];
-    const first = candidates.find((c) => typeof c === "string");
-    return (first as string | undefined) ?? JSON.stringify(parsed);
+    const single = [parsed?.message, parsed?.errorMessage, parsed?.error].find(
+      (c) => typeof c === "string",
+    );
+    if (typeof single === "string") return single;
+    if (Array.isArray(parsed?.errors)) {
+      const joined = parsed.errors.filter((e: unknown) => typeof e === "string").join(" | ");
+      if (joined) return joined;
+    }
+    return JSON.stringify(parsed);
   } catch {
     return raw;
   }

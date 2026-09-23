@@ -67,5 +67,10 @@ export async function POST(req: NextRequest) {
     adjustments:      result.adjustments,
     missing_required: result.missingRequired,
     blockers:         result.blockers,
+    // Raw, reason-tagged notes (see JumiaPayloadBuild.preflightNotes) —
+    // adjustments above has already lost the .reason tag to seller-facing
+    // prose, which is exactly what a canary run diffing "what got built"
+    // against "what should have been built" needs back.
+    preflight_notes:  result.preflightNotes,
   });
 }

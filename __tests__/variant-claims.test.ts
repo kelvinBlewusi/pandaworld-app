@@ -33,6 +33,13 @@ describe("extractVariantClaim", () => {
     const c = extractVariantClaim("Only red and blue are available");
     expect(c?.source).toBe("Only red and blue are available");
   });
+
+  it("extracts a WhatsApp-style Sizes caption list", () => {
+    const c = extractVariantClaim("GHS 70. Sizes Medium Large Xtra Large");
+    expect(c).not.toBeNull();
+    expect(c!.tokens).toEqual(["medium", "large", "xtra", "large"]);
+    expect(c!.source.toLowerCase()).toContain("sizes");
+  });
 });
 
 describe("reconcileVariants — the live failure", () => {
@@ -134,6 +141,24 @@ describe("reconcileVariants", () => {
   it("handles a claim against an empty proposal without inventing one", () => {
     const r = reconcileVariants(extractVariantClaim("Only red is available"), []);
     expect(r.kind).toBe("unresolved");
+  });
+});
+
+describe("reconcileVariants — the live 'too' failure", () => {
+  // Verbatim, from a 20-product batch, 2026-09-20: an air fryer note.
+  // "too" isn't a connector, so it read as a second claimed option that
+  // matches nothing in the photo — the ENTIRE claim (including the "blue"
+  // that DID match) came back unresolved and every colour got dropped.
+  const NOTE = "The colors are black and we have blue too";
+  const PHOTO_COLOURS = ["Black", "Blue"];
+
+  it("does not read 'too' as a claimed option", () => {
+    expect(extractVariantClaim(NOTE)?.tokens).not.toContain("too");
+  });
+
+  it("resolves instead of wiping out every colour on the draft", () => {
+    const r = reconcileVariants(extractVariantClaim(NOTE), PHOTO_COLOURS);
+    expect(r.kind).toBe("restrict");
   });
 });
 

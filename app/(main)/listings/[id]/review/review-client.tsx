@@ -1502,9 +1502,17 @@ export function ReviewClient({
     }
     return [{
       id: "v1", axes: {}, variation: "Default", sellerSku: listing.sku,
-      gtin: "", quantity: "1",
+      gtin: "", quantity: String(listing.quantity ?? 1),
       globalPrice: listing.selling_price ? String(listing.selling_price) : "",
-      salePrice: "", saleStartDate: "", saleEndDate: "",
+      // Same fallback as globalPrice above, for the same reason — a sale
+      // price set before any variant row exists (via the WhatsApp chat
+      // flow, or a previous save from this same synthetic row) lands on
+      // the listing itself, so hydrate it here rather than showing a
+      // blank field that looks like it never registered — and would
+      // silently clear the existing value on the next Save.
+      salePrice:     listing.sale_price != null ? String(listing.sale_price) : "",
+      saleStartDate: listing.sale_start_date ?? "",
+      saleEndDate:   listing.sale_end_date   ?? "",
     }];
   });
   const [axesDef, setAxesDef] = useState<AxisDef[]>([]);
@@ -1522,6 +1530,18 @@ export function ReviewClient({
       })
       .catch(() => setSchemaAxes([]));
   }, [categoryCode]);
+
+  // A category whose ONLY variant axis is a fixed list (screen sizes, shoe
+  // lengths) can't accept anything else for its Variation field — Jumia's
+  // own Vendor Center shows exactly this axis's options as a dropdown
+  // rather than a free-text box. Scoped to exactly one axis: with two or
+  // more, the "Variant axes" picker above already builds the right
+  // composite value per combo, and a flat dropdown of one axis's values
+  // alone would misrepresent what the category actually requires.
+  const singleAxisVariationOptions =
+    schemaAxes.length === 1 && schemaAxes[0].allowed_values.length > 0
+      ? schemaAxes[0].allowed_values
+      : undefined;
 
   // Rebuild variant rows from variant axes (Color, Size, etc.).
   // When axesDef is empty we LEAVE variants alone — they were either
@@ -2473,6 +2493,7 @@ export function ReviewClient({
                     onToggleSelect={() => toggleSelectVariant(v.id)}
                     onToggleCollapse={() => toggleCollapse(v.id)}
                     onDelete={() => deleteVariant(v.id)}
+                    variationOptions={singleAxisVariationOptions}
                   />
                 ))}
               </div>

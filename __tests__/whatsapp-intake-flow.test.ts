@@ -84,6 +84,27 @@ jest.mock("@/lib/jumia/push-listing", () => ({
   pushListingToJumia: async () => { pushCallCount++; return pushResult; },
 }));
 
+// assessListingPushReadiness (lib/whatsapp/readiness.ts) is the ONE seam
+// this suite doesn't exercise for real — its own dry-run reaches Jumia
+// (getValidJumiaCredentials, resolveBrand, schema fetch), which none of
+// these fixtures seed a jumia_connections row for. Mocked down to just the
+// pure, already-real missingFieldLabels check these tests actually care
+// about (message volume / chunking / "needs price" phrasing) — the
+// assessor's own Jumia-dependent behaviour (decimal mismatches, variant
+// enums, fashion-Generic brand) has its own unit tests in
+// __tests__/whatsapp-readiness.test.ts.
+jest.mock("@/lib/whatsapp/readiness", () => ({
+  assessListingPushReadiness: async (_userId: string, listingId: string) => {
+    const { missingFieldLabels } = jest.requireActual("@/lib/jumia/push-listing");
+    const row = db.tables.listings.find((l) => l.id === listingId);
+    if (!row) return { ready: false, reasons: ["listing not found"] };
+    const missing = missingFieldLabels(row);
+    return missing.length > 0
+      ? { ready: false, reasons: missing.map((m: string) => `needs ${m}`) }
+      : { ready: true, reasons: [] };
+  },
+}));
+
 import { handleLinkedMessage } from "@/lib/whatsapp/intake";
 
 const USER  = "user_1";
@@ -456,6 +477,116 @@ describe("asking for a missing price in chat", () => {
   });
 });
 
+describe("a single-product batch whose analysis hard-failed", () => {
+  // Real production shape: a Vercel function-timeout kill mid-analysis is
+  // silent at the platform level — no catch block runs, so
+  // runQueuedAnalysis never reaches its own replyError call. The job gets
+  // retried, and once claim_analysis_jobs finally retires it to 'failed'
+  // after exhausting attempts, the seller had heard NOTHING since
+  // "drafting them now" — confirmed live, two single-product batches sat
+  // untouched for hours.
+  it("tells the seller when the job was retired to 'failed' with no title ever set", async () => {
+    db.tables.listings = [
+      { id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: null, selling_price: null },
+    ];
+    db.tables.analysis_jobs = [
+      { id: "job-1", listing_id: "listing-1", batch_id: "batch-1", user_id: USER, phone_number: PHONE, seq: 1, batch_size: 1, status: "failed", attempts: 3, error: "Gave up after 3 attempts" },
+    ];
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 1);
+
+    const failure = sent.find((m) => m.body.includes("couldn't be drafted after several tries"));
+    expect(failure).toBeDefined();
+  });
+
+  // The other half: a job that reached runQueuedAnalysis's own graceful
+  // failure path is marked 'done' (not 'failed'), specifically so
+  // finalizeBatch does not send a SECOND message on top of the one
+  // runQueuedAnalysis already sent. No analysis_jobs row at all is the
+  // same case — the job might have been cleaned up, or never queued via
+  // this path in the test at all.
+  it("stays silent when the no-title listing's job is not 'failed' — already covered elsewhere", async () => {
+    db.tables.listings = [
+      { id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: null, selling_price: null },
+    ];
+    db.tables.analysis_jobs = [
+      { id: "job-1", listing_id: "listing-1", batch_id: "batch-1", user_id: USER, phone_number: PHONE, seq: 1, batch_size: 1, status: "done", attempts: 1, error: null },
+    ];
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 1);
+
+    expect(sent).toHaveLength(0);
+  });
+});
+
+describe("a multi-product batch with one hard-failed product", () => {
+  // Same production shape as the single-product case above, extended to a
+  // batch of several — a throw mid-Gemini (see lib/ai/parse-ai-response.ts's
+  // hardening in this same change) and a Vercel function-
+  // timeout kill are both silent at the point of failure and both retire
+  // to analysis_jobs.status='failed' the same way, without
+  // runQueuedAnalysis ever reaching its own replyError call. Confirmed
+  // live, 2026-09-21 staging canary: a 3-product batch went quiet on 2 of
+  // 3 products with nothing sent for either.
+  const FULL = {
+    description: "A long enough description to clear the fifty-character minimum check.",
+    category_code: "1234",
+    brand: "Panasonic",
+    images: ["https://cdn.test/a.jpg"],
+    status: "draft",
+    selling_price: 150,
+  };
+
+  it("sends a per-seq Fix/Retry bubble for the hard-failed product, alongside the other two drafting normally", async () => {
+    db.tables.listings = [
+      { id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: "Drafted product number 1", ...FULL },
+      { id: "listing-2", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 2, title: null, selling_price: null },
+      { id: "listing-3", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 3, title: "Drafted product number 3", ...FULL },
+    ];
+    db.tables.analysis_jobs = [
+      { id: "job-2", listing_id: "listing-2", batch_id: "batch-1", user_id: USER, phone_number: PHONE, seq: 2, batch_size: 3, status: "failed", attempts: 3, error: "Gave up after 3 attempts" },
+    ];
+    seedSession({ state: "awaiting_confirmation", batch_size: 3, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 3);
+
+    const bubble = sent.find((m) => m.kind === "cta" && m.body.includes("Product 2 couldn't be drafted after several tries"));
+    expect(bubble).toBeDefined();
+
+    // The other two still get their normal Ready/Held status line, and it
+    // says nothing about product 2 — that's the per-seq bubble's job.
+    const statusMessage = sent.find((m) => m.kind === "text" && m.body.includes("Product 1"));
+    expect(statusMessage?.body).toContain("Product 1: ✅ Ready");
+    expect(statusMessage?.body).toContain("Product 3: ✅ Ready");
+    expect(statusMessage?.body).not.toContain("Product 2");
+  });
+
+  it("does not send a per-seq bubble for a title-less product whose job never reached 'failed'", async () => {
+    db.tables.listings = [
+      { id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: "Drafted product number 1", ...FULL },
+      { id: "listing-2", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 2, title: null, selling_price: null },
+    ];
+    // No analysis_jobs row at all for listing-2 — e.g. still mid-retry
+    // elsewhere, or cleaned up. Nothing here confirms a silent death, so
+    // no per-seq bubble — only the existing combined "couldn't be
+    // drafted" summary further down still names it.
+    seedSession({ state: "awaiting_confirmation", batch_size: 2, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 2);
+
+    expect(sent.some((m) => m.body.includes("couldn't be drafted after several tries"))).toBe(false);
+  });
+});
 
 describe("message volume on a large batch", () => {
   // The live failure: a 10-product batch sent roughly 25 messages to one
@@ -530,6 +661,44 @@ describe("message volume on a large batch", () => {
     const list = sent.find((m) => m.kind === "list")!;
     expect(list.rows).toEqual(["submit 1", "submit 2", "submit 4", "submit 5"]);
     expect(sent.some((m) => m.body.includes("retry 3"))).toBe(true);
+  });
+
+  // The other half of the ~108-message evidence: runQueuedAnalysis used to
+  // send its own "✅ Product N drafted" message the moment EACH product
+  // finished, so a 20-product batch fired up to 20 of these on top of
+  // everything else. That per-product bubble is gone; the status is
+  // reported once, by finalizeBatch, after the whole batch settles.
+  it("does not send a live 'drafted' message per product while a multi-product batch is still analyzing", async () => {
+    db.tables.listings = [{ id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: null, ...FULL }];
+    sent.length = 0;
+
+    const { runQueuedAnalysis } = await import("@/lib/whatsapp/intake");
+    await runQueuedAnalysis({
+      id: "job-1", listing_id: "listing-1", batch_id: "batch-1", user_id: USER,
+      phone_number: PHONE, seq: 1, batch_size: 2, status: "running", attempts: 1,
+    });
+
+    expect(sent.some((m) => m.body.includes("drafted"))).toBe(false);
+  });
+
+  // finalizeBatch's own replacement for that per-product bubble: ONE
+  // message naming every drafted product's status — Ready, or Held with
+  // why — instead of one live message per product as each one finished.
+  it("reports every drafted product's Ready/Held status in one consolidated message", async () => {
+    seedDrafted(3);
+    db.tables.listings[1].selling_price = null; // product 2 is missing its price
+    seedSession({ state: "awaiting_confirmation", batch_size: 3, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 3);
+
+    const statusMessages = sent.filter((m) => m.kind === "text" && m.body.includes("Product 1"));
+    expect(statusMessages).toHaveLength(1);
+    const body = statusMessages[0].body;
+    expect(body).toContain("Product 1: ✅ Ready — Drafted product number 1.");
+    expect(body).toContain("Product 2: ⚠️ Held — needs price.");
+    expect(body).toContain("Product 3: ✅ Ready — Drafted product number 3.");
   });
 });
 
@@ -755,6 +924,24 @@ describe("Fix & resubmit", () => {
 
     expect(autoAnalyzeCalls).toHaveLength(1);
     expect(pushCallCount).toBe(1);
+  });
+
+  // notifyBatchResolved (lib/jumia/push-listing.ts) now puts every item —
+  // live or rejected — behind the same fix:<listingId> id in its "Pick a
+  // product" list, so a seller can tap an already-live row from that same
+  // list. Without this guard, extractRejectionText(null) => "" =>
+  // classifyJumiaRejection("") => kind: "unknown" => isAutoFixable ===
+  // true, which would happily redraft-and-repush a product Jumia already
+  // approved.
+  it("does nothing but confirm when there's no rejection to fix — e.g. a tap on an already-live row", async () => {
+    seedRejectedListing({ status: "live", jumia_error: null });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
+
+    expect(autoAnalyzeCalls).toHaveLength(0);
+    expect(pushCallCount).toBe(0);
+    expect(sent.some((m) => m.body.includes("already live"))).toBe(true);
   });
 
   // Never fixed by a redraft — no amount of rerunning invents a price.

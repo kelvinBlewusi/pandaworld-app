@@ -1,4 +1,4 @@
-import { preflightAttributes, snapToAllowed } from "@/lib/jumia/preflight";
+import { preflightAttributes, snapToAllowed, snapToAllowedWithSynonyms, checkNumericConstraint } from "@/lib/jumia/preflight";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 
 function attr(over: Partial<JumiaCategoryAttribute> & { name: string }): JumiaCategoryAttribute {
@@ -41,6 +41,34 @@ describe("snapToAllowed", () => {
   });
 });
 
+describe("snapToAllowedWithSynonyms", () => {
+  // Same contract as snapToAllowed, plus a British/American spelling-pair
+  // check — shared by resolveVariantRowVariation/resolveColorFallbackVariation
+  // (lib/jumia/api.ts), preflightAttributes' own enum check below, and the
+  // draft-time reconciliation in auto-analyze.ts, so all three treat
+  // "Grey" against a "Gray"-only axis the same way instead of drifting.
+  it("bridges a British/American spelling pair snapToAllowed alone cannot", () => {
+    expect(snapToAllowedWithSynonyms("Grey", ["Black", "Gray", "White"])).toBe("Gray");
+    expect(snapToAllowed("Grey", ["Black", "Gray", "White"])).toBeNull();
+  });
+
+  it("bridges the pair inside a longer compound value", () => {
+    expect(snapToAllowedWithSynonyms("Grey Metal", ["Gray Metal", "Black Metal"])).toBe("Gray Metal");
+  });
+
+  it("still falls back to plain snapToAllowed's casing/plural repair", () => {
+    expect(snapToAllowedWithSynonyms("metal", ["Metal", "Wood"])).toBe("Metal");
+  });
+
+  it("still refuses to guess when nothing plausible matches", () => {
+    expect(snapToAllowedWithSynonyms("Fabric", ["Metal", "Wood"])).toBeNull();
+  });
+
+  it("passes a value through unchanged when the field is free text", () => {
+    expect(snapToAllowedWithSynonyms("Grey", [])).toBe("Grey");
+  });
+});
+
 describe("preflightAttributes", () => {
   const schema = [
     attr({ name: "material_family", label: "Material", allowed_values: ["Metal", "Wood"] }),
@@ -59,6 +87,15 @@ describe("preflightAttributes", () => {
   it("snaps a near-miss enum instead of dropping it", () => {
     const r = preflightAttributes([{ name: "material_family", value: "metal" }], schema);
     expect(r.attributes).toEqual([{ name: "material_family", value: "Metal" }]);
+    expect(r.notes.find((n) => n.reason === "snapped_enum")?.detail).toMatch(/corrected/);
+  });
+
+  it("snaps a British/American spelling pair the same way, not just casing/plural", () => {
+    const colourSchema = [
+      attr({ name: "color_family", label: "Colour", allowed_values: ["Gray", "Black", "White"] }),
+    ];
+    const r = preflightAttributes([{ name: "color_family", value: "Grey" }], colourSchema);
+    expect(r.attributes).toEqual([{ name: "color_family", value: "Gray" }]);
     expect(r.notes.find((n) => n.reason === "snapped_enum")?.detail).toMatch(/corrected/);
   });
 
@@ -264,14 +301,28 @@ describe("snapToAllowed against a real Jumia material_family list", () => {
 });
 
 describe("preflightAttributes — decimalPlaces", () => {
-  // "Attribute [capacity_liter] with the value [0.35] should be a number
-  // without decimals." — the same rejection SHAPE capacity_liter hit
-  // (2026-09-14_fix-attribute-type-codes.sql fixed the TYPE being wrong;
-  // decimal_places is the value bound the type alone never enforced).
-  it("rounds a fractional value to a whole number when decimalPlaces is 0", () => {
+  // Real rejection, 2026-09-19 batch: "Attribute [capacity_liter] with the
+  // value [1.7] should be a number without decimals." A whole-number-only
+  // field is a COUNT (a litre capacity, a piece count) — rounding 1.7 to 1
+  // or 2 guesses at what's actually being sold, so it's blocked on the
+  // very first attempt rather than silently rounded and sent.
+  it("blocks (drops) a fractional value on the first attempt when decimalPlaces is 0 — never guesses a rounding", () => {
     const schema = [attr({ name: "capacity_liter", type: "number", decimal_places: 0 })];
     const result = preflightAttributes([{ name: "capacity_liter", value: "1.7" }], schema);
-    expect(result.attributes[0].value).toBe("2");
+    expect(result.attributes.find((a) => a.name === "capacity_liter")).toBeUndefined();
+    expect(result.notes[0].reason).toBe("decimal_mismatch_blocked");
+  });
+
+  it("surfaces the blocked attribute as missingRequired when the schema requires it", () => {
+    const schema = [attr({ name: "capacity_liter", type: "number", decimal_places: 0, required: true })];
+    const result = preflightAttributes([{ name: "capacity_liter", value: "1.7" }], schema);
+    expect(result.missingRequired.map((n) => n.attribute)).toContain("capacity_liter");
+  });
+
+  it("only blocks decimal_places===0 — a fractional-but-allowed field still rounds (trimming precision, not changing the quantity)", () => {
+    const schema = [attr({ name: "weight_kg", type: "number", decimal_places: 2 })];
+    const result = preflightAttributes([{ name: "weight_kg", value: "1.2345" }], schema);
+    expect(result.attributes[0].value).toBe("1.23");
     expect(result.notes[0].reason).toBe("rounded_number");
   });
 
@@ -289,9 +340,24 @@ describe("preflightAttributes — decimalPlaces", () => {
   });
 
   it("does nothing when the schema doesn't constrain decimal places", () => {
-    const schema = [attr({ name: "capacity_liter", type: "number", decimal_places: null })];
-    const result = preflightAttributes([{ name: "capacity_liter", value: "1.23456" }], schema);
+    const schema = [attr({ name: "weight_kg", type: "number", decimal_places: null })];
+    const result = preflightAttributes([{ name: "weight_kg", value: "1.23456" }], schema);
     expect(result.attributes[0].value).toBe("1.23456");
+  });
+
+  // Real rejection, recurred 2026-09-20 on a DIFFERENT listing in a
+  // DIFFERENT category (1029495) than the 2026-09-19 one above — same
+  // exact wire text, but that category's own synced schema has
+  // decimal_places: null for capacity_liter (Jumia's schema is
+  // inconsistent about this per category for the identical attribute
+  // name). The schema-only check above had nothing to block on and shipped
+  // "1.7" straight into the same rejection a second time — this is the
+  // name-based hardening that closes that gap.
+  it("blocks capacity_liter as whole-number-only even when THIS category's schema leaves decimal_places null", () => {
+    const schema = [attr({ name: "capacity_liter", type: "number", decimal_places: null })];
+    const result = preflightAttributes([{ name: "capacity_liter", value: "1.7" }], schema);
+    expect(result.attributes.find((a) => a.name === "capacity_liter")).toBeUndefined();
+    expect(result.notes[0].reason).toBe("decimal_mismatch_blocked");
   });
 
   it("leaves a non-numeric value on a number field alone — not this function's problem", () => {
@@ -301,59 +367,6 @@ describe("preflightAttributes — decimalPlaces", () => {
     expect(result.notes).toHaveLength(0);
   });
 
-  // Fix 3: rounding is still fine on a FIRST attempt (above) — the bug was
-  // shipping the identical shape again after Jumia already rejected this
-  // exact attribute for it. Real chat log: "Attribute [capacity_liter]
-  // with the value [1.7] should be a number without decimals." rejected an
-  // Electric Kettle, "Fix & resubmit" redrafted it, and the resubmit was
-  // rejected with the SAME message a second time — the value never
-  // actually changed shape, just got silently re-rounded and re-sent.
-  describe("preflightAttributes — decimal mismatch already rejected once", () => {
-    const priorRejectionText =
-      "Attribute [capacity_liter] with the value [1.7] should be a number without decimals.";
-
-    it("blocks (drops) rather than re-rounds when the same attribute was already rejected for a decimal mismatch", () => {
-      const schema = [attr({ name: "capacity_liter", type: "number", decimal_places: 0 })];
-      const result = preflightAttributes(
-        [{ name: "capacity_liter", value: "1.7" }],
-        schema,
-        { priorRejectionText },
-      );
-      expect(result.attributes.find((a) => a.name === "capacity_liter")).toBeUndefined();
-      expect(result.notes[0].reason).toBe("decimal_mismatch_blocked");
-    });
-
-    it("still rounds normally when the prior rejection was about a DIFFERENT attribute", () => {
-      const schema = [attr({ name: "capacity_liter", type: "number", decimal_places: 0 })];
-      const result = preflightAttributes(
-        [{ name: "capacity_liter", value: "1.7" }],
-        schema,
-        { priorRejectionText: "Attribute [weight_kg] with the value [2.4] should be a number without decimals." },
-      );
-      expect(result.attributes[0].value).toBe("2");
-      expect(result.notes[0].reason).toBe("rounded_number");
-    });
-
-    it("surfaces the blocked attribute as missingRequired when the schema requires it", () => {
-      const schema = [attr({ name: "capacity_liter", type: "number", decimal_places: 0, required: true })];
-      const result = preflightAttributes(
-        [{ name: "capacity_liter", value: "1.7" }],
-        schema,
-        { priorRejectionText },
-      );
-      expect(result.missingRequired.map((n) => n.attribute)).toContain("capacity_liter");
-    });
-
-    it("only blocks decimal_places===0 — a fractional-but-allowed field still rounds", () => {
-      const schema = [attr({ name: "weight_kg", type: "number", decimal_places: 2 })];
-      const result = preflightAttributes(
-        [{ name: "weight_kg", value: "1.2345" }],
-        schema,
-        { priorRejectionText: "Attribute [weight_kg] with the value [1.2] should be a number without decimals." },
-      );
-      expect(result.attributes[0].value).toBe("1.23");
-    });
-  });
 });
 
 describe("preflightAttributes — notZeroOrNegative", () => {
@@ -398,5 +411,57 @@ describe("preflightAttributes — notZeroOrNegative", () => {
     const schema = [attr({ name: "x", type: "number", not_zero_or_negative: false })];
     const result = preflightAttributes([{ name: "x", value: "-3" }], schema);
     expect(result.attributes[0].value).toBe("-3");
+  });
+});
+
+describe("checkNumericConstraint", () => {
+  // Extracted out of preflightAttributes so auto-analyze.ts can run the
+  // identical rule at DRAFT time — the moment a category is known —
+  // rather than only discovering a bad decimal after a push attempt.
+  // Real, repeated rejection this exists to close: "Attribute
+  // [capacity_liter] with the value [1.7] should be a number without
+  // decimals."
+  const capacityField = attr({ name: "capacity_liter", type: "number", decimal_places: 0 });
+
+  it("blocks a fractional value on a whole-number-only field, same as preflightAttributes", () => {
+    const result = checkNumericConstraint("1.7", capacityField);
+    expect(result.value).toBeNull();
+    expect(result.note?.reason).toBe("decimal_mismatch_blocked");
+  });
+
+  it("catches capacity_liter as whole-number-only even when the schema leaves decimal_places null", () => {
+    const noDeclaredPlaces = attr({ name: "capacity_liter", type: "number", decimal_places: null });
+    const result = checkNumericConstraint("1.7", noDeclaredPlaces);
+    expect(result.value).toBeNull();
+    expect(result.note?.reason).toBe("decimal_mismatch_blocked");
+  });
+
+  it("keeps a whole number on a whole-number-only field, unchanged and with no note", () => {
+    const result = checkNumericConstraint("2", capacityField);
+    expect(result).toEqual({ value: "2" });
+  });
+
+  it("rounds excess precision on a field with a non-zero decimal_places, rather than blocking it", () => {
+    const twoDp = attr({ name: "price_extra", type: "number", decimal_places: 2 });
+    const result = checkNumericConstraint("1.2345", twoDp);
+    expect(result.value).toBe("1.23");
+    expect(result.note?.reason).toBe("rounded_number");
+  });
+
+  it("drops a zero-or-negative value when the schema forbids it", () => {
+    const positiveOnly = attr({ name: "weight", type: "number", not_zero_or_negative: true });
+    expect(checkNumericConstraint("0", positiveOnly).value).toBeNull();
+    expect(checkNumericConstraint("-5", positiveOnly).value).toBeNull();
+    expect(checkNumericConstraint("0", positiveOnly).note?.reason).toBe("invalid_number");
+  });
+
+  it("leaves a non-numeric value alone — a different, pre-existing problem", () => {
+    const result = checkNumericConstraint("true", capacityField);
+    expect(result).toEqual({ value: "true" });
+  });
+
+  it("leaves an unconstrained number field's value unchanged", () => {
+    const unconstrained = attr({ name: "x", type: "number" });
+    expect(checkNumericConstraint("1.23456", unconstrained)).toEqual({ value: "1.23456" });
   });
 });

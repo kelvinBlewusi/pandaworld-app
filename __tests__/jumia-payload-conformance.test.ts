@@ -8,7 +8,7 @@
  * Run: npm test
  */
 
-import { mapListingToJumiaProducts, type JumiaProduct } from "@/lib/jumia/api";
+import { mapListingToJumiaProducts, reconcileDraftVariation, type JumiaProduct } from "@/lib/jumia/api";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 
@@ -243,15 +243,33 @@ describe("Jumia /feeds/products/create payload conformance", () => {
       expect(products[0].variation.length).toBeGreaterThan(0);
     });
 
-    it("variation falls back to 'Default' when no color is set", () => {
+    it("variation defaults to '...' when no color is set", () => {
       const noColorListing: ListingRow = { ...sampleListing, color: null, color_family: null };
       const ps = mapListingToJumiaProducts(noColorListing, [], brand, currency);
-      expect(ps[0].variation).toBe("Default");
+      expect(ps[0].variation).toBe("...");
     });
 
-    it("variation uses color when present (preferred over 'Default')", () => {
-      // Sample listing has color "Navy Blue"
-      expect(products[0].variation).toBe("Navy Blue");
+    // Every listing defaults to a single SKU ("...") no matter what the AI
+    // thinks it sees in the photos. sampleListing's colour ("Navy Blue")
+    // came from the vision pass — field_sources.color is "ai", and it
+    // carries no field_confidence marking it seller-required — so it must
+    // NOT drive the variation.
+    it("variation defaults to '...' for an AI-guessed colour, even when one is set", () => {
+      expect(products[0].variation).toBe("...");
+    });
+
+    // Only a colour the SELLER stated themselves — verified via
+    // field_confidence.color.source === "seller-required", written by
+    // auto-analyze.ts's note-intent/note-assertion handling when the
+    // listing notes actually say what the colour/variant is — drives the
+    // variation. This is the one case where a colour-derived value ships.
+    it("variation uses the colour when the seller stated it in their own notes", () => {
+      const sellerStated: ListingRow = {
+        ...sampleListing,
+        field_confidence: { color: { confidence: 1, source: "seller-required" } },
+      };
+      const ps = mapListingToJumiaProducts(sellerStated, [], brand, currency);
+      expect(ps[0].variation).toBe("Navy Blue");
     });
 
     // A single SKU cannot have three colours. When the AI sees a product
@@ -259,27 +277,120 @@ describe("Jumia /feeds/products/create payload conformance", () => {
     // string used to ship as the variation: observed live on 2026-09-15 as
     // one product whose variation read "Black, Silver, White", which no
     // buyer can choose from. A list means variants the seller hasn't set
-    // up yet, not a name for this one.
+    // up yet, not a name for this one. Marked seller-required so this
+    // exercises resolveColorFallbackVariation's own multi-colour guard
+    // rather than being skipped for not being seller-stated at all.
     it.each([
       "Black, Silver, White",
       "Black and White",
       "Red & Blue",
       "Red/Blue",
-    ])("variation falls back to 'Default' rather than shipping the list %p", (color) => {
-      const multi: ListingRow = { ...sampleListing, color, color_family: color };
+    ])("variation falls back to '...' rather than shipping the list %p", (color) => {
+      const multi: ListingRow = {
+        ...sampleListing, color, color_family: color,
+        field_confidence: { color: { confidence: 1, source: "seller-required" } },
+      };
       const ps = mapListingToJumiaProducts(multi, [], brand, currency);
-      expect(ps[0].variation).toBe("Default");
+      expect(ps[0].variation).toBe("...");
     });
 
     // The guard must not swallow legitimate multi-word colour names.
     it.each(["Navy Blue", "Rose Gold", "Off White", "Sandstone"])(
-      "keeps %p, which is one colour that happens to have two words",
+      "keeps %p, which is one colour that happens to have two words, when the seller stated it",
       (color) => {
-        const single: ListingRow = { ...sampleListing, color, color_family: color };
+        const single: ListingRow = {
+          ...sampleListing, color, color_family: color,
+          field_confidence: { color: { confidence: 1, source: "seller-required" } },
+        };
         const ps = mapListingToJumiaProducts(single, [], brand, currency);
         expect(ps[0].variation).toBe(color);
       },
     );
+
+    // Real rejection, live: a Baby Carrier with ZERO persisted variant rows
+    // (so this base-product fallback, not resolveVariantRowVariation, is
+    // the one that runs) shipped "Blue" straight to Jumia into a category
+    // whose variant axis is entirely lengths in inches ("Attribute
+    // [variation] with invalid value [Blue]") — nothing here checked the
+    // detected colour against what the category actually stocks before a
+    // create-feed push, unlike the identical check already applied to a
+    // variant row's own typed value. Seller-stated here so the colour is
+    // even considered in the first place — see the AI-guessed-colour test
+    // above for the case where it isn't.
+    it("holds the push (via blockers) when the seller's stated colour isn't one of the category's own stocked options", () => {
+      const sizeOnlyAxis: JumiaCategoryAttribute[] = [
+        { name: "variation", label: "Variation", type: "select",
+          allowed_values: ["S", "M", "L", "XL", "One Size Fits All"],
+          required: true, is_variant: true },
+      ];
+      const babyCarrier: ListingRow = {
+        ...sampleListing, color: "Blue", color_family: "Blue",
+        field_confidence: { color: { confidence: 1, source: "seller-required" } },
+      };
+      const blockers: string[] = [];
+      const ps = mapListingToJumiaProducts(babyCarrier, [], brand, currency, [], undefined, sizeOnlyAxis, blockers);
+      expect(blockers).toHaveLength(1);
+      expect(blockers[0]).toMatch(/isn't one of this category's stocked options/);
+      expect(blockers[0]).toMatch(/S, M, L, XL, One Size Fits All/);
+      // Still built — blockers is the signal the caller must check, not a
+      // thrown error (see the variant-row equivalent above).
+      expect(ps[0].variation).toBe("Blue");
+    });
+
+    it("does not block a seller-stated colour when no variant-axis data is available", () => {
+      const babyCarrier: ListingRow = {
+        ...sampleListing, color: "Blue", color_family: "Blue",
+        field_confidence: { color: { confidence: 1, source: "seller-required" } },
+      };
+      const blockers: string[] = [];
+      const ps = mapListingToJumiaProducts(babyCarrier, [], brand, currency, [], undefined, [], blockers);
+      expect(blockers).toHaveLength(0);
+      expect(ps[0].variation).toBe("Blue");
+    });
+
+    // Real category, confirmed live via Supabase (1005888, "Baby Products >
+    // Gear > Backpacks & Carriers"): a Baby Carrier's zero-variant push kept
+    // getting held on EVERY redraft, all day, because its axis has no colour
+    // option at all and reconcileDraftVariation's "..." fallback only runs
+    // for the multi-variant draft path — this base-product fallback still
+    // blocked outright. Jumia's own Vendor Center offers "..." as a real,
+    // selectable option in this axis (confirmed by the literal "..." entry
+    // below, taken from the live jumia_category_attributes row), so a
+    // colour that can never match should go out as that instead of holding
+    // the push a fourth time.
+    it('falls back to "..." instead of blocking when the category itself offers it as a stocked option', () => {
+      const mixedSizeAxis: JumiaCategoryAttribute[] = [
+        { name: "variation", label: "Variation", type: "select",
+          allowed_values: ["18\"", "19\"", "20\"", "L", "M", "S", "XL", "One Size Fits All", "15.6\"", "13.3\"", "..."],
+          required: true, is_variant: true },
+      ];
+      const babyCarrier: ListingRow = {
+        ...sampleListing, color: "Navy Blue", color_family: "Navy Blue",
+        field_confidence: { color: { confidence: 1, source: "seller-required" } },
+      };
+      const blockers: string[] = [];
+      const ps = mapListingToJumiaProducts(babyCarrier, [], brand, currency, [], undefined, mixedSizeAxis, blockers);
+      expect(blockers).toHaveLength(0);
+      expect(ps[0].variation).toBe("...");
+    });
+
+    // resolveDefaultVariation's own block path: no seller-stated colour at
+    // all (the new universal default), AND the category's axis is a closed
+    // list that doesn't even offer "..." — genuinely nothing safe to send
+    // without the seller picking one themselves.
+    it("holds the push when there's no seller-stated colour and the category's axis doesn't offer '...' either", () => {
+      const sizeOnlyAxis: JumiaCategoryAttribute[] = [
+        { name: "variation", label: "Variation", type: "select",
+          allowed_values: ["S", "M", "L", "XL"],
+          required: true, is_variant: true },
+      ];
+      const noColorListing: ListingRow = { ...sampleListing, color: null, color_family: null };
+      const blockers: string[] = [];
+      const ps = mapListingToJumiaProducts(noColorListing, [], brand, currency, [], undefined, sizeOnlyAxis, blockers);
+      expect(blockers).toHaveLength(1);
+      expect(blockers[0]).toMatch(/needs a variation picked from its own stocked options/);
+      expect(ps[0].variation).toBe("...");
+    });
 
     it("includes a listing-level sale price when set — the only place one can live with zero variant rows", () => {
       const onSale: ListingRow = { ...sampleListing, sale_price: 1799, sale_start_date: FUTURE_SALE_START_2, sale_end_date: FUTURE_SALE_END_2 };
@@ -369,6 +480,44 @@ describe("Jumia /feeds/products/create payload conformance", () => {
         const single: VariantRow = { ...sampleVariants[0], variation: "Navy" };
         const ps = mapListingToJumiaProducts(sampleListing, [single], brand, currency, [], undefined, colorAxis);
         expect(ps[0].variation).toBe("Navy");
+      });
+
+      // Real rejection, live and repeated (2026-09-19 batch): "Attribute
+      // [variation] with invalid value [Navy Blue]" on a Baby Carrier —
+      // "Navy Blue" was never one of the category's own colour options,
+      // and "Fix & resubmit" kept redrafting and resubmitting the
+      // identical value because nothing local ever checked it against the
+      // axis. Held now instead of shipped, with the real options named.
+      it("holds the push (via blockers) when the value isn't a stocked option and no unambiguous snap exists", () => {
+        const unmatched: VariantRow = { ...sampleVariants[0], variation: "Navy Blue" };
+        const blockers: string[] = [];
+        const ps = mapListingToJumiaProducts(sampleListing, [unmatched], brand, currency, [], undefined, colorAxis, blockers);
+        expect(blockers).toHaveLength(1);
+        expect(blockers[0]).toMatch(/isn't one of this category's stocked options/);
+        expect(blockers[0]).toMatch(/Black, White, Gray, Navy/);
+        // The product is still built (the caller decides whether to push it) —
+        // blockers is the signal, not a thrown error.
+        expect(ps[0].variation).toBe("Navy Blue");
+      });
+
+      it("does not block a value that snaps unambiguously (Grey → Gray)", () => {
+        const greyVariant: VariantRow = { ...sampleVariants[0], variation: "Grey" };
+        const blockers: string[] = [];
+        mapListingToJumiaProducts(sampleListing, [greyVariant], brand, currency, [], undefined, colorAxis, blockers);
+        expect(blockers).toHaveLength(0);
+      });
+
+      it("does not block a value that's already an exact stocked option", () => {
+        const single: VariantRow = { ...sampleVariants[0], variation: "Navy" };
+        const blockers: string[] = [];
+        mapListingToJumiaProducts(sampleListing, [single], brand, currency, [], undefined, colorAxis, blockers);
+        expect(blockers).toHaveLength(0);
+      });
+
+      it("does not block a composite label with no axis to check against", () => {
+        const blockers: string[] = [];
+        mapListingToJumiaProducts(sampleListing, sampleVariants, brand, currency, [], undefined, [], blockers);
+        expect(blockers).toHaveLength(0);
       });
     });
 
@@ -685,6 +834,135 @@ describe("Jumia /feeds/products/create payload conformance", () => {
       const products = mapListingToJumiaProducts(listing, [], brand, currency, weightSchema);
       expect(products[0].attributes.map((a) => a.name)).not.toContain("product_weight");
     });
+  });
+
+  describe("category-aware attribute naming (aliases)", () => {
+    // Jumia uses DIFFERENT attribute names for the SAME logical field
+    // across categories — "color" in some, "colour" in others; "weight",
+    // "weight_kg" or "product_weight" depending on category. Hardcoding
+    // one spelling meant a category using the other one had the value
+    // dropped outright by preflightAttributes as "not visible for
+    // category", even though that category genuinely accepts the field
+    // under its own name.
+    const colourSchema: JumiaCategoryAttribute[] = [
+      { name: "colour", label: "Colour", type: "string", allowed_values: [], required: false, is_variant: false },
+    ];
+
+    it("sends the value under the schema's own spelling when it differs from the default", () => {
+      const products = mapListingToJumiaProducts(sampleListing, [], brand, currency, colourSchema);
+      const names = products[0].attributes.map((a) => a.name);
+      expect(names).not.toContain("color");
+      const attr = products[0].attributes.find((a) => a.name === "colour");
+      expect(attr?.value).toBe("Navy Blue");
+    });
+
+    it("still prefers the default spelling when the schema declares it", () => {
+      const colorSchema: JumiaCategoryAttribute[] = [
+        { name: "color", label: "Color", type: "string", allowed_values: [], required: false, is_variant: false },
+      ];
+      const products = mapListingToJumiaProducts(sampleListing, [], brand, currency, colorSchema);
+      const attr = products[0].attributes.find((a) => a.name === "color");
+      expect(attr?.value).toBe("Navy Blue");
+    });
+
+    it("falls back to the default spelling (and lets preflight drop it) when the schema declares neither alias", () => {
+      const neitherSchema: JumiaCategoryAttribute[] = [
+        { name: "ram", label: "RAM", type: "string", allowed_values: [], required: false, is_variant: false },
+      ];
+      const products = mapListingToJumiaProducts(sampleListing, [], brand, currency, neitherSchema);
+      const names = products[0].attributes.map((a) => a.name);
+      expect(names).not.toContain("color");
+      expect(names).not.toContain("colour");
+    });
+
+    it("sends weight under the schema's 'weight' spelling instead of the default 'product_weight'", () => {
+      const weightAliasSchema: JumiaCategoryAttribute[] = [
+        { name: "weight", label: "Weight", type: "string", allowed_values: [], required: false, is_variant: false },
+      ];
+      const products = mapListingToJumiaProducts(sampleListing, [], brand, currency, weightAliasSchema);
+      const names = products[0].attributes.map((a) => a.name);
+      expect(names).not.toContain("product_weight");
+      const attr = products[0].attributes.find((a) => a.name === "weight");
+      expect(attr?.value).toBe("0.213 kg");
+    });
+  });
+
+  describe("length/width/height — combined vs. per-dimension attributes", () => {
+    // Some categories declare size_l/size_w/size_h as three separate
+    // (often required, numeric) attributes rather than one free-text
+    // "product_measures" field. Always collapsing into the combined
+    // string meant those categories never got size_l/size_w/size_h under
+    // their own names at all — Jumia rejected "product_measures" as
+    // undeclared AND separately reported the three as missing, for a
+    // value the seller had actually supplied.
+    const dimensionSchema: JumiaCategoryAttribute[] = [
+      { name: "size_l", label: "Length (cm)", type: "number", allowed_values: [], required: true, is_variant: false },
+      { name: "size_w", label: "Width (cm)",  type: "number", allowed_values: [], required: true, is_variant: false },
+      { name: "size_h", label: "Height (cm)", type: "number", allowed_values: [], required: true, is_variant: false },
+    ];
+
+    it("sends size_l/size_w/size_h as their own bare-number attributes when the schema declares them separately", () => {
+      const products = mapListingToJumiaProducts(sampleListing, [], brand, currency, dimensionSchema);
+      const attrs = products[0].attributes;
+      expect(attrs.find((a) => a.name === "size_l")?.value).toBe("16.1");
+      expect(attrs.find((a) => a.name === "size_w")?.value).toBe("7.7");
+      expect(attrs.find((a) => a.name === "size_h")?.value).toBe("0.8");
+      expect(attrs.map((a) => a.name)).not.toContain("product_measures");
+    });
+
+    it("falls back to the combined product_measures string when the schema doesn't declare the dimensions separately", () => {
+      const noDimensionSchema: JumiaCategoryAttribute[] = [
+        { name: "product_measures", label: "Measurements", type: "string", allowed_values: [], required: false, is_variant: false },
+      ];
+      const products = mapListingToJumiaProducts(sampleListing, [], brand, currency, noDimensionSchema);
+      const attr = products[0].attributes.find((a) => a.name === "product_measures");
+      expect(attr?.value).toBe("L: 16.1 cm × W: 7.7 cm × H: 0.8 cm");
+    });
+
+    it("still sends the combined product_measures string when no schema is passed at all", () => {
+      const products = mapListingToJumiaProducts(sampleListing, [], brand, currency);
+      const attr = products[0].attributes.find((a) => a.name === "product_measures");
+      expect(attr?.value).toBe("L: 16.1 cm × W: 7.7 cm × H: 0.8 cm");
+    });
+  });
+});
+
+describe("reconcileDraftVariation", () => {
+  // The Describe pass (lib/actions/ai.ts) invents a variation label from
+  // the photos before the category — and therefore its variant axis — is
+  // even resolved. A laptop-screen-size category (real shape, confirmed
+  // live in Vendor Center) never accepts free text for this field, no
+  // matter how it's spelled: its own dropdown offers "..." alongside the
+  // real sizes for a seller who can't tell which one applies.
+  const screenSizeAxis: JumiaCategoryAttribute[] = [
+    {
+      name: "variation", label: "Variation", type: "string",
+      allowed_values: ["...", "13.3\"", "14\"", "15.6\"", "17.3\""],
+      required: true, is_variant: true,
+    },
+  ];
+
+  it("falls back to \"...\" when the AI's guess doesn't match any of the category's own options", () => {
+    expect(reconcileDraftVariation("15.6 inch", screenSizeAxis)).toBe("...");
+  });
+
+  it("snaps to the category's exact spelling on a case-only near-miss", () => {
+    const colourAxis: JumiaCategoryAttribute[] = [
+      { name: "variation", label: "Variation", type: "string", allowed_values: ["Black", "White"], required: true, is_variant: true },
+    ];
+    expect(reconcileDraftVariation("black", colourAxis)).toBe("Black");
+  });
+
+  it("keeps an already-exact match unchanged", () => {
+    expect(reconcileDraftVariation("15.6\"", screenSizeAxis)).toBe("15.6\"");
+  });
+
+  it("keeps the AI's free-text label unchanged when the category has no restricted axis", () => {
+    expect(reconcileDraftVariation("Rustic Oak Finish", [])).toBe("Rustic Oak Finish");
+  });
+
+  it("returns an empty label unchanged regardless of axis restrictions", () => {
+    expect(reconcileDraftVariation("   ", screenSizeAxis)).toBe("");
   });
 });
 

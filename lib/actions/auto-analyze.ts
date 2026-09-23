@@ -15,7 +15,7 @@
  * the result to JSON.
  */
 
-import { snapToAllowed } from "@/lib/jumia/preflight";
+import { snapToAllowedWithSynonyms, checkNumericConstraint } from "@/lib/jumia/preflight";
 import { createServerClient } from "@/lib/supabase/server";
 import {
   aiPassA_describeProduct,
@@ -25,6 +25,7 @@ import {
   aiPassBC_pickAndFill,
   aiFillGaps,
   aiExpandDescription,
+  aiMatchAllowedValue,
   type CandidateWithSchema,
   type RankedCategory,
 } from "@/lib/actions/ai";
@@ -35,6 +36,7 @@ import {
   CONTENT_LENGTH_FLOORS,
 } from "@/lib/ai/content-style-rules";
 import { canonicalKey, columnFor } from "@/lib/jumia/attribute-mapping";
+import { isFashionCategory } from "@/lib/jumia/fashion-category";
 import { aiReadNoteIntent } from "@/lib/actions/ai";
 import { verifyNoteIntent, type NoteIntent } from "@/lib/whatsapp/note-intent";
 import {
@@ -62,7 +64,7 @@ import {
   mergeCandidates,
   type CategoryCandidate,
 } from "@/lib/jumia/category-search";
-import { getValidJumiaCredentials } from "@/lib/jumia/api";
+import { getValidJumiaCredentials, reconcileDraftVariation } from "@/lib/jumia/api";
 import { AI_DYNAMIC_ATTR_DEFAULTS, resolvePatternDefault } from "@/lib/ai/policy";
 import { webSearch, formatSearchSnippetsForPrompt, isWebSearchEnabled } from "@/lib/ai/web-search";
 
@@ -345,6 +347,16 @@ export async function runAutoAnalyze(
     candidates = searchCategoriesByText(retrievalQuery, listableCategories, 8);
   }
 
+  // Enrich with is_leaf from the SAME listableCategories rows the pool
+  // came from — none of the retrieval functions in category-search.ts
+  // carry it themselves (see CategoryCandidate's own doc comment). This
+  // is what lets the ranking prompts below prefer a leaf over a listable
+  // parent when both are plausible, rather than treating "has its own
+  // attribute set" as the whole story on whether Jumia will actually
+  // accept a listing filed there directly.
+  const listableByCode = new Map(listableCategories.map((c) => [c.code, c]));
+  candidates = candidates.map((c) => ({ ...c, is_leaf: listableByCode.get(c.code)?.is_leaf ?? false }));
+
   console.info(
     `[auto-analyze] category resolution for query="${retrievalQuery.slice(0, 100)}" → ${candidates.length} candidate(s)`,
   );
@@ -404,10 +416,11 @@ export async function runAutoAnalyze(
         }
       }
       return {
-        code:  c.code,
-        name:  c.name,
-        path:  c.path,
+        code:    c.code,
+        name:    c.name,
+        path:    c.path,
         attrs,
+        is_leaf: c.is_leaf ?? false,
       };
     }),
   );
@@ -581,17 +594,27 @@ export async function runAutoAnalyze(
     }
   }
 
-  // Brand — Pass A's brand if confident, else "Generic" fallback so the
-  // required field is never empty. Per Jumia API docs, code 1045133 for
-  // Generic; resolveBrand maps the name → code at push time.
+  // Brand — every listing defaults to Generic (or Fashion, for a
+  // fashion-labelled category) so the required field is never empty.
+  // Pass A no longer even attempts to read a brand off a photographed
+  // logo (see its prompt) — a photo-detected brand is exactly what
+  // surfaces on Jumia's restricted/forbidden-brand lists and trademark
+  // rejections most often, for a product the seller may not be an
+  // authorised reseller of. Real brand names only ever reach `updates`
+  // via the note-intent/note-assertion handling further down, which
+  // reads what the SELLER actually wrote and unconditionally overrides
+  // this default — that's a seller's own words, which outrank a guess
+  // no matter how it was reached.
   if (canFill("brand") || !listing.brand) {
     if (!isUserEdited("brand")) {
-      const brandValue = description.brand && description.brand.trim() ? description.brand : "Generic";
+      const brandValue = isFashionCategory(chosen.path) ? "Fashion" : "Generic";
       updates.brand = brandValue;
       newSources["brand"] = "ai";
-      newConfidence["brand"] = description.brand
-        ? { confidence: 0.9, source: "image",    reasoning: "Logo visible in image" }
-        : { confidence: 0.5, source: "inferred", reasoning: "No brand logo detected — defaulted to Generic. Edit if you know the real brand." };
+      newConfidence["brand"] = {
+        confidence: 0.5,
+        source:     "inferred",
+        reasoning:  `Defaulted to "${brandValue}" — no brand stated in your notes. Mention the real brand in your listing notes if you're authorised to sell it, or edit this field.`,
+      };
     }
   }
 
@@ -955,15 +978,16 @@ export async function runAutoAnalyze(
   // "1x Item" list (Jumia's preferred format), substituting the listing
   // title for the main product so it reads:
   //     1x Volcano Humidifier
-  //     1x User manual (if applicable)
-  //     1x Original packaging
-  // — much more buyer-trust-worthy than a generic prose note.
+  // — just the product itself, not a manual/packaging guess (see
+  // AI_DYNAMIC_ATTR_DEFAULTS's doc comment in lib/ai/policy.ts) — a seller
+  // who wants real extras listed can say so in their own notes, which
+  // always wins over this fallback (see the mergedSources check below).
   function getProductAwareDefault(intent: string, fallback: string): string {
     const title = (updates.title as string | undefined) ?? (listing?.title ?? "") as string;
     if (intent === "what_is_in_the_box" && title && title.length > 0) {
       // Take the first 6 words from the title for a tidy product name.
       const productName = title.split(/\s+/).slice(0, 6).join(" ");
-      return `1x ${productName}\n1x User manual (if applicable)\n1x Original packaging`;
+      return `1x ${productName}`;
     }
     return fallback;
   }
@@ -1023,14 +1047,21 @@ export async function runAutoAnalyze(
   ]);
   const TEXTY_NAME_RE = /(desc|note|text|title|label|name|comment|message|copy|tagline)/i;
 
-  const numericAttrNames = new Set(
+  const numericAttrFields = new Map(
     attrs
       .filter((a) => a.type === "number")
-      .map((a) => a.name.toLowerCase())
-      .filter((n) => !SKIP_NUMERIC_SCRUB.has(n) && !TEXTY_NAME_RE.test(n)),
+      .filter((a) => !SKIP_NUMERIC_SCRUB.has(a.name.toLowerCase()) && !TEXTY_NAME_RE.test(a.name))
+      .map((a) => [a.name.toLowerCase(), a] as const),
   );
+  const dropNumericAttr = (key: string) => {
+    delete finalDynamicAttrs[key];
+    // Also clear any field_sources / field_confidence tracking for it.
+    if (mergedSources[key] !== "user") delete mergedSources[key];
+    delete mergedConfidence[key];
+  };
   for (const key of Object.keys(finalDynamicAttrs)) {
-    if (!numericAttrNames.has(key.toLowerCase())) continue;
+    const field = numericAttrFields.get(key.toLowerCase());
+    if (!field) continue;
     const raw   = String(finalDynamicAttrs[key]);
 
     // Last-resort heuristic: if the value contains spaces AND letters,
@@ -1043,22 +1074,37 @@ export async function runAutoAnalyze(
     }
 
     const match = raw.match(/-?\d+(?:\.\d+)?/);
-    if (match) {
-      const n = parseFloat(match[0]);
-      if (Number.isFinite(n)) {
-        finalDynamicAttrs[key] = String(n); // canonical numeric string
-        continue;
-      }
+    const n = match ? parseFloat(match[0]) : NaN;
+    if (!Number.isFinite(n)) {
+      // Couldn't extract a real number ("true", "yes", "unknown") — drop
+      // it. Leaving the field empty is better than failing Jumia QC.
+      console.warn(
+        `[auto-analyze] dropping non-numeric value for numeric attr '${key}': '${raw.slice(0, 40)}'`,
+      );
+      dropNumericAttr(key);
+      continue;
     }
-    // Couldn't extract a real number ("true", "yes", "unknown") — drop it.
-    // Leaving the field empty is better than failing Jumia QC.
-    console.warn(
-      `[auto-analyze] dropping non-numeric value for numeric attr '${key}': '${raw.slice(0, 40)}'`,
-    );
-    delete finalDynamicAttrs[key];
-    // Also clear any field_sources / field_confidence tracking for it.
-    if (mergedSources[key] !== "user") delete mergedSources[key];
-    delete mergedConfidence[key];
+
+    // A clean number can STILL be one this category rejects — the exact
+    // decimalPlaces / notZeroOrNegative rules preflightAttributes enforces
+    // at push time, run here so the same "1.7 into a whole-number-only
+    // capacity_liter" mistake is caught the moment the category is known
+    // rather than after a push attempt. Real, repeated rejection this
+    // closes: "Attribute [capacity_liter] with the value [1.7] should be
+    // a number without decimals" — previously the numeric scrub above
+    // accepted "1.7" as a perfectly clean number and moved on.
+    const checked = checkNumericConstraint(String(n), field);
+    if (checked.value === null) {
+      console.info(
+        `[auto-analyze] listing=${listingId} cleared ${key}="${n}" — ${checked.note?.detail}`,
+      );
+      dropNumericAttr(key);
+      continue;
+    }
+    finalDynamicAttrs[key] = checked.value; // canonical numeric string, possibly rounded
+    if (checked.value !== String(n)) {
+      console.info(`[auto-analyze] listing=${listingId} rounded ${key}: "${n}" -> "${checked.value}"`);
+    }
   }
 
   // ── C) PATTERN DEFAULTS for still-empty required attributes ─────────────
@@ -1223,8 +1269,9 @@ export async function runAutoAnalyze(
   //
   // aiFillGaps already validates its own output this way; the earlier
   // passes (A and combined B+C) never did, which is where these came from.
-  // Same snapping rules as the push path, reusing snapToAllowed so the two
-  // cannot drift: casing and singular/plural are repaired, genuine
+  // Same snapping rules as the push path, reusing snapToAllowedWithSynonyms
+  // so the two cannot drift: casing, singular/plural, and a British/
+  // American spelling pair ("Grey" -> "Gray") are repaired, genuine
   // mismatches are dropped, and anything ambiguous is dropped rather than
   // guessed.
   //
@@ -1244,7 +1291,7 @@ export async function runAutoAnalyze(
       ? value.split(",").map((v) => v.trim()).filter(Boolean)
       : [value];
     const kept = parts
-      .map((part) => snapToAllowed(part, field.allowed_values))
+      .map((part) => snapToAllowedWithSynonyms(part, field.allowed_values))
       .filter((v): v is string => v !== null);
 
     if (kept.length === 0) {
@@ -1296,7 +1343,7 @@ export async function runAutoAnalyze(
       ? raw.split(",").map((v) => v.trim()).filter(Boolean)
       : [raw];
     const kept = parts
-      .map((part) => snapToAllowed(part, field.allowed_values))
+      .map((part) => snapToAllowedWithSynonyms(part, field.allowed_values))
       .filter((v): v is string => v !== null);
 
     if (kept.length === 0) {
@@ -1383,16 +1430,52 @@ export async function runAutoAnalyze(
       const baseSku    = (listing.sku as string | undefined) ?? listingId.slice(0, 8).toUpperCase();
       const basePrice  = (listing.selling_price as number | undefined) ?? null;
       const baseStock  = (listing.quantity as number | undefined) ?? 1;
-      const rows = variations.map((v) => ({
-        listing_id:      listingId,
-        variation:       v.label,
-        seller_sku:      `${baseSku}-${v.sku_suffix}`,
-        gtin:            null,
-        quantity:        baseStock,
-        global_price:    basePrice,
-        sale_price:      null,
-        sale_start_date: null,
-        sale_end_date:   null,
+      // The Describe pass invents these labels before the category (and
+      // its variant-axis schema) is even resolved — see
+      // reconcileDraftVariation's doc comment. Reconciling here, now that
+      // `chosen`/`attrs` are known, catches a category whose axis is a
+      // closed list (screen sizes, shoe lengths) before the seller ever
+      // sees a value Jumia would reject outright.
+      const variantAxes         = attrs.filter((a) => a.is_variant);
+      const allowedVariantValues = variantAxes.flatMap((a) => a.allowed_values ?? []);
+      const rows = await Promise.all(variations.map(async (v) => {
+        let variation = reconcileDraftVariation(v.label, variantAxes);
+
+        // reconcileDraftVariation only ever falls back to "..." when the
+        // axis DOES restrict to a closed list and the seller's label
+        // didn't match it even after casing/plural/spelling-pair
+        // snapping — i.e. the seller said SOMETHING, the category has a
+        // fixed vocabulary, and neither literally lines up. That is
+        // exactly the case a live listing hit: a Backpacks & Carriers
+        // note named a size the category's own axis genuinely stocked,
+        // just not spelled the seller's way, and it drafted as the
+        // meaningless "..." placeholder instead of the size meant.
+        // aiMatchAllowedValue asks a model to match BY MEANING against
+        // the category's own exact, closed list — see its doc comment
+        // for why an answer here can only ever be one of that list, or
+        // nothing at all.
+        if (variation === "..." && allowedVariantValues.length > 0 && v.label.trim() !== "...") {
+          const matched = await aiMatchAllowedValue(v.label, allowedVariantValues, userContext);
+          if (matched) {
+            console.info(
+              `[auto-analyze] listing=${listingId} matched variant label "${v.label}" → "${matched}" ` +
+              `against category ${chosen.code}'s own options`,
+            );
+            variation = matched;
+          }
+        }
+
+        return {
+          listing_id:      listingId,
+          variation,
+          seller_sku:      `${baseSku}-${v.sku_suffix}`,
+          gtin:            null,
+          quantity:        baseStock,
+          global_price:    basePrice,
+          sale_price:      null,
+          sale_start_date: null,
+          sale_end_date:   null,
+        };
       }));
       // Clear-then-insert. RLS still enforces ownership via the listings
       // ownership check above.
