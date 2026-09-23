@@ -525,6 +525,58 @@ describe("a single-product batch whose analysis hard-failed", () => {
   });
 });
 
+describe("noteWarningsFor — variant-claim vs drafted-label matching (finalizeBatch single-product)", () => {
+  // Real incident, sandals (parentSku PA-MUDIF5R5, category 1013693): the
+  // seller wrote "Sizes 40 41 42 43", the category's own numeric-size
+  // schema drafted "EU 40" / "EU 41" / "EU 42" / "EU 43" — a listing Jumia
+  // would have accepted exactly as submitted was Held anyway, asking the
+  // seller to open Edit for nothing that needed fixing.
+  const FULL = {
+    description: "A long enough description to clear the fifty-character minimum check.",
+    category_code: "1234",
+    brand: "Panasonic",
+    images: ["https://cdn.test/a.jpg"],
+    status: "draft",
+    selling_price: 150,
+  };
+
+  function seedDraftedWithClaim(userPrompt: string, variationLabels: string[]) {
+    db.tables.listings = [
+      { id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: "Leather Slide Sandals - Buckle Strap, Brown", user_prompt: userPrompt, ...FULL },
+    ];
+    db.tables.variants = variationLabels.map((v, i) => ({ id: `v${i + 1}`, listing_id: "listing-1", variation: v }));
+  }
+
+  it("does not Hold when the seller's bare numeric sizes are a whole word inside the drafted regional labels", async () => {
+    seedDraftedWithClaim("Sizes 40 41 42 43", ["EU 40", "EU 41", "EU 42", "EU 43"]);
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 1);
+
+    const draftMsg = sent.find((m) => m.kind === "cta");
+    expect(draftMsg?.body).toContain("Ready to submit");
+    expect(draftMsg?.body).not.toContain("doesn't match what you typed exactly");
+  });
+
+  // The protection this must not regress, 2026-09-22 tee canary: "Xtra
+  // Large" and "XL" share no literal word in common, so a claim of
+  // "Xtra Large" against a drafted "XL" still Holds with one ask.
+  it("still Holds a genuine soft-snap mismatch — 'Xtra Large' vs 'XL' share no literal word", async () => {
+    seedDraftedWithClaim("Sizes Medium Large Xtra Large", ["M", "L", "XL"]);
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 1);
+
+    const draftMsg = sent.find((m) => m.kind === "cta");
+    expect(draftMsg?.body).toContain("doesn't match what you typed exactly");
+    expect(draftMsg?.body).not.toContain("Ready to submit");
+  });
+});
+
 describe("a multi-product batch with one hard-failed product", () => {
   // Same production shape as the single-product case above, extended to a
   // batch of several — a throw mid-Gemini (see lib/ai/parse-ai-response.ts's
