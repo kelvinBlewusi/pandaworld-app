@@ -232,6 +232,30 @@ export async function ensureLeafCategory(
 }
 
 /**
+ * Never let more than one variant row collapse to the identical "..."
+ * placeholder (reconcileDraftVariation in lib/jumia/api.ts) — Jumia's own
+ * duplicate-variation validation rejects two rows carrying the same
+ * variation value under one parentSku, the exact shape of "Duplicate
+ * Variation on Product with parentSKU [...] and variation [...]" the
+ * 2026-09-23 sandal incident closed in mapListingToJumiaProducts.
+ *
+ * Real live case, same day: a Backpacks listing whose note said "black and
+ * grey" — the category's own variant axis is SIZE-only (18", ..., S/M/L/
+ * XL, "One Size Fits All"), so neither colour matched it and BOTH rows
+ * fell back to "..." independently, producing two variants with the exact
+ * same value. Keeping only the first is correct here specifically because
+ * every row collapsing to "..." already means NONE of them named a real,
+ * distinguishable option on this category's own axis — there is genuinely
+ * only one listable variant, however many colours/labels the seller or
+ * the photos named.
+ */
+export function collapseDuplicateEllipsisVariants<T extends { variation: string }>(rows: T[]): T[] {
+  const ellipsisRows = rows.filter((r) => r.variation === "...");
+  if (ellipsisRows.length <= 1) return rows;
+  return [...rows.filter((r) => r.variation !== "..."), ellipsisRows[0]];
+}
+
+/**
  * Run the full analyze pipeline for `listingId` (owned by `userId`).
  *
  * `userPromptOverride`, when given, is the "SELLER CONTEXT" free-text hint
@@ -1624,10 +1648,19 @@ export async function runAutoAnalyze(
           sale_end_date:   null,
         };
       }));
+
+      const finalRows = collapseDuplicateEllipsisVariants(rows);
+      if (finalRows.length !== rows.length) {
+        console.info(
+          `[auto-analyze] listing=${listingId} collapsed ${rows.length - finalRows.length + 1} "..." variants down to 1 — ` +
+          `none of them named an option on this category's own variant axis`,
+        );
+      }
+
       // Clear-then-insert. RLS still enforces ownership via the listings
       // ownership check above.
       await db.from("variants").delete().eq("listing_id", listingId);
-      await db.from("variants").insert(rows);
+      await db.from("variants").insert(finalRows);
     } catch (e) {
       console.warn(`[auto-analyze] variant persist failed: ${(e as Error).message}`);
     }
