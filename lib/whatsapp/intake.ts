@@ -225,7 +225,24 @@ async function missingFieldsFor(listingId: string): Promise<string[]> {
  * backwards, so we refuse it — correctly — but saying nothing looks
  * identical to the system never having read the line at all.
  */
-async function noteWarningsFor(listingId: string): Promise<string[]> {
+interface NoteWarnings {
+  /** Block regardless of whether Jumia's own dry-run says the push would
+   *  succeed — a stated claim that silently lost every option, or a stale
+   *  sale-date, are real data problems no amount of push-acceptability
+   *  excuses. */
+  warnings: string[];
+  /** Block ONLY when the push would not otherwise succeed. The wording
+   *  doesn't literally match what the seller typed, but that is a
+   *  correctness worry, not a submittability one — once Jumia's own
+   *  dry-run already confirms the drafted values are fine, second-
+   *  guessing the wording on top is a false Hold (2026-09-23 seller
+   *  decision: a listing Jumia would accept must not sit behind an
+   *  editor-only warning it doesn't need). Still surfaced as context when
+   *  the listing is Held for some other reason anyway. */
+  softWarnings: string[];
+}
+
+async function noteWarningsFor(listingId: string): Promise<NoteWarnings> {
   const db = createServerClient();
   const { data } = await db
     .from("listings")
@@ -233,9 +250,10 @@ async function noteWarningsFor(listingId: string): Promise<string[]> {
     .eq("id", listingId)
     .maybeSingle();
   const note = (data?.user_prompt as string | null) ?? "";
-  if (!note) return [];
+  if (!note) return { warnings: [], softWarnings: [] };
 
   const warnings: string[] = [];
+  const softWarnings: string[] = [];
   const sale = extractSalePrice(note);
   if (sale?.dateWarning) warnings.push(sale.dateWarning);
 
@@ -266,9 +284,12 @@ async function noteWarningsFor(listingId: string): Promise<string[]> {
       // schema names numeric sizes "EU 40"/"EU 41"/... — that listing would
       // have been accepted by Jumia as submitted, but Held anyway asking
       // the seller to open Edit for nothing to fix). Whole-word only, never
-      // substring or synonym: "xtra"/"large" are never the whole word "xl",
-      // so a real mismatch like the 2026-09-22 tee canary (variants M/L/XL,
-      // caption still said Xtra Large) still Holds. Same rule
+      // substring or synonym: "xtra"/"large" are never the whole word "xl".
+      // A leftover mismatch after this (like the 2026-09-22 tee canary,
+      // variants M/L/XL against a caption that said Xtra Large) is now a
+      // SOFT warning rather than an automatic Hold — see NoteWarnings'
+      // doc comment: once the push itself is confirmed acceptable, the
+      // seller is trusted over a wording quibble. Same rule
       // reconcileVariants already uses at draft time
       // (lib/whatsapp/variant-claims.ts) — this just applies it to the
       // post-hoc check against what actually got persisted.
@@ -279,7 +300,7 @@ async function noteWarningsFor(listingId: string): Promise<string[]> {
         return !labels.some((l) => l.toLowerCase().split(/[\s-]+/).includes(tl));
       });
       if (unmatched.length > 0) {
-        warnings.push(
+        softWarnings.push(
           `you wrote "${claim.source}" — I drafted ${labels.join(", ")}, but that doesn't match what you typed exactly. ` +
           `Open Edit to confirm the sizes/options you actually stock`,
         );
@@ -287,7 +308,7 @@ async function noteWarningsFor(listingId: string): Promise<string[]> {
     }
   }
 
-  return warnings;
+  return { warnings, softWarnings };
 }
 
 /** The seller's shop currency ISO code ("GHS", "NGN", ...) for a user
@@ -2093,12 +2114,19 @@ export async function finalizeBatch(
       // the category's stocked options, ...). noteWarningsFor's sale-date
       // and variant-claim checks catch a case the payload builder can't
       // (zero variant rows despite a stated claim, so there's nothing for
-      // it to validate against) — merged in alongside, not replaced.
-      const [assessment, noteWarnings] = await Promise.all([
+      // it to validate against) — merged in alongside, not replaced. Its
+      // softWarnings (wording that doesn't literally match, e.g. "Xtra
+      // Large" against a drafted "XL") only count once the push itself
+      // would NOT otherwise succeed — see NoteWarnings' doc comment.
+      const [assessment, noteResult] = await Promise.all([
         assessListingPushReadiness(only.user_id as string, only.id),
         noteWarningsFor(only.id),
       ]);
-      const reasons = [...assessment.reasons, ...noteWarnings];
+      const reasons = [
+        ...assessment.reasons,
+        ...noteResult.warnings,
+        ...(assessment.ready ? [] : noteResult.softWarnings),
+      ];
       const ready = reasons.length === 0;
       const heldText = reasons.length > 0 ? `\n⚠️ ${reasons.join("; ")}.` : "";
       await replyCta(
@@ -2190,9 +2218,9 @@ export async function finalizeBatch(
       for (let i = cursor++; i < drafted.length; i = cursor++) {
         const l = drafted[i];
         let assessment: { ready: boolean; reasons: string[] };
-        let noteWarnings: string[];
+        let noteResult: NoteWarnings;
         try {
-          [assessment, noteWarnings] = await Promise.all([
+          [assessment, noteResult] = await Promise.all([
             assessListingPushReadiness(l.user_id as string, l.id),
             noteWarningsFor(l.id),
           ]);
@@ -2204,15 +2232,18 @@ export async function finalizeBatch(
             ready: false,
             reasons: [`couldn't verify readiness (${(e as Error).message || "error"}) — open Edit before submitting`],
           };
-          noteWarnings = [];
+          noteResult = { warnings: [], softWarnings: [] };
         }
         // noteWarningsFor catches a case the payload builder structurally
         // can't (zero variant rows despite a stated size/colour claim —
         // there is nothing for it to validate against) — merged in
-        // alongside the assessor's own reasons, not replaced by them.
+        // alongside the assessor's own reasons, not replaced by them. Its
+        // softWarnings only count once the push itself would NOT otherwise
+        // succeed — see NoteWarnings' doc comment.
+        const applicableSoft = assessment.ready ? [] : noteResult.softWarnings;
         assessments[i] = {
-          ready:   assessment.ready && noteWarnings.length === 0,
-          reasons: [...assessment.reasons, ...noteWarnings],
+          ready:   assessment.ready && noteResult.warnings.length === 0 && applicableSoft.length === 0,
+          reasons: [...assessment.reasons, ...noteResult.warnings, ...applicableSoft],
         };
       }
     };
