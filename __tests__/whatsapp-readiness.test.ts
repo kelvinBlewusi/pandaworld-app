@@ -58,6 +58,7 @@ beforeEach(() => {
     adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
   };
   db.tables.variants = [];
+  db.tables.jumia_category_attributes = [];
 });
 
 describe("assessListingPushReadiness — cheap field checks short-circuit", () => {
@@ -248,6 +249,10 @@ describe("assessListingPushReadiness — canary 2 root cause: a stale attribute 
   // valid stocked size; only which variant it's attached to is wrong.
   it("holds when a non-variation attribute is frozen at one value across variants that disagree with it", async () => {
     seedListing({ title: "Navy Blue Cotton Crew Neck Tee", category_path: "Fashion > Men's Wear > Shirts" });
+    // "size" is this category's real is_variant axis (not "variation") —
+    // see the doc comment on staleDuplicateVariantAttribute for why that
+    // gate has to pass for this to still be flagged.
+    db.tables.jumia_category_attributes = [{ category_code: 1234, name: "size", is_variant: true }];
     previewResult = {
       ok: true,
       products: [
@@ -265,12 +270,39 @@ describe("assessListingPushReadiness — canary 2 root cause: a stale attribute 
 
   it("does not hold when the duplicated attribute genuinely tracks each variant", async () => {
     seedListing({ title: "Navy Blue Cotton Crew Neck Tee", category_path: "Fashion > Men's Wear > Shirts" });
+    db.tables.jumia_category_attributes = [{ category_code: 1234, name: "size", is_variant: true }];
     previewResult = {
       ok: true,
       products: [
         { brand: { code: 1, name: "Fashion" }, variation: "M", attributes: [{ name: "size", value: "M" }] },
         { brand: { code: 1, name: "Fashion" }, variation: "L", attributes: [{ name: "size", value: "L" }] },
         { brand: { code: 1, name: "Fashion" }, variation: "XL", attributes: [{ name: "size", value: "XL" }] },
+      ],
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(true);
+  });
+
+  // Real live case, 2026-09-23 (Backpacks, category 1024302): "color" was
+  // frozen at "Grey" for both a Black and a Grey variant — matching the
+  // OLD, ungated heuristic's exact trigger shape (a non-"variation"
+  // attribute whose value is one of the variation labels, disagreeing on
+  // one row). But this category's own schema only flags "variation" as
+  // is_variant — "color" isn't, and Jumia's own Vendor Center editor for
+  // it has no per-variant color field at all (confirmed against a
+  // screenshot of the real Variants tab). This must stay Ready: the
+  // listing pushes and Jumia accepts it exactly as drafted, and "open
+  // Edit to set it per variant" would send the seller to a field their
+  // own Edit page can't set per variant.
+  it("does not hold a non-variant attribute that merely happens to share a value with a variation label", async () => {
+    seedListing({ title: "3-Piece Backpack Set", category_path: "Home & Office > Backpacks" });
+    db.tables.jumia_category_attributes = [{ category_code: 1234, name: "variation", is_variant: true }];
+    previewResult = {
+      ok: true,
+      products: [
+        { brand: { code: 1, name: "Fashion" }, variation: "Black", attributes: [{ name: "color", value: "Grey" }] },
+        { brand: { code: 1, name: "Fashion" }, variation: "Grey", attributes: [{ name: "color", value: "Grey" }] },
       ],
       adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
     };

@@ -25,6 +25,7 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { previewListingPayload, missingFieldLabels } from "@/lib/jumia/push-listing";
 import { isFashionCategory } from "@/lib/jumia/fashion-category";
+import { getVariantAxes } from "@/lib/jumia/categories";
 import type { PreflightReason } from "@/lib/jumia/preflight";
 import type { ListingRow } from "@/lib/supabase/types";
 
@@ -175,13 +176,32 @@ function blankSizeClaimReason(
  * valid stocked sizes; nothing about the value itself was wrong, only
  * which variant it was attached to.
  *
- * Deliberately name-agnostic (does not hardcode "size") — it looks for
- * any attribute whose value equals one of the listing's own variation
- * labels, then checks whether that same attribute disagrees with its own
- * product's variation on at least one OTHER product.
+ * `variantAxisNames` (the category's own is_variant=true attribute names,
+ * lowercased) gates which attribute names are even eligible — added
+ * 2026-09-23 after a false positive on a real Backpacks listing: "color"
+ * (is_variant=false for that category — only "variation" is) was frozen
+ * at "Grey" for both a Black and a Grey variant, and this function
+ * flagged it as if it were the same bug as the tee. It isn't: Jumia's own
+ * Vendor Center editor for that category has no per-variant color field
+ * at all (confirmed against a screenshot of the real Variants tab — only
+ * Variation/SKU/GTIN/Quantity/Price/Sale fields per row), because color
+ * there is inherently a PARENT-level spec, shared by every variant by
+ * design, not a mistake in what got drafted. Telling the seller to "open
+ * Edit to set it per variant" for a field their own Edit page can't set
+ * per variant is worse than not flagging it — it's a dead end. The tee
+ * case still catches correctly: that category's real variant axis is
+ * "size", not "variation" (confirmed via jumia_category_attributes), so
+ * "size" passes this gate and the mismatch is exactly as real as before.
+ *
+ * Otherwise deliberately name-agnostic (does not hardcode "size") — among
+ * eligible attributes, it looks for any whose value equals one of the
+ * listing's own variation labels, then checks whether that same attribute
+ * disagrees with its own product's variation on at least one OTHER
+ * product.
  */
 function staleDuplicateVariantAttribute(
   products: { variation?: string; attributes?: { name: string; value: unknown }[] }[],
+  variantAxisNames: Set<string>,
 ): string | null {
   if (products.length < 2) return null;
 
@@ -192,7 +212,9 @@ function staleDuplicateVariantAttribute(
   const candidateNames = new Set<string>();
   for (const p of products) {
     for (const a of p.attributes ?? []) {
-      if (a.name.toLowerCase() === "variation") continue;
+      const lower = a.name.toLowerCase();
+      if (lower === "variation") continue;
+      if (!variantAxisNames.has(lower)) continue;
       if (variationValues.has(norm(a.value))) candidateNames.add(a.name);
     }
   }
@@ -280,7 +302,11 @@ export async function assessListingPushReadiness(
   // claims the AI parked outside title/description.
   const freeText = `${row.title ?? ""} ${row.description ?? ""} ${row.user_prompt ?? ""} ${highlights} ${dynText}`;
 
-  const staleAttr = staleDuplicateVariantAttribute(products);
+  const categoryCode = row.category_code ? parseInt(row.category_code as string, 10) : NaN;
+  const variantAxes = categoryCode && !isNaN(categoryCode) ? await getVariantAxes(categoryCode) : [];
+  const variantAxisNames = new Set(variantAxes.map((a) => a.name.toLowerCase()));
+
+  const staleAttr = staleDuplicateVariantAttribute(products, variantAxisNames);
   if (staleAttr) {
     reasons.push(`${staleAttr}: stuck at the same value across every variant, but your variants differ — open Edit to set it per variant`);
   }
