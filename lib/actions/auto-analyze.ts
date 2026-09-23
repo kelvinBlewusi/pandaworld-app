@@ -54,6 +54,7 @@ import {
   getCategoryAttributes,
   fetchAttributesFromJumia,
   upsertAttributes,
+  type JumiaCategoryRow,
 } from "@/lib/jumia/categories";
 import {
   searchCategoriesByText,
@@ -97,6 +98,69 @@ export type AutoAnalyzeResult =
       description?: unknown;
       candidates?: unknown;
     };
+
+/**
+ * If `nonLeaf` isn't actually listable on Jumia, resolve to one of its
+ * leaf descendants instead of letting the pick through as-is — see the
+ * "Hard leaf enforcement" comment at its call site in runAutoAnalyze for
+ * the real-batch failure this closes. Extracted to its own function so
+ * that decision is testable without mocking the whole analyze pipeline:
+ * every dependency here is a named import already designed to be mocked
+ * independently (aiPassB_rankCategory, the category-schema helpers).
+ *
+ * Returns null when there's nothing to resolve to — no leaf descendant
+ * exists under `nonLeaf`, or the model couldn't pick one from what does.
+ * The caller's job at that point is to bail to manual category pick,
+ * never to persist a category guaranteed to be rejected.
+ */
+export async function resolveNonLeafCategory(
+  nonLeaf: JumiaCategoryRow,
+  listableCategories: JumiaCategoryRow[],
+  images: Parameters<typeof aiPassB_rankCategory>[0],
+  userContext: Parameters<typeof aiPassB_rankCategory>[2],
+  useCase: Parameters<typeof aiPassB_rankCategory>[3],
+  environment: Parameters<typeof aiPassB_rankCategory>[4],
+  accessToken: string | null,
+): Promise<{
+  ranked: Awaited<ReturnType<typeof aiPassB_rankCategory>>;
+  filled: Awaited<ReturnType<typeof extractAttributesForCategory>>;
+} | null> {
+  const leafChildren = listableCategories.filter(
+    (c) => c.is_leaf && c.path.startsWith(`${nonLeaf.path} > `),
+  );
+  if (leafChildren.length === 0) return null;
+
+  const leafRanked = await aiPassB_rankCategory(
+    images, leafChildren, userContext, useCase, environment, { forceBestModel: true },
+  );
+  if (!leafRanked.primary) return null;
+
+  const leafCode = leafRanked.primary.code;
+  // Cold-cache prefetch — a leaf reached only through this re-rank was
+  // never part of the caller's own prefetched top-N schemas.
+  const existingAttrs = await getCategoryAttributes(leafCode);
+  if (existingAttrs.length === 0) {
+    const leafRow = leafChildren.find((c) => c.code === leafCode);
+    if (leafRow?.attribute_set_sid && accessToken) {
+      try {
+        const fresh = await fetchAttributesFromJumia(accessToken, leafRow.attribute_set_sid);
+        if (fresh.length > 0) await upsertAttributes(leafCode, fresh);
+      } catch (e) {
+        console.warn(`[auto-analyze] leaf schema fetch failed for code=${leafCode}: ${(e as Error).message}`);
+      }
+    }
+  }
+
+  let filled: Awaited<ReturnType<typeof extractAttributesForCategory>> =
+    { dynamic_attributes: {}, field_sources: {}, field_confidence: {} };
+  try {
+    filled = await extractAttributesForCategory(images, leafCode, userContext, { forceBestModel: true });
+  } catch (e) {
+    console.warn(`[auto-analyze] leaf re-rank attribute fill failed: ${(e as Error).message}`);
+  }
+
+  return { ranked: leafRanked, filled };
+}
 
 /**
  * Run the full analyze pipeline for `listingId` (owned by `userId`).
@@ -526,6 +590,50 @@ export async function runAutoAnalyze(
       timings.fill_ms = Date.now() - tFill;
     } catch (e) {
       console.warn(`[auto-analyze] fallback attribute fill failed: ${(e as Error).message}`);
+    }
+  }
+
+  // ── 5b. Hard leaf enforcement ─────────────────────────────────────────
+  //
+  // Real batch, 2026-09-23: 5 of 7 failures in one 10-listing batch were
+  // Jumia's "You can't list products in this category. Please choose a
+  // different (more specific) category and try again." — every one of
+  // them a category our OWN listableCategories rows already flagged
+  // is_leaf=false (Refrigerators & Freezers, Mixers & Blenders, Chargers
+  // & Power Adapters, Tabletop Lighting, T-shirts). is_leaf was already
+  // surfaced to the ranking/pick prompts as a soft "prefer a leaf when one
+  // fits" signal (see CategoryCandidate's doc comment in
+  // category-search.ts), but nothing enforced it — if the top-N shortlist
+  // handed to the model didn't happen to contain the right leaf (or it
+  // just ignored the hint), a non-leaf pick sailed straight through to a
+  // real Jumia push and was rejected every single time, guaranteed. This
+  // is the hard backstop: a non-leaf pick never reaches persistence.
+  {
+    const listableByCode = new Map(listableCategories.map((c) => [c.code, c]));
+    const primaryRow = listableByCode.get(ranked.primary!.code);
+    if (primaryRow && !primaryRow.is_leaf) {
+      console.warn(
+        `[auto-analyze] chosen category ${primaryRow.code} "${primaryRow.name}" is not a leaf — re-ranking before persisting.`,
+      );
+      const resolved = await resolveNonLeafCategory(
+        primaryRow,
+        listableCategories,
+        images,
+        userContext,
+        description.intended_use_case,
+        description.environment,
+        accessTokenForBatch,
+      );
+      if (!resolved) {
+        // No leaf descendant at all, or the model couldn't pick one —
+        // the "most specific" thing we know of still isn't listable.
+        // Falling through would push a category Jumia will reject with
+        // 100% certainty; hand it to the seller instead, same as the
+        // no-candidate-fits case above.
+        return bailToManualCategory();
+      }
+      ranked = resolved.ranked;
+      filled = resolved.filled;
     }
   }
 
