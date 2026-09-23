@@ -259,12 +259,25 @@ async function noteWarningsFor(listingId: string): Promise<string[]> {
         `Tap Edit to set the ones you actually stock`,
       );
     } else {
-      // Exact label match only (case-insensitive). Soft-snaps like
-      // "Medium"→M or "Xtra Large"→XL must Hold with one ask — silent Ready
-      // after a soft-snap is the false confidence the 2026-09-22 tee canary
-      // showed (variants M/L/XL, caption still said Xtra Large).
+      // A token matches when it IS a drafted label (case-insensitive), or
+      // is one of that label's own whitespace/hyphen-delimited words —
+      // "40" against a drafted "EU 40" (real incident: sandals, parentSku
+      // PA-MUDIF5R5, seller wrote "Sizes 40 41 42 43", the category's own
+      // schema names numeric sizes "EU 40"/"EU 41"/... — that listing would
+      // have been accepted by Jumia as submitted, but Held anyway asking
+      // the seller to open Edit for nothing to fix). Whole-word only, never
+      // substring or synonym: "xtra"/"large" are never the whole word "xl",
+      // so a real mismatch like the 2026-09-22 tee canary (variants M/L/XL,
+      // caption still said Xtra Large) still Holds. Same rule
+      // reconcileVariants already uses at draft time
+      // (lib/whatsapp/variant-claims.ts) — this just applies it to the
+      // post-hoc check against what actually got persisted.
       const byLower = new Map(labels.map((l) => [l.toLowerCase(), l]));
-      const unmatched = claim.tokens.filter((t) => !byLower.has(t.toLowerCase()));
+      const unmatched = claim.tokens.filter((t) => {
+        const tl = t.toLowerCase();
+        if (byLower.has(tl)) return false;
+        return !labels.some((l) => l.toLowerCase().split(/[\s-]+/).includes(tl));
+      });
       if (unmatched.length > 0) {
         warnings.push(
           `you wrote "${claim.source}" — I drafted ${labels.join(", ")}, but that doesn't match what you typed exactly. ` +
