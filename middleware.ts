@@ -32,6 +32,17 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 //                            shape as /api/jumia/callback below, which
 //                            already had to be public for the same reason.
 //   /api/jumia/callback    — Jumia OAuth post-redirect
+//   /onboarding/done       — the success page /api/jumia/callback redirects
+//                            to once OAuth finishes. Reached by the SAME
+//                            no-Clerk-session browser as /api/jumia/connect
+//                            above — gating this too would mean a WhatsApp
+//                            seller's Jumia connection succeeds server-side
+//                            (and the bot already messaged them to continue
+//                            in chat) while their browser tab still dead-
+//                            ends on a sign-in wall instead of the success
+//                            card. Pure client component, no server data
+//                            fetch — reads store name from its own URL
+//                            params, nothing sensitive to gate.
 //   /api/cron/(.*)         — Vercel cron, bearer-token authorised
 //   /api/worker/(.*)       — the background job worker, called by pg_cron via
 //                            pg_net (and by the WhatsApp webhook's own nudge),
@@ -87,6 +98,7 @@ const isPublicRoute = createRouteMatcher([
   '/api/webhooks/clerk',
   '/api/jumia/connect',
   '/api/jumia/callback',
+  '/onboarding/done',
   '/api/cron/(.*)',
   '/api/worker/(.*)',
   '/extension',
