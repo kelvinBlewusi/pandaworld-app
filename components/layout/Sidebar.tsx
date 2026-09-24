@@ -26,6 +26,8 @@ import {
   Tags,
   Globe,
   Chrome,
+  MessageSquare,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -346,6 +348,8 @@ export function Sidebar({
             </div>
             <NavItem href="/admin/categories" label="Categories" icon={Database} />
             <NavItem href="/admin/brands"     label="Brands"     icon={Tags} />
+            <NavItem href="/admin/messages"   label="WhatsApp log" icon={MessageSquare} />
+            <NavItem href="/admin/errors"     label="Errors"       icon={AlertTriangle} />
           </>
         )}
       </nav>
