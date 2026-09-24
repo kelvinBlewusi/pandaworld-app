@@ -6,20 +6,20 @@
  * overlay) with a "Donate" link in the nav next to Sign in. Both removed
  * by direct request 2026-09-24: the animated dark backdrop read heavy for
  * a first screen, and Donate didn't belong beside the primary auth
- * actions. Same copy, same layout shape (centred content, pill nav, pill
- * CTAs) — just re-themed for a plain white background with dark,
- * accessible text instead of near-white-on-black.
+ * actions. Same copy, same layout shape (centred content, pill CTAs) —
+ * just re-themed for a plain white background with dark, accessible text
+ * instead of near-white-on-black.
  *
- * Not a client component any more either — nothing here needs browser
- * APIs now that the canvas is gone, so this renders on the server like
- * the rest of the page around it.
+ * The top nav itself is HomeFloatingNav (a separate client component, for
+ * its mobile hamburger state) — this component stays server-rendered,
+ * nothing else here needs browser APIs.
  */
 
 import Link from "next/link";
-import Image from "next/image";
-import { Space_Grotesk, Inter } from "next/font/google";
+import { Space_Grotesk } from "next/font/google";
 import { ArrowRight } from "lucide-react";
 import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
+import { HomeFloatingNav } from "@/components/marketing/home-floating-nav";
 
 const spaceGrotesk = Space_Grotesk({
   subsets: ["latin"],
@@ -27,12 +27,6 @@ const spaceGrotesk = Space_Grotesk({
   display: "swap",
   variable: "--font-space-grotesk",
 });
-
-// Matches components/marketing/wordmark.tsx's own Inter 800 — the
-// lettering weight used everywhere else "pandaworld" is spelled out, so
-// this reads as the same brand mark, just with the real logo standing in
-// for the "P" instead of a plain letterform.
-const inter = Inter({ subsets: ["latin"], weight: ["800"], display: "swap" });
 
 // text-orange-600 in Tailwind terms — darkened one step from the brand's
 // bg-orange-500 (#f97316, used on buttons and the eyebrow dot) so inline
@@ -54,47 +48,18 @@ interface ExtensionHeroBackdropProps {
   signUpHref: string;
   ctaHref: string;
   ctaLabel: string;
+  calculatorHref: string;
 }
 
-export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabel }: ExtensionHeroBackdropProps) {
+export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabel, calculatorHref }: ExtensionHeroBackdropProps) {
   return (
     <section
       className={`${spaceGrotesk.variable} relative w-full bg-white`}
       style={{ fontFamily: "var(--font-space-grotesk), system-ui, sans-serif", color: "#1c1917" }}
     >
-      <div className="relative z-10 box-border px-5 pb-16 pt-10 sm:px-12 lg:px-24">
-        <header className="flex flex-wrap items-center justify-between gap-4 sm:gap-8">
-          <Link href="/extension" aria-label="pandaworld home" className="inline-flex items-center">
-            <Image
-              src="/brand/panda-p-logo-trimmed.png"
-              alt=""
-              width={634}
-              height={562}
-              className="h-8 w-auto"
-              priority
-            />
-            <span className={`${inter.className} -ml-0.5 text-[26px] font-extrabold tracking-tight text-zinc-900`}>
-              andaworld
-            </span>
-          </Link>
-          <nav className="flex items-center gap-2 text-[12px] uppercase tracking-[0.08em] sm:gap-3 sm:text-[13px]">
-            <Link
-              href={signInHref}
-              className="whitespace-nowrap rounded-full px-3 py-2 text-zinc-700 transition-colors hover:bg-zinc-100 sm:px-4"
-              style={{ border: "1px solid #e7e5e4" }}
-            >
-              Sign in
-            </Link>
-            <Link
-              href={signUpHref}
-              className="whitespace-nowrap rounded-full px-3 py-2 font-medium normal-case tracking-normal text-white transition-colors hover:bg-orange-600 sm:px-4"
-              style={{ background: ACCENT_FILL }}
-            >
-              Get Started
-            </Link>
-          </nav>
-        </header>
+      <HomeFloatingNav signInHref={signInHref} signUpHref={signUpHref} calculatorHref={calculatorHref} />
 
+      <div className="relative z-10 box-border px-5 pb-16 pt-10 sm:px-12 lg:px-24">
         <div className="flex items-center justify-center pt-16 text-center sm:pt-20">
           <div className="flex max-w-[760px] flex-col items-center">
             <div

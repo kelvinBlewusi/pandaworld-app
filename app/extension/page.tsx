@@ -191,6 +191,7 @@ export async function ExtensionPage() {
   const ctaHref  = userId ? DASHBOARD_REDIRECT : `/sign-up?redirect_url=${DASHBOARD_REDIRECT}`;
   const ctaLabel = userId ? "Open dashboard" : "Get Started";
   const signInHref = `/sign-in?redirect_url=${DASHBOARD_REDIRECT}`;
+  const calculatorHref = userId ? "/extension/calculator" : "/sign-in?redirect_url=/extension/calculator";
 
   return (
     <div className="min-h-screen bg-white text-zinc-900">
@@ -215,16 +216,16 @@ export async function ExtensionPage() {
       </div>
 
       {/* Hero — plain white (components/marketing/extension-hero-backdrop.tsx).
-          Carries its own nav (logo, Sign in, Get Started) since it's a
-          different visual block from the "How it works" section and footer
-          below — no separate MarketingNav on this page. That means Sign in
-          isn't persistently reachable while scrolled past the hero;
-          MarketingFooter below still offers a way through. */}
+          Carries its own floating pill nav (HomeFloatingNav: logo, How it
+          Works / Pricing / Jumia Pricing Calculator, Login, Get started),
+          `sticky` so it stays reachable while scrolled past the hero —
+          no separate MarketingNav on this page. */}
       <ExtensionHeroBackdrop
         signInHref={signInHref}
         signUpHref={`/sign-up?redirect_url=${DASHBOARD_REDIRECT}`}
         ctaHref={ctaHref}
         ctaLabel={ctaLabel}
+        calculatorHref={calculatorHref}
       />
 
       {/* How it works — two tracks side by side (Chrome extension, WhatsApp),
