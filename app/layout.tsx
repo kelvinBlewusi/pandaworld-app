@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Script from "next/script";
 import { Inter } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
+import { FREE_FOR_ALL_MODE } from "@/lib/billing/free-for-all";
 import "./globals.css";
 
 export const dynamic = "force-dynamic";
@@ -192,12 +193,21 @@ const softwareApplicationLd = {
   applicationCategory: "BusinessApplication",
   description:       "AI-powered listing assistant for Jumia sellers across Africa. Auto-generates titles, descriptions, categories, attributes, and product images. Pushes listings to Jumia Vendor Center.",
   url:               APP_URL,
-  offers: [
-    { "@type": "Offer", name: "Free",     price: "0",   priceCurrency: "GHS", description: "5 listings every month" },
-    { "@type": "Offer", name: "Starter",  price: "30",  priceCurrency: "GHS", description: "30 listings + 10 image polishes / month" },
-    { "@type": "Offer", name: "Pro",      price: "65",  priceCurrency: "GHS", description: "70 listings + 30 image polishes / month" },
-    { "@type": "Offer", name: "Business", price: "120", priceCurrency: "GHS", description: "100 listings + 50 image polishes / month" },
-  ],
+  // Tracks FREE_FOR_ALL_MODE (lib/billing/free-for-all.ts) rather than a
+  // fixed list — while it's on, every paid tier below is unpurchasable
+  // (extension-credits.ts/quota.ts both short-circuit to unmetered), so a
+  // rich-result search snippet advertising "from GHS 30/month" would be
+  // structured data Google could flag as inaccurate, on top of just being
+  // misleading to a seller who clicks through expecting to pay. Reverts
+  // to the real tier list automatically the moment that flag flips back.
+  offers: FREE_FOR_ALL_MODE
+    ? [{ "@type": "Offer", name: "Free", price: "0", priceCurrency: "GHS", description: "Unlimited listings — free while we test" }]
+    : [
+        { "@type": "Offer", name: "Free",     price: "0",   priceCurrency: "GHS", description: "5 listings every month" },
+        { "@type": "Offer", name: "Starter",  price: "30",  priceCurrency: "GHS", description: "30 listings + 10 image polishes / month" },
+        { "@type": "Offer", name: "Pro",      price: "65",  priceCurrency: "GHS", description: "70 listings + 30 image polishes / month" },
+        { "@type": "Offer", name: "Business", price: "120", priceCurrency: "GHS", description: "100 listings + 50 image polishes / month" },
+      ],
   audience: {
     "@type":        "Audience",
     audienceType:   "Jumia sellers across Africa",

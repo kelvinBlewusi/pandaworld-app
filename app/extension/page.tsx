@@ -1,3 +1,4 @@
+import Image from "next/image";
 import { WhatsAppIcon } from "@/components/whatsapp/whatsapp-icon";
 import {Chrome, KeyRound, UploadCloud, Wand2, ListOrdered, Camera, CheckCircle2, Megaphone} from "lucide-react";
 import { auth } from "@clerk/nextjs/server";
@@ -96,6 +97,15 @@ const WHATSAPP_STEPS = [
     body: "We draft the listing and message it back to you. Check it over, reply submit, and it goes live on Jumia.",
   },
 ];
+
+// Real screenshots from a real seller's chat (2026-09-24), not mockups —
+// the same three-product batch from "Say how many products" through to
+// "Submit all", in order.
+const CONVERSATION_SHOTS = [
+  { src: "/marketing/whatsapp-flow-1-start.jpg", alt: "WhatsApp chat: PandaWorld AI asks how many products, seller replies 3 products", caption: "Say how many you're listing" },
+  { src: "/marketing/whatsapp-flow-4-ready.jpg", alt: "WhatsApp chat: PandaWorld AI reports all 3 products drafted and ready", caption: "AI drafts every product" },
+  { src: "/marketing/whatsapp-flow-5-submit.jpg", alt: "WhatsApp chat: seller taps Submit all to push every listing to Jumia", caption: "Review, then submit" },
+] as const;
 
 /** Any icon that takes a className — lucide's, or one of our own brand
  *  marks. It was `typeof Chrome`, which pinned it to lucide's exact
@@ -204,18 +214,17 @@ export async function ExtensionPage() {
         <span>Try PandaWorld for free — auto-push listings from WhatsApp chat to Jumia, or from the Chrome extension.</span>
       </div>
 
-      {/* Hero — dark, canvas-animated backdrop (components/marketing/extension-hero-backdrop.tsx).
-          Carries its own nav (logo, Pricing, Sign in, Get Started) since
-          it's visually a different world from the "How it works" section and
-          footer below — no separate MarketingNav on this page. That means
-          Pricing/Sign in aren't persistently reachable while scrolled past
-          the hero; MarketingFooter below still offers a way through. */}
+      {/* Hero — plain white (components/marketing/extension-hero-backdrop.tsx).
+          Carries its own nav (logo, Sign in, Get Started) since it's a
+          different visual block from the "How it works" section and footer
+          below — no separate MarketingNav on this page. That means Sign in
+          isn't persistently reachable while scrolled past the hero;
+          MarketingFooter below still offers a way through. */}
       <ExtensionHeroBackdrop
         signInHref={signInHref}
         signUpHref={`/sign-up?redirect_url=${DASHBOARD_REDIRECT}`}
         ctaHref={ctaHref}
         ctaLabel={ctaLabel}
-        signedIn={Boolean(userId)}
       />
 
       {/* How it works — two tracks side by side (Chrome extension, WhatsApp),
@@ -249,6 +258,41 @@ export async function ExtensionPage() {
               label="From WhatsApp"
               steps={WHATSAPP_STEPS}
             />
+          </div>
+        </div>
+      </section>
+
+      {/* Real conversation, not a mockup — three phone screenshots from an
+          actual seller's chat, in order. Sits on white (the section above
+          is zinc-50) so the two alternate and this doesn't blur into it. */}
+      <section className="bg-white">
+        <div className="mx-auto max-w-5xl px-6 py-16">
+          <div className="text-center">
+            <p className="text-xs font-semibold uppercase tracking-widest text-orange-500">
+              See it happen
+            </p>
+            <h2 className="mt-3 text-2xl font-bold sm:text-3xl">
+              A real WhatsApp conversation
+            </h2>
+          </div>
+          <div className="mt-10 grid grid-cols-1 gap-8 sm:grid-cols-3">
+            {CONVERSATION_SHOTS.map((shot, i) => (
+              <figure key={shot.src} className="flex flex-col items-center">
+                <div className="overflow-hidden rounded-2xl border border-zinc-200 shadow-sm">
+                  <Image
+                    src={shot.src}
+                    alt={shot.alt}
+                    width={296}
+                    height={640}
+                    className="h-auto w-full max-w-[240px]"
+                    sizes="(min-width: 640px) 240px, 80vw"
+                  />
+                </div>
+                <figcaption className="mt-3 text-sm text-zinc-500">
+                  <span className="font-semibold text-zinc-900">{i + 1}.</span> {shot.caption}
+                </figcaption>
+              </figure>
+            ))}
           </div>
         </div>
       </section>
