@@ -2129,12 +2129,26 @@ export async function finalizeBatch(
       ];
       const ready = reasons.length === 0;
       const heldText = reasons.length > 0 ? `\n⚠️ ${reasons.join("; ")}.` : "";
-      await replyCta(
-        phoneNumber,
-        (ready ? `✅ Product drafted: ${only.title}. Ready to submit!` : `✅ Product drafted: ${only.title}.`) + heldText,
-        "Edit product",
-        focusedEditorUrl(only.id),
-      );
+      // A disconnected Jumia account can't be fixed by opening the editor —
+      // "Edit product" would send the seller to a form with nothing wrong
+      // on it. Offer the reconnect link instead, same one-time-token
+      // mechanism the SUBMIT flow already uses for the same condition.
+      if (assessment.needsReconnect) {
+        const token = await createConnectToken(only.user_id as string);
+        await replyCta(
+          phoneNumber,
+          `✅ Product drafted: ${only.title}.${heldText}`,
+          "Reconnect Jumia",
+          jumiaConnectLink(token),
+        );
+      } else {
+        await replyCta(
+          phoneNumber,
+          (ready ? `✅ Product drafted: ${only.title}. Ready to submit!` : `✅ Product drafted: ${only.title}.`) + heldText,
+          "Edit product",
+          focusedEditorUrl(only.id),
+        );
+      }
       // Never offer Submit on a Held product — confidence over optimism:
       // a seller should never be handed a button that would fail or ship
       // something other than what they typed.
@@ -2211,13 +2225,13 @@ export async function finalizeBatch(
   // and most of a batch is typically still missing basic fields anyway —
   // assessListingPushReadiness only reaches Jumia once those are filled.
   const ASSESS_CONCURRENCY = 3;
-  const assessments: { ready: boolean; reasons: string[] }[] = new Array(drafted.length);
+  const assessments: { ready: boolean; reasons: string[]; needsReconnect?: boolean }[] = new Array(drafted.length);
   {
     let cursor = 0;
     const assessWorker = async (): Promise<void> => {
       for (let i = cursor++; i < drafted.length; i = cursor++) {
         const l = drafted[i];
-        let assessment: { ready: boolean; reasons: string[] };
+        let assessment: Awaited<ReturnType<typeof assessListingPushReadiness>>;
         let noteResult: NoteWarnings;
         try {
           [assessment, noteResult] = await Promise.all([
@@ -2244,6 +2258,7 @@ export async function finalizeBatch(
         assessments[i] = {
           ready:   assessment.ready && noteResult.warnings.length === 0 && applicableSoft.length === 0,
           reasons: [...assessment.reasons, ...noteResult.warnings, ...applicableSoft],
+          needsReconnect: assessment.needsReconnect,
         };
       }
     };
@@ -2269,7 +2284,20 @@ export async function finalizeBatch(
         ? `Product ${l.whatsapp_seq}: ✅ Ready — ${l.title}.`
         : `Product ${l.whatsapp_seq}: ⚠️ Held — ${reasons.join("; ")}.`;
     });
-    await replyText(phoneNumber, statusLines.join("\n"));
+    // One product held on a disconnected Jumia account means every OTHER
+    // product held for the same reason is fixed by the exact same tap —
+    // the token below isn't per-product, so it's generated once and
+    // appended to the message rather than repeated per status line (which
+    // would be one link per Held-for-reconnect product, all but the first
+    // dead the moment any one of them gets used).
+    const anyNeedsReconnect = assessments.some((a) => a.needsReconnect);
+    let reconnectFooter = "";
+    if (anyNeedsReconnect) {
+      const userId = drafted[0].user_id as string;
+      const token = await createConnectToken(userId);
+      reconnectFooter = `\n\n🔗 Reconnect Jumia: ${jumiaConnectLink(token)}`;
+    }
+    await replyText(phoneNumber, statusLines.join("\n") + reconnectFooter);
   }
 
   // Now that the whole batch has settled, offer every READY product's
