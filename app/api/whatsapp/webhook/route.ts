@@ -10,6 +10,8 @@ import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
 import { getOrCreateSession, updateSession } from "@/lib/whatsapp/session";
 import { promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
 import { appUrl } from "@/lib/whatsapp/app-url";
+import { logInboundMessage } from "@/lib/whatsapp/message-log";
+import { logAppError } from "@/lib/observability/errors";
 
 /**
  * WhatsApp Business Cloud API webhook.
@@ -81,12 +83,21 @@ export async function POST(req: NextRequest) {
   const { messages, contactName } = extractMessages(body);
 
   for (const msg of messages) {
+    const content = contentOf(msg);
+    logInboundMessage(
+      msg.from,
+      msg.id,
+      msg.type,
+      content.text ?? (content.unsupported ? `[unsupported: ${content.unsupported}]` : null),
+      content.imageMediaId ? { imageMediaId: content.imageMediaId } : undefined,
+    );
     try {
       await handleMessage(msg, contactName);
     } catch (e) {
       // One malformed/unexpected message must never take down the rest of
       // the batch, or cause Meta to retry the whole webhook delivery.
       console.error(`[whatsapp webhook] failed handling message from ${msg.from}:`, e);
+      logAppError("whatsapp-webhook", e, { phoneNumber: msg.from, wamid: msg.id, messageType: msg.type });
     }
   }
 

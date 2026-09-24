@@ -10,6 +10,7 @@ import {
 } from "@/lib/whatsapp/analysis-queue";
 import { runQueuedAnalysis, finalizeBatch } from "@/lib/whatsapp/intake";
 import { readGeminiTelemetry } from "@/lib/ai/quota-telemetry";
+import { logAppError } from "@/lib/observability/errors";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -157,6 +158,13 @@ export async function POST(req: NextRequest) {
         // to 'failed' once the attempts run out.
         const message = (e as Error).message ?? "unknown error";
         console.error(`[worker] job ${job.id} (listing ${job.listing_id}) failed: ${message}`);
+        // analysis_jobs.error only ever holds the LATEST attempt's message —
+        // a retry that later succeeds overwrites it, so it's current state,
+        // not a trail. Logged here too so a listing that eventually went
+        // fine (like this one) still leaves a permanent record that its
+        // first attempt didn't — the "why did I see an error" question this
+        // exists to answer.
+        logAppError("worker-analyze-jobs", e, { jobId: job.id, listingId: job.listing_id, batchId: job.batch_id, phoneNumber: job.phone_number, attempt: job.attempts });
         await markJobFailed(job.id, message);
         failed++;
       }

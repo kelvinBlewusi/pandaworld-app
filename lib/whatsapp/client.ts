@@ -25,6 +25,8 @@
  * actually reply is worse than one that fails loudly during setup.
  */
 
+import { logOutboundMessage } from "@/lib/whatsapp/message-log";
+
 const GRAPH_API_VERSION = "v21.0";
 
 export function isWhatsAppConfigured(): boolean {
@@ -88,6 +90,15 @@ function throttleCodeOf(body: string): number | null {
  */
 async function callGraphApi(body: Record<string, unknown>): Promise<void> {
   const { token, phoneNumberId } = requireConfig();
+
+  // Logged once here — the one chokepoint every send helper below funnels
+  // through — rather than per caller, so nothing sent through client.ts
+  // can be added later without also being logged. Logged as an attempt,
+  // before the retry loop, so a send that ultimately fails after retries
+  // still leaves a record of what the bot tried to say.
+  if (typeof body.to === "string") {
+    logOutboundMessage(body.to, body);
+  }
 
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(`https://graph.facebook.com/${GRAPH_API_VERSION}/${phoneNumberId}/messages`, {
