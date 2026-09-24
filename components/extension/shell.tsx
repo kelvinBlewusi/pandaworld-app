@@ -2,9 +2,9 @@
 
 /**
  * App shell for app/extension/(app) — sidebar + a persistent utility bar
- * (Donate / Plan / Credits / notifications / Install Extension),
- * modeled on components/layout/MainShell.tsx's desktop-sidebar +
- * mobile-drawer pattern so the extension flow feels like the same app.
+ * (Plan / Credits / notifications / Install Extension), modeled on
+ * components/layout/MainShell.tsx's desktop-sidebar + mobile-drawer
+ * pattern so the extension flow feels like the same app.
  *
  * Plan/credit data is fetched server-side (in layout.tsx) and passed in as
  * props — this component only owns the interactive chrome (mobile drawer
@@ -15,10 +15,9 @@ import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useUser } from "@clerk/nextjs";
-import { Menu, Heart, Bell, X } from "lucide-react";
+import { Menu, Bell, X } from "lucide-react";
 import { ExtensionSidebar } from "./sidebar";
 import { Wordmark } from "@/components/marketing/wordmark";
-import { DonateModal } from "./donate-modal";
 import { GoogleIcon } from "./google-icon";
 import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 import { WhatsAppBotButton } from "@/components/whatsapp/whatsapp-bot-button";
@@ -81,7 +80,6 @@ export function ExtensionShell({
   isAdmin?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const [donateOpen, setDonateOpen] = useState(false);
   const [items, setItems] = useState(notifications);
   // seenAt drives the bell's own alert dot — it clears the instant the
   // dropdown opens. displaySeenAt drives each item's "new" highlight and
@@ -182,8 +180,8 @@ export function ExtensionShell({
         </header>
 
         {/* Utility bar — page title + greeting on the left (changes per
-            page), Buy Credits / Plan / Credits / notifications / Install on
-            the right, same order across every page in this shell. */}
+            page), Plan / Credits / notifications / Install on the right,
+            same order across every page in this shell. */}
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-4 border-b bg-white px-4 py-4 sm:px-6">
           <div>
             <h1 className="text-xl font-bold text-zinc-900 sm:text-2xl">{pageTitle}</h1>
@@ -191,12 +189,6 @@ export function ExtensionShell({
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
-            <button
-              onClick={() => setDonateOpen(true)}
-              className="flex items-center gap-1.5 rounded-full bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
-            >
-              <Heart className="h-4 w-4" /> Donate
-            </button>
             <span className="rounded-full border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-600">
               Plan: {planLabel}
             </span>
@@ -275,8 +267,6 @@ export function ExtensionShell({
           <div className="min-h-full p-4 sm:p-6 lg:p-8">{children}</div>
         </main>
       </div>
-
-      <DonateModal open={donateOpen} onClose={() => setDonateOpen(false)} />
     </div>
   );
 }
