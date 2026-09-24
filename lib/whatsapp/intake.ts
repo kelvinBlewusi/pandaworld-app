@@ -2671,8 +2671,10 @@ async function handleSubmit(
     // Products that did NOT reach Jumia. Collected rather than just
     // described, because a line of text is not an action: the seller needs
     // to be able to open the one that failed and fix it, and hunting for
-    // the right product on the site is the step where they give up.
-    const notSent: { seq: number | null; listingId: string }[] = [];
+    // the right product on the site is the step where they give up. reason
+    // is carried alongside so the compiled follow-up message below can say
+    // WHY each one needs a look, not just that it does.
+    const notSent: { seq: number | null; listingId: string; reason: string }[] = [];
     let cursor = 0;
     const pushWorker = async (): Promise<void> => {
       for (let i = cursor++; i < targets.length; i = cursor++) {
@@ -2703,7 +2705,7 @@ async function handleSubmit(
             // prevented.
             messages[i] = `Product ${seq}: ℹ️ ${result.message}`;
           } else if (result.code === "validation") {
-            notSent.push({ seq, listingId: listing.id });
+            notSent.push({ seq, listingId: listing.id, reason: result.message });
             messages[i] = `Product ${seq}: ⚠️ Not submitted — ${result.message}`;
           } else if (result.needsReconnect) {
             // Same one-time-link mechanism as lib/whatsapp/jumia-connect.ts's
@@ -2715,7 +2717,7 @@ async function handleSubmit(
             const token = await createConnectToken(userId);
             messages[i] = `Product ${seq}: ⚠️ Jumia needs to be reconnected — tap here: ${jumiaConnectLink(token)}, then reply submit again.`;
           } else {
-            notSent.push({ seq, listingId: listing.id });
+            notSent.push({ seq, listingId: listing.id, reason: result.message });
             messages[i] = `Product ${seq}: ❌ Not submitted — ${result.message}`;
           }
         } catch (e) {
@@ -2724,7 +2726,7 @@ async function handleSubmit(
           // seller gets zero reply and no way to tell what happened (this
           // had no per-listing catch at all before).
           console.error(`[whatsapp intake] product ${seq} submit threw: ${(e as Error).message}`);
-          notSent.push({ seq, listingId: listing.id });
+          notSent.push({ seq, listingId: listing.id, reason: "something went wrong on our side" });
           messages[i] = `Product ${seq}: ❌ Not submitted — something went wrong on our side.`;
         }
       }
@@ -2760,35 +2762,47 @@ async function handleSubmit(
     // product actually went through.
     await replyText(phoneNumber, [...alreadySubmittedMessages, ...raceResult].join("\n"));
 
-    // One tappable way back in per product that did not reach Jumia.
-    //
-    // The summary above says WHAT happened; this is what the seller does
-    // about it. Previously a failure was a line of text ending in a bare
-    // URL, and the only products that got a link at all were validation
-    // failures — a push that failed for any other reason left the seller
-    // to find it on the site themselves.
-    //
-    // Sent as its own message per product because a cta_url button belongs
-    // to one URL, and the whole point is that the button opens THAT
-    // product. Capped so a batch where everything failed cannot turn into
-    // twenty messages; past the cap they get the batch page instead.
-    const NOT_SENT_LINK_CAP = 5;
-    if (notSent.length > 0 && notSent.length <= NOT_SENT_LINK_CAP) {
-      for (const item of notSent) {
-        await replyCta(
+    // One tappable way back in per product that did not reach Jumia,
+    // compiled into ONE message rather than a separate cta_url send per
+    // product — a batch with several failures used to fan out into that
+    // many near-identical bubbles, each carrying its own single button,
+    // which read as several unrelated problems instead of one batch that
+    // needs a few taps. A list row/button can't carry a URL directly
+    // (only a standalone cta_url message can), so each one reuses the
+    // `edit:<uuid>` id the "Edit product" tap already handles elsewhere in
+    // this file — tapping it replies with the focused editor link as its
+    // own follow-up button, same round trip "review" and the Held-product
+    // edit flow already use.
+    if (notSent.length > 0) {
+      const shortReason = (r: string) => r.length > 60 ? `${r.slice(0, 59)}…` : r;
+      const body = notSent.length === 1
+        ? `Product ${notSent[0].seq} wasn't sent to Jumia: ${shortReason(notSent[0].reason)}`
+        : [
+            `${notSent.length} products weren't sent to Jumia:`,
+            ...notSent.map((item) => `Product ${item.seq}: ${shortReason(item.reason)}`),
+          ].join("\n");
+
+      if (notSent.length <= 3) {
+        await replyButtons(
           phoneNumber,
-          `Product ${item.seq} wasn't sent to Jumia. Review it and push it from the site.`,
-          `Edit product ${item.seq}`,
-          focusedEditorUrl(item.listingId),
+          body,
+          notSent.map((item) => ({ id: `edit:${item.listingId}`, title: `Edit product ${item.seq}`.slice(0, 20) })),
         );
+      } else {
+        for (let idx = 0; idx < notSent.length; idx += LIST_MAX_ROWS) {
+          const chunk = notSent.slice(idx, idx + LIST_MAX_ROWS);
+          await replyList(
+            phoneNumber,
+            idx === 0 ? body : "…and the rest:",
+            "Pick a product",
+            chunk.map((item) => ({
+              id:    `edit:${item.listingId}`,
+              title: `Edit product ${item.seq}`,
+              description: shortReason(item.reason),
+            })),
+          );
+        }
       }
-    } else if (notSent.length > NOT_SENT_LINK_CAP) {
-      await replyCta(
-        phoneNumber,
-        `${notSent.length} products weren't sent to Jumia. Review them and push them from the site.`,
-        "Review listings",
-        whatsappListingsUrl(batchId),
-      );
     }
 
     const refreshed = await getBatchListings(batchId);

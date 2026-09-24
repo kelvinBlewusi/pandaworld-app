@@ -19,7 +19,9 @@ jest.mock("@/lib/supabase/server", () => ({
 
 jest.mock("@/lib/whatsapp/client", () => ({
   sendTextIfConfigured:    async (to: string, body: string) => { sent.push({ to, body, kind: "text" }); },
-  sendButtonsIfConfigured: async (to: string, body: string) => { sent.push({ to, body, kind: "buttons" }); },
+  sendButtonsIfConfigured: async (to: string, body: string, buttons: { id: string }[]) => {
+    sent.push({ to, body, kind: "buttons", rows: buttons.map((b) => b.id) });
+  },
   sendCtaUrlIfConfigured:  async (to: string, body: string) => { sent.push({ to, body, kind: "cta" }); },
   sendListIfConfigured:    async (to: string, body: string, _btn: string, rows: { id: string }[]) => {
     sent.push({ to, body, kind: "list", rows: rows.map((r) => r.id) });
@@ -76,12 +78,23 @@ jest.mock("@/lib/actions/auto-analyze", () => ({
 // pushListingToJumia is mocked; missingFieldLabels (used by intake.ts's own
 // missingFieldsFor gate) stays real — it's pure, and Fix & resubmit's
 // "seller still needs to supply X" test depends on its actual logic.
-type PushMockResult = { ok: true; adjustments?: string[] } | { ok: false; message: string };
+type PushMockResult =
+  | { ok: true; adjustments?: string[] }
+  | { ok: false; message: string; code?: "validation"; needsReconnect?: boolean };
 let pushResult: PushMockResult = { ok: true };
 let pushCallCount = 0;
+// Per-listing override for handleSubmit's "submit all" fan-out, where a
+// single batch pushes several listings at once and different ones need to
+// resolve differently (some ok, some a validation failure) — every OTHER
+// test in this file drives one listing at a time and keeps using the
+// single global pushResult above unchanged.
+const pushResultFor = new Map<string, PushMockResult>();
 jest.mock("@/lib/jumia/push-listing", () => ({
   ...jest.requireActual("@/lib/jumia/push-listing"),
-  pushListingToJumia: async () => { pushCallCount++; return pushResult; },
+  pushListingToJumia: async (_userId: string, listingId: string) => {
+    pushCallCount++;
+    return pushResultFor.get(listingId) ?? pushResult;
+  },
 }));
 
 // assessListingPushReadiness (lib/whatsapp/readiness.ts) is the ONE seam
@@ -144,6 +157,9 @@ beforeEach(() => {
   sent.length = 0;
   enqueued.length = 0;
   needsReconnectFor.clear();
+  pushResultFor.clear();
+  pushResult = { ok: true };
+  pushCallCount = 0;
   seedSession();
 });
 
@@ -1047,6 +1063,93 @@ describe("quiet batch mode", () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+describe("handleSubmit — products that fail to push get ONE compiled follow-up, not one per product", () => {
+  // Real screenshot the seller sent, 2026-09-24: two "wasn't sent to
+  // Jumia" bubbles, each with its own single "Edit product N" button —
+  // read as two unrelated problems. The fix compiles them into one
+  // message with a tappable action per product, sized to how many failed.
+  const FULL = {
+    description: "A long enough description to clear the fifty-character minimum check.",
+    category_code: "1234",
+    brand: "Panasonic",
+    images: ["https://cdn.test/a.jpg"],
+    status: "draft",
+    selling_price: 150,
+  };
+
+  function seedBatch(n: number) {
+    db.tables.listings = Array.from({ length: n }, (_, i) => ({
+      id: `listing-${i + 1}`,
+      user_id: USER,
+      whatsapp_batch_id: "batch-1",
+      whatsapp_seq: i + 1,
+      title: `Drafted product number ${i + 1}`,
+      ...FULL,
+    }));
+  }
+
+  it("compiles 2 push failures into ONE buttons message with an Edit product tap for each", async () => {
+    seedBatch(4);
+    pushResultFor.set("listing-2", { ok: false, code: "validation", message: "This category requires Weight (kg). Jumia rejects the whole listing without it, so nothing was submitted — add it and submit again." });
+    pushResultFor.set("listing-4", { ok: false, code: "validation", message: "This category requires Weight (kg)." });
+    seedSession({ state: "awaiting_confirmation", batch_size: 4, batch_seq: null });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "submit all" });
+
+    // No more one-per-product cta bubbles for the failures.
+    expect(sent.filter((m) => m.kind === "cta" && m.body.includes("wasn't sent to Jumia"))).toHaveLength(0);
+
+    const followUp = sent.find((m) => m.kind === "buttons" && m.body.includes("weren't sent to Jumia"));
+    expect(followUp).toBeDefined();
+    expect(followUp!.body).toContain("Product 2:");
+    expect(followUp!.body).toContain("Product 4:");
+    expect(followUp!.rows).toEqual(["edit:listing-2", "edit:listing-4"]);
+  });
+
+  it("uses a list, not buttons, when more than 3 products fail to push", async () => {
+    seedBatch(5);
+    for (const id of ["listing-1", "listing-2", "listing-3", "listing-4"]) {
+      pushResultFor.set(id, { ok: false, code: "validation", message: "This category requires Weight (kg)." });
+    }
+    seedSession({ state: "awaiting_confirmation", batch_size: 5, batch_seq: null });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "submit all" });
+
+    expect(sent.some((m) => m.kind === "buttons" && m.body.includes("weren't sent"))).toBe(false);
+    const followUp = sent.find((m) => m.kind === "list");
+    expect(followUp).toBeDefined();
+    expect(followUp!.rows).toEqual(["edit:listing-1", "edit:listing-2", "edit:listing-3", "edit:listing-4"]);
+  });
+
+  it("sends nothing further when every product pushes successfully", async () => {
+    seedBatch(2);
+    seedSession({ state: "awaiting_confirmation", batch_size: 2, batch_seq: null });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "submit all" });
+
+    expect(sent.some((m) => m.body.includes("wasn't sent") || m.body.includes("weren't sent"))).toBe(false);
+    expect(sent.some((m) => (m.rows ?? []).some((r) => r.startsWith("edit:")))).toBe(false);
+  });
+
+  it("compiles a single push failure into one buttons message too, not a bare cta_url link", async () => {
+    seedBatch(1);
+    pushResultFor.set("listing-1", { ok: false, code: "validation", message: "This category requires Weight (kg)." });
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "submit all" });
+
+    expect(sent.some((m) => m.kind === "cta" && m.body.includes("wasn't sent"))).toBe(false);
+    const followUp = sent.find((m) => m.kind === "buttons" && m.body.includes("wasn't sent to Jumia"));
+    expect(followUp).toBeDefined();
+    expect(followUp!.body).toContain("Weight (kg)");
+    expect(followUp!.rows).toEqual(["edit:listing-1"]);
   });
 });
 
