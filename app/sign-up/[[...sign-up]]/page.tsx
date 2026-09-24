@@ -14,8 +14,8 @@ export default function SignUpPage() {
     <AuthSplitLayout
       title="Create your account"
       subtitle="List on Jumia from WhatsApp or Chrome in minutes"
-      image="/marketing/panda-mascot-merchant.jpg"
-      imageAlt="PandaWorld's panda mascot, illustrated as a merchant"
+      image="/marketing/auth-lakeside.jpg"
+      imageAlt="A lakeside campsite at golden hour, kayaks pulled up on the shore"
     >
       <SignUp appearance={CLERK_APPEARANCE} />
     </AuthSplitLayout>
