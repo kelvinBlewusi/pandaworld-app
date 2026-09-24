@@ -93,8 +93,15 @@ jest.mock("@/lib/jumia/push-listing", () => ({
 // assessor's own Jumia-dependent behaviour (decimal mismatches, variant
 // enums, fashion-Generic brand) has its own unit tests in
 // __tests__/whatsapp-readiness.test.ts.
+// Settable per test — the set of listing ids assessListingPushReadiness
+// should report as blocked on a disconnected Jumia account, mirroring
+// readiness.ts's own not_connected branch (needsReconnect: true).
+const needsReconnectFor = new Set<string>();
 jest.mock("@/lib/whatsapp/readiness", () => ({
   assessListingPushReadiness: async (_userId: string, listingId: string) => {
+    if (needsReconnectFor.has(listingId)) {
+      return { ready: false, reasons: ["Jumia needs to be (re)connected before this can be checked"], needsReconnect: true };
+    }
     const { missingFieldLabels } = jest.requireActual("@/lib/jumia/push-listing");
     const row = db.tables.listings.find((l) => l.id === listingId);
     if (!row) return { ready: false, reasons: ["listing not found"] };
@@ -132,9 +139,11 @@ function listings() { return db.tables.listings; }
 beforeEach(() => {
   db.tables.listings = [];
   db.tables.analysis_jobs = [];
+  db.tables.jumia_connect_tokens = [];
   db.rpcCalls.length = 0;
   sent.length = 0;
   enqueued.length = 0;
+  needsReconnectFor.clear();
   seedSession();
 });
 
@@ -674,6 +683,103 @@ describe("a multi-product batch with one hard-failed product", () => {
     await finalizeBatch("batch-1", PHONE, 2);
 
     expect(sent.some((m) => m.body.includes("couldn't be drafted after several tries"))).toBe(false);
+  });
+});
+
+describe("finalizeBatch — Held-for-reconnect status messages carry a reconnect link", () => {
+  // Real production report, 2026-09-24: a batch came back with several
+  // products Held on "Jumia needs to be (re)connected before this can be
+  // checked" and no way to act on it from the message — the seller had to
+  // already know to type "connect". One token fixes every Held-for-
+  // reconnect product in the batch at once, so it's generated once and
+  // appended to the status message rather than repeated per line.
+  const FULL = {
+    description: "A long enough description to clear the fifty-character minimum check.",
+    category_code: "1234",
+    brand: "Panasonic",
+    images: ["https://cdn.test/a.jpg"],
+    status: "draft",
+    selling_price: 150,
+  };
+
+  function seedBatch(rows: { seq: number; title: string }[]) {
+    db.tables.listings = rows.map((r) => ({
+      id: `listing-${r.seq}`,
+      user_id: USER,
+      whatsapp_batch_id: "batch-1",
+      whatsapp_seq: r.seq,
+      title: r.title,
+      ...FULL,
+    }));
+  }
+
+  it("appends one reconnect link to the multi-product status message when any product needs it", async () => {
+    seedBatch([
+      { seq: 1, title: "Panasonic Electric Kettle 1.7L" },
+      { seq: 2, title: "Sony Wireless Over-Ear Headphones" },
+      { seq: 3, title: "Safety Helmet — Adjustable Strap" },
+    ]);
+    needsReconnectFor.add("listing-1");
+    needsReconnectFor.add("listing-3");
+    seedSession({ state: "awaiting_confirmation", batch_size: 3, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 3);
+
+    const status = sent.find((m) => m.kind === "text" && m.body.includes("Product 1"));
+    expect(status).toBeDefined();
+    expect(status!.body).toContain("Product 1: ⚠️ Held — Jumia needs to be (re)connected");
+    expect(status!.body).toContain("Product 3: ⚠️ Held — Jumia needs to be (re)connected");
+    // Exactly one link, not one per Held-for-reconnect line.
+    const linkCount = (status!.body.match(/\/api\/jumia\/connect\?wa_token=/g) ?? []).length;
+    expect(linkCount).toBe(1);
+    expect(db.tables.jumia_connect_tokens).toHaveLength(1);
+    expect(db.tables.jumia_connect_tokens[0].user_id).toBe(USER);
+  });
+
+  it("adds no reconnect link when nothing in the batch needs one", async () => {
+    seedBatch([
+      { seq: 1, title: "Panasonic Electric Kettle 1.7L" },
+      { seq: 2, title: "Sony Wireless Over-Ear Headphones" },
+    ]);
+    seedSession({ state: "awaiting_confirmation", batch_size: 2, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 2);
+
+    const status = sent.find((m) => m.kind === "text" && m.body.includes("Product 1"));
+    expect(status!.body).not.toContain("/api/jumia/connect");
+    expect(db.tables.jumia_connect_tokens ?? []).toHaveLength(0);
+  });
+
+  it("offers a Reconnect Jumia link instead of Edit product for a single-product batch that needs reconnecting", async () => {
+    seedBatch([{ seq: 1, title: "Panasonic Electric Kettle 1.7L" }]);
+    needsReconnectFor.add("listing-1");
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 1);
+
+    const draftMsg = sent.find((m) => m.kind === "cta");
+    expect(draftMsg?.body).toContain("Jumia needs to be (re)connected");
+    expect(db.tables.jumia_connect_tokens).toHaveLength(1);
+  });
+
+  it("still offers Edit product for a single-product batch Held for an ordinary reason", async () => {
+    seedBatch([{ seq: 1, title: "Panasonic Electric Kettle 1.7L" }]);
+    db.tables.listings[0].selling_price = null; // missing price — an ordinary Held, not a reconnect
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 1);
+
+    const draftMsg = sent.find((m) => m.kind === "cta");
+    expect(draftMsg?.body ?? "").not.toContain("re)connected");
+    expect(db.tables.jumia_connect_tokens ?? []).toHaveLength(0);
   });
 });
 

@@ -148,35 +148,67 @@ describe("notifyBatchResolved", () => {
     expect(sent[0].body).toContain("2 more products went live");
   });
 
-  it("uses a tappable LIST, not chunked buttons, when 4+ items resolve in one tick — every item gets a row, live or rejected", async () => {
+  it("uses a tappable LIST, not chunked buttons, when 4+ items are REJECTED in one tick — live ones never get a row", async () => {
     await notifyBatchResolved(PHONE, "batch-1", [
       notice({ listingId: "listing-1", title: "Kettle", whatsappSeq: 1, newStatus: "live" }),
       notice({ listingId: "listing-2", title: "Baby Carrier", whatsappSeq: 2, newStatus: "failed", errorMsg: "Attribute [variation] with invalid value [Navy Blue]" }),
       notice({ listingId: "listing-3", title: "Blender", whatsappSeq: 3, newStatus: "live" }),
       notice({ listingId: "listing-4", title: "Toaster", whatsappSeq: 4, newStatus: "failed", errorMsg: "You can't list products in this category." }),
+      notice({ listingId: "listing-5", title: "Helmet", whatsappSeq: 5, newStatus: "failed", errorMsg: "price is required" }),
+      notice({ listingId: "listing-6", title: "Backpack", whatsappSeq: 6, newStatus: "failed", errorMsg: "Attribute [color_family] with invalid value [Black,Grey]." }),
     ]);
 
     expect(sent.some((m) => m.kind === "buttons")).toBe(false);
     expect(sent.some((m) => m.kind === "cta")).toBe(false);
 
+    // Only the four rejected products get a row — the two live ones stay
+    // in the summary text and never appear as a tappable "pick a product"
+    // option, since there's nothing to fix on them.
     const lists = sent.filter((m) => m.kind === "list");
     expect(lists).toHaveLength(1);
-    expect(lists[0].buttons).toEqual(["fix:listing-1", "fix:listing-2", "fix:listing-3", "fix:listing-4"]);
-    expect(lists[0].descriptions?.[0]).toMatch(/Live on Jumia/);
-    expect(lists[0].descriptions?.[1]).toMatch(/Rejected — Attribute \[variation\]/);
-    expect(lists[0].descriptions?.[3]).toMatch(/Rejected — You can't list products/);
+    expect(lists[0].buttons).toEqual(["fix:listing-2", "fix:listing-4", "fix:listing-5", "fix:listing-6"]);
+    expect(lists[0].descriptions?.[0]).toMatch(/Rejected — Attribute \[variation\]/);
+    expect(lists[0].descriptions?.[1]).toMatch(/Rejected — You can't list products/);
   });
 
-  it("chunks the list into groups of LIST_MAX_ROWS when more items resolve than fit in one list", async () => {
-    const items = Array.from({ length: 12 }, (_, i) =>
+  it("still uses reply-buttons (not a list) when 4+ items resolve but 3 or fewer are rejected", async () => {
+    await notifyBatchResolved(PHONE, "batch-1", [
+      notice({ listingId: "listing-1", title: "Kettle", whatsappSeq: 1, newStatus: "live" }),
+      notice({ listingId: "listing-2", title: "Baby Carrier", whatsappSeq: 2, newStatus: "failed", errorMsg: "Attribute [variation] with invalid value [Navy Blue]" }),
+      notice({ listingId: "listing-3", title: "Blender", whatsappSeq: 3, newStatus: "live" }),
+      notice({ listingId: "listing-4", title: "Toaster", whatsappSeq: 4, newStatus: "live" }),
+    ]);
+
+    expect(sent.some((m) => m.kind === "list")).toBe(false);
+    const buttonMsgs = sent.filter((m) => m.kind === "buttons");
+    expect(buttonMsgs).toHaveLength(1);
+    expect(buttonMsgs[0].buttons).toEqual(["fix:listing-2"]);
+  });
+
+  it("chunks the list into groups of LIST_MAX_ROWS when more than 10 REJECTED items resolve — live items never occupy a row slot", async () => {
+    const items = Array.from({ length: 20 }, (_, i) =>
       notice({ listingId: `listing-${i + 1}`, title: `Product ${i + 1}`, whatsappSeq: i + 1, newStatus: i % 2 === 0 ? "live" : "failed", errorMsg: i % 2 === 0 ? null : "some rejection" }),
+    );
+    await notifyBatchResolved(PHONE, "batch-1", items);
+
+    // 10 of the 20 are rejected — exactly one LIST_MAX_ROWS-sized list,
+    // not two, and not a mix of live rows padding it out.
+    const lists = sent.filter((m) => m.kind === "list");
+    expect(lists).toHaveLength(1);
+    expect(lists[0].buttons).toHaveLength(10);
+    expect(lists[0].buttons?.every((id) => ["listing-2", "listing-4", "listing-6", "listing-8", "listing-10", "listing-12", "listing-14", "listing-16", "listing-18", "listing-20"].some((n) => id === `fix:${n}`))).toBe(true);
+  });
+
+  it("chunks past LIST_MAX_ROWS when more than 10 items are rejected", async () => {
+    const items = Array.from({ length: 15 }, (_, i) =>
+      notice({ listingId: `listing-${i + 1}`, title: `Product ${i + 1}`, whatsappSeq: i + 1, newStatus: "failed", errorMsg: "some rejection" }),
     );
     await notifyBatchResolved(PHONE, "batch-1", items);
 
     const lists = sent.filter((m) => m.kind === "list");
     expect(lists).toHaveLength(2);
     expect(lists[0].buttons).toHaveLength(10);
-    expect(lists[1].buttons).toHaveLength(2);
+    expect(lists[1].buttons).toHaveLength(5);
   });
 
   it("does nothing for an empty batch", async () => {

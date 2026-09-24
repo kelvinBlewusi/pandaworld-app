@@ -38,6 +38,12 @@ export interface ListingReadinessResult {
    *  phrased for a chat line ("needs price", "capacity: ... isn't a whole
    *  number..."), never a raw error code. */
   reasons: string[];
+  /** True when Held specifically because Jumia isn't connected — lets a
+   *  caller offer a reconnect link instead of (or alongside) "open Edit",
+   *  same as handleSubmit's own needsReconnect branch. Matching on this
+   *  flag rather than the reasons[] text keeps the two call sites from
+   *  drifting if the wording here ever changes. */
+  needsReconnect?: boolean;
 }
 
 /**
@@ -261,7 +267,7 @@ export async function assessListingPushReadiness(
   if (!preview.ok) {
     if (preview.code === "not_found") return { ready: false, reasons: ["listing not found"] };
     if (preview.code === "not_connected") {
-      return { ready: false, reasons: ["Jumia needs to be (re)connected before this can be checked"] };
+      return { ready: false, reasons: ["Jumia needs to be (re)connected before this can be checked"], needsReconnect: true };
     }
     // build_failed — buildJumiaPayload's own error is already written for
     // a seller (JUMIA_NO_SCHEMA, a variant value outside the category's

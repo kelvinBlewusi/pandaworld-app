@@ -760,16 +760,22 @@ export function toResolvedNotice(
  * link that didn't even show the rejection reason or offer a retry —
  * Fix & resubmit was reachable in principle but not in practice.
  *
- *   - 1-3 items: reply-buttons hold three per message (Meta's own cap), so
- *     every REJECTED item gets its own "Fix product N" button in one
- *     message. A live item needs no button — nothing to fix.
- *   - 4+ items: a list holds up to 10 rows in ONE message (see sendList's
- *     own doc comment on why this replaced button-message chunking) — so
- *     EVERY item, live or rejected, gets a row, each labelled with its
- *     status. Tapping a rejected row fixes it; tapping an already-live
- *     row just confirms it's already live (see handleFixAndResubmit's own
- *     early-return for a listing with nothing to fix) — one mechanism for
- *     the whole list rather than two different tap behaviours to explain.
+ * Only a REJECTED item ever gets a tappable row or button below the
+ * summary — a live item has nothing to fix, so it appears in the summary
+ * text above and nowhere else. This used to include every item, live or
+ * rejected, in the 4+ list (tapping a live row just confirmed it was
+ * already live), which made "Pick a product to fix it" appear on a batch
+ * that actually had nothing left to fix, or offer live products as if
+ * they needed the same action as the rejected ones. Sized by how many
+ * items actually need fixing, not by the batch's total size:
+ *
+ *   - 1-3 REJECTED items: reply-buttons hold three per message (Meta's own
+ *     cap), so every rejected item gets its own "Fix product N" button in
+ *     one message.
+ *   - 4+ REJECTED items: a list holds up to 10 rows in ONE message (see
+ *     sendList's own doc comment on why this replaced button-message
+ *     chunking) — every rejected item gets a row, chunked across messages
+ *     past the 10-row cap.
  */
 export async function notifyBatchResolved(
   phoneNumber: string,
@@ -807,7 +813,15 @@ export async function notifyBatchResolved(
 
     const label = (i: ResolvedListingNotice) => i.whatsappSeq != null ? `Product ${i.whatsappSeq}` : (i.title ?? "product");
 
-    if (items.length <= 3) {
+    // Only a REJECTED item gets a row/button here — a live one has nothing
+    // to fix, so offering it alongside "Pick a product to fix it" read as
+    // an action available on every product when it only ever did anything
+    // for the rejected ones (tapping a live row used to just confirm it
+    // was already live, a dead tap dressed up as a choice). The live/rejected
+    // counts are still in the summary text above; this is only the
+    // follow-up affordance, sized to how many actually need fixing rather
+    // than to the batch's total size.
+    if (rejected.length <= 3) {
       await sendButtonsIfConfigured(
         phoneNumber,
         "Fix what didn't go through:",
@@ -816,18 +830,16 @@ export async function notifyBatchResolved(
       return;
     }
 
-    const rows = items.map((i) => ({
+    const rows = rejected.map((i) => ({
       id:          `fix:${i.listingId}`,
       title:       label(i),
-      description: i.newStatus === "live"
-        ? "✅ Live on Jumia"
-        : `⚠️ Rejected — ${i.errorMsg ?? "see details"}`,
+      description: `⚠️ Rejected — ${i.errorMsg ?? "see details"}`,
     }));
     for (let idx = 0; idx < rows.length; idx += LIST_MAX_ROWS) {
       const chunk = rows.slice(idx, idx + LIST_MAX_ROWS);
       await sendListIfConfigured(
         phoneNumber,
-        idx === 0 ? "Tap a product to fix it, or see a live one's details:" : "…and the rest:",
+        idx === 0 ? "Tap a product to fix it:" : "…and the rest:",
         "Pick a product",
         chunk,
       );
