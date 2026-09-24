@@ -16,9 +16,9 @@
  */
 
 import Link from "next/link";
-import { Space_Grotesk } from "next/font/google";
+import Image from "next/image";
+import { Space_Grotesk, Inter } from "next/font/google";
 import { ArrowRight } from "lucide-react";
-import { Wordmark } from "@/components/marketing/wordmark";
 import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 
 const spaceGrotesk = Space_Grotesk({
@@ -27,6 +27,12 @@ const spaceGrotesk = Space_Grotesk({
   display: "swap",
   variable: "--font-space-grotesk",
 });
+
+// Matches components/marketing/wordmark.tsx's own Inter 800 — the
+// lettering weight used everywhere else "pandaworld" is spelled out, so
+// this reads as the same brand mark, just with the real logo standing in
+// for the "P" instead of a plain letterform.
+const inter = Inter({ subsets: ["latin"], weight: ["800"], display: "swap" });
 
 // text-orange-600 in Tailwind terms — darkened one step from the brand's
 // bg-orange-500 (#f97316, used on buttons and the eyebrow dot) so inline
@@ -58,8 +64,18 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
     >
       <div className="relative z-10 box-border px-5 pb-16 pt-10 sm:px-12 lg:px-24">
         <header className="flex flex-wrap items-center justify-between gap-4 sm:gap-8">
-          <Link href="/extension" aria-label="pandaworld home">
-            <Wordmark size={26} />
+          <Link href="/extension" aria-label="pandaworld home" className="inline-flex items-center">
+            <Image
+              src="/brand/panda-p-logo-trimmed.png"
+              alt=""
+              width={634}
+              height={562}
+              className="h-8 w-auto"
+              priority
+            />
+            <span className={`${inter.className} -ml-0.5 text-[26px] font-extrabold tracking-tight text-zinc-900`}>
+              andaworld
+            </span>
           </Link>
           <nav className="flex items-center gap-2 text-[12px] uppercase tracking-[0.08em] sm:gap-3 sm:text-[13px]">
             <Link

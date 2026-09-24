@@ -41,15 +41,17 @@ export function AuthSplitLayout({
           <div className="mt-8">{children}</div>
         </div>
       </div>
-      <div className="relative hidden bg-zinc-100 lg:block">
-        <Image
-          src={image}
-          alt={imageAlt}
-          fill
-          sizes="50vw"
-          className="object-cover"
-          priority
-        />
+      <div className="hidden bg-zinc-100 p-6 lg:block">
+        <div className="relative h-full w-full overflow-hidden rounded-3xl">
+          <Image
+            src={image}
+            alt={imageAlt}
+            fill
+            sizes="50vw"
+            className="object-cover"
+            priority
+          />
+        </div>
       </div>
     </div>
   );
