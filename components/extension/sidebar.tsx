@@ -15,7 +15,7 @@ import { WhatsAppIcon } from "@/components/whatsapp/whatsapp-icon";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { UserButton, useUser } from "@clerk/nextjs";
-import {LayoutDashboard, Calculator, ListChecks, HelpCircle, BookOpen, Settings, ArrowRight, X} from "lucide-react";
+import {LayoutDashboard, Calculator, ListChecks, HelpCircle, BookOpen, Settings, ArrowRight, X, MessageSquare, AlertTriangle} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Wordmark } from "@/components/marketing/wordmark";
 import { COMMUNITY_WHATSAPP_URL } from "@/lib/constants/support";
@@ -35,6 +35,15 @@ const comingSoonNav = [
 ];
 
 const settingsItem = { href: "/extension/settings", label: "Settings", icon: Settings };
+
+// Only rendered when isAdmin — same ADMIN_USER_IDS allow-list
+// (lib/auth/is-admin.ts) components/layout/Sidebar.tsx already gates its
+// own admin section with. Not linked anywhere else in this app shell, so
+// a regular seller never sees "Admin" in their own nav.
+const adminNav = [
+  { href: "/admin/messages", label: "WhatsApp log", icon: MessageSquare },
+  { href: "/admin/errors",   label: "Errors",        icon: AlertTriangle },
+];
 
 function NavItem({ href, label, icon: Icon }: { href: string; label: string; icon: React.ElementType }) {
   const pathname = usePathname();
@@ -140,6 +149,20 @@ export function ExtensionSidebar({ onClose, isAdmin = false }: { onClose?: () =>
           <ComingSoonItem key={item.label} {...item} />
         ))}
         <SupportNavItem />
+
+        {isAdmin && (
+          <>
+            <div className="pb-1 pt-3">
+              <div className="mb-3 h-px bg-zinc-100" />
+              <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                Admin
+              </p>
+            </div>
+            {adminNav.map((item) => (
+              <NavItem key={item.href} {...item} />
+            ))}
+          </>
+        )}
 
         <div className="pb-1 pt-3">
           <div className="mb-3 h-px bg-zinc-100" />
