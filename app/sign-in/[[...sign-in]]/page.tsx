@@ -18,8 +18,8 @@ export default function SignInPage() {
     <AuthSplitLayout
       title="Welcome back"
       subtitle="Log in to your PandaWorld account"
-      image="/marketing/panda-mascot-wizard.jpg"
-      imageAlt="PandaWorld's panda mascot, illustrated as a wizard casting AI magic"
+      image="/marketing/auth-lakeside.jpg"
+      imageAlt="A lakeside campsite at golden hour, kayaks pulled up on the shore"
     >
       <SignIn appearance={CLERK_APPEARANCE} />
     </AuthSplitLayout>
