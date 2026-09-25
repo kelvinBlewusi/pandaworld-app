@@ -123,6 +123,102 @@ export function welcomeEmail(opts: {
   };
 }
 
+// ─── Announcement: WhatsApp bot number + Chrome extension ────────────────────
+//
+// One-off feature announcement, sent via app/api/admin/broadcast/
+// whatsapp-extension-announcement/route.ts to every existing sign-up.
+// Not a recurring transactional email — no unsubscribe link, since it's a
+// one-time send to an existing account holder rather than a marketing
+// list. Points "Connect WhatsApp" at the dashboard's connect-code flow
+// (not a bare wa.me link) because the bot needs a LINK-XXXXXXXX code to
+// link an account.
+
+const WHATSAPP_BOT_NUMBER = "+233 54 853 4323";
+
+export function whatsappExtensionAnnouncementEmail(opts: {
+  firstName?: string | null;
+  appUrl:     string;
+}): RenderResult {
+  const greeting = opts.firstName ? `Hi ${escapeHtml(opts.firstName)},` : "Hi there,";
+  const whatsappUrl = `${opts.appUrl}/extension/whatsapp-listings`;
+  const howToUrl    = `${opts.appUrl}/how-to`;
+
+  return {
+    subject: "Two faster ways to list on Jumia",
+    html: layout({
+      title: "Two faster ways to list on Jumia",
+      body: `
+        <p style="margin:0 0 16px;">${greeting}</p>
+        <p style="margin:0 0 24px;">
+          A quick update on how to get products onto Jumia faster with PandaWorld —
+          whether you&rsquo;re on your phone or your laptop.
+        </p>
+
+        <p style="margin:0 0 8px; font-size:15px;"><strong>1. List straight from WhatsApp</strong></p>
+        <p style="margin:0 0 12px; font-size:14px; color:#3f3f46;">
+          Send product photos to our WhatsApp number and the AI drafts the listing for
+          you — title, description, category, and every attribute Jumia asks for.
+        </p>
+        <p style="margin:0 0 16px; padding:12px 16px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; font-size:16px; font-weight:700; color:#15803d; text-align:center;">
+          ${WHATSAPP_BOT_NUMBER}
+        </p>
+        <ol style="margin:0 0 20px 16px; padding:0; font-size:14px; line-height:1.7; color:#3f3f46;">
+          <li>Link your number from your dashboard (one WhatsApp message, takes a few seconds).</li>
+          <li>Tell the bot how many products you're listing.</li>
+          <li>Send each product's photos with a note — price, colour, what's in the box.</li>
+          <li>Review the drafts and reply <strong>submit</strong> — it goes live on Jumia.</li>
+        </ol>
+
+        <p style="margin:0 0 8px; font-size:15px;"><strong>2. Autofill listings on your laptop</strong></p>
+        <p style="margin:0 0 24px; font-size:14px; color:#3f3f46;">
+          Already on Jumia Vendor Center? The PandaWorld Chrome extension opens right
+          next to the &ldquo;Add Products&rdquo; form and fills it in for you — title,
+          description, highlights, attributes, brand. You just review and submit.
+        </p>
+
+        ${ctaButtonPair(
+          { label: "Connect WhatsApp", href: whatsappUrl },
+          { label: "Add to Chrome", href: CHROME_WEB_STORE_URL },
+        )}
+
+        <p style="margin:24px 0 0; font-size:13px; color:#52525b;">
+          Both are free while we're in our early-access period — no card needed. Full
+          step-by-step guides (with video walkthroughs) are up at
+          <a href="${howToUrl}" style="color:#ea580c;">${howToUrl.replace(/^https?:\/\//, "")}</a>.
+        </p>
+        <p style="margin:16px 0 0; font-size:13px; color:#71717a;">
+          Reply to this email if you get stuck — we read every message.
+        </p>
+      `,
+    }),
+    text: [
+      greeting,
+      "",
+      "A quick update on how to get products onto Jumia faster with PandaWorld - whether you're on your phone or your laptop.",
+      "",
+      "1. List straight from WhatsApp",
+      `   Send product photos to ${WHATSAPP_BOT_NUMBER} and the AI drafts the listing`,
+      "   for you - title, description, category, and every attribute Jumia asks for.",
+      "     - Link your number from your dashboard (one WhatsApp message).",
+      "     - Tell the bot how many products you're listing.",
+      "     - Send each product's photos with a note - price, colour, what's in the box.",
+      "     - Review the drafts and reply submit - it goes live on Jumia.",
+      "",
+      "2. Autofill listings on your laptop",
+      "   Already on Jumia Vendor Center? The PandaWorld Chrome extension opens right",
+      "   next to the \"Add Products\" form and fills it in for you.",
+      "",
+      `Connect WhatsApp: ${whatsappUrl}`,
+      `Add to Chrome: ${CHROME_WEB_STORE_URL}`,
+      "",
+      "Both are free while we're in our early-access period - no card needed. Full",
+      `step-by-step guides (with video walkthroughs): ${howToUrl}`,
+      "",
+      "Reply to this email if you get stuck - we read every message.",
+    ].join("\n"),
+  };
+}
+
 // ─── Payment confirmation ────────────────────────────────────────────────────
 
 export function paymentConfirmationEmail(opts: {
