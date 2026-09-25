@@ -38,9 +38,13 @@ interface HomeFloatingNavProps {
 export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref }: HomeFloatingNavProps) {
   const [open, setOpen] = useState(false);
 
-  const links = [
+  const links: { href: string; label: string; disabled?: boolean }[] = [
     { href: "#how-it-works", label: "How it Works" },
-    { href: "/pricing", label: "Pricing" },
+    // Greyed out + non-clickable: /pricing shows the paid monthly tiers,
+    // which don't apply while FREE_FOR_ALL_MODE is on (see
+    // lib/billing/free-for-all.ts) — keeping it visible but disabled here
+    // signals "coming later" rather than linking somewhere misleading.
+    { href: "/pricing", label: "Pricing", disabled: true },
     { href: calculatorHref, label: "Jumia Pricing Calculator" },
   ];
 
@@ -61,28 +65,39 @@ export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref }: Home
           </span>
         </Link>
 
-        <nav className="hidden items-center gap-6 text-sm font-medium text-zinc-600 lg:flex">
-          {links.map((link) => (
-            <Link
-              key={link.label}
-              href={link.href}
-              className="whitespace-nowrap transition-colors hover:text-zinc-900"
-            >
-              {link.label}
-            </Link>
-          ))}
+        <nav className="hidden items-center gap-6 text-base font-medium text-zinc-600 lg:flex">
+          {links.map((link) =>
+            link.disabled ? (
+              <span
+                key={link.label}
+                className="cursor-not-allowed whitespace-nowrap text-zinc-300"
+                aria-disabled="true"
+                title="Coming soon"
+              >
+                {link.label}
+              </span>
+            ) : (
+              <Link
+                key={link.label}
+                href={link.href}
+                className="whitespace-nowrap transition-colors hover:text-zinc-900"
+              >
+                {link.label}
+              </Link>
+            )
+          )}
         </nav>
 
         <div className="hidden items-center gap-1 lg:flex">
           <Link
             href={signInHref}
-            className="whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-100"
+            className="whitespace-nowrap rounded-full px-4 py-2 text-base font-medium text-zinc-600 transition-colors hover:bg-zinc-100"
           >
             Login
           </Link>
           <Link
             href={signUpHref}
-            className="whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-orange-600"
+            className="whitespace-nowrap rounded-full px-4 py-2 text-base font-semibold text-white transition-colors hover:bg-orange-600"
             style={{ background: ACCENT_FILL }}
           >
             Get started
@@ -102,30 +117,41 @@ export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref }: Home
 
       {open && (
         <div className="mx-auto mt-2 max-w-5xl rounded-2xl border border-zinc-200 bg-white p-3 shadow-lg lg:hidden">
-          <nav className="flex flex-col gap-1 text-sm font-medium text-zinc-700">
-            {links.map((link) => (
-              <Link
-                key={link.label}
-                href={link.href}
-                onClick={() => setOpen(false)}
-                className="rounded-lg px-3 py-2.5 transition-colors hover:bg-zinc-50"
-              >
-                {link.label}
-              </Link>
-            ))}
+          <nav className="flex flex-col gap-1 text-base font-medium text-zinc-700">
+            {links.map((link) =>
+              link.disabled ? (
+                <span
+                  key={link.label}
+                  className="cursor-not-allowed rounded-lg px-3 py-2.5 text-zinc-300"
+                  aria-disabled="true"
+                  title="Coming soon"
+                >
+                  {link.label}
+                </span>
+              ) : (
+                <Link
+                  key={link.label}
+                  href={link.href}
+                  onClick={() => setOpen(false)}
+                  className="rounded-lg px-3 py-2.5 transition-colors hover:bg-zinc-50"
+                >
+                  {link.label}
+                </Link>
+              )
+            )}
           </nav>
           <div className="mt-2 flex flex-col gap-2 border-t border-zinc-100 pt-3">
             <Link
               href={signInHref}
               onClick={() => setOpen(false)}
-              className="rounded-full border border-zinc-200 px-4 py-2.5 text-center text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50"
+              className="rounded-full border border-zinc-200 px-4 py-2.5 text-center text-base font-medium text-zinc-700 transition-colors hover:bg-zinc-50"
             >
               Login
             </Link>
             <Link
               href={signUpHref}
               onClick={() => setOpen(false)}
-              className="rounded-full px-4 py-2.5 text-center text-sm font-semibold text-white transition-colors hover:bg-orange-600"
+              className="rounded-full px-4 py-2.5 text-center text-base font-semibold text-white transition-colors hover:bg-orange-600"
               style={{ background: ACCENT_FILL }}
             >
               Get started
