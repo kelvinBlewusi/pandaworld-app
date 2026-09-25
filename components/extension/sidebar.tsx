@@ -28,7 +28,7 @@ const primaryNav = [
   // Points at the public /how-to page (not an /extension/... route) so the
   // same guides are reachable — and indexable by Google — whether a seller
   // is signed in or not. See app/how-to/page.tsx.
-  { href: "/how-to",               label: "How to",       icon: BookOpen },
+  { href: "/how-to",               label: "Guides",       icon: BookOpen },
 ];
 
 // Content for this doesn't exist yet — shown so the shell reads complete,

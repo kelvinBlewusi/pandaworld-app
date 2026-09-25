@@ -43,7 +43,7 @@ export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref }: Home
     // longer only rendered on the homepage (see app/how-to/page.tsx), and a
     // bare fragment resolves against whatever page it's clicked from.
     { href: "/#how-it-works", label: "How it Works" },
-    { href: "/how-to", label: "How To" },
+    { href: "/how-to", label: "Guides" },
     // Greyed out + non-clickable: /pricing shows the paid monthly tiers,
     // which don't apply while FREE_FOR_ALL_MODE is on (see
     // lib/billing/free-for-all.ts) — keeping it visible but disabled here
