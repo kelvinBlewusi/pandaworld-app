@@ -25,7 +25,10 @@ const primaryNav = [
   { href: "/extension/whatsapp-listings", label: "List from WhatsApp", icon: WhatsAppIcon },
   { href: "/extension/calculator", label: "Calculator",  icon: Calculator },
   { href: "/extension/listings",   label: "Autofill Activity", icon: ListChecks },
-  { href: "/extension/how-to",     label: "How to",       icon: BookOpen },
+  // Points at the public /how-to page (not an /extension/... route) so the
+  // same guides are reachable — and indexable by Google — whether a seller
+  // is signed in or not. See app/how-to/page.tsx.
+  { href: "/how-to",               label: "How to",       icon: BookOpen },
 ];
 
 // Content for this doesn't exist yet — shown so the shell reads complete,
