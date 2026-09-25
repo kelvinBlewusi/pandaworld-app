@@ -66,7 +66,7 @@ export default async function ExtensionDashboardPage() {
         <div className="flex-1">
           <p className="font-semibold">Push listings from WhatsApp</p>
           <p className="mt-0.5 text-sm text-white/85">
-            Away from your laptop? Send product photos on WhatsApp and we&apos;ll draft + push the listing for you.
+            Away from your laptop? Send product photos on WhatsApp to +233548534323 and our AI WhatsApp bot will draft + push the listing to Vendor Center for you.
           </p>
         </div>
         <ArrowRight className="h-5 w-5 shrink-0" />

@@ -25,13 +25,13 @@ const primaryNav = [
   { href: "/extension/whatsapp-listings", label: "List from WhatsApp", icon: WhatsAppIcon },
   { href: "/extension/calculator", label: "Calculator",  icon: Calculator },
   { href: "/extension/listings",   label: "Autofill Activity", icon: ListChecks },
+  { href: "/extension/how-to",     label: "How to",       icon: BookOpen },
 ];
 
-// Content for these doesn't exist yet — shown so the shell reads complete,
+// Content for this doesn't exist yet — shown so the shell reads complete,
 // but deliberately inert (no href, no click) rather than a broken link.
 const comingSoonNav = [
-  { label: "FAQ",    icon: HelpCircle },
-  { label: "How to", icon: BookOpen },
+  { label: "FAQ", icon: HelpCircle },
 ];
 
 const settingsItem = { href: "/extension/settings", label: "Settings", icon: Settings };

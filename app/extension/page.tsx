@@ -79,7 +79,7 @@ const WHATSAPP_STEPS = [
   {
     Icon: WhatsAppIcon,
     title: "Link your WhatsApp",
-    body: "Grab a connect code from your PandaWorld dashboard and send it to our number. Takes a few seconds.",
+    body: "Grab a connect code from your PandaWorld dashboard and send it to this WhatsApp number +233548534323. Takes a few seconds.",
   },
   {
     Icon: ListOrdered,
