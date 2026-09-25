@@ -107,6 +107,15 @@ const CONVERSATION_SHOTS = [
   { src: "/marketing/whatsapp-flow-5-submit.jpg", alt: "WhatsApp chat: seller taps Submit all to push every listing to Jumia", caption: "Review, then submit" },
 ] as const;
 
+// Real screenshots from a real seller's Jumia Vendor Center session
+// (2026-09-25), not mockups — the same watch listing scrolled top to
+// bottom after clicking Autofill, in order.
+const EXTENSION_SHOTS = [
+  { src: "/marketing/extension-flow-1-basics.png", alt: "Jumia Vendor Center listing form: PandaWorld extension has filled in the name, category, brand, color, and weight", caption: "AI fills the name, category, brand, color, and weight" },
+  { src: "/marketing/extension-flow-2-highlights.png", alt: "Jumia Vendor Center listing form: PandaWorld extension has written the full product description and highlights", caption: "Description and highlights, fully written" },
+  { src: "/marketing/extension-flow-3-manufacturer.png", alt: "Jumia Vendor Center listing form: PandaWorld extension has filled in manufacturer details, what's in the box, and warranty", caption: "Even manufacturer info and what's in the box" },
+] as const;
+
 /** Any icon that takes a className — lucide's, or one of our own brand
  *  marks. It was `typeof Chrome`, which pinned it to lucide's exact
  *  ForwardRef shape and rejected the WhatsApp glyph outright. */
@@ -263,9 +272,11 @@ export async function ExtensionPage() {
         </div>
       </section>
 
-      {/* Real conversation, not a mockup — three phone screenshots from an
-          actual seller's chat, in order. Sits on white (the section above
-          is zinc-50) so the two alternate and this doesn't blur into it. */}
+      {/* Real screenshots, not mockups — the Chrome extension autofilling an
+          actual Jumia listing, and an actual seller's WhatsApp chat. Sits on
+          white (the section above is zinc-50) so the two alternate and this
+          doesn't blur into it. Two tracks, same icon+label pattern as the
+          "How it works" section above. */}
       <section className="bg-white">
         <div className="mx-auto max-w-5xl px-6 py-16">
           <div className="text-center">
@@ -273,27 +284,64 @@ export async function ExtensionPage() {
               See it happen
             </p>
             <h2 className="mt-3 text-2xl font-bold sm:text-3xl">
-              A real WhatsApp conversation
+              Real listings, not mockups
             </h2>
           </div>
-          <div className="mt-10 grid grid-cols-1 gap-8 sm:grid-cols-3">
-            {CONVERSATION_SHOTS.map((shot, i) => (
-              <figure key={shot.src} className="flex flex-col items-center">
-                <div className="overflow-hidden rounded-2xl border border-zinc-200 shadow-sm">
-                  <Image
-                    src={shot.src}
-                    alt={shot.alt}
-                    width={296}
-                    height={640}
-                    className="h-auto w-full max-w-[240px]"
-                    sizes="(min-width: 640px) 240px, 80vw"
-                  />
-                </div>
-                <figcaption className="mt-3 text-sm text-zinc-500">
-                  <span className="font-semibold text-zinc-900">{i + 1}.</span> {shot.caption}
-                </figcaption>
-              </figure>
-            ))}
+
+          <div className="mt-12">
+            <div className="flex items-center justify-center gap-2.5">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500 text-white">
+                <Chrome className="h-4 w-4" />
+              </div>
+              <h3 className="text-lg font-bold text-zinc-900">From the Chrome extension</h3>
+            </div>
+            <div className="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-3">
+              {EXTENSION_SHOTS.map((shot, i) => (
+                <figure key={shot.src} className="flex flex-col items-center">
+                  <div className="overflow-hidden rounded-2xl border border-zinc-200 shadow-sm">
+                    <Image
+                      src={shot.src}
+                      alt={shot.alt}
+                      width={480}
+                      height={285}
+                      className="h-auto w-full"
+                      sizes="(min-width: 640px) 33vw, 100vw"
+                    />
+                  </div>
+                  <figcaption className="mt-3 text-sm text-zinc-500">
+                    <span className="font-semibold text-zinc-900">{i + 1}.</span> {shot.caption}
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-16">
+            <div className="flex items-center justify-center gap-2.5">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500 text-white">
+                <WhatsAppIcon className="h-4 w-4" />
+              </div>
+              <h3 className="text-lg font-bold text-zinc-900">From WhatsApp</h3>
+            </div>
+            <div className="mt-6 grid grid-cols-1 gap-8 sm:grid-cols-3">
+              {CONVERSATION_SHOTS.map((shot, i) => (
+                <figure key={shot.src} className="flex flex-col items-center">
+                  <div className="overflow-hidden rounded-2xl border border-zinc-200 shadow-sm">
+                    <Image
+                      src={shot.src}
+                      alt={shot.alt}
+                      width={296}
+                      height={640}
+                      className="h-auto w-full max-w-[240px]"
+                      sizes="(min-width: 640px) 240px, 80vw"
+                    />
+                  </div>
+                  <figcaption className="mt-3 text-sm text-zinc-500">
+                    <span className="font-semibold text-zinc-900">{i + 1}.</span> {shot.caption}
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
           </div>
         </div>
       </section>
