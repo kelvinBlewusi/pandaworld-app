@@ -12,7 +12,7 @@ import { MarketingFooter } from "@/components/marketing/footer";
 // "how to connect Jumia Vendor Center" or "list on Jumia from WhatsApp"
 // should be able to land here directly. Reachable from the homepage's own
 // nav (components/marketing/home-floating-nav.tsx) and from the extension
-// sidebar's "How to" link (components/extension/sidebar.tsx), which used to
+// sidebar's "Guides" link (components/extension/sidebar.tsx), which used to
 // point at a signed-in-only duplicate of this same content.
 //
 // Four guides, not five — "Connect Vendor Center" and "Link WhatsApp" are
