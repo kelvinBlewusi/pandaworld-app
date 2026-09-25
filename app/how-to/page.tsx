@@ -66,7 +66,7 @@ const GUIDES: Guide[] = [
     steps: [
       "Go to vendorcenter.jumia.com and sign in to your seller account.",
       "In Vendor Center, go to Settings → Applications → Create Application, and choose \"Web Application (OAuth)\".",
-      "Set the Redirect URI to https://pandaworldai.site/api/jumia/callback — PandaWorld also shows you this, pre-filled, on the connect page.",
+      "Set the Redirect URI to https://pandaworldai.site/api/jumia/callback.",
       "Copy the Client ID and Client Secret from the application you just created.",
       "In your PandaWorld dashboard, open the Connect Jumia page, pick your country, paste in the Client ID and Client Secret, click \"Test Connection\", then \"Connect Jumia\".",
     ],
