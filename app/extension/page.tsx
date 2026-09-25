@@ -295,17 +295,24 @@ export async function ExtensionPage() {
               </div>
               <h3 className="text-lg font-bold text-zinc-900">From the Chrome extension</h3>
             </div>
-            <div className="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-3">
+            {/* Stacked full-width, not a 3-up grid — these are dense
+                desktop screenshots (small form labels and body text), and
+                a WhatsApp-shot-sized thumbnail crushed them down to the
+                point of illegibility. Cropped to just the form + extension
+                panel (public/marketing/extension-flow-*.png), dropping the
+                Vendor Center sidebar and browser chrome, so the remaining
+                pixels all go to content that's actually worth reading. */}
+            <div className="mx-auto mt-6 flex max-w-3xl flex-col gap-8">
               {EXTENSION_SHOTS.map((shot, i) => (
                 <figure key={shot.src} className="flex flex-col items-center">
                   <div className="overflow-hidden rounded-2xl border border-zinc-200 shadow-sm">
                     <Image
                       src={shot.src}
                       alt={shot.alt}
-                      width={480}
-                      height={285}
+                      width={1124}
+                      height={811}
                       className="h-auto w-full"
-                      sizes="(min-width: 640px) 33vw, 100vw"
+                      sizes="(min-width: 768px) 768px, 100vw"
                     />
                   </div>
                   <figcaption className="mt-3 text-sm text-zinc-500">
