@@ -4,6 +4,7 @@ import { Link2, Laptop, PlayCircle } from "lucide-react";
 import { WhatsAppIcon } from "@/components/whatsapp/whatsapp-icon";
 import { HomeFloatingNav } from "@/components/marketing/home-floating-nav";
 import { MarketingFooter } from "@/components/marketing/footer";
+import { WhatsAppFlowVideo } from "@/components/marketing/whatsapp-flow-video";
 
 // ─── /how-to — public, indexable step-by-step guides ─────────────────────────
 //
@@ -55,6 +56,8 @@ interface Guide {
   steps: string[];
   /** YouTube video ID once recorded. null renders the "coming soon" placeholder. */
   videoId: string | null;
+  /** A recording we host ourselves, shown instead of the YouTube slot. */
+  recording?: "whatsapp-flow";
 }
 
 const GUIDES: Guide[] = [
@@ -108,6 +111,7 @@ const GUIDES: Guide[] = [
       "Review each draft, then reply submit for one product, or submit all to push everything to Jumia at once.",
     ],
     videoId: null,
+    recording: "whatsapp-flow",
   },
 ];
 
@@ -175,13 +179,20 @@ export default async function HowToPage() {
                     <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-orange-50 text-xs font-bold text-orange-600">
                       {j + 1}
                     </span>
-                    <span className="leading-relaxed">{step}</span>
+                    <span className="min-w-0 leading-relaxed [overflow-wrap:anywhere]">{step}</span>
                   </li>
                 ))}
               </ol>
 
               <div className="mt-5">
-                <GuideVideo videoId={guide.videoId} title={guide.title} />
+                {guide.recording === "whatsapp-flow" ? (
+                  // Portrait phone recording: phone width, not the 16:9 slot.
+                  <div className="mx-auto max-w-[280px]">
+                    <WhatsAppFlowVideo />
+                  </div>
+                ) : (
+                  <GuideVideo videoId={guide.videoId} title={guide.title} />
+                )}
               </div>
             </div>
           ))}

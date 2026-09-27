@@ -128,7 +128,10 @@ export const config = {
     // below doesn't skip it) never hits auth.protect(). Otherwise every
     // page view from a logged-out visitor — i.e. all marketing traffic —
     // would be rejected before reaching Vercel.
-    '/((?!_next|_vercel|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)',
+    // mp4/webm: public/marketing/whatsapp-flow.mp4 plays on the homepage
+    // and /how-to for logged-out visitors; without these it hit
+    // auth.protect() and redirected to sign-in like any unknown route.
+    '/((?!_next|_vercel|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest|mp4|webm)).*)',
     '/(api|trpc)(.*)',
   ],
 }
