@@ -3163,7 +3163,7 @@ async function handleFixAndResubmit(
     updated_at:              new Date().toISOString(),
   }).eq("id", listingId);
 
-  await replyText(phoneNumber, `🔧 ${label}: ${remedy.explanation} Fixing and resubmitting…`);
+  await replyText(phoneNumber, `🔧 ${label}:\nFixing and resubmitting…`);
 
   // A "not visible for category" rejection means OUR cached schema is
   // wrong, not the listing — no redraft can fix an attribute that was
