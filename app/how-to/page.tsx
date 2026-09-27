@@ -132,7 +132,7 @@ function GuideVideo({ videoId, title }: { videoId: string | null; title: string 
   return (
     <div className="flex aspect-video flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-200 bg-zinc-50 text-zinc-400">
       <PlayCircle className="h-9 w-9" />
-      <span className="text-xs font-medium uppercase tracking-wide">Video coming soon</span>
+      <span className="text-sm font-medium uppercase tracking-wide">Video coming soon</span>
     </div>
   );
 }
@@ -151,9 +151,9 @@ export default async function HowToPage() {
 
       <div className="mx-auto max-w-3xl px-6 pb-16 pt-16 sm:pt-20">
         <div className="text-center">
-          <p className="text-xs font-semibold uppercase tracking-widest text-orange-500">Guides</p>
-          <h1 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">How To</h1>
-          <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-zinc-500">
+          <p className="text-sm font-semibold uppercase tracking-widest text-orange-500">Guides</p>
+          <h1 className="mt-3 text-4xl font-bold tracking-tight sm:text-5xl">How To</h1>
+          <p className="mx-auto mt-4 max-w-2xl text-base leading-relaxed text-zinc-500 sm:text-lg">
             Step-by-step guides for getting set up and listing on Jumia — from your laptop with the Chrome
             extension, or from your phone over WhatsApp.
           </p>
@@ -167,16 +167,16 @@ export default async function HowToPage() {
                   <guide.Icon className="h-4 w-4" />
                 </div>
                 <div>
-                  <p className="text-xs font-semibold text-zinc-400">{`0${i + 1}`}</p>
-                  <h2 className="text-base font-bold text-zinc-900">{guide.title}</h2>
+                  <p className="text-sm font-semibold text-zinc-400">{`0${i + 1}`}</p>
+                  <h2 className="text-lg font-bold text-zinc-900 sm:text-xl">{guide.title}</h2>
                 </div>
               </div>
-              <p className="mt-3 text-sm text-zinc-600">{guide.intro}</p>
+              <p className="mt-3 text-base text-zinc-600">{guide.intro}</p>
 
               <ol className="mt-4 space-y-2.5 border-l border-zinc-200 pl-5">
                 {guide.steps.map((step, j) => (
-                  <li key={j} className="flex gap-2.5 text-sm text-zinc-600">
-                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-orange-50 text-xs font-bold text-orange-600">
+                  <li key={j} className="flex gap-3 text-base text-zinc-600">
+                    <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-orange-50 text-sm font-bold text-orange-600">
                       {j + 1}
                     </span>
                     <span className="min-w-0 leading-relaxed [overflow-wrap:anywhere]">{step}</span>
@@ -201,7 +201,7 @@ export default async function HowToPage() {
         <div className="mt-12 text-center">
           <Link
             href={signUpHref}
-            className="inline-flex items-center justify-center gap-2 rounded-full bg-orange-500 px-6 py-3.5 text-sm font-medium text-white transition-colors hover:bg-orange-600"
+            className="inline-flex items-center justify-center gap-2 rounded-full bg-orange-500 px-7 py-4 text-base font-medium text-white transition-colors hover:bg-orange-600"
           >
             Get started free
           </Link>

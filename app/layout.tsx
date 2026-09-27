@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Script from "next/script";
-import { Inter } from "next/font/google";
+import { Inter_Tight } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { Analytics } from "@vercel/analytics/next";
 import { FREE_FOR_ALL_MODE } from "@/lib/billing/free-for-all";
@@ -8,9 +8,12 @@ import "./globals.css";
 
 export const dynamic = "force-dynamic";
 
-const inter = Inter({
+// Inter Tight site-wide — Inter with tighter default letter-spacing, the
+// same face ListsGenie's site uses (requested 2026-09-27). Tailwind's
+// `font-sans` reads this variable (tailwind.config.ts).
+const interTight = Inter_Tight({
   subsets: ["latin"],
-  variable: "--font-inter",
+  variable: "--font-inter-tight",
   display: "swap",
 });
 
@@ -225,7 +228,7 @@ export default function RootLayout({
 }) {
   return (
     <ClerkProvider signInUrl="/sign-in" signUpUrl="/sign-up">
-      <html lang="en" className={inter.variable}>
+      <html lang="en" className={interTight.variable}>
         <head>
           {/* Google Search Console domain ownership.
               The same tag is ALSO declared in the Metadata object above

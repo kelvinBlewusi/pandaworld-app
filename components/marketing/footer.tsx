@@ -60,12 +60,12 @@ export function MarketingFooter({
   return (
     <footer className="border-t border-zinc-100 bg-zinc-50">
       <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-6 px-6 py-10 sm:flex-row">
-        <div className="flex flex-col items-center gap-2 text-sm text-zinc-500 sm:flex-row">
-          <Wordmark size={20} />
+        <div className="flex flex-col items-center gap-2 text-base text-zinc-500 sm:flex-row">
+          <Wordmark size={22} />
           <span className="sm:before:content-['·_']">Built for Jumia sellers</span>
         </div>
 
-        <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-zinc-500">
+        <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-zinc-500">
           {extensionPricing ? (
             <FooterPricingTrigger signedIn={extensionPricing.signedIn} signInHref={extensionPricing.signInHref} />
           ) : (

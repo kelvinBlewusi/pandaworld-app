@@ -19,10 +19,10 @@
 import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { Inter } from "next/font/google";
+import { Inter_Tight } from "next/font/google";
 import { Menu, X } from "lucide-react";
 
-const inter = Inter({ subsets: ["latin"], weight: ["800"], display: "swap" });
+const inter = Inter_Tight({ subsets: ["latin"], weight: ["800"], display: "swap" });
 
 // Matches extension-hero-backdrop.tsx's own ACCENT_FILL — the brand's
 // orange used on every solid button. Duplicated rather than imported to
