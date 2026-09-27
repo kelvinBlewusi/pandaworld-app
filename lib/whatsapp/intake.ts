@@ -17,7 +17,18 @@ import { pushListingToJumia, missingFieldLabels, refreshPendingFeedStatus } from
 import { assessListingPushReadiness } from "@/lib/whatsapp/readiness";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
 import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames } from "@/lib/jumia/rejection-remedy";
-import { removeAttributesFromCache } from "@/lib/jumia/categories";
+import { removeAttributesFromCache, getCategoryByCode } from "@/lib/jumia/categories";
+import { isUnlistableCategoryError } from "@/lib/jumia/unlistable-categories";
+import {
+  listableLeafCategories,
+  refusedCategoryCodes,
+  suggestCategories,
+  matchCategoryAnswer,
+  looksLikeCategoryAnswer,
+  categoryListRow,
+  CATEGORY_SKIP_RE,
+  type CategoryChoice,
+} from "@/lib/whatsapp/category-question";
 import { getValidJumiaCredentials, COUNTRY_CURRENCY, DEFAULT_JUMIA_COUNTRY, currencySymbol, currencyNameWord } from "@/lib/jumia/api";
 import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
 import { isFashionCategory } from "@/lib/jumia/fashion-category";
@@ -99,6 +110,10 @@ const SUBMIT_DEADLINE_MS = 45_000;
 // the wrong shape for this, since it has to move whenever the cap does.
 // At ~22s for a single product, three concurrent is already a real wait.
 const BIG_BATCH_SIZE = 3;
+
+// Session states in which a typed reply can be an answer to
+// askSellerForCategory's question — see handleLinkedMessage.
+const CATEGORY_ANSWER_STATES = new Set<WhatsAppSession["state"]>(["awaiting_count", "awaiting_confirmation", "error"]);
 
 function replyText(to: string, text: string): Promise<void> {
   return sendTextIfConfigured(to, text);
@@ -479,7 +494,31 @@ export async function handleLinkedMessage(
     return;
   }
 
+  // A category picked from askSellerForCategory's list — id is
+  // `recat:<listingId>:<code>`. Global for the same reason as fix: above:
+  // the question follows a Jumia rejection, whatever state the session is
+  // in by then.
+  const recatMatch = content.text?.trim().match(/^recat:([0-9a-f-]{36}):(\d+)$/i);
+  if (recatMatch) {
+    await applySellerCategory(userId, phoneNumber, recatMatch[1], parseInt(recatMatch[2], 10));
+    return;
+  }
+
   const globalCmd = content.text ? parseGlobalCommand(content.text) : null;
+
+  // A typed answer to askSellerForCategory's question. Only read between
+  // batches: mid-product (collecting photos, drafting) the seller's text is
+  // a note for that product, and while connecting Jumia it's a credential.
+  // A photo means they've moved on. Anything that isn't an answer drops
+  // the question and is handled normally below.
+  if (!globalCmd && session.awaitingCategoryFor) {
+    const text = content.text?.trim();
+    if (content.imageMediaId) {
+      await updateSession(phoneNumber, { awaitingCategoryFor: null });
+    } else if (text && CATEGORY_ANSWER_STATES.has(session.state)) {
+      if (await handleCategoryAnswer(userId, phoneNumber, session.awaitingCategoryFor, text)) return;
+    }
+  }
 
   if (globalCmd) {
     await handleGlobalCommand(globalCmd, userId, phoneNumber, session);
@@ -3043,7 +3082,7 @@ async function handleFixAndResubmit(
   const db = createServerClient();
   const { data: row } = await db
     .from("listings")
-    .select("id, whatsapp_seq, title, status, brand, field_sources, field_confidence, jumia_error, category_code, category_path, user_prompt, jumia_rerun_fingerprint, jumia_rerun_count")
+    .select("id, whatsapp_seq, title, status, brand, field_sources, field_confidence, jumia_error, category_code, category_path, category_alternates, user_prompt, jumia_rerun_fingerprint, jumia_rerun_count")
     .eq("id", listingId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -3150,6 +3189,27 @@ async function handleFixAndResubmit(
       jumia_rerun_count:       0,
       updated_at:              new Date().toISOString(),
     }).eq("id", listingId);
+
+    // Jumia refused our category twice (the original pick and the
+    // redraft's). The seller can see which categories Vendor Center
+    // accepts and we can't, so ask them rather than sending them to the
+    // editor. If the category Jumia just refused was the seller's own pick
+    // from that question, asking again would go round in circles, so that
+    // case does go to the editor.
+    if (isUnlistableCategoryError(rejectionText)) {
+      const sellerPicked = (row.field_sources as Record<string, string> | null)?.category_code === "user";
+      if (!sellerPicked) {
+        await askSellerForCategory(userId, phoneNumber, row, label);
+        return;
+      }
+      await replyError(
+        phoneNumber,
+        `⚠️ ${label}: Jumia refused the category you picked as well. This one needs you now: open the editor, choose the category there, and I'll resubmit once it's ready.`,
+        { retryId: `fix:${listingId}`, retryTitle: "Fix & resubmit", cta: { label: "Open editor", url: focusedEditorUrl(listingId) } },
+      );
+      return;
+    }
+
     await replyError(
       phoneNumber,
       `⚠️ ${label}: I already tried fixing this automatically once and Jumia rejected it the same way again — ${remedy.explanation} This one needs you now: open the editor, sort it out, and I'll resubmit once it's ready.`,
@@ -3254,6 +3314,220 @@ async function pushAndReport(
     `⚠️ ${label}: Jumia still isn't happy — ${result.message}`,
     { retryId: `fix:${listingId}`, retryTitle: "Fix & resubmit", cta: { label: "Open editor", url: focusedEditorUrl(listingId) } },
   );
+}
+
+/**
+ * Jumia has refused our category for this product twice — the original
+ * pick and the automatic redraft's — with "You can't list products in this
+ * category". The seller can see which categories Vendor Center accepts and
+ * we can't, so ask them: a list of suggestions Jumia hasn't refused in
+ * their country, or a typed category name (handleCategoryAnswer). Either
+ * answer switches the category and resubmits (applySellerCategory).
+ */
+async function askSellerForCategory(
+  userId:      string,
+  phoneNumber: string,
+  listing:     Record<string, unknown>,
+  label:       string,
+): Promise<void> {
+  const listingId = listing.id as string;
+  const suggestions = await categorySuggestionsFor(userId, listing);
+  await updateSession(phoneNumber, { awaitingCategoryFor: listingId });
+
+  const body =
+    `⚠️ ${label}: Jumia has refused 2 categories for this product and I can't find one it accepts. ` +
+    `Which category does Vendor Center allow for it? ` +
+    `${suggestions.length > 0 ? "Pick one below or type" : "Type"} the category name as it appears in Vendor Center, ` +
+    `and I'll redraft and resubmit it for you.\n\nOr reply *skip* to fix it in the editor instead.`;
+
+  if (suggestions.length > 0) {
+    await replyList(phoneNumber, body, "Pick a category", suggestions.map((c) => categoryListRow(listingId, c)));
+  } else {
+    await replyText(phoneNumber, body);
+  }
+}
+
+/** Suggestions for the category question — never one Jumia has refused
+ *  in this seller's country. Empty on any failure: the question still
+ *  works with a typed name. */
+async function categorySuggestionsFor(userId: string, listing: Record<string, unknown>): Promise<CategoryChoice[]> {
+  try {
+    const [leaves, refused] = await Promise.all([
+      listableLeafCategories(),
+      refusedCategoryCodes(userId, (listing.category_code as string | null) ?? null),
+    ]);
+    return suggestCategories(
+      {
+        title:               (listing.title as string | null) ?? null,
+        category_alternates: (listing.category_alternates as { code: number }[] | null) ?? null,
+      },
+      leaves.filter((c) => !refused.has(Number(c.code))),
+    );
+  } catch (e) {
+    console.warn(`[whatsapp intake] couldn't build category suggestions for ${listing.id}: ${(e as Error).message}`);
+    return [];
+  }
+}
+
+/**
+ * A typed reply while askSellerForCategory's question is open. An exact
+ * category name is applied straight away; anything close is shown back as
+ * a list to pick from, never guessed at. Returns false, and drops the
+ * question, when the message isn't an answer at all, so the caller can
+ * handle it normally.
+ */
+async function handleCategoryAnswer(
+  userId:      string,
+  phoneNumber: string,
+  listingId:   string,
+  text:        string,
+): Promise<boolean> {
+  if (CATEGORY_SKIP_RE.test(text)) {
+    await updateSession(phoneNumber, { awaitingCategoryFor: null });
+    await replyCta(
+      phoneNumber,
+      "No problem — choose the category in the editor and I'll resubmit it once it's ready.",
+      "Open editor",
+      focusedEditorUrl(listingId),
+    );
+    return true;
+  }
+  if (!looksLikeCategoryAnswer(text)) {
+    await updateSession(phoneNumber, { awaitingCategoryFor: null });
+    return false;
+  }
+
+  const db = createServerClient();
+  const { data: listing } = await db
+    .from("listings")
+    .select("id, whatsapp_seq, title, category_code, category_alternates")
+    .eq("id", listingId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!listing) {
+    await updateSession(phoneNumber, { awaitingCategoryFor: null });
+    return false;
+  }
+  const label = listing.whatsapp_seq != null ? `Product ${listing.whatsapp_seq}` : "This product";
+
+  const [leaves, refused] = await Promise.all([
+    listableLeafCategories(),
+    refusedCategoryCodes(userId, (listing.category_code as string | null) ?? null),
+  ]);
+  const answer = matchCategoryAnswer(text, leaves, refused);
+
+  if (answer.kind === "match") {
+    await applySellerCategory(userId, phoneNumber, listingId, answer.category.code);
+    return true;
+  }
+
+  if (answer.kind === "choose") {
+    await replyList(
+      phoneNumber,
+      answer.exact
+        ? `${label}: Jumia has more than one "${text}" category. Which one is it?`
+        : `${label}: I couldn't find a category called "${text}" exactly. Is it one of these? If not, type the name exactly as Vendor Center shows it.`,
+      "Pick a category",
+      answer.options.map((c) => categoryListRow(listingId, c)),
+    );
+    return true;
+  }
+
+  // Refused or not found: say which, and offer the suggestions again.
+  const suggestions = suggestCategories(
+    {
+      title:               (listing.title as string | null) ?? null,
+      category_alternates: (listing.category_alternates as { code: number }[] | null) ?? null,
+    },
+    leaves.filter((c) => !refused.has(Number(c.code))),
+  );
+  const lead = answer.kind === "refused"
+    ? `${label}: Jumia has already refused "${answer.name}" in your country, so I can't use it.`
+    : `${label}: I couldn't find a Jumia category called "${text}".`;
+  const body =
+    `${lead} Type the name exactly as Vendor Center shows it${suggestions.length > 0 ? ", or pick one below" : ""}. ` +
+    `Reply *skip* to fix it in the editor instead.`;
+  if (suggestions.length > 0) {
+    await replyList(phoneNumber, body, "Pick a category", suggestions.map((c) => categoryListRow(listingId, c)));
+  } else {
+    await replyText(phoneNumber, body);
+  }
+  return true;
+}
+
+/**
+ * Switch a listing to the category the seller named and resubmit it — the
+ * answer to askSellerForCategory, tapped or typed. Keeps the title,
+ * description and photos; the new category's own fields are refilled for
+ * its schema, the same way the category buttons at drafting time do.
+ */
+async function applySellerCategory(
+  userId:       string,
+  phoneNumber:  string,
+  listingId:    string,
+  categoryCode: number,
+): Promise<void> {
+  const db = createServerClient();
+  const { data: row } = await db
+    .from("listings")
+    .select("id, whatsapp_seq, title, category_code, user_prompt, jumia_error")
+    .eq("id", listingId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (!row) {
+    await updateSession(phoneNumber, { awaitingCategoryFor: null });
+    await replyError(phoneNumber, "⚠️ I couldn't find that product — it may have been removed.");
+    return;
+  }
+  const label = row.whatsapp_seq != null ? `Product ${row.whatsapp_seq}` : (row.title as string | null) ?? "That product";
+
+  // A row tapped from an earlier list, after the switch already happened.
+  if (String(categoryCode) === String(row.category_code)) {
+    await updateSession(phoneNumber, { awaitingCategoryFor: null });
+    await replyText(phoneNumber, `${label} is already in that category — nothing to change.`);
+    return;
+  }
+
+  // An older list can offer a category Jumia has refused since it was sent.
+  const refused = await refusedCategoryCodes(userId, (row.category_code as string | null) ?? null);
+  if (refused.has(categoryCode)) {
+    await replyText(
+      phoneNumber,
+      `${label}: Jumia has already refused that category in your country. Pick another one, or type the name as Vendor Center shows it.`,
+    );
+    return;
+  }
+
+  await updateSession(phoneNumber, { awaitingCategoryFor: null });
+  const category = await getCategoryByCode(categoryCode);
+  await replyText(phoneNumber, `🔧 ${label}:\nSwitching to "${category?.name ?? "your category"}" and resubmitting…`);
+
+  const result = await refillAttributesForCategory(userId, listingId, categoryCode, {
+    userContext: unwrapRerunContext((row.user_prompt as string | null) ?? null),
+  });
+  if (!result.ok) {
+    await replyError(
+      phoneNumber,
+      `⚠️ ${label}: couldn't switch to that category (${result.message}).`,
+      { retryId: `recat:${listingId}:${categoryCode}`, retryTitle: "Try again 🔁", cta: { label: "Open editor", url: focusedEditorUrl(listingId) } },
+    );
+    return;
+  }
+
+  // Marked as the seller's own pick, with the category rejection counted
+  // as already auto-fixed once. If Jumia refuses this category too, the
+  // next Fix & resubmit goes to the editor instead of redrafting over the
+  // seller's choice or asking them the same question again.
+  const rejectionText = extractRejectionText((row.jumia_error as string | null) ?? null);
+  await db.from("listings").update({
+    field_sources:           { ...result.field_sources, category_code: "user" },
+    jumia_rerun_fingerprint: rejectionText ? rejectionFingerprint(classifyJumiaRejection(rejectionText).kind, rejectionText) : null,
+    jumia_rerun_count:       rejectionText ? 1 : 0,
+    updated_at:              new Date().toISOString(),
+  }).eq("id", listingId);
+
+  await pushAndReport(userId, phoneNumber, listingId, label);
 }
 
 async function handleCategoryCorrection(
