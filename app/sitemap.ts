@@ -40,6 +40,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority:        0.9,                   // pricing page — high
     },
     {
+      url:            `${APP_URL}/how-to`,
+      lastModified,
+      changeFrequency: "monthly",
+      priority:        0.8,                   // setup guides — targets "how to" searches
+    },
+    {
       url:            `${APP_URL}/terms`,
       lastModified,
       changeFrequency: "yearly",

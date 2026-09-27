@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Script from "next/script";
 import { Inter } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
+import { Analytics } from "@vercel/analytics/next";
 import { FREE_FOR_ALL_MODE } from "@/lib/billing/free-for-all";
 import "./globals.css";
 
@@ -258,7 +259,10 @@ export default function RootLayout({
             dangerouslySetInnerHTML={{ __html: JSON.stringify(softwareApplicationLd) }}
           />
         </head>
-        <body>{children}</body>
+        <body>
+          {children}
+          <Analytics />
+        </body>
       </html>
     </ClerkProvider>
   );
