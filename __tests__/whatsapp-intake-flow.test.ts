@@ -150,11 +150,14 @@ const refillCalls: { listingId: string; code: number }[] = [];
 jest.mock("@/lib/jumia/refill-attributes", () => ({
   refillAttributesForCategory: async (_userId: string, listingId: string, code: number) => {
     refillCalls.push({ listingId, code });
+    // Mirrors the real refill's writes: the new category, marked as the
+    // seller's choice (its own unit test covers that rule).
+    const field_sources = { "dynamic_attributes.color": "ai", category_code: "user" };
     const row = db.tables.listings.find((l) => l.id === listingId);
-    if (row) row.category_code = String(code);
+    if (row) Object.assign(row, { category_code: String(code), field_sources });
     return {
       ok: true, category: { code, name: "x", path: "x" }, attributesSchema: 2, aiFilled: 1,
-      dynamic_attributes: {}, field_sources: { "dynamic_attributes.color": "ai" }, field_confidence: {},
+      dynamic_attributes: {}, field_sources, field_confidence: {},
     };
   },
 }));
@@ -1300,9 +1303,11 @@ describe("Fix & resubmit", () => {
     expect(pushCallCount).toBe(0);
   });
 
+  // A category rejection whose redraft fails asks the seller instead —
+  // see "asking the seller for a category" below.
   it("reports a failed rerun rather than pushing a stale draft", async () => {
-    seedRejectedListing();
-    autoAnalyzeResult = { ok: false, message: "no confident category" };
+    seedRejectedListing({ jumia_error: "The title contains the brand name, seller name or company name." });
+    autoAnalyzeResult = { ok: false, message: "describe failed" };
     sent.length = 0;
 
     await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
@@ -1414,11 +1419,6 @@ describe("asking the seller for a category after Jumia refuses ours twice", () =
     expect(sent.some((m) => m.body.includes('Switching to "Portable Power Banks & Battery Packs"'))).toBe(true);
     expect(sent.some((m) => m.body.includes("resubmitted"))).toBe(true);
     expect(session().awaiting_category_for).toBeNull();
-    // Remembered as the seller's own pick, with this rejection already
-    // counted as auto-fixed once.
-    expect(listing().field_sources).toMatchObject({ category_code: "user", "dynamic_attributes.color": "ai" });
-    expect(listing().jumia_rerun_fingerprint).toBe(CANT_LIST_FINGERPRINT);
-    expect(listing().jumia_rerun_count).toBe(1);
   });
 
   it("applies a typed category name that matches exactly one category", async () => {
@@ -1458,14 +1458,58 @@ describe("asking the seller for a category after Jumia refuses ours twice", () =
     expect(refillCalls).toHaveLength(0);
   });
 
-  it("hands over the editor when the seller doesn't know", async () => {
+  // Our editor has no Vendor Center-style category picker, so it's no help
+  // here: the last resort is a category Jumia already uses for a similar
+  // product, which the seller can copy off its page.
+  it("tells a seller who doesn't know how to find the category on Jumia, and keeps the question open", async () => {
     session().awaiting_category_for = LISTING_ID;
 
     await handleLinkedMessage(USER, PHONE, "m1", { text: "I don't know" });
 
-    expect(sent.some((m) => m.kind === "cta" && m.body.includes("choose the category in the editor"))).toBe(true);
-    expect(session().awaiting_category_for).toBeNull();
+    expect(sent.some((m) => m.body.includes("Search jumia.com.gh for a product like this one"))).toBe(true);
+    expect(sent.some((m) => m.kind === "cta")).toBe(false);
+    expect(session().awaiting_category_for).toBe(LISTING_ID);
     expect(refillCalls).toHaveLength(0);
+  });
+
+  it("reads a breadcrumb pasted off a Jumia product page, product name and all", async () => {
+    session().awaiting_category_for = LISTING_ID;
+
+    await handleLinkedMessage(USER, PHONE, "m1", {
+      text: "Home > Phones & Tablets > Mobile Accessories > Portable Power Banks & Battery Packs > Oraimo 20000mAh Power Bank",
+    });
+
+    expect(refillCalls).toEqual([{ listingId: LISTING_ID, code: 1000279 }]);
+    expect(pushCallCount).toBe(1);
+  });
+
+  it("offers the categories under a parent the seller names", async () => {
+    session().awaiting_category_for = LISTING_ID;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "Mobile Accessories" });
+
+    const choice = listSent().find((m) => m.body.includes('under "Mobile Accessories"'));
+    expect(choice!.rows!.sort()).toEqual([`recat:${LISTING_ID}:1000279`, `recat:${LISTING_ID}:3000001`]);
+    expect(refillCalls).toHaveLength(0);
+  });
+
+  it("explains that a product link doesn't carry its category", async () => {
+    session().awaiting_category_for = LISTING_ID;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "https://www.jumia.com.gh/oraimo-20000mah-power-bank-123456.html" });
+
+    expect(sent.some((m) => m.body.includes("link to a product"))).toBe(true);
+    expect(session().awaiting_category_for).toBe(LISTING_ID);
+    expect(refillCalls).toHaveLength(0);
+  });
+
+  it("points at a similar product's category when nothing matches", async () => {
+    session().awaiting_category_for = LISTING_ID;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "zzqx" });
+
+    expect(sent.some((m) => m.body.includes("couldn't find that category") && m.body.includes("Search jumia.com.gh"))).toBe(true);
+    expect(session().awaiting_category_for).toBe(LISTING_ID);
   });
 
   it("drops the question on a reply that isn't an answer, and handles it normally", async () => {
@@ -1487,14 +1531,47 @@ describe("asking the seller for a category after Jumia refuses ours twice", () =
     expect(sent.some((m) => m.body.includes("more than one"))).toBe(false);
   });
 
-  it("sends the seller to the editor when Jumia refuses the category they picked too", async () => {
-    seedTwiceRefused({ field_sources: { category_code: "user" } });
+  // A redraft would keep the seller's category and resubmit it unchanged,
+  // so there's nothing to try automatically: ask again at once.
+  it("asks again straight away, with the find-it-on-Jumia tip, when Jumia refuses the seller's own pick", async () => {
+    seedTwiceRefused({ field_sources: { category_code: "user" }, jumia_rerun_fingerprint: null, jumia_rerun_count: 0 });
 
     await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${LISTING_ID}` });
 
-    expect(sent.some((m) => m.body.includes("Jumia refused the category you picked as well"))).toBe(true);
-    expect(listSent()).toHaveLength(0);
-    expect(session().awaiting_category_for ?? null).toBeNull();
+    const ask = listSent().find((m) => m.body.includes('Jumia refused "External Battery Packs", the category you picked'));
+    expect(ask!.body).toContain("Search jumia.com.gh");
+    expect(autoAnalyzeCalls).toHaveLength(0);
+    expect(pushCallCount).toBe(0);
+    expect(sent.some((m) => m.kind === "cta")).toBe(false);
+    expect(session().awaiting_category_for).toBe(LISTING_ID);
+  });
+
+  it("asks the seller when the first redraft can't find another category at all", async () => {
+    seedTwiceRefused({ jumia_rerun_fingerprint: null, jumia_rerun_count: 0 });
+    autoAnalyzeResult = { ok: false, message: "no confident category" };
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${LISTING_ID}` });
+
+    expect(listSent().some((m) => m.body.includes("couldn't find another one it accepts"))).toBe(true);
+    expect(sent.some((m) => m.body.includes("couldn't redraft it"))).toBe(false);
+    expect(pushCallCount).toBe(0);
+    expect(session().awaiting_category_for).toBe(LISTING_ID);
+  });
+
+  // A stale code has to be re-picked even if the seller chose it, so the
+  // redraft is allowed to replace it.
+  it("lets the redraft re-pick a seller's category that Jumia no longer recognises", async () => {
+    seedTwiceRefused({
+      jumia_error: "Category not found by code 1017621",
+      jumia_rerun_fingerprint: null,
+      jumia_rerun_count: 0,
+      field_sources: { category_code: "user", title: "user" },
+    });
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${LISTING_ID}` });
+
+    expect(autoAnalyzeCalls).toHaveLength(1);
+    expect(listing().field_sources).toEqual({ title: "user" });
   });
 
   it("keeps the generic hand-off for a repeated rejection that isn't about the category", async () => {
