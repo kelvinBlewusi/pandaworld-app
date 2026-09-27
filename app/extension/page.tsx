@@ -141,22 +141,22 @@ function HowItWorksTrack({ icon: TrackIcon, label, steps }: { icon: IconComponen
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500 text-white">
           <TrackIcon className="h-4 w-4" />
         </div>
-        <h3 className="text-lg font-bold text-zinc-900">{label}</h3>
+        <h3 className="text-xl font-bold text-zinc-900">{label}</h3>
       </div>
       <ol className="mt-6 space-y-6 border-l border-zinc-200 pl-6">
         {steps.map((step, i) => {
           const content = (
             <>
               <div className="flex items-center gap-2">
-                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-orange-50 text-xs font-bold text-orange-600">
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-orange-50 text-sm font-bold text-orange-600">
                   {i + 1}
                 </span>
-                <h4 className="text-sm font-semibold text-zinc-900">{step.title}</h4>
+                <h4 className="text-base font-semibold text-zinc-900">{step.title}</h4>
                 {step.href && (
-                  <span className="text-xs font-medium text-orange-500">Open Chrome Web Store →</span>
+                  <span className="text-sm font-medium text-orange-500">Open Chrome Web Store →</span>
                 )}
               </div>
-              <p className="mt-1.5 pl-8 text-sm leading-relaxed text-zinc-600">{step.body}</p>
+              <p className="mt-1.5 pl-9 text-base leading-relaxed text-zinc-600">{step.body}</p>
             </>
           );
           return (
@@ -215,7 +215,7 @@ export async function ExtensionPage() {
           animation in tailwind.config.ts, if nothing else uses them by
           then) once free-for-all mode ends. */}
       <div
-        className="relative flex items-center justify-center gap-2 overflow-hidden bg-orange-600 px-4 py-2.5 text-center text-sm font-semibold text-white animate-shimmer"
+        className="relative flex items-center justify-center gap-2 overflow-hidden bg-orange-600 px-4 py-2.5 text-center text-sm font-semibold text-white animate-shimmer sm:text-base"
         style={{
           backgroundImage: "linear-gradient(115deg, transparent 30%, rgba(255,255,255,0.35) 50%, transparent 70%)",
           backgroundSize: "200% 100%",
@@ -245,13 +245,13 @@ export async function ExtensionPage() {
       <section id="how-it-works" className="bg-zinc-50">
         <div className="mx-auto max-w-6xl px-6 py-16">
           <div className="text-center">
-            <p className="text-xs font-semibold uppercase tracking-widest text-orange-500">
+            <p className="text-sm font-semibold uppercase tracking-widest text-orange-500">
               How it works
             </p>
-            <h2 className="mt-3 text-2xl font-bold sm:text-3xl">
+            <h2 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">
               Two ways to get your products listed
             </h2>
-            <p className="mx-auto mt-3 max-w-xl text-sm text-zinc-500">
+            <p className="mx-auto mt-4 max-w-2xl text-balance text-base text-zinc-500 sm:text-lg">
               Use the extension when you&apos;re at your laptop, or send photos on WhatsApp when
               you&apos;re not. Either way our AI writes the listing, and you have the final say
               before it goes live.
@@ -281,10 +281,10 @@ export async function ExtensionPage() {
       <section className="bg-white">
         <div className="mx-auto max-w-5xl px-6 py-16">
           <div className="text-center">
-            <p className="text-xs font-semibold uppercase tracking-widest text-orange-500">
+            <p className="text-sm font-semibold uppercase tracking-widest text-orange-500">
               See it happen
             </p>
-            <h2 className="mt-3 text-2xl font-bold sm:text-3xl">
+            <h2 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">
               Real listings, not mockups
             </h2>
           </div>
@@ -294,7 +294,7 @@ export async function ExtensionPage() {
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500 text-white">
                 <Chrome className="h-4 w-4" />
               </div>
-              <h3 className="text-lg font-bold text-zinc-900">From the Chrome extension</h3>
+              <h3 className="text-xl font-bold text-zinc-900">From the Chrome extension</h3>
             </div>
             {/* Stacked full-width, not a 3-up grid — these are dense
                 desktop screenshots (small form labels and body text), and
@@ -316,7 +316,7 @@ export async function ExtensionPage() {
                       sizes="(min-width: 768px) 768px, 100vw"
                     />
                   </div>
-                  <figcaption className="mt-3 text-sm text-zinc-500">
+                  <figcaption className="mt-3 text-base text-zinc-500">
                     <span className="font-semibold text-zinc-900">{i + 1}.</span> {shot.caption}
                   </figcaption>
                 </figure>
@@ -329,13 +329,13 @@ export async function ExtensionPage() {
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500 text-white">
                 <WhatsAppIcon className="h-4 w-4" />
               </div>
-              <h3 className="text-lg font-bold text-zinc-900">From WhatsApp</h3>
+              <h3 className="text-xl font-bold text-zinc-900">From WhatsApp</h3>
             </div>
             {/* The whole flow as one screen recording, then the three key
                 moments as stills below it for anyone who won't press play. */}
             <figure className="mx-auto mt-6 flex max-w-[300px] flex-col items-center">
               <WhatsAppFlowVideo />
-              <figcaption className="mt-3 text-center text-sm text-zinc-500">
+              <figcaption className="mt-3 text-center text-base text-zinc-500">
                 Tap play: 3 products go from photos to live on Jumia, all in one chat (1:19).
               </figcaption>
             </figure>
@@ -352,7 +352,7 @@ export async function ExtensionPage() {
                       sizes="(min-width: 640px) 240px, 80vw"
                     />
                   </div>
-                  <figcaption className="mt-3 text-sm text-zinc-500">
+                  <figcaption className="mt-3 text-base text-zinc-500">
                     <span className="font-semibold text-zinc-900">{i + 1}.</span> {shot.caption}
                   </figcaption>
                 </figure>

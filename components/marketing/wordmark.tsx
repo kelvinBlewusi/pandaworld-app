@@ -1,12 +1,12 @@
 /**
- * "pandaworld" wordmark — lowercase Inter 800, with the `o` in
+ * "pandaworld" wordmark — lowercase Inter Tight 800 (the site-wide face), with the `o` in
  * "pandaworld" replaced by a 62×62 panda-face SVG.
  *
  * Source: extracted from the wordmark design file at
  * Downloads/07 _ Wordmark_ panda _o_.html. We reproduce the SVG
  * shapes here directly (white head, two black ears, two angled black
  * eye-patches, small black nose) rather than embedding the 1.9 MB
- * HTML source — and we pull Inter from next/font/google so the
+ * HTML source — and we pull Inter Tight from next/font/google so the
  * variable-weight typography ships at runtime, not in the bundle.
  *
  * Used in the marketing nav across /, /pricing, /terms, /privacy +
@@ -14,13 +14,12 @@
  * standard nav size, 64px is the landing hero size.
  */
 
-import { Inter } from "next/font/google";
+import { Inter_Tight } from "next/font/google";
 
-const inter = Inter({
+const inter = Inter_Tight({
   subsets: ["latin"],
   weight:  ["800"],
   display: "swap",
-  variable: "--font-inter",
 });
 
 interface WordmarkProps {
