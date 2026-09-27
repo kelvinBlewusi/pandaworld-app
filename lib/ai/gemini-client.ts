@@ -32,6 +32,7 @@
  * out for the "check the thin margins" request, Aug 2026.
  */
 
+import { readUsage, recordAiUsage } from "@/lib/ai/usage";
 import {
   GoogleGenerativeAI,
   type GenerativeModel as AIStudioModel,
@@ -207,6 +208,7 @@ export async function callGeminiBackend(
       .filter((p): p is { text: string } => typeof (p as { text?: unknown }).text === "string")
       .map((p) => p.text)
       .join("");
+    await recordAiUsage({ model: modelName, backend: "vertex", ...readUsage(result) });
     return { text, model: modelName, backend: "vertex" };
   }
 
@@ -220,6 +222,7 @@ export async function callGeminiBackend(
         }
       : parts,
   );
+  await recordAiUsage({ model: modelName, backend: "ai-studio", ...readUsage(result.response) });
   return {
     text:    result.response.text(),
     model:   modelName,

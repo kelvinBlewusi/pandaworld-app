@@ -36,6 +36,7 @@ import {
   type FillResponse,
 } from "@/lib/extension/fill";
 import { aiFillRenderedFields, aiConfigured } from "@/lib/ai/extension-fill";
+import { withAiUsageContext } from "@/lib/ai/usage";
 import {
   authenticateExtensionKey,
   logExtensionFillEvent,
@@ -365,12 +366,14 @@ export async function POST(req: Request) {
   const warnings: string[] = [];
   try {
     const fillable = body.fields.filter((f) => !isSellerOwned(f.label));
-    const { raw } = await aiFillRenderedFields({
-      images: images.map((i) => ({ base64: i.base64, mimeType: i.mimeType })),
-      fields: fillable,
-      notes,
-      market,
-    });
+    const { raw } = await withAiUsageContext({ feature: "extension_fill", userId }, () =>
+      aiFillRenderedFields({
+        images: images.map((i) => ({ base64: i.base64, mimeType: i.mimeType })),
+        fields: fillable,
+        notes,
+        market,
+      }),
+    );
     const finalized = finalizeAiValues(raw, body.fields, notes);
     values = finalized.values;
     warnings.push(...finalized.warnings);

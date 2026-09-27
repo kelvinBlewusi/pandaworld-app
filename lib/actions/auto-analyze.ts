@@ -68,6 +68,7 @@ import {
 import { getValidJumiaCredentials, reconcileDraftVariation } from "@/lib/jumia/api";
 import { blockedCategoryCodes, sellerCountry, withoutBlocked } from "@/lib/jumia/unlistable-categories";
 import { provenCategoriesFor } from "@/lib/jumia/live-listings";
+import { withAiUsageContext } from "@/lib/ai/usage";
 import { AI_DYNAMIC_ATTR_DEFAULTS, resolvePatternDefault } from "@/lib/ai/policy";
 import { webSearch, formatSearchSnippetsForPrompt, isWebSearchEnabled } from "@/lib/ai/web-search";
 
@@ -328,6 +329,18 @@ export async function keepSellerCategory(
  * no hint at all — same resolution order the route used.
  */
 export async function runAutoAnalyze(
+  userId: string,
+  listingId: string,
+  userPromptOverride?: string | null,
+): Promise<AutoAnalyzeResult> {
+  // Every AI call in one draft (first draft or a Fix & resubmit redraft)
+  // is costed as one run — see lib/ai/usage.ts.
+  return withAiUsageContext({ feature: "listing_draft", userId, listingId }, () =>
+    runAutoAnalyzeUnmetered(userId, listingId, userPromptOverride),
+  );
+}
+
+async function runAutoAnalyzeUnmetered(
   userId: string,
   listingId: string,
   userPromptOverride?: string | null,
