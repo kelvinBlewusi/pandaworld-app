@@ -253,7 +253,7 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
   // runAutoAnalyze has no visibility into. Rerunning this listing alone
   // could pick a category that disagrees with its siblings even more,
   // not less — that one needs a human coordinating across the set.
-  if (/category not found by code/.test(msg) || /category attribute set not found/.test(msg)) {
+  if (isStaleCategoryError(msg)) {
     return { kind: "rerun", explanation: "Jumia doesn't recognise this product's category anymore — redrafting will pick a live one." };
   }
   if (/(attribute list than category|use the same category as the product set)/.test(msg)) {
@@ -365,6 +365,15 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
  *  handing straight back to the seller. */
 export function isAutoFixable(kind: RemedyKind): boolean {
   return kind === "rerun" || kind === "not_visible_attributes" || kind === "repush" || kind === "unknown";
+}
+
+/**
+ * Jumia no longer recognises the listing's category code at all (deleted
+ * or renumbered) — as opposed to refusing a category that still exists.
+ * Any redraft has to re-pick, even a category the seller chose.
+ */
+export function isStaleCategoryError(raw: string | null | undefined): boolean {
+  return /category not found by code|category attribute set not found/i.test(raw ?? "");
 }
 
 /**
