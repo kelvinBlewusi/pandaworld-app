@@ -18,6 +18,7 @@ jest.mock("@/lib/supabase/server", () => ({
 }));
 
 const aiCalls: string[] = [];
+let pickCandidates: { code: number; liveExample?: string }[] = [];
 jest.mock("@/lib/actions/ai", () => ({
   ...jest.requireActual("@/lib/actions/ai"),
   aiPassA_describeProduct: async () => ({
@@ -31,8 +32,9 @@ jest.mock("@/lib/actions/ai", () => ({
     aiCalls.push("department");
     return { primary: { name: "Phones & Tablets", path: "Phones & Tablets", confidence: 0.9 }, alternates: [] };
   },
-  aiPassBC_pickAndFill: async (_images: string[], candidates: { code: number; name: string; path: string }[]) => {
+  aiPassBC_pickAndFill: async (_images: string[], candidates: { code: number; name: string; path: string; liveExample?: string }[]) => {
     aiCalls.push("pick");
+    pickCandidates = candidates;
     const c = candidates[0];
     return {
       ok: true, noCandidateFits: false, needsUserConfirmation: false,
@@ -103,6 +105,8 @@ const listing = () => db.tables.listings[0];
 
 beforeEach(() => {
   aiCalls.length = 0;
+  pickCandidates = [];
+  db.tables.jumia_live_listings = [];
   listable = [AI_PICK, SELLER_PICK];
   db.tables.variants = [];
   db.tables.jumia_connections = [];
@@ -158,5 +162,47 @@ describe("sellerChosenCategoryCode", () => {
     expect(sellerChosenCategoryCode({ category_code: "1000279", field_sources: { category_code: "ai" } })).toBeNull();
     expect(sellerChosenCategoryCode({ category_code: "1000279", field_sources: {} })).toBeNull();
     expect(sellerChosenCategoryCode({ category_code: null, field_sources: { category_code: "user" } })).toBeNull();
+  });
+});
+
+// lib/jumia/live-listings.ts: a category a similar product already went
+// live in (same country) is offered to the AI first, marked, even when
+// the text search ranked something else higher.
+describe("runAutoAnalyze with a similar live listing", () => {
+  beforeEach(() => {
+    db.tables.jumia_connections = [{ user_id: USER, country: "GH" }];
+    db.tables.jumia_live_listings = [{
+      listing_id: "live-1", country: "GH", category_code: SELLER_PICK.code,
+      title: "20000mAh Power Bank - 4 Built-in Cables, Smart Display", went_live_at: "2026-09-27T21:16:00Z",
+    }];
+    seedListing({ field_sources: {}, category_code: null, category_path: null });
+  });
+
+  it("puts the live listing's category first, marked with that listing's title", async () => {
+    await runAutoAnalyze(USER, LISTING_ID, null);
+
+    expect(pickCandidates[0]).toMatchObject({
+      code: SELLER_PICK.code,
+      liveExample: "20000mAh Power Bank - 4 Built-in Cables, Smart Display",
+    });
+    // Retrieval's own candidates are still offered alongside it.
+    expect(pickCandidates.map((c) => c.code)).toContain(AI_PICK.code);
+    expect(pickCandidates.filter((c) => c.liveExample)).toHaveLength(1);
+  });
+
+  it("never offers a live category Jumia has since refused in the seller's country", async () => {
+    db.tables.jumia_unlistable_categories = [{ country: "GH", category_code: SELLER_PICK.code }];
+
+    await runAutoAnalyze(USER, LISTING_ID, null);
+
+    expect(pickCandidates.map((c) => c.code)).not.toContain(SELLER_PICK.code);
+  });
+
+  it("doesn't learn from another country's live listings", async () => {
+    db.tables.jumia_connections = [{ user_id: USER, country: "NG" }];
+
+    await runAutoAnalyze(USER, LISTING_ID, null);
+
+    expect(pickCandidates.some((c) => c.liveExample)).toBe(false);
   });
 });

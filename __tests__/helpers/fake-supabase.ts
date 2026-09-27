@@ -59,6 +59,7 @@ export class FakeDb {
         return selectBuilder([...filters, { col, val: null, op: "not-is-null" }]);
       },
       order() { return selectBuilder(filters); },
+      limit() { return selectBuilder(filters); },
       async maybeSingle() {
         const hit = rows().find((r) => db.match(r, filters));
         return { data: hit ? { ...hit } : null, error: null };

@@ -19,6 +19,7 @@ import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
 import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames, isStaleCategoryError } from "@/lib/jumia/rejection-remedy";
 import { removeAttributesFromCache, getCategoryByCode } from "@/lib/jumia/categories";
 import { isUnlistableCategoryError, sellerCountry } from "@/lib/jumia/unlistable-categories";
+import { provenCategoriesFor } from "@/lib/jumia/live-listings";
 import {
   listableLeafCategories,
   refusedCategoryCodes,
@@ -3406,20 +3407,29 @@ async function askSellerForCategory(
 }
 
 /** Suggestions for the category question — never one Jumia has refused
- *  in this seller's country. Empty on any failure: the question still
- *  works with a typed name. */
+ *  in this seller's country. Categories similar products went live in
+ *  come first (lib/jumia/live-listings.ts), then the last draft's AI
+ *  alternates, then title matches. Empty on any failure: the question
+ *  still works with a typed name. */
 async function categorySuggestionsFor(userId: string, listing: Record<string, unknown>): Promise<CategoryChoice[]> {
   try {
-    const [leaves, refused] = await Promise.all([
+    const title = (listing.title as string | null) ?? null;
+    const [leaves, refused, country] = await Promise.all([
       listableLeafCategories(),
       refusedCategoryCodes(userId, (listing.category_code as string | null) ?? null),
+      sellerCountry(userId).catch(() => null),
     ]);
+    const pickable = leaves.filter((c) => !refused.has(Number(c.code)));
+    const proven = title ? await provenCategoriesFor(country, { title }, pickable) : [];
     return suggestCategories(
       {
-        title:               (listing.title as string | null) ?? null,
-        category_alternates: (listing.category_alternates as { code: number }[] | null) ?? null,
+        title,
+        category_alternates: [
+          ...proven.map((p) => ({ code: p.code })),
+          ...((listing.category_alternates as { code: number }[] | null) ?? []),
+        ],
       },
-      leaves.filter((c) => !refused.has(Number(c.code))),
+      pickable,
     );
   } catch (e) {
     console.warn(`[whatsapp intake] couldn't build category suggestions for ${listing.id}: ${(e as Error).message}`);
@@ -3498,13 +3508,7 @@ async function handleCategoryAnswer(
 
   // Refused or not found: say which, and point them at a listed product's
   // category, with the suggestions again.
-  const suggestions = suggestCategories(
-    {
-      title:               (listing.title as string | null) ?? null,
-      category_alternates: (listing.category_alternates as { code: number }[] | null) ?? null,
-    },
-    leaves.filter((c) => !refused.has(Number(c.code))),
-  );
+  const suggestions = await categorySuggestionsFor(userId, listing);
   const lead = answer.kind === "refused"
     ? `${label}: Jumia has already refused "${answer.name}" in your country, so I can't use it.`
     : `${label}: I couldn't find that category on Jumia.`;
