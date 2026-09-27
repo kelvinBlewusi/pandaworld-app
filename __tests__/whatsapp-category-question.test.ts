@@ -16,8 +16,11 @@ import type { JumiaCategoryRow } from "@/lib/jumia/categories";
 import {
   CATEGORY_SKIP_RE,
   categoryListRow,
+  findOnJumiaTip,
+  jumiaStorefront,
   looksLikeCategoryAnswer,
   matchCategoryAnswer,
+  parseCategoryAnswer,
   refusedCategoryCodes,
   suggestCategories,
 } from "@/lib/whatsapp/category-question";
@@ -41,7 +44,8 @@ const EXTERNAL_BANKS   = cat(2, "Electronics > Accessories > External Power Bank
 const CHARGERS_PHONES  = cat(3, "Phones & Tablets > Accessories > Chargers");
 const CHARGERS_ELEC    = cat(4, "Electronics > Accessories > Chargers");
 const BATTERY_PACKS    = cat(5, "Phones & Tablets > Accessories > Portable Power Banks & Battery Packs");
-const LEAVES = [POWER_BANKS, EXTERNAL_BANKS, CHARGERS_PHONES, CHARGERS_ELEC, BATTERY_PACKS];
+const CABLES_PHONES    = cat(6, "Phones & Tablets > Accessories > Cables");
+const LEAVES = [POWER_BANKS, EXTERNAL_BANKS, CHARGERS_PHONES, CHARGERS_ELEC, BATTERY_PACKS, CABLES_PHONES];
 
 describe("matchCategoryAnswer", () => {
   it("applies an exact name, ignoring case and plurals", () => {
@@ -92,6 +96,78 @@ describe("matchCategoryAnswer", () => {
   it("finds nothing for text that names no category", () => {
     expect(matchCategoryAnswer("zzqx", LEAVES, new Set())).toEqual({ kind: "none" });
   });
+
+  // Copied off a Jumia product page: starts at "Home", ends with the
+  // product's own name.
+  it("reads a product-page breadcrumb, skipping Home and the product name", () => {
+    const answer = matchCategoryAnswer(
+      "Home > Electronics > Accessories > Chargers > Oraimo 18W Fast Charger",
+      LEAVES,
+      new Set(),
+    );
+    expect(answer).toMatchObject({ kind: "match", category: { code: 4 } });
+  });
+
+  it.each([
+    ["one level per line", "Home\nElectronics\nAccessories\nChargers"],
+    ["the › glyph", "Electronics › Accessories › Chargers"],
+    ["a spaced slash", "Electronics / Accessories / Chargers"],
+  ])("reads a breadcrumb separated by %s", (_label, text) => {
+    expect(matchCategoryAnswer(text, LEAVES, new Set())).toMatchObject({ kind: "match", category: { code: 4 } });
+  });
+
+  // The public site doesn't always name upper levels the way Vendor Center
+  // does; the category's own name still decides it.
+  it("tolerates upper levels named differently from Vendor Center", () => {
+    const answer = matchCategoryAnswer("Mobile Phones & Gadgets > Phone Accessories > Power Banks", LEAVES, new Set());
+    expect(answer).toMatchObject({ kind: "match", category: { code: 1 } });
+  });
+
+  it("calls a path refused when it points at the refused category, not a same-named allowed one", () => {
+    const answer = matchCategoryAnswer("Phones & Tablets > Accessories > Chargers", LEAVES, new Set([3]));
+    expect(answer).toEqual({ kind: "refused", name: "Chargers" });
+  });
+
+  it("offers a parent's categories, best fit for the product first", () => {
+    const answer = matchCategoryAnswer("Phones & Tablets", LEAVES, new Set(), { title: "USB Charging Cable 1m" });
+    expect(answer).toMatchObject({ kind: "choose", exact: false, under: "Phones & Tablets" });
+    const codes = (answer as { options: { code: number }[] }).options.map((o) => o.code);
+    expect(codes[0]).toBe(6);
+    expect(codes.sort()).toEqual([1, 3, 5, 6]);
+  });
+
+  it("uses a category page link's name", () => {
+    const answer = matchCategoryAnswer("https://www.jumia.com.gh/power-banks/", LEAVES, new Set());
+    expect(answer).toMatchObject({ kind: "match", category: { code: 1 } });
+  });
+
+  it("flags a product page link, which doesn't carry its category", () => {
+    expect(matchCategoryAnswer("https://www.jumia.com.gh/oraimo-power-bank-20000mah-12345.html", LEAVES, new Set()))
+      .toEqual({ kind: "product_link" });
+  });
+});
+
+describe("parseCategoryAnswer", () => {
+  it("keeps the seller's wording for display", () => {
+    expect(parseCategoryAnswer("Home > Phones & Tablets > Accessories").raw).toEqual(["Phones & Tablets", "Accessories"]);
+  });
+
+  it("reads a link without the scheme too", () => {
+    expect(parseCategoryAnswer("jumia.com.gh/portable-power-banks").raw).toEqual(["portable power banks"]);
+  });
+});
+
+describe("findOnJumiaTip", () => {
+  it("names the seller's own country's Jumia site", () => {
+    expect(jumiaStorefront("GH")).toBe("jumia.com.gh");
+    expect(jumiaStorefront("ke")).toBe("jumia.co.ke");
+    expect(findOnJumiaTip("NG")).toContain("Search jumia.com.ng for a product like this one");
+  });
+
+  it("falls back to plain 'Jumia' for an unknown country", () => {
+    expect(jumiaStorefront(null)).toBe("Jumia");
+    expect(jumiaStorefront("ZZ")).toBe("Jumia");
+  });
 });
 
 describe("suggestCategories", () => {
@@ -133,11 +209,17 @@ describe("refusedCategoryCodes", () => {
 });
 
 describe("looksLikeCategoryAnswer", () => {
-  it.each(["Power Banks", "phones > accessories > chargers", "Kettles"])("accepts %p", (text) => {
+  it.each([
+    "Power Banks",
+    "phones > accessories > chargers",
+    "Kettles",
+    "https://www.jumia.com.gh/power-banks/",
+    `Home > Phones & Tablets > Accessories > Power Banks > ${"Oraimo 20000mAh Fast Charging Power Bank ".repeat(3)}`,
+  ])("accepts %p", (text) => {
     expect(looksLikeCategoryAnswer(text)).toBe(true);
   });
 
-  it.each(["3", "submit all", "submit 2", "2: change the price to 150", "fix:abc", "ok", "Thanks!", "x".repeat(121)])(
+  it.each(["3", "submit all", "submit 2", "2: change the price to 150", "fix:abc", "ok", "Thanks!", "x".repeat(401)])(
     "lets go of %p so it's handled normally",
     (text) => {
       expect(looksLikeCategoryAnswer(text)).toBe(false);

@@ -104,6 +104,14 @@ export async function refillAttributesForCategory(
   for (const k of Object.keys(carriedConfidence)) {
     if (k.startsWith("dynamic_attributes.") && !validKeys.has(k.slice("dynamic_attributes.".length))) delete carriedConfidence[k];
   }
+  // A category switch here is always a seller choosing it (the editor's
+  // category picker, WhatsApp's category buttons and category question),
+  // so record it as theirs: a later redraft keeps it rather than
+  // re-picking — see sellerChosenCategoryCode in lib/actions/auto-analyze.ts.
+  // Not on a same-category refill ("Fill empty fields with AI"), which
+  // says nothing about who chose the category.
+  const previousCategoryCode = listing.category_code ? Number(listing.category_code) : null;
+  if (previousCategoryCode !== categoryCode) carriedSources.category_code = "user";
 
   const category = { code: cat.code, name: cat.name, path: cat.path };
   const categoryPath = opts.categoryPath ?? cat.path;
@@ -111,7 +119,6 @@ export async function refillAttributesForCategory(
   // Log an actual override (previous category existed and differs from the
   // new pick) — not the listing's first-ever category assignment, which
   // isn't a "correction" of anything. See lib/jumia/category-corrections.ts.
-  const previousCategoryCode = listing.category_code ? Number(listing.category_code) : null;
   if (previousCategoryCode !== null && previousCategoryCode !== categoryCode) {
     const alternates = (listing.category_alternates ?? []) as Array<{ code: number; confidence: number }>;
     const previousAlternate = alternates.find((a) => a.code === previousCategoryCode);

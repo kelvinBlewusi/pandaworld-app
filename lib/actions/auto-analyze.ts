@@ -257,6 +257,68 @@ export function collapseDuplicateEllipsisVariants<T extends { variation: string 
 }
 
 /**
+ * The category the seller chose for this listing themselves — marked
+ * field_sources.category_code = "user" by refillAttributesForCategory
+ * whenever a seller switches category (the editor's picker, WhatsApp's
+ * category buttons and category question). Null when the AI picked it.
+ */
+export function sellerChosenCategoryCode(listing: { category_code?: unknown; field_sources?: unknown }): number | null {
+  const sources = (listing.field_sources ?? {}) as Record<string, string>;
+  const code = String(listing.category_code ?? "");
+  return sources.category_code === "user" && /^\d+$/.test(code) ? Number(code) : null;
+}
+
+/**
+ * The category-resolution result for a seller-chosen category: that
+ * category as the pick, its fields filled from the photos. Null when it's
+ * no longer listable, so the caller falls back to the AI's own pick.
+ */
+export async function keepSellerCategory(
+  userId:      string,
+  code:        number,
+  images:      string[],
+  userContext: string | null,
+): Promise<{
+  ranked:                Awaited<ReturnType<typeof aiPassB_rankCategory>>;
+  filled:                Awaited<ReturnType<typeof extractAttributesForCategory>>;
+  candidatesWithSchemas: CandidateWithSchema[];
+} | null> {
+  const cat = (await getListableCategories()).find((c) => Number(c.code) === code);
+  if (!cat) return null;
+
+  let attrs = await getCategoryAttributes(code);
+  if (attrs.length === 0 && cat.attribute_set_sid) {
+    try {
+      const { accessToken } = await getValidJumiaCredentials(userId);
+      const fresh = await fetchAttributesFromJumia(accessToken, cat.attribute_set_sid);
+      if (fresh.length > 0) {
+        await upsertAttributes(code, fresh);
+        attrs = fresh;
+      }
+    } catch (e) {
+      console.warn(`[auto-analyze] schema fetch failed for seller's category ${code}: ${(e as Error).message}`);
+    }
+  }
+
+  let filled: Awaited<ReturnType<typeof extractAttributesForCategory>> = { dynamic_attributes: {}, field_sources: {}, field_confidence: {} };
+  try {
+    filled = await extractAttributesForCategory(images, code, userContext, { forceBestModel: true });
+  } catch (e) {
+    console.warn(`[auto-analyze] attribute fill failed for seller's category ${code}: ${(e as Error).message}`);
+  }
+
+  return {
+    ranked: {
+      primary:               { code, name: cat.name, path: cat.path, confidence: 1 },
+      alternates:            [],
+      needsUserConfirmation: false,
+    },
+    filled,
+    candidatesWithSchemas: [{ code, name: cat.name, path: cat.path, attrs, is_leaf: cat.is_leaf }],
+  };
+}
+
+/**
  * Run the full analyze pipeline for `listingId` (owned by `userId`).
  *
  * `userPromptOverride`, when given, is the "SELLER CONTEXT" free-text hint
@@ -276,7 +338,7 @@ export async function runAutoAnalyze(
   // ── Load listing + verify ownership ───────────────────────────────────────
   const { data: listing } = await db
     .from("listings")
-    .select("id, user_id, sku, images, title, brand, description, highlights, selling_price, sale_price, quantity, dynamic_attributes, field_sources, field_confidence, user_prompt")
+    .select("id, user_id, sku, images, title, brand, description, highlights, selling_price, sale_price, quantity, dynamic_attributes, field_sources, field_confidence, user_prompt, category_code, category_alternates")
     .eq("id", listingId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -419,295 +481,309 @@ export async function runAutoAnalyze(
   // try before giving up — and giving up now means "no category yet,
   // pick one manually" (routes to the category picker), never a
   // confidently-wrong guess.
-  const tRet = Date.now();
-  const [allListableCategories, allCategories, blocked] = await Promise.all([
-    getListableCategories(),
-    getAllCategoriesForTree(),
-    sellerCountry(userId).then(blockedCategoryCodes),
-  ]);
-  // Categories Jumia has already refused in this seller's country (see
-  // lib/jumia/unlistable-categories.ts) never reach the AI — neither on a
-  // first draft nor on a fix-and-resubmit redraft. Dropped from the base
-  // set here (so fuzzy search fills its slots with live categories) and
-  // from the embedding hits below, which come straight from the database
-  // rather than from this list.
-  const listableCategories = withoutBlocked(allListableCategories, blocked);
-
-  if (listableCategories.length === 0 || allCategories.length === 0) {
-    return {
-      ok: false,
-      code: "no_categories_synced",
-      message: "No categories synced yet. Open Settings → Integrations → Sync categories first.",
-    };
-  }
-
-  const departments = getTopLevelDepartments(allCategories);
+  //
+  // A category the seller chose themselves is kept: the redraft rewrites
+  // the title, description and fields within it, but doesn't re-pick it.
+  // Without this, a Fix & resubmit for an unrelated rejection (a title, a
+  // missing attribute) could quietly move a product the seller had put in
+  // the right category somewhere else.
   let candidates: CategoryCandidate[] = [];
+  let candidatesWithSchemas: CandidateWithSchema[] = [];
+  let ranked: Awaited<ReturnType<typeof aiPassB_rankCategory>>;
+  let filled: Awaited<ReturnType<typeof extractAttributesForCategory>>;
 
-  try {
-    const deptPick = await aiPassB0_pickDepartment(
+  const sellerCode = sellerChosenCategoryCode(listing);
+  const kept = sellerCode != null ? await keepSellerCategory(userId, sellerCode, images, userContext) : null;
+  if (kept) {
+    ({ ranked, filled, candidatesWithSchemas } = kept);
+  } else {
+    const tRet = Date.now();
+    const [allListableCategories, allCategories, blocked] = await Promise.all([
+      getListableCategories(),
+      getAllCategoriesForTree(),
+      sellerCountry(userId).then(blockedCategoryCodes),
+    ]);
+    // Categories Jumia has already refused in this seller's country (see
+    // lib/jumia/unlistable-categories.ts) never reach the AI — neither on a
+    // first draft nor on a fix-and-resubmit redraft. Dropped from the base
+    // set here (so fuzzy search fills its slots with live categories) and
+    // from the embedding hits below, which come straight from the database
+    // rather than from this list.
+    const listableCategories = withoutBlocked(allListableCategories, blocked);
+
+    if (listableCategories.length === 0 || allCategories.length === 0) {
+      return {
+        ok: false,
+        code: "no_categories_synced",
+        message: "No categories synced yet. Open Settings → Integrations → Sync categories first.",
+      };
+    }
+
+    const departments = getTopLevelDepartments(allCategories);
+
+    try {
+      const deptPick = await aiPassB0_pickDepartment(
+        images,
+        departments,
+        userContext,
+        description.intended_use_case,
+        description.environment,
+        { forceBestModel: true },
+      );
+
+      // Search the primary department AND its alternates, then pool.
+      //
+      // This used to stop at the first department that returned ANYTHING
+      // (`if (candidates.length > 0) continue`), which made the alternates
+      // a fallback for an EMPTY department rather than a wrong one. A
+      // confidently-wrong pick is never empty: it returns eight plausible
+      // candidates from the wrong subtree, the loop stops, and the vision
+      // model is handed a shortlist with no correct answer anywhere in it.
+      // That is how a safety helmet was filed under "Automobile > Car Care
+      // > Cleaning Kits" — the department pick was wrong, and nothing
+      // downstream could recover from it, because the right department was
+      // never searched.
+      //
+      // Pooling instead of short-circuiting means a wrong primary is
+      // survivable: the correct department's candidates are in the
+      // shortlist too, and picking between them is exactly what the vision
+      // model is good at. It also fits the catalog, which lists the same
+      // leaf under several departments (Hard Hats exists under both
+      // Industrial & Scientific and Home & Office), so "the" right
+      // department is often not even unique.
+      const deptsToSearch = [deptPick.primary, ...deptPick.alternates]
+        .filter((d): d is NonNullable<typeof d> => Boolean(d))
+        .filter((d, i, all) => all.findIndex((o) => o.path === d.path) === i)
+        .filter((d) => getSubtreeCategories(listableCategories, d.path).length > 0)
+        .slice(0, 3);
+
+      if (deptsToSearch.length > 0) {
+        // One embedding, N scoped matches, all inside one timeout budget.
+        const semanticPerDept = await searchCategoriesByEmbeddingMulti(
+          retrievalQuery,
+          8,
+          deptsToSearch.map((d) => d.path),
+        );
+
+        const perDept = deptsToSearch.map((dept, i) => {
+          const subtree = getSubtreeCategories(listableCategories, dept.path);
+          const fuzzyHits = searchCategoriesByText(retrievalQuery, subtree, 8);
+          const semanticHits = withoutBlocked(semanticPerDept[i] ?? [], blocked);
+          return semanticHits.length > 0 ? mergeCandidates(fuzzyHits, semanticHits, 8) : fuzzyHits;
+        });
+
+        candidates = poolByRank(perDept, 8);
+
+        console.info(
+          `[auto-analyze] searched ${deptsToSearch.length} department(s): ` +
+            deptsToSearch.map((d, i) => `"${d.name}"→${perDept[i].length}`).join(", "),
+        );
+      }
+    } catch (e) {
+      console.warn(`[auto-analyze] department pick failed, falling back to full-catalog fuzzy search: ${(e as Error).message}`);
+    }
+
+    // Last resort: full-catalog fuzzy search (still real retrieval, never a
+    // blind slice) — only reached if department picking itself threw, or
+    // every department subtree it tried came up empty.
+    if (candidates.length === 0) {
+      candidates = searchCategoriesByText(retrievalQuery, listableCategories, 8);
+    }
+
+    // Enrich with is_leaf from the SAME listableCategories rows the pool
+    // came from — none of the retrieval functions in category-search.ts
+    // carry it themselves (see CategoryCandidate's own doc comment). This
+    // is what lets the ranking prompts below prefer a leaf over a listable
+    // parent when both are plausible, rather than treating "has its own
+    // attribute set" as the whole story on whether Jumia will actually
+    // accept a listing filed there directly.
+    const listableByCode = new Map(listableCategories.map((c) => [c.code, c]));
+    candidates = candidates.map((c) => ({ ...c, is_leaf: listableByCode.get(c.code)?.is_leaf ?? false }));
+
+    console.info(
+      `[auto-analyze] category resolution for query="${retrievalQuery.slice(0, 100)}" → ${candidates.length} candidate(s)`,
+    );
+
+    timings.retrieval_ms = Date.now() - tRet;
+
+    if (candidates.length === 0) {
+      // Genuinely nothing matched anywhere. Hand back to the seller rather
+      // than guess — the listing keeps whatever category it had (usually
+      // none), and the focused/full editor's category picker is the way
+      // forward from here.
+      return bailToManualCategory();
+    }
+
+    // ── 3 + 4 + 5 combined: pick category AND fill its attributes in ONE call.
+    //
+    // This collapses what used to be three serial steps (Pass B rank → schema
+    // fetch → Pass C fill) into one Gemini call + parallel schema prefetch.
+    // Saves ~1 round-trip (~5-8s typical, more on Pro). The old separate
+    // Pass B + Pass C still exist below as a safety fallback if the combined
+    // call returns an invalid result (model picked a code not in candidates,
+    // or threw entirely).
+    //
+    // Step a: take the top 3 candidates and prefetch their attribute schemas
+    //         in parallel (cached for repeat categories — fast for the
+    //         common case where the seller's catalogue is already cached).
+    // Step b: single Gemini call that does both pick + fill, with
+    //         server-side validation that the chosen code is in the set.
+    // Step c: on combined-call failure (ok=false), fall back to the old
+    //         flow: aiPassB_rankCategory → schema fetch → extractAttrs.
+    const tCombined        = Date.now();
+    const TOP_N_FOR_COMBINED = 3;
+    const topNCandidates   = candidates.slice(0, TOP_N_FOR_COMBINED);
+
+    // Parallel schema fetch for top-N candidates. We need them all in hand
+    // before the combined Gemini call so the model can pick + fill from
+    // any of them. Fetch-from-Jumia fallback for uncached categories.
+    const accessTokenForBatch = await getValidJumiaCredentials(userId)
+      .then((c) => c.accessToken)
+      .catch(() => null);
+
+    candidatesWithSchemas = await Promise.all(
+      topNCandidates.map(async (c) => {
+        let attrs = await getCategoryAttributes(c.code);
+        if (attrs.length === 0) {
+          const catRow = listableCategories.find((lc) => lc.code === c.code);
+          if (catRow?.attribute_set_sid && accessTokenForBatch) {
+            try {
+              const fresh = await fetchAttributesFromJumia(accessTokenForBatch, catRow.attribute_set_sid);
+              if (fresh.length > 0) {
+                await upsertAttributes(c.code, fresh);
+                attrs = fresh;
+              }
+            } catch (e) {
+              console.warn(`[auto-analyze] schema fetch failed for code=${c.code}: ${(e as Error).message}`);
+            }
+          }
+        }
+        return {
+          code:    c.code,
+          name:    c.name,
+          path:    c.path,
+          attrs,
+          is_leaf: c.is_leaf ?? false,
+        };
+      }),
+    );
+
+    // The combined call — single Gemini round-trip for category + attrs.
+    const combined = await aiPassBC_pickAndFill(
       images,
-      departments,
+      candidatesWithSchemas,
       userContext,
       description.intended_use_case,
       description.environment,
       { forceBestModel: true },
     );
 
-    // Search the primary department AND its alternates, then pool.
-    //
-    // This used to stop at the first department that returned ANYTHING
-    // (`if (candidates.length > 0) continue`), which made the alternates
-    // a fallback for an EMPTY department rather than a wrong one. A
-    // confidently-wrong pick is never empty: it returns eight plausible
-    // candidates from the wrong subtree, the loop stops, and the vision
-    // model is handed a shortlist with no correct answer anywhere in it.
-    // That is how a safety helmet was filed under "Automobile > Car Care
-    // > Cleaning Kits" — the department pick was wrong, and nothing
-    // downstream could recover from it, because the right department was
-    // never searched.
-    //
-    // Pooling instead of short-circuiting means a wrong primary is
-    // survivable: the correct department's candidates are in the
-    // shortlist too, and picking between them is exactly what the vision
-    // model is good at. It also fits the catalog, which lists the same
-    // leaf under several departments (Hard Hats exists under both
-    // Industrial & Scientific and Home & Office), so "the" right
-    // department is often not even unique.
-    const deptsToSearch = [deptPick.primary, ...deptPick.alternates]
-      .filter((d): d is NonNullable<typeof d> => Boolean(d))
-      .filter((d, i, all) => all.findIndex((o) => o.path === d.path) === i)
-      .filter((d) => getSubtreeCategories(listableCategories, d.path).length > 0)
-      .slice(0, 3);
-
-    if (deptsToSearch.length > 0) {
-      // One embedding, N scoped matches, all inside one timeout budget.
-      const semanticPerDept = await searchCategoriesByEmbeddingMulti(
-        retrievalQuery,
-        8,
-        deptsToSearch.map((d) => d.path),
-      );
-
-      const perDept = deptsToSearch.map((dept, i) => {
-        const subtree = getSubtreeCategories(listableCategories, dept.path);
-        const fuzzyHits = searchCategoriesByText(retrievalQuery, subtree, 8);
-        const semanticHits = withoutBlocked(semanticPerDept[i] ?? [], blocked);
-        return semanticHits.length > 0 ? mergeCandidates(fuzzyHits, semanticHits, 8) : fuzzyHits;
-      });
-
-      candidates = poolByRank(perDept, 8);
-
+    // The model looked at every candidate and said none of them is where this
+    // product belongs. Falling through to the separate passes below would just
+    // force a pick from the same bad candidates — exactly how a canvas wall-art
+    // print got filed under "Icing & Decorating Spatulas" at 0.95 confidence
+    // and rejected by Jumia. Hand the choice to the seller instead.
+    if (combined.noCandidateFits) {
       console.info(
-        `[auto-analyze] searched ${deptsToSearch.length} department(s): ` +
-          deptsToSearch.map((d, i) => `"${d.name}"→${perDept[i].length}`).join(", "),
+        `[auto-analyze] no candidate category fit — routing to manual pick for query="${retrievalQuery.slice(0, 100)}"`,
       );
+      return bailToManualCategory();
     }
-  } catch (e) {
-    console.warn(`[auto-analyze] department pick failed, falling back to full-catalog fuzzy search: ${(e as Error).message}`);
-  }
 
-  // Last resort: full-catalog fuzzy search (still real retrieval, never a
-  // blind slice) — only reached if department picking itself threw, or
-  // every department subtree it tried came up empty.
-  if (candidates.length === 0) {
-    candidates = searchCategoriesByText(retrievalQuery, listableCategories, 8);
-  }
 
-  // Enrich with is_leaf from the SAME listableCategories rows the pool
-  // came from — none of the retrieval functions in category-search.ts
-  // carry it themselves (see CategoryCandidate's own doc comment). This
-  // is what lets the ranking prompts below prefer a leaf over a listable
-  // parent when both are plausible, rather than treating "has its own
-  // attribute set" as the whole story on whether Jumia will actually
-  // accept a listing filed there directly.
-  const listableByCode = new Map(listableCategories.map((c) => [c.code, c]));
-  candidates = candidates.map((c) => ({ ...c, is_leaf: listableByCode.get(c.code)?.is_leaf ?? false }));
+    if (combined.ok && combined.primary) {
+      timings.combined_bc_ms = Date.now() - tCombined;
+      ranked = {
+        primary:               combined.primary,
+        alternates:            combined.alternates,
+        needsUserConfirmation: combined.needsUserConfirmation,
+      };
+      filled = {
+        dynamic_attributes: combined.dynamic_attributes,
+        field_sources:      combined.field_sources,
+        field_confidence:   combined.field_confidence,
+      };
+    } else {
+      // ── Fallback path: the combined call failed (model returned an
+      // invalid code, threw, or didn't pick anything). Fall back to the
+      // proven separate Pass B → schema fetch → Pass C flow so the
+      // listing still gets analysed properly.
+      console.warn(
+        "[auto-analyze] combined Pass B+C did not produce a usable result; falling back to separate passes.",
+      );
 
-  console.info(
-    `[auto-analyze] category resolution for query="${retrievalQuery.slice(0, 100)}" → ${candidates.length} candidate(s)`,
-  );
+      const tRank = Date.now();
+      try {
+        ranked = await aiPassB_rankCategory(
+          images,
+          candidates,
+          userContext,
+          description.intended_use_case,
+          description.environment,
+          { forceBestModel: true },
+        );
+        timings.rank_ms = Date.now() - tRank;
+      } catch (e) {
+        return {
+          ok: false,
+          code: "rank_failed",
+          message: `Step 3 (rank) failed: ${(e as Error).message}`,
+          description,
+          candidates,
+        };
+      }
 
-  timings.retrieval_ms = Date.now() - tRet;
+      if (!ranked.primary) {
+        return {
+          ok: false,
+          code: "no_category_picked",
+          message: "The AI couldn't pick a category from the candidates. Pick manually.",
+          description,
+          candidates,
+        };
+      }
 
-  if (candidates.length === 0) {
-    // Genuinely nothing matched anywhere. Hand back to the seller rather
-    // than guess — the listing keeps whatever category it had (usually
-    // none), and the focused/full editor's category picker is the way
-    // forward from here.
-    return bailToManualCategory();
-  }
-
-  // ── 3 + 4 + 5 combined: pick category AND fill its attributes in ONE call.
-  //
-  // This collapses what used to be three serial steps (Pass B rank → schema
-  // fetch → Pass C fill) into one Gemini call + parallel schema prefetch.
-  // Saves ~1 round-trip (~5-8s typical, more on Pro). The old separate
-  // Pass B + Pass C still exist below as a safety fallback if the combined
-  // call returns an invalid result (model picked a code not in candidates,
-  // or threw entirely).
-  //
-  // Step a: take the top 3 candidates and prefetch their attribute schemas
-  //         in parallel (cached for repeat categories — fast for the
-  //         common case where the seller's catalogue is already cached).
-  // Step b: single Gemini call that does both pick + fill, with
-  //         server-side validation that the chosen code is in the set.
-  // Step c: on combined-call failure (ok=false), fall back to the old
-  //         flow: aiPassB_rankCategory → schema fetch → extractAttrs.
-  const tCombined        = Date.now();
-  const TOP_N_FOR_COMBINED = 3;
-  const topNCandidates   = candidates.slice(0, TOP_N_FOR_COMBINED);
-
-  // Parallel schema fetch for top-N candidates. We need them all in hand
-  // before the combined Gemini call so the model can pick + fill from
-  // any of them. Fetch-from-Jumia fallback for uncached categories.
-  const accessTokenForBatch = await getValidJumiaCredentials(userId)
-    .then((c) => c.accessToken)
-    .catch(() => null);
-
-  const candidatesWithSchemas: CandidateWithSchema[] = await Promise.all(
-    topNCandidates.map(async (c) => {
-      let attrs = await getCategoryAttributes(c.code);
-      if (attrs.length === 0) {
-        const catRow = listableCategories.find((lc) => lc.code === c.code);
+      // Schema-fetch for the chosen category (might not be in our top-N
+      // if Pass B picked something different from the combined attempt).
+      const chosenSchema = candidatesWithSchemas.find((c) => c.code === ranked.primary!.code);
+      if (chosenSchema && chosenSchema.attrs.length > 0) {
+        // Already prefetched — reuse.
+      } else {
+        const catRow = listableCategories.find((c) => c.code === ranked.primary!.code);
         if (catRow?.attribute_set_sid && accessTokenForBatch) {
           try {
             const fresh = await fetchAttributesFromJumia(accessTokenForBatch, catRow.attribute_set_sid);
-            if (fresh.length > 0) {
-              await upsertAttributes(c.code, fresh);
-              attrs = fresh;
-            }
+            if (fresh.length > 0) await upsertAttributes(ranked.primary.code, fresh);
           } catch (e) {
-            console.warn(`[auto-analyze] schema fetch failed for code=${c.code}: ${(e as Error).message}`);
+            console.warn(`[auto-analyze] fallback schema fetch failed: ${(e as Error).message}`);
           }
         }
       }
-      return {
-        code:    c.code,
-        name:    c.name,
-        path:    c.path,
-        attrs,
-        is_leaf: c.is_leaf ?? false,
-      };
-    }),
-  );
 
-  // The combined call — single Gemini round-trip for category + attrs.
-  const combined = await aiPassBC_pickAndFill(
-    images,
-    candidatesWithSchemas,
-    userContext,
-    description.intended_use_case,
-    description.environment,
-    { forceBestModel: true },
-  );
-
-  // The model looked at every candidate and said none of them is where this
-  // product belongs. Falling through to the separate passes below would just
-  // force a pick from the same bad candidates — exactly how a canvas wall-art
-  // print got filed under "Icing & Decorating Spatulas" at 0.95 confidence
-  // and rejected by Jumia. Hand the choice to the seller instead.
-  if (combined.noCandidateFits) {
-    console.info(
-      `[auto-analyze] no candidate category fit — routing to manual pick for query="${retrievalQuery.slice(0, 100)}"`,
-    );
-    return bailToManualCategory();
-  }
-
-  let ranked: Awaited<ReturnType<typeof aiPassB_rankCategory>>;
-  let filled: Awaited<ReturnType<typeof extractAttributesForCategory>>;
-
-  if (combined.ok && combined.primary) {
-    timings.combined_bc_ms = Date.now() - tCombined;
-    ranked = {
-      primary:               combined.primary,
-      alternates:            combined.alternates,
-      needsUserConfirmation: combined.needsUserConfirmation,
-    };
-    filled = {
-      dynamic_attributes: combined.dynamic_attributes,
-      field_sources:      combined.field_sources,
-      field_confidence:   combined.field_confidence,
-    };
-  } else {
-    // ── Fallback path: the combined call failed (model returned an
-    // invalid code, threw, or didn't pick anything). Fall back to the
-    // proven separate Pass B → schema fetch → Pass C flow so the
-    // listing still gets analysed properly.
-    console.warn(
-      "[auto-analyze] combined Pass B+C did not produce a usable result; falling back to separate passes.",
-    );
-
-    const tRank = Date.now();
-    try {
-      ranked = await aiPassB_rankCategory(
-        images,
-        candidates,
-        userContext,
-        description.intended_use_case,
-        description.environment,
-        { forceBestModel: true },
-      );
-      timings.rank_ms = Date.now() - tRank;
-    } catch (e) {
-      return {
-        ok: false,
-        code: "rank_failed",
-        message: `Step 3 (rank) failed: ${(e as Error).message}`,
-        description,
-        candidates,
-      };
-    }
-
-    if (!ranked.primary) {
-      return {
-        ok: false,
-        code: "no_category_picked",
-        message: "The AI couldn't pick a category from the candidates. Pick manually.",
-        description,
-        candidates,
-      };
-    }
-
-    // Schema-fetch for the chosen category (might not be in our top-N
-    // if Pass B picked something different from the combined attempt).
-    const chosenSchema = candidatesWithSchemas.find((c) => c.code === ranked.primary!.code);
-    if (chosenSchema && chosenSchema.attrs.length > 0) {
-      // Already prefetched — reuse.
-    } else {
-      const catRow = listableCategories.find((c) => c.code === ranked.primary!.code);
-      if (catRow?.attribute_set_sid && accessTokenForBatch) {
-        try {
-          const fresh = await fetchAttributesFromJumia(accessTokenForBatch, catRow.attribute_set_sid);
-          if (fresh.length > 0) await upsertAttributes(ranked.primary.code, fresh);
-        } catch (e) {
-          console.warn(`[auto-analyze] fallback schema fetch failed: ${(e as Error).message}`);
-        }
+      const tFill = Date.now();
+      filled = { dynamic_attributes: {}, field_sources: {}, field_confidence: {} };
+      try {
+        filled = await extractAttributesForCategory(images, ranked.primary.code, userContext, { forceBestModel: true });
+        timings.fill_ms = Date.now() - tFill;
+      } catch (e) {
+        console.warn(`[auto-analyze] fallback attribute fill failed: ${(e as Error).message}`);
       }
     }
 
-    const tFill = Date.now();
-    filled = { dynamic_attributes: {}, field_sources: {}, field_confidence: {} };
-    try {
-      filled = await extractAttributesForCategory(images, ranked.primary.code, userContext, { forceBestModel: true });
-      timings.fill_ms = Date.now() - tFill;
-    } catch (e) {
-      console.warn(`[auto-analyze] fallback attribute fill failed: ${(e as Error).message}`);
-    }
+    // ── 5b. Leaf preference, never a dead end — see ensureLeafCategory's own
+    // doc comment for the real-batch failure this closes and why it can
+    // never bail to "pick a category manually".
+    ({ ranked, filled } = await ensureLeafCategory(
+      ranked,
+      filled,
+      listableCategories,
+      images,
+      userContext,
+      description.intended_use_case,
+      description.environment,
+      accessTokenForBatch,
+    ));
   }
-
-  // ── 5b. Leaf preference, never a dead end — see ensureLeafCategory's own
-  // doc comment for the real-batch failure this closes and why it can
-  // never bail to "pick a category manually".
-  ({ ranked, filled } = await ensureLeafCategory(
-    ranked,
-    filled,
-    listableCategories,
-    images,
-    userContext,
-    description.intended_use_case,
-    description.environment,
-    accessTokenForBatch,
-  ));
 
   // Pull `chosen` + `attrs` into the local namespace expected by the
   // downstream merge logic. `attrs` is the chosen category's schema
@@ -1021,6 +1097,9 @@ export async function runAutoAnalyze(
   // Merge field_sources + field_confidence (keep user-edited keys intact)
   const mergedSources    = { ...previousSources, ...newSources };
   const mergedConfidence = { ...previousConfidence, ...newConfidence };
+  // The AI picked the category this time (the seller's is no longer
+  // listable), so it isn't the seller's any more.
+  if (!kept) delete mergedSources.category_code;
   for (const [k, v] of Object.entries(filled.field_sources ?? {})) {
     if (mergedSources[k] !== "user") mergedSources[k] = v;
   }
@@ -1548,7 +1627,9 @@ export async function runAutoAnalyze(
     dynamic_attributes:  finalDynamicAttrs,
     field_sources:       mergedSources,
     field_confidence:    mergedConfidence,
-    category_alternates: alternatesForUI,
+    // A kept seller category has no alternates of its own; the last AI
+    // pick's are still the best suggestions if Jumia ever refuses it.
+    category_alternates: kept ? (listing.category_alternates ?? alternatesForUI) : alternatesForUI,
     // Persist the seller's free-text prompt so re-runs honour it
     // automatically (without forcing them to retype on every re-analyze).
     // null = no prompt this run, but DON'T clobber a previously-stored
@@ -1699,7 +1780,7 @@ export async function runAutoAnalyze(
       `fill=${timings.fill_ms ?? "—"}ms ` +
       `total=${total_ms}ms ` +
       `images=${images.length} ` +
-      `path=${timings.combined_bc_ms != null ? "combined" : "fallback"}`,
+      `path=${kept ? "seller-category" : timings.combined_bc_ms != null ? "combined" : "fallback"}`,
   );
 
   return {
