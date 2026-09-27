@@ -4,7 +4,7 @@ import {Chrome, KeyRound, UploadCloud, Wand2, ListOrdered, Camera, CheckCircle2,
 import { auth } from "@clerk/nextjs/server";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { ExtensionHeroBackdrop } from "@/components/marketing/extension-hero-backdrop";
-import { WhatsAppFlowVideo } from "@/components/marketing/whatsapp-flow-video";
+import { LoopingVideo } from "@/components/marketing/looping-video";
 import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 
 // ─── /extension — public page for the Chrome extension + WhatsApp flows ──────
@@ -101,10 +101,17 @@ const WHATSAPP_STEPS = [
 
 // Real screenshots from a real seller's chat (2026-09-24), not mockups —
 // the same three-product batch from "Say how many products" through to
-// "Submit all", in order.
+// "Submit all", in order. The middle one is the screen recording of the
+// whole flow, playing on a loop like a GIF (LoopingVideo); it has the same
+// proportions as the screenshots, so it sits in the row as a third phone.
 const CONVERSATION_SHOTS = [
   { src: "/marketing/whatsapp-flow-1-start.jpg", alt: "WhatsApp chat: PandaWorld AI asks how many products, seller replies 3 products", caption: "Say how many you're listing" },
-  { src: "/marketing/whatsapp-flow-4-ready.jpg", alt: "WhatsApp chat: PandaWorld AI reports all 3 products drafted and ready", caption: "AI drafts every product" },
+  {
+    video:  "/marketing/whatsapp-flow-loop.mp4",
+    src:    "/marketing/whatsapp-flow-loop-poster.jpg",
+    alt:    "Screen recording: listing 3 products to Jumia from a WhatsApp chat with PandaWorld AI",
+    caption: "Watch it draft all 3 products",
+  },
   { src: "/marketing/whatsapp-flow-5-submit.jpg", alt: "WhatsApp chat: seller taps Submit all to push every listing to Jumia", caption: "Review, then submit" },
 ] as const;
 
@@ -331,26 +338,29 @@ export async function ExtensionPage() {
               </div>
               <h3 className="text-xl font-bold text-zinc-900">From WhatsApp</h3>
             </div>
-            {/* The whole flow as one screen recording, then the three key
-                moments as stills below it for anyone who won't press play. */}
-            <figure className="mx-auto mt-6 flex max-w-[300px] flex-col items-center">
-              <WhatsAppFlowVideo />
-              <figcaption className="mt-3 text-center text-base text-zinc-500">
-                Tap play: 3 products go from photos to live on Jumia, all in one chat (1:19).
-              </figcaption>
-            </figure>
-            <div className="mt-10 grid grid-cols-1 gap-8 sm:grid-cols-3">
+            <div className="mt-6 grid grid-cols-1 gap-8 sm:grid-cols-3">
               {CONVERSATION_SHOTS.map((shot, i) => (
                 <figure key={shot.src} className="flex flex-col items-center">
                   <div className="overflow-hidden rounded-2xl border border-zinc-200 shadow-sm">
-                    <Image
-                      src={shot.src}
-                      alt={shot.alt}
-                      width={296}
-                      height={640}
-                      className="h-auto w-full max-w-[240px]"
-                      sizes="(min-width: 640px) 240px, 80vw"
-                    />
+                    {"video" in shot ? (
+                      <LoopingVideo
+                        src={shot.video}
+                        poster={shot.src}
+                        width={480}
+                        height={1038}
+                        label={shot.alt}
+                        className="block h-auto w-full max-w-[240px]"
+                      />
+                    ) : (
+                      <Image
+                        src={shot.src}
+                        alt={shot.alt}
+                        width={296}
+                        height={640}
+                        className="h-auto w-full max-w-[240px]"
+                        sizes="(min-width: 640px) 240px, 80vw"
+                      />
+                    )}
                   </div>
                   <figcaption className="mt-3 text-base text-zinc-500">
                     <span className="font-semibold text-zinc-900">{i + 1}.</span> {shot.caption}
