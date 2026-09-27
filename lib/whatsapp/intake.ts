@@ -1305,14 +1305,17 @@ async function msSinceLastPhoto(listingId: string): Promise<number> {
 /** How many photos this listing currently holds. Best-effort: a failure
  *  answers 0, which simply omits the count from the reply rather than
  *  holding up the seller's "done". */
-async function countListingImages(listingId: string): Promise<number> {
+async function listingIntakeSummary(listingId: string): Promise<{ photos: number; hasNotes: boolean }> {
   const db = createServerClient();
-  const { data, error } = await db.from("listings").select("images").eq("id", listingId).maybeSingle();
+  const { data, error } = await db.from("listings").select("images, user_prompt").eq("id", listingId).maybeSingle();
   if (error) {
     console.warn(`[whatsapp intake] photo count failed for listing ${listingId}: ${error.message}`);
-    return 0;
+    return { photos: 0, hasNotes: false };
   }
-  return ((data?.images ?? []) as string[]).filter(Boolean).length;
+  return {
+    photos:   ((data?.images ?? []) as string[]).filter(Boolean).length,
+    hasNotes: Boolean(String((data?.user_prompt as string | null) ?? "").trim()),
+  };
 }
 
 /**
@@ -1647,8 +1650,13 @@ async function handleAwaitingPhotos(
     // accurate. Read from the row rather than carried along: the delivery
     // that handles "done" is a different invocation from the ones that
     // appended the photos, and on an album it may not even be the last.
-    const photoCount = listingId ? await countListingImages(listingId) : 0;
-    const photoNote = photoCount > 0 ? ` (${photoCount} photo${photoCount === 1 ? "" : "s"})` : "";
+    // Notes are named too: a note sent as a photo caption mid-album is
+    // saved without a reply of its own (see the captioned-photo branch
+    // below), so this is where the seller hears it arrived.
+    const { photos: photoCount, hasNotes } = listingId ? await listingIntakeSummary(listingId) : { photos: 0, hasNotes: false };
+    const photoNote = photoCount > 0
+      ? ` (${photoCount} photo${photoCount === 1 ? "" : "s"}${hasNotes ? ", notes saved" : ""})`
+      : "";
 
     // ── Don't advance while the album is still arriving ──────────────────
     //
@@ -1736,13 +1744,28 @@ async function handleAwaitingPhotos(
   // product — the same free-text field the web flow threads through
   // auto-analyze as "SELLER CONTEXT" (e.g. "this is a pack of 6", "the
   // colour is teal not blue").
-  if (listingId) await applyNotes(listingId, text);
-  if (listingId) {
+  if (listingId && content.imageMediaId) {
+    // A captioned photo is part of the same album as the plain ones, so it
+    // shares their one-confirmation-per-burst claim. It used to reply on
+    // its own regardless, so an album with a price caption got "got it"
+    // AND "got it, notes saved" a second apart (live, 2026-09-27). Claimed
+    // before the note is saved so this, the more informative reply, gets a
+    // fair chance at being the one sent. If a plain photo already
+    // confirmed, the note is saved silently and "done" reports it.
+    const confirm = await claimPhotoConfirmation(phoneNumber);
+    await applyNotes(listingId, text);
+    if (confirm) {
+      await replyButtons(
+        phoneNumber,
+        `📸 Product ${seq}: got it, notes saved. Send more photos, or reply *done* once you're finished with this one.`,
+        [{ id: "done", title: "Done ✅" }],
+      );
+    }
+  } else if (listingId) {
+    await applyNotes(listingId, text);
     await replyButtons(
       phoneNumber,
-      content.imageMediaId
-        ? `📸 Product ${seq}: got it, notes saved. Send more photos, or reply *done* once you're finished with this one.`
-        : `Got it — noted for product ${seq}. Send more photos, or reply *done* when ready.`,
+      `Got it — noted for product ${seq}. Send more photos, or reply *done* when ready.`,
       [{ id: "done", title: "Done ✅" }],
     );
   } else {

@@ -241,6 +241,29 @@ describe("an album arriving as several webhook deliveries", () => {
     expect(gotIt).toHaveLength(1);
   });
 
+  // Live, 2026-09-27: seven photos, the first captioned "150", drew
+  // "📸 Product 1: got it." and then "📸 Product 1: got it, notes saved." a
+  // second later — the captioned photo replied outside the burst claim.
+  it.each([
+    ["the captioned photo lands first", [{ imageMediaId: "a", text: "150" }, photo("b"), photo("c")]],
+    ["a plain photo lands first", [photo("a"), { imageMediaId: "b", text: "150" }, photo("c")]],
+  ])("confirms an album with a price caption once when %s", async (_label, deliveries) => {
+    for (let i = 0; i < deliveries.length; i++) await handleLinkedMessage(USER, PHONE, `m${i}`, deliveries[i]);
+
+    expect(sent.filter((m) => m.body.includes("got it"))).toHaveLength(1);
+    expect(listings()[0].user_prompt).toContain("150");
+  });
+
+  it("says the notes were saved on done, whichever photo confirmed the album", async () => {
+    await handleLinkedMessage(USER, PHONE, "m1", photo("a"));
+    await handleLinkedMessage(USER, PHONE, "m2", { imageMediaId: "b", text: "150" });
+    listings()[0].updated_at = new Date(Date.now() - 60_000).toISOString();
+
+    await handleLinkedMessage(USER, PHONE, "m3", { text: "done" });
+
+    expect(sent.some((m) => m.body.includes("(2 photos, notes saved)"))).toBe(true);
+  });
+
   // The count was the whole point of the confirmation — it is what tells a
   // seller nothing was dropped. Silencing the repeats must not lose it, so
   // it moves to "done", where it is finally accurate.
