@@ -28,6 +28,7 @@ import {
   Chrome,
   MessageSquare,
   AlertTriangle,
+  Ban,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -350,6 +351,7 @@ export function Sidebar({
             <NavItem href="/admin/brands"     label="Brands"     icon={Tags} />
             <NavItem href="/admin/messages"   label="WhatsApp log" icon={MessageSquare} />
             <NavItem href="/admin/errors"     label="Errors"       icon={AlertTriangle} />
+            <NavItem href="/admin/blocked-categories" label="Blocked categories" icon={Ban} />
           </>
         )}
       </nav>

@@ -16,6 +16,7 @@
 import { createHash } from "node:crypto";
 import { createServerClient } from "@/lib/supabase/server";
 import { JUMIA_API_ENV_NAME } from "@/lib/jumia/oauth";
+import { isUnlistableCategoryError, recordUnlistableCategory, sellerCountry } from "@/lib/jumia/unlistable-categories";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
 
 /**
@@ -69,11 +70,15 @@ export interface FeedOutcomeInput {
 export async function logFeedOutcome(input: FeedOutcomeInput): Promise<void> {
   try {
     const db = createServerClient();
+    // Some callers (the feed-status resolver) never have the seller in
+    // scope, so resolve country from the listing's owner here instead —
+    // it's the key for the per-country category blocklist below.
+    const country = input.country ?? (await countryForListing(input.listingId));
     await db.from("jumia_feed_outcomes").insert({
       listing_id:          input.listingId,
       feed_id:             input.feedId ?? null,
       seller_sku:          input.sellerSku ?? null,
-      country:             input.country ?? null,
+      country:             country,
       category_code:       input.categoryCode ?? null,
       outcome:             input.outcome,
       raw_error:           input.rawError ?? null,
@@ -85,7 +90,19 @@ export async function logFeedOutcome(input: FeedOutcomeInput): Promise<void> {
       // project), so without this they're indistinguishable.
       source_env:          JUMIA_API_ENV_NAME,
     });
+
+    const categoryCode = input.categoryCode && /^\d+$/.test(input.categoryCode) ? Number(input.categoryCode) : null;
+    if (input.outcome === "rejected" && country && categoryCode && isUnlistableCategoryError(input.rawError)) {
+      await recordUnlistableCategory(country, categoryCode, input.rawError ?? null);
+    }
   } catch (e) {
     console.warn(`[feed-outcomes] failed to log outcome for ${input.listingId}: ${(e as Error).message}`);
   }
+}
+
+async function countryForListing(listingId: string): Promise<string | null> {
+  const db = createServerClient();
+  const { data } = await db.from("listings").select("user_id").eq("id", listingId).maybeSingle();
+  const userId = data?.user_id as string | undefined;
+  return userId ? sellerCountry(userId) : null;
 }

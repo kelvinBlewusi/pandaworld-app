@@ -66,6 +66,7 @@ import {
   type CategoryCandidate,
 } from "@/lib/jumia/category-search";
 import { getValidJumiaCredentials, reconcileDraftVariation } from "@/lib/jumia/api";
+import { blockedCategoryCodes, sellerCountry, withoutBlocked } from "@/lib/jumia/unlistable-categories";
 import { AI_DYNAMIC_ATTR_DEFAULTS, resolvePatternDefault } from "@/lib/ai/policy";
 import { webSearch, formatSearchSnippetsForPrompt, isWebSearchEnabled } from "@/lib/ai/web-search";
 
@@ -419,10 +420,18 @@ export async function runAutoAnalyze(
   // pick one manually" (routes to the category picker), never a
   // confidently-wrong guess.
   const tRet = Date.now();
-  const [listableCategories, allCategories] = await Promise.all([
+  const [allListableCategories, allCategories, blocked] = await Promise.all([
     getListableCategories(),
     getAllCategoriesForTree(),
+    sellerCountry(userId).then(blockedCategoryCodes),
   ]);
+  // Categories Jumia has already refused in this seller's country (see
+  // lib/jumia/unlistable-categories.ts) never reach the AI — neither on a
+  // first draft nor on a fix-and-resubmit redraft. Dropped from the base
+  // set here (so fuzzy search fills its slots with live categories) and
+  // from the embedding hits below, which come straight from the database
+  // rather than from this list.
+  const listableCategories = withoutBlocked(allListableCategories, blocked);
 
   if (listableCategories.length === 0 || allCategories.length === 0) {
     return {
@@ -482,7 +491,7 @@ export async function runAutoAnalyze(
       const perDept = deptsToSearch.map((dept, i) => {
         const subtree = getSubtreeCategories(listableCategories, dept.path);
         const fuzzyHits = searchCategoriesByText(retrievalQuery, subtree, 8);
-        const semanticHits = semanticPerDept[i] ?? [];
+        const semanticHits = withoutBlocked(semanticPerDept[i] ?? [], blocked);
         return semanticHits.length > 0 ? mergeCandidates(fuzzyHits, semanticHits, 8) : fuzzyHits;
       });
 
