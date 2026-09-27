@@ -135,6 +135,17 @@ export class FakeDb {
         });
         return updateBuilder([]);
       },
+
+      delete() {
+        const deleteBuilder = (filters: Filter[]) => ({
+          eq(col: string, val: unknown) { return deleteBuilder([...filters, { col, val, op: "eq" }]); },
+          then(resolve: (v: unknown) => unknown) {
+            db.tables[table] = rows().filter((r) => !db.match(r, filters));
+            return Promise.resolve({ data: null, error: null }).then(resolve);
+          },
+        });
+        return deleteBuilder([]);
+      },
     };
   }
 

@@ -15,7 +15,7 @@ import { WhatsAppIcon } from "@/components/whatsapp/whatsapp-icon";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { UserButton, useUser } from "@clerk/nextjs";
-import {LayoutDashboard, Calculator, ListChecks, HelpCircle, BookOpen, Settings, ArrowRight, X, MessageSquare, AlertTriangle} from "lucide-react";
+import {LayoutDashboard, Calculator, ListChecks, HelpCircle, BookOpen, Settings, ArrowRight, X, MessageSquare, AlertTriangle, Ban} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Wordmark } from "@/components/marketing/wordmark";
 import { COMMUNITY_WHATSAPP_URL } from "@/lib/constants/support";
@@ -46,6 +46,7 @@ const settingsItem = { href: "/extension/settings", label: "Settings", icon: Set
 const adminNav = [
   { href: "/admin/messages", label: "WhatsApp log", icon: MessageSquare },
   { href: "/admin/errors",   label: "Errors",        icon: AlertTriangle },
+  { href: "/admin/blocked-categories", label: "Blocked categories", icon: Ban },
 ];
 
 function NavItem({ href, label, icon: Icon }: { href: string; label: string; icon: React.ElementType }) {
