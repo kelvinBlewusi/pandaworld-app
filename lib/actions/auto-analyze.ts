@@ -67,6 +67,7 @@ import {
 } from "@/lib/jumia/category-search";
 import { getValidJumiaCredentials, reconcileDraftVariation } from "@/lib/jumia/api";
 import { blockedCategoryCodes, sellerCountry, withoutBlocked } from "@/lib/jumia/unlistable-categories";
+import { provenCategoriesFor } from "@/lib/jumia/live-listings";
 import { AI_DYNAMIC_ATTR_DEFAULTS, resolvePatternDefault } from "@/lib/ai/policy";
 import { webSearch, formatSearchSnippetsForPrompt, isWebSearchEnabled } from "@/lib/ai/web-search";
 
@@ -489,6 +490,7 @@ export async function runAutoAnalyze(
   // the right category somewhere else.
   let candidates: CategoryCandidate[] = [];
   let candidatesWithSchemas: CandidateWithSchema[] = [];
+  let provenCount = 0;
   let ranked: Awaited<ReturnType<typeof aiPassB_rankCategory>>;
   let filled: Awaited<ReturnType<typeof extractAttributesForCategory>>;
 
@@ -498,10 +500,12 @@ export async function runAutoAnalyze(
     ({ ranked, filled, candidatesWithSchemas } = kept);
   } else {
     const tRet = Date.now();
-    const [allListableCategories, allCategories, blocked] = await Promise.all([
+    const countryLookup = sellerCountry(userId);
+    const [allListableCategories, allCategories, blocked, country] = await Promise.all([
       getListableCategories(),
       getAllCategoriesForTree(),
-      sellerCountry(userId).then(blockedCategoryCodes),
+      countryLookup.then(blockedCategoryCodes),
+      countryLookup,
     ]);
     // Categories Jumia has already refused in this seller's country (see
     // lib/jumia/unlistable-categories.ts) never reach the AI — neither on a
@@ -590,6 +594,41 @@ export async function runAutoAnalyze(
       candidates = searchCategoriesByText(retrievalQuery, listableCategories, 8);
     }
 
+    // Categories similar products already went live in, in this seller's
+    // country (lib/jumia/live-listings.ts), go first, marked for the model
+    // as accepted by Jumia. They're offered, not applied: a live listing
+    // can itself be in the wrong category, so the model still judges fit.
+    // Drawn from `listableCategories`, so never one Jumia has refused here.
+    const proven = await provenCategoriesFor(
+      country,
+      { title: description.title, keywords: description.keywords },
+      listableCategories,
+    );
+    if (proven.length > 0) {
+      const provenCodes = new Set(proven.map((p) => p.code));
+      const rowByCode = new Map(listableCategories.map((c) => [Number(c.code), c]));
+      candidates = [
+        ...proven.map((p): CategoryCandidate => {
+          const row = rowByCode.get(p.code)!;
+          return {
+            code:              p.code,
+            name:              row.name,
+            path:              row.path,
+            attribute_set_sid: row.attribute_set_sid,
+            retrievalScore:    p.score,
+            source:            "live",
+            liveExample:       p.exampleTitle,
+          };
+        }),
+        ...candidates.filter((c) => !provenCodes.has(c.code)),
+      ];
+      provenCount = proven.length;
+      console.info(
+        `[auto-analyze] ${proven.length} live-listing categor${proven.length === 1 ? "y" : "ies"} for "${description.title}": ` +
+          proven.map((p) => `${p.code} (${p.score.toFixed(2)}, like "${p.exampleTitle}")`).join(", "),
+      );
+    }
+
     // Enrich with is_leaf from the SAME listableCategories rows the pool
     // came from — none of the retrieval functions in category-search.ts
     // carry it themselves (see CategoryCandidate's own doc comment). This
@@ -632,7 +671,9 @@ export async function runAutoAnalyze(
     //         flow: aiPassB_rankCategory → schema fetch → extractAttrs.
     const tCombined        = Date.now();
     const TOP_N_FOR_COMBINED = 3;
-    const topNCandidates   = candidates.slice(0, TOP_N_FOR_COMBINED);
+    // Live-listing categories sit in front and don't count against the
+    // retrieval top N, so the model still sees retrieval's best three.
+    const topNCandidates   = candidates.slice(0, TOP_N_FOR_COMBINED + provenCount);
 
     // Parallel schema fetch for top-N candidates. We need them all in hand
     // before the combined Gemini call so the model can pick + fill from
@@ -664,6 +705,7 @@ export async function runAutoAnalyze(
           path:    c.path,
           attrs,
           is_leaf: c.is_leaf ?? false,
+          liveExample: c.liveExample,
         };
       }),
     );

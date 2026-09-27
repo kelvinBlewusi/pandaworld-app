@@ -58,7 +58,14 @@ export interface CategoryCandidate {
   /** 0–1 retrieval relevance — NOT vision confidence */
   retrievalScore:     number;
   /** Where this candidate came from — useful for debugging the pipeline */
-  source:             "fuzzy" | "jumia" | "merged" | "embedding";
+  source:             "fuzzy" | "jumia" | "merged" | "embedding" | "live";
+  /**
+   * Set when a similar product already went live on Jumia in this
+   * category, in the seller's country: that listing's title. Surfaced to
+   * the model as evidence Jumia accepts the category (see
+   * lib/jumia/live-listings.ts). Evidence of acceptance, not of fit.
+   */
+  liveExample?:       string;
   /**
    * Whether this is Jumia's most specific category for this branch —
    * i.e. it has no more-specific child a product could be filed under

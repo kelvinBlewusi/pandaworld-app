@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import { createServerClient } from "@/lib/supabase/server";
 import { JUMIA_API_ENV_NAME } from "@/lib/jumia/oauth";
 import { isUnlistableCategoryError, recordUnlistableCategory, sellerCountry } from "@/lib/jumia/unlistable-categories";
+import { recordLiveListing } from "@/lib/jumia/live-listings";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
 
 /**
@@ -72,8 +73,10 @@ export async function logFeedOutcome(input: FeedOutcomeInput): Promise<void> {
     const db = createServerClient();
     // Some callers (the feed-status resolver) never have the seller in
     // scope, so resolve country from the listing's owner here instead —
-    // it's the key for the per-country category blocklist below.
-    const country = input.country ?? (await countryForListing(input.listingId));
+    // it's the key for the per-country category blocklist and the live
+    // listings record below. A live outcome also needs the title.
+    const listing = !input.country || input.outcome === "live" ? await listingFacts(input.listingId) : null;
+    const country = input.country ?? (listing?.userId ? await sellerCountry(listing.userId) : null);
     await db.from("jumia_feed_outcomes").insert({
       listing_id:          input.listingId,
       feed_id:             input.feedId ?? null,
@@ -95,14 +98,19 @@ export async function logFeedOutcome(input: FeedOutcomeInput): Promise<void> {
     if (input.outcome === "rejected" && country && categoryCode && isUnlistableCategoryError(input.rawError)) {
       await recordUnlistableCategory(country, categoryCode, input.rawError ?? null);
     }
+    if (input.outcome === "live" && country && categoryCode && listing?.title) {
+      await recordLiveListing(input.listingId, country, categoryCode, listing.title);
+    }
   } catch (e) {
     console.warn(`[feed-outcomes] failed to log outcome for ${input.listingId}: ${(e as Error).message}`);
   }
 }
 
-async function countryForListing(listingId: string): Promise<string | null> {
+async function listingFacts(listingId: string): Promise<{ userId: string | null; title: string | null }> {
   const db = createServerClient();
-  const { data } = await db.from("listings").select("user_id").eq("id", listingId).maybeSingle();
-  const userId = data?.user_id as string | undefined;
-  return userId ? sellerCountry(userId) : null;
+  const { data } = await db.from("listings").select("user_id, title").eq("id", listingId).maybeSingle();
+  return {
+    userId: (data?.user_id as string | null | undefined) ?? null,
+    title:  (data?.title as string | null | undefined) ?? null,
+  };
 }

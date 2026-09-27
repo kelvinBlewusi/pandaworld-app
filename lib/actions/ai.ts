@@ -1483,9 +1483,27 @@ export interface RankingResult {
   needsUserConfirmation:  boolean;
 }
 
+/** The candidate-line marker for a category a similar product went live in. */
+function liveMarker(example: string | undefined): string {
+  return example ? ` [ACCEPTED ON JUMIA — a similar product went live here: "${example.slice(0, 90)}"]` : "";
+}
+
+/**
+ * How to weigh [ACCEPTED ON JUMIA] candidates. Only emitted when one is
+ * present. Acceptance is real evidence (Jumia refuses some categories
+ * outright), but live listings include miscategorised ones, so it's a
+ * tie-breaker between genuine fits, never a reason on its own.
+ */
+function liveNote(candidates: Array<{ liveExample?: string }>): string {
+  if (!candidates.some((c) => c.liveExample)) return "";
+  return `
+A candidate marked [ACCEPTED ON JUMIA] is one Jumia has already accepted a similar product in, in this seller's country. When it is a genuinely correct shelf for THIS product, prefer it over an equally good unmarked candidate, since Jumia refuses some categories outright. Never pick it just for the mark: a similar-sounding product can belong elsewhere (a power bank case is not a power bank), and a past listing can itself have been filed in the wrong category.
+`;
+}
+
 export async function aiPassB_rankCategory(
   imageUrls:  string[],
-  candidates: Array<{ code: number; name: string; path: string; is_leaf?: boolean }>,
+  candidates: Array<{ code: number; name: string; path: string; is_leaf?: boolean; liveExample?: string }>,
   userContext?: string | null,
   // From Pass A — anchors the rank model so it disambiguates
   // visually-similar candidates by what the product is actually FOR.
@@ -1521,7 +1539,7 @@ export async function aiPassB_rankCategory(
   const rankVisionModel = await resolveModel(rankUserId, "vision", { forceBestModel: opts.forceBestModel });
 
   const candidateList = candidates
-    .map((c, i) => `${i + 1}. ${c.code} — ${c.path}${c.is_leaf === false ? " [PARENT category — has more specific sub-categories on Jumia]" : ""}`)
+    .map((c, i) => `${i + 1}. ${c.code} — ${c.path}${c.is_leaf === false ? " [PARENT category — has more specific sub-categories on Jumia]" : ""}${liveMarker(c.liveExample)}`)
     .join("\n");
 
   const ctxSection = userContext && userContext.trim()
@@ -1540,7 +1558,7 @@ export async function aiPassB_rankCategory(
 
 CANDIDATES:
 ${candidateList}
-${useCaseBlock}
+${liveNote(candidates)}${useCaseBlock}
 Rules:
 1. Pick exactly one as the primary (the best match).
 2. List up to 2 alternates in case the primary is wrong.
@@ -1752,6 +1770,8 @@ export interface CandidateWithSchema {
    *  parent it considers too broad ("You can't list products in this
    *  category ... choose a more specific category"). */
   is_leaf: boolean;
+  /** See CategoryCandidate.liveExample (lib/jumia/category-search.ts). */
+  liveExample?: string;
 }
 
 export interface PickAndFillResult {
@@ -1850,7 +1870,7 @@ export async function aiPassBC_pickAndFill(
         }).join("\n");
 
     const specificity = c.is_leaf ? "" : " [PARENT category — has more specific sub-categories on Jumia]";
-    return `${i + 1}. CODE ${c.code} — ${c.path}${specificity}\n${attrLines}`;
+    return `${i + 1}. CODE ${c.code} — ${c.path}${specificity}${liveMarker(c.liveExample)}\n${attrLines}`;
   }).join("\n\n");
 
   const ctxSection = userContext && userContext.trim()
@@ -1876,7 +1896,7 @@ export async function aiPassBC_pickAndFill(
 STEP 1 — Pick the best Jumia category from these candidates (each shows its attribute schema underneath):
 
 ${candidateBlocks}
-${useCaseBlock}
+${liveNote(candidates)}${useCaseBlock}
 STEP 2 — For YOUR CHOSEN category from Step 1, fill the attribute values you can determine from the images.
 
 ${policyBlock}
