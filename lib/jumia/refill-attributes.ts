@@ -24,6 +24,7 @@ import {
 } from "@/lib/jumia/categories";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { logCategoryCorrection } from "@/lib/jumia/category-corrections";
+import { withAiUsageContext } from "@/lib/ai/usage";
 
 type FieldConfidence = { confidence: number; source: string; reasoning?: string };
 
@@ -43,15 +44,28 @@ export async function refillAttributesForCategory(
   userId:       string,
   listingId:    string,
   categoryCode: number,
-  opts: {
-    categoryPath?: string | null;
-    userContext?:  string | null;
-    /** Skip the Gemini fill step — fields reset to empty for the new
-     *  schema instead of being AI-filled. Used only where a caller
-     *  deliberately wants to defer the AI call (none currently do; kept
-     *  for parity with the HTTP route's ?mode=schema-only). */
-    schemaOnly?: boolean;
-  } = {},
+  opts: RefillOptions = {},
+): Promise<RefillAttributesResult> {
+  return withAiUsageContext({ feature: "category_refill", userId, listingId }, () =>
+    refillUnmetered(userId, listingId, categoryCode, opts),
+  );
+}
+
+interface RefillOptions {
+  categoryPath?: string | null;
+  userContext?:  string | null;
+  /** Skip the Gemini fill step — fields reset to empty for the new
+   *  schema instead of being AI-filled. Used only where a caller
+   *  deliberately wants to defer the AI call (none currently do; kept
+   *  for parity with the HTTP route's ?mode=schema-only). */
+  schemaOnly?: boolean;
+}
+
+async function refillUnmetered(
+  userId:       string,
+  listingId:    string,
+  categoryCode: number,
+  opts:         RefillOptions,
 ): Promise<RefillAttributesResult> {
   const db = createServerClient();
 
