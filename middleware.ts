@@ -52,6 +52,10 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 //                            worker silently looked like it didn't exist and
 //                            queued batches never drained.
 //   /extension              — Chrome extension marketing/onboarding page
+//   /how-to                 — public step-by-step guides (app/how-to/page.tsx).
+//                            Exists specifically to be indexed by Google;
+//                            leaving it off this list meant Googlebot and
+//                            every logged-out visitor got bounced to /sign-in.
 //   /api/extension/fill     — the extension's autofill call. The extension has
 //                            no Clerk browser session (it runs from Jumia's
 //                            origin) — it authenticates itself with a
@@ -96,6 +100,7 @@ const isPublicRoute = createRouteMatcher([
   '/api/cron/(.*)',
   '/api/worker/(.*)',
   '/extension',
+  '/how-to',
   '/api/extension/fill',
   '/api/extension/account',
   '/api/whatsapp/webhook',
@@ -118,7 +123,12 @@ export default clerkMiddleware(async (auth, request) => {
 
 export const config = {
   matcher: [
-    '/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)',
+    // `_vercel` is excluded so Vercel Analytics' event beacon
+    // (/_vercel/insights/event — no file extension, so the extension rule
+    // below doesn't skip it) never hits auth.protect(). Otherwise every
+    // page view from a logged-out visitor — i.e. all marketing traffic —
+    // would be rejected before reaching Vercel.
+    '/((?!_next|_vercel|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)',
     '/(api|trpc)(.*)',
   ],
 }
