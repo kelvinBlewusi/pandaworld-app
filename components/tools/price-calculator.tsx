@@ -5,10 +5,9 @@
  *
  * Pure client-side — no Jumia connection or account data required, just the
  * static commission/shipping table in lib/mock/categories. That's what lets
- * it render both inside the main app ((main)/price-calculator, which sits
- * behind the Jumia-OAuth gate) and on the extension's own dashboard
- * (extension/(app)/calculator, which deliberately doesn't) — same component,
- * two entry points.
+ * it render inside the main app ((main)/price-calculator, behind the
+ * Jumia-OAuth gate), on the extension's own dashboard (extension/(app)/
+ * calculator), and on the public, indexable app/jumia-price-calculator.
  */
 
 import { useState, useMemo } from "react";
@@ -54,7 +53,10 @@ function calcNetPayout(listingPrice: number, shippingContrib: number, commission
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function PriceCalculator() {
+export function PriceCalculator({ showHeader = true }: {
+  /** False on the public calculator page (app/jumia-price-calculator), which has its own H1. */
+  showHeader?: boolean;
+} = {}) {
   const [mode, setMode] = useState<Mode>("reverse");
   const [categoryId, setCategoryId] = useState<string>("");
   const [shippingMode, setShippingMode] = useState<ShippingMode>("je");
@@ -109,13 +111,14 @@ export function PriceCalculator() {
 
   return (
     <div className="space-y-6 max-w-2xl">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-zinc-900">Price calculator</h1>
-        <p className="mt-1 text-sm text-zinc-500">
-          Calculate the price to show on Jumia or estimate the amount you will receive.
-        </p>
-      </div>
+      {showHeader && (
+        <div>
+          <h1 className="text-2xl font-bold text-zinc-900">Price calculator</h1>
+          <p className="mt-1 text-sm text-zinc-500">
+            Calculate the price to show on Jumia or estimate the amount you will receive.
+          </p>
+        </div>
+      )}
 
       {/* Mode toggle */}
       <div className="flex rounded-xl border bg-zinc-50 p-1 gap-1">

@@ -7,6 +7,7 @@ import { ExtensionHeroBackdrop } from "@/components/marketing/extension-hero-bac
 import { LoopingVideo } from "@/components/marketing/looping-video";
 import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 import { isBillingEnabled } from "@/lib/billing/mode";
+import { CALCULATOR_HREF } from "@/lib/marketing/links";
 import { FREE_SIGNUP_CREDITS } from "@/lib/billing/credit-packs";
 
 // ─── /extension — public page for the Chrome extension + WhatsApp flows ──────
@@ -210,7 +211,8 @@ export async function ExtensionPage() {
   const ctaHref  = userId ? DASHBOARD_REDIRECT : `/sign-up?redirect_url=${DASHBOARD_REDIRECT}`;
   const ctaLabel = userId ? "Open dashboard" : "Get Started";
   const signInHref = `/sign-in?redirect_url=${DASHBOARD_REDIRECT}`;
-  const calculatorHref = userId ? "/extension/calculator" : "/sign-in?redirect_url=/extension/calculator";
+  // The public calculator page: usable signed in or not, and indexable.
+  const calculatorHref = CALCULATOR_HREF;
   const billingOn = await isBillingEnabled();
 
   return (

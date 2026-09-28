@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Mail, Users } from "lucide-react";
 import { Wordmark } from "./wordmark";
 import { FooterPricingTrigger } from "./footer-pricing-trigger";
+import { CALCULATOR_HREF, COMMISSION_RATES_HREF } from "@/lib/marketing/links";
 import {
   SUPPORT_EMAIL,
   SUPPORT_MAILTO,
@@ -71,6 +72,18 @@ export function MarketingFooter({
               Pricing
             </Link>
           )}
+
+          {/* Crawlable links to the public guides and tools on every
+              marketing page, so search engines reach them from anywhere. */}
+          <Link href="/how-to" className="hover:text-zinc-900">
+            Guides
+          </Link>
+          <Link href={CALCULATOR_HREF} className="hover:text-zinc-900">
+            Jumia price calculator
+          </Link>
+          <Link href={COMMISSION_RATES_HREF} className="hover:text-zinc-900">
+            Jumia commission rates
+          </Link>
 
           {/* Terms + Privacy — intentionally non-responsive for now.
               Pages exist as drafts at /terms + /privacy but they need
