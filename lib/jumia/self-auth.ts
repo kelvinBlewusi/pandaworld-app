@@ -71,7 +71,7 @@ function explain(e: unknown): { reason: SelfAuthFailure; error: string } {
     if (e.code === "invalid_grant") {
       return {
         reason: "bad_token",
-        error: "That token has expired or was already used. In Vendor Center, click the orange lock icon next to PandaWorld again and paste the new token straight away.",
+        error: "That token has expired or was already used. In Vendor Center, tap on the padlock icon next to PandaWorld again and paste the new token straight away.",
       };
     }
     return { reason: "bad_token", error: `Jumia refused the connection (${e.code ?? e.status}). Generate a new token and try again.` };
@@ -96,7 +96,7 @@ export async function connectSelfAuthorization(
     return { ok: false, reason: "bad_input", error: "That doesn't look like a Client ID. It's the long code with dashes shown next to your application in Vendor Center." };
   }
   if (!looksLikeGeneratedToken(token)) {
-    return { ok: false, reason: "bad_input", error: "That doesn't look like a generated token. In Vendor Center, click the orange lock icon next to your Self Authorization application and copy the whole token." };
+    return { ok: false, reason: "bad_input", error: "That doesn't look like a generated token. In Vendor Center, tap on the padlock icon next to your Self Authorization application and copy the whole token." };
   }
 
   let tokens: Awaited<ReturnType<typeof refreshAccessToken>>;
