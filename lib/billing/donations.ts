@@ -3,7 +3,7 @@
 /**
  * Donation ledger — the "Donate" flow that temporarily stands in for
  * paid credit-pack purchases (components/extension/donate-modal.tsx)
- * while lib/billing/free-for-all.ts's FREE_FOR_ALL_MODE is on. A
+ * while billing is off (lib/billing/mode.ts). A
  * donation grants nothing back (no credits, no plan change) — it's
  * just goodwill support money, recorded for our own accounting.
  */

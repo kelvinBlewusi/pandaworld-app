@@ -1,14 +1,10 @@
 "use client";
 
 /**
- * Footer "Donate" trigger for extension-flavored pages (/, /extension) —
- * opens the same support-donation card (DonateModal) as the hero nav's
- * own "Donate" button, instead of MarketingFooter's default plain link
- * to /pricing (the classic web app's unrelated monthly-plan pricing).
- * See extension-hero-backdrop.tsx's own "Donate" button for why these
- * must never be conflated on this page. Stands in for the old "Pricing"
- * trigger (BuyCreditsModal) while WhatsApp + the extension are free —
- * see lib/billing/free-for-all.ts.
+ * Footer "Donate" trigger for the homepage and Guides while billing is off
+ * (lib/billing/mode.ts) — opens the same support-donation card
+ * (DonateModal) instead of MarketingFooter's plain link to /pricing, since
+ * nothing is being charged yet.
  */
 
 import { useState } from "react";

@@ -1,16 +1,11 @@
 /**
  * /api/extension/credits/checkout — starts a one-time credit-pack purchase
- * for the extension dashboard's "Buy Credits" modal.
+ * for the Buy Credits modal (dashboard, /settings/billing, /pricing).
  *
- * Separate FLOW from the classic app's plan-subscription checkout
- * (app/api/paystack/initialize, which uses pre-created Paystack Payment
- * Pages) — same Paystack account/secret key, but this uses the
- * transaction/initialize API directly since credit packs are one-time
- * charges with a fixed small set of amounts, not recurring subscriptions.
- * Paystack reliably passes metadata through on this API-driven flow (the
- * dropped-metadata issue noted in lib/billing/paystack-reference.ts is
- * specific to Payment Pages), so no reference-encoding fallback is needed
- * here — the webhook and /verify both read tx.metadata directly.
+ * Uses Paystack's transaction/initialize API directly: credit packs are
+ * one-time charges with a fixed small set of amounts. Paystack reliably
+ * passes metadata through on this API-driven flow, so the webhook and
+ * /verify both read tx.metadata directly.
  */
 
 import { NextResponse } from "next/server";

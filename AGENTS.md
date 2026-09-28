@@ -22,9 +22,11 @@ field should be AI-filled to a sensible default that passes Jumia QC.
 multi-market-aware (Jumia has 9 markets); expansion to Côte d'Ivoire / Senegal /
 Cameroon (French markets) is planned but not active.
 
-**Pricing**: 4 tiers — Free (5 listings/mo), Starter (GHS 30 / 30 listings),
-Pro (GHS 65 / 70 listings), Business (GHS 120 / 100 listings). Quota
-enforcement is per-period (30-day rolling) via `lib/billing/quota.ts`.
+**Pricing**: pay-as-you-go credits, no subscription (the monthly plans were
+removed 2026-09-28). 25 free credits on sign-up; an extension autofill costs
+1.5, a WhatsApp/web draft 2, an AI photo 4; packs 150/330/650 credits for GHS
+20/50/100 — all in `lib/billing/credit-packs.ts`. Nothing is charged until an
+admin switches billing on at `/admin/billing` — see "Billing" below.
 
 **Founder/operator**: Kelvin (single-person operation). Communication style is
 concise, direct, file-path-specific. Prefers small focused commits over big
@@ -37,7 +39,7 @@ refactors. Hates Lorem-ipsum-style placeholder code.
 - **Framework**: Next.js 14 (App Router) on Vercel
 - **Auth**: Clerk (production instance live at `pandaworldai.site`, see DNS records under `clerk.pandaworldai.site` etc.)
 - **Database**: Supabase Postgres + pgvector extension + Supabase Storage
-- **Payments**: Paystack (Payment Pages flow, NOT API/initialize — see `lib/billing/plans.ts`)
+- **Payments**: Paystack transaction/initialize for one-time credit packs (`app/api/extension/credits/checkout`)
 - **AI**: Google AI Studio API key (`GOOGLE_API_KEY`) for:
   - Gemini 3.1 Flash Lite (vision + text) — listing analyze, gap-fill, description-expand
   - Gemini 2.5 Flash Image — text-to-image + image polish/rebuild
@@ -218,9 +220,9 @@ pipeline above:
   `lib/jumia/embed-categories.ts` so both share it — looping batches
   within one invocation until either done or a 50s soft deadline.
 - **WhatsApp credits**: a WhatsApp product draft (one `runAutoAnalyze`
-  pass) now spends `WHATSAPP_DRAFT_CREDIT_COST` (3) credits from the
+  pass) now spends `WHATSAPP_DRAFT_CREDIT_COST` (2) credits from the
   SAME ledger the Chrome extension's autofill spends
-  `LISTING_CREDIT_COST` (2.5) from — see `lib/billing/extension-
+  `LISTING_CREDIT_COST` (1.5) from — see `lib/billing/extension-
   credits.ts`. `startBatchAnalysis` (`lib/whatsapp/intake.ts`) reserves
   affordability for the whole batch up front (same pattern as its
   existing rate-limit reservation), splitting listings the seller can't
@@ -374,12 +376,11 @@ pipeline above:
 - `app/api/listings/[id]/resolve-rejection/route.ts` — "Resolve with AI" button handler
 - `app/api/jumia/push/route.ts` — sends listing to Jumia
 - `app/api/jumia/callback/route.ts` — OAuth callback (PUBLIC route)
-- `app/api/paystack/initialize/route.ts` — redirects to Payment Page
-- `app/api/paystack/verify/route.ts` — confirms payment via Paystack API
-- `app/api/paystack/webhook/route.ts` — async webhook handler (PUBLIC, HMAC verified)
+- `app/api/extension/credits/checkout/route.ts` / `verify/route.ts` — credit-pack purchase
+- `app/api/paystack/webhook/route.ts` — credits packs + records donations (PUBLIC, HMAC verified)
 - `app/api/webhooks/clerk/route.ts` — Clerk user sync (svix verified)
 - `app/api/admin/embed-categories/route.ts` — backfill pgvector embeddings (admin only)
-- `app/api/generate-product-image/route.ts` — Imagen 3 text-to-image (Business tier)
+- `app/api/generate-product-image/route.ts` — Imagen 3 text-to-image (IMAGE_CREDIT_COST credits)
 - `app/api/enhance-images/route.ts` — Gemini image rebuild (legacy, currently maintenance)
 - `app/api/polish-images/route.ts` — PhotoRoom polish (legacy)
 - `app/(main)/listings/new/page.tsx` — mode picker UI
@@ -398,14 +399,16 @@ pipeline above:
 - `lib/ai/restricted-words.ts` — banned-word list scraped from Jumia GH guides
 - `lib/ai/embeddings.ts` — embedding API client with fallback chain
 - `lib/ai/web-search.ts` — Google Custom Search wrapper (added 2026-05-28)
-- `lib/billing/plans.ts` — single source of truth for tier prices + quotas + Paystack page URLs
-- `lib/billing/quota.ts` — checkQuota / incrementUsage / getEffectivePlan
-- `lib/billing/ai-models.ts` — tier → Gemini model mapping (pickModelForPlan)
+- `lib/billing/credit-packs.ts` — every price: packs, free credits, cost per autofill / draft / photo
+- `lib/billing/extension-credits.ts` — the credit ledger (balance, deduct, purchase, top-up)
+- `lib/billing/mode.ts` — the billing switch (app_settings.billing_enabled)
+- `lib/ai/usage.ts` + `lib/billing/costs.ts` — per-call AI cost log and its per-run summary
+- `lib/billing/ai-models.ts` — which Gemini model each kind of call uses (one per kind, no tiers)
 - `lib/jumia/categories.ts` — category schema fetch + cache
 - `lib/jumia/category-search.ts` — fuzzy + timeout-bounded embedding search, merged, department-scoped (getTopLevelDepartments/getSubtreeCategories/mergeCandidates); Jumia-catalog search function still lives here but is unused by the analyze pipeline as of 2026-09-13
 - `lib/jumia/embed-categories.ts` — idempotent embedding-backfill batch, shared by the admin route and the daily cron
 - `lib/jumia/api.ts` — Jumia Vendor Center API client + OAuth token refresh
-- `lib/actions/listings.ts` — createListing / updateListing server actions (quota-gated)
+- `lib/actions/listings.ts` — createListing / updateListing server actions
 - `lib/actions/upload.ts` — image upload with magic-byte MIME validation (JPEG/PNG only)
 - `lib/rate-limit.ts` — in-memory sliding-window rate limiter per Clerk userId
 - `lib/supabase/server.ts` — service-role client (server-only)
@@ -428,44 +431,36 @@ Run in order. All applied through Supabase Dashboard → SQL Editor (NOT auto-ap
 
 ---
 
-## Free-for-all growth phase (2026-09-13)
+## Billing (2026-09-28)
 
-WhatsApp and the extension are temporarily **free for every user** — a
-marketing decision to get sellers using the two new flows while
-credit-based billing is finished and tested, not a removal of either
-billing system underneath. Single switch: `FREE_FOR_ALL_MODE` in
-`lib/billing/free-for-all.ts`. While `true`:
-- `getOrCreateCreditBalance()`/`deductCredits()` (`lib/billing/
-  extension-credits.ts`) return `Infinity`/no-op for every user, same as
-  the existing `isAdmin()` bypass — the extension popup and dashboard
-  already render `Infinity` as "∞ credits" for admins, so this needed no
-  UI changes, just the one flag.
-- `checkQuota()`/`incrementUsage()`/`decrementUsage()`/`getQuotaSummary()`
-  (`lib/billing/quota.ts`) get the same treatment, so WhatsApp's
-  `createListingForUser` → `checkQuota` gate (the OTHER, older limiter —
-  Free tier = 5 listings/month) can't quietly block a seller while
-  credits say "unlimited". `is_admin: true` is returned for everyone
-  too, which is what drives the "Unlimited usage" banner — deliberate,
-  see the field's doc comment.
-- Neither the credit ledger nor quota counters are written to while this
-  is on (both short-circuit before touching the DB) — every user's real
-  balance/usage is exactly where it was when this flag flips back to
-  `false`. **To resume real billing: set `FREE_FOR_ALL_MODE = false` and
-  redeploy. Nothing else needs to change.**
-- The extension dashboard's "Buy Credits" button (paid credit packs) is
-  swapped for "Donate" (`components/extension/donate-modal.tsx`) in all
-  three places `BuyCreditsModal` used to render: `components/extension/
-  shell.tsx` (dashboard), `components/marketing/extension-hero-backdrop.tsx`
-  and `components/marketing/footer-pricing-trigger.tsx` (marketing page,
-  logged-out visitors). A donation is a free-form GHS amount via a NEW,
-  separate Paystack flow (`app/api/donations/checkout`, a `donation`
-  branch in `app/api/paystack/webhook`, `lib/billing/donations.ts` →
-  `recordDonation()`) that grants nothing back — no credits, no plan
-  change, just recorded in the new `donations` table for accounting.
-  `BuyCreditsModal`, its checkout/verify routes, and `CREDIT_PACKS` are
-  all left fully intact and wired — switching back to selling credits is
-  just re-swapping which modal these three callers render, alongside
-  flipping `FREE_FOR_ALL_MODE`.
+Credits are the only billing. The monthly plans (Free/Starter/Pro/Business,
+`lib/billing/plans.ts` + `quota.ts`, the reset-quotas cron, Paystack Payment
+Pages) were deleted 2026-09-28; nobody was on a paid plan. The
+`subscriptions` and `billing_events` tables are left in the database,
+unused.
+
+**The switch.** `/admin/billing` has one button, stored in
+`app_settings.billing_enabled` and read by `isBillingEnabled()`
+(`lib/billing/mode.ts`, cached 30 s per instance, stays free if it can't be
+read). It replaced the `FREE_FOR_ALL_MODE` constant.
+- Off: `getOrCreateCreditBalance()` returns `Infinity` and `deductCredits()`
+  is a no-op for everyone (as for admins always), so no credits move. The
+  homepage says "Try PandaWorld for free", the nav's Pricing link is greyed,
+  the footer offers Donate, and no Buy Credits button shows.
+- On: autofills, WhatsApp/web drafts and AI photos cost credits, new sellers
+  get 25 on first use, the dashboard / `/settings/billing` / `/pricing` show
+  Buy credits, and the homepage banner, nav and footer switch to pricing.
+- Purchases always land in the stored balance, whatever the switch
+  (`creditPurchase` → `storedBalance`).
+- The admin page won't switch on while a readiness check fails
+  (`lib/billing/readiness.ts`: Paystack key set and accepted, live vs test,
+  `NEXT_PUBLIC_APP_URL`), shows measured AI cost per run from `ai_usage`
+  against what each run earns, and can top up old balances (the 10-credit
+  welcome) to 25.
+
+Donations (`components/extension/donate-modal.tsx`,
+`app/api/donations/checkout`, `lib/billing/donations.ts`) grant nothing and
+only appear while billing is off.
 
 ---
 

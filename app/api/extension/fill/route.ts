@@ -9,12 +9,11 @@
  * Clerk session; the extension calls this endpoint from Jumia's origin, which
  * has no PandaWorld cookies. A missing/invalid key returns 401.
  *
- * Credits: the extension runs on its own credit ledger (lib/billing/
- * extension-credits.ts), separate from the web app's plan-based monthly
- * quota (lib/billing/quota.ts) — new sign-ups get 10 free credits, one real
- * autofill costs 2.5, purchased credits never expire. Balance checked
- * BEFORE the AI call, deducted AFTER success, same before/after shape as
- * the quota check it replaced.
+ * Credits: one autofill costs LISTING_CREDIT_COST from the seller's
+ * credit ledger (lib/billing/extension-credits.ts, shared with WhatsApp
+ * drafts). New sign-ups get FREE_SIGNUP_CREDITS; purchased credits never
+ * expire. Balance checked BEFORE the AI call, deducted AFTER success.
+ * Nothing is charged while billing is off (lib/billing/mode.ts).
  *
  * AI: when a Gemini backend is configured (Vertex or AI Studio key) AND an
  * image is supplied, the real vision pass (lib/ai/extension-fill) fills the

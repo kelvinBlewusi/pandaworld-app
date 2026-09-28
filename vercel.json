@@ -9,10 +9,6 @@
       "schedule": "0 0 * * *"
     },
     {
-      "path": "/api/cron/reset-quotas",
-      "schedule": "5 0 * * *"
-    },
-    {
       "path": "/api/cron/delete-stale-drafts",
       "schedule": "10 0 * * *"
     },

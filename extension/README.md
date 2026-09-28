@@ -21,8 +21,9 @@ No build step — it's plain JS/HTML/CSS. Loads unpacked as-is for local dev, an
   and selected from programmatically; see `enrichComboboxOptions()` /
   `writeCombobox()`).
 - Real auth (`pw_live_...` API keys, see `lib/security/extension-keys.ts`) and
-  a credit ledger (`lib/billing/extension-credits.ts`) — 10 free credits on
-  sign-up, 2.5 spent per real autofill, top-ups via Paystack on the dashboard.
+  a credit ledger (`lib/billing/extension-credits.ts`) — 25 free credits on
+  sign-up, 1.5 spent per real autofill, top-ups via Paystack on the dashboard.
+  Nothing is charged until billing is switched on (`lib/billing/mode.ts`).
 - Backend endpoints: `POST /api/extension/fill` (autofill),
   `GET /api/extension/account` (plan + credit balance for the panel's status
   row).

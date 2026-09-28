@@ -1208,10 +1208,7 @@ function isDuplicateSlot(e: unknown): boolean {
  * already has. See the call site for the album race this exists for.
  *
  * Returns the EXISTING row whenever there is one, so a second, third and
- * fourth photo of the same product all land on it. The quota is only ever
- * charged by whichever call actually inserts — createListingForUser bumps
- * the counter after a successful insert, so a loser that throws on the
- * unique index costs the seller nothing.
+ * fourth photo of the same product all land on it.
  */
 async function claimBatchSlot(
   userId:  string,
@@ -1250,7 +1247,7 @@ async function claimBatchSlot(
     }
     return {
       ok:      false,
-      message: (e as Error).message.replace(/^QUOTA_EXCEEDED:\s*/, ""),
+      message: (e as Error).message,
     };
   }
 }

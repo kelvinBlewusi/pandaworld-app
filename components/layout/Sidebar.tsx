@@ -4,9 +4,8 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { UserButton, useUser, useClerk } from "@clerk/nextjs";
-import { getQuotaSummaryForCurrentUser } from "@/lib/actions/subscription";
-import { PlanBadge } from "@/components/billing/plan-badge";
-import type { Plan } from "@/lib/billing/plans";
+import { getMyCredits, type MyCredits } from "@/lib/actions/credits";
+import { CreditsBadge } from "@/components/billing/credits-badge";
 import {
   LayoutDashboard,
   List,
@@ -57,7 +56,7 @@ const workflowNavBase = [
 
 const settingsNav = [
   { href: "/settings/account",      label: "Account",          icon: Settings  },
-  { href: "/settings/billing",      label: "Plans & billing",  icon: CreditCard },
+  { href: "/settings/billing",      label: "Credits & billing", icon: CreditCard },
   { href: "/settings/integrations", label: "Integrations",     icon: Plug      },
 ];
 
@@ -157,26 +156,17 @@ function NewListingLink() {
   );
 }
 
-// ─── User chip (real Clerk identity + plan badge) ───────────────────────────
+// ─── User chip (real Clerk identity + credits badge) ────────────────────────
 
 function UserChip() {
   const { user } = useUser();
-  const [plan, setPlan] = useState<Plan | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [credits, setCredits] = useState<MyCredits | null>(null);
 
-  // Pull the EFFECTIVE plan from the quota engine (which auto-expires
-  // past-due paid plans to "free" and flags admins). One server-action
-  // call on mount — cheap, single Supabase query, cached for the rest
-  // of the session. We don't re-fetch on route change since plans
-  // rarely flip mid-session and any change goes through /verify or
-  // the webhook which then triggers its own page reload via the
-  // billing settings flow.
+  // One server-action call on mount; not re-fetched on route change.
   useEffect(() => {
     let cancelled = false;
-    getQuotaSummaryForCurrentUser().then((q) => {
-      if (cancelled || !q) return;
-      setPlan(q.plan as Plan);
-      setIsAdmin(q.is_admin);
+    getMyCredits().then((c) => {
+      if (!cancelled) setCredits(c);
     });
     return () => { cancelled = true; };
   }, []);
@@ -194,11 +184,11 @@ function UserChip() {
         <p className="truncate text-xs font-medium text-zinc-800">
           {user?.firstName ?? user?.username ?? "You"}
         </p>
-        {/* Plan badge slides in once the quota summary returns. Shown
-            on its own line below the name so the user identity stays
-            the dominant text. */}
-        {plan ? (
-          <PlanBadge plan={plan} isAdmin={isAdmin} size="xs" className="mt-0.5" />
+        {/* Credits badge slides in once the balance returns. Shown on
+            its own line below the name so the user identity stays the
+            dominant text. */}
+        {credits ? (
+          <CreditsBadge credits={credits} size="xs" className="mt-0.5" />
         ) : (
           <p className="truncate text-[10px] text-zinc-400">
             {user?.primaryEmailAddress?.emailAddress ?? ""}

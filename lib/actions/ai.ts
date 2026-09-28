@@ -1,6 +1,5 @@
 "use server";
 
-import { auth } from "@clerk/nextjs/server";
 // Gemini-client abstraction — picks Vertex AI or AI Studio based on env.
 // Replaces the previous direct `new GoogleGenerativeAI(apiKey)` instantiation.
 // See lib/ai/gemini-client.ts for backend-selection details + roll-back path.
@@ -44,43 +43,23 @@ import {
   buildDescriptionAndHighlightsStyleBlock,
   buildDescriptionStyleBlock,
 } from "@/lib/ai/content-style-rules";
-import { pickModelForPlan, pickModelForOwnImagesFlow, type ModelKind } from "@/lib/billing/ai-models";
-import { getQuotaSummary } from "@/lib/billing/quota";
+import { pickModelForOwnImagesFlow, type ModelKind } from "@/lib/billing/ai-models";
 import { trackGeminiCall, isQuotaError } from "@/lib/ai/quota-telemetry";
-import type { Plan } from "@/lib/billing/plans";
 
-// ─── Tier-aware model selection helper ──────────────────────────────────────
+// ─── Model selection ────────────────────────────────────────────────────────
 //
-// Resolves the user's effective plan via the quota engine (which knows
-// about admins + expired-paid-plan-downgrades) and returns the right
-// Gemini model for the requested kind of call. Falls back gracefully
-// to undefined if there's no userId (callGemini will then use the
-// global PREFERRED_MODELS array — same as before this commit).
+// One model per kind of call for every seller (lib/billing/ai-models.ts).
+// The plan tiers that once picked a pricier model for paying sellers (and,
+// while everything was free, Gemini 2.5 Pro for everyone) were removed
+// 2026-09-28. The user id and forceBestModel arguments are left over from
+// then; they no longer change the answer.
 
 async function resolveModel(
-  userId: string | null | undefined,
+  _userId: string | null | undefined,
   kind: ModelKind,
-  opts: { forceBestModel?: boolean } = {},
+  _opts: { forceBestModel?: boolean } = {},
 ): Promise<string | undefined> {
-  // forceBestModel: bypass the tier ladder entirely and return the
-  // model pinned for the "own images" analyze flow. Same model for
-  // every seller — Free / Starter / Pro / Business — because the
-  // auto-analyze pipeline is the only active listing-creation path
-  // and we want consistent output quality across the user base.
-  // The dedicated model is defined in lib/billing/ai-models.ts so a
-  // future swap is a one-line edit.
-  if (opts.forceBestModel) {
-    return pickModelForOwnImagesFlow(kind);
-  }
-  if (!userId) return undefined;
-  try {
-    const summary = await getQuotaSummary(userId);
-    return pickModelForPlan(summary.plan as Plan, kind, { isAdmin: summary.is_admin });
-  } catch {
-    // Quota lookup is non-critical for model selection — degrade
-    // silently to the global default.
-    return undefined;
-  }
+  return pickModelForOwnImagesFlow(kind);
 }
 
 // ─── Output types ─────────────────────────────────────────────────────────────
@@ -501,12 +480,9 @@ async function fetchImagePart(url: string): Promise<ImageFetchResult> {
 async function callGemini(
   prompt: string,
   imageUrls: string[],
-  // Optional tier-based model override. When provided, we try this
+  // Optional model override (resolveModel). When provided, we try this
   // model FIRST (instead of the PREFERRED_MODELS array). If it errors
-  // out we fall through to the normal preference list. This lets paid
-  // users get Gemini 2.5 Flash while free users get the cheaper
-  // 2.0 Flash, without forcing a full pipeline rewrite. See
-  // lib/billing/ai-models.ts → pickModelForPlan().
+  // out we fall through to the normal preference list.
   preferredModel?: string,
 ): Promise<string> {
   // Backend selection (Vertex AI vs AI Studio) is resolved per-call via
@@ -570,8 +546,8 @@ async function callGemini(
     return `${kind}${stage} model ${name} failed: ${message.slice(0, 200)}`;
   };
 
-  // 1. Caller passed a tier-aware preferred model (e.g. Free → 2.0 Flash,
-  //    Paid → 2.5 Flash). Try it first — succeeds in the common case.
+  // 1. Caller passed a preferred model (resolveModel). Try it first —
+  //    succeeds in the common case.
   //    On failure (model unavailable, throttled, deprecated) fall through
   //    to the global cache + preference list.
   if (preferredModel) {
@@ -949,11 +925,7 @@ export async function analyzeProductImages(
     );
   }
 
-  // Resolve the tier-preferred Gemini model for this user (Free →
-  // 2.0 Flash, Paid → 2.5 Flash). One quota lookup per call; if it
-  // fails for any reason we degrade silently to the global default.
-  const { userId } = await auth();
-  const visionModel = await resolveModel(userId, "vision");
+  const visionModel = await resolveModel(null, "vision");
 
   // Load every category Jumia accepts listings on — listable leaves AND
   // listable parents. Vendor Center allows publishing into a parent
@@ -1145,11 +1117,7 @@ type Environment = NonNullable<ProductDescription["environment"]>;
 export async function aiPassA_describeProduct(
   imageUrls: string[],
   userContext?: string | null,   // free-text from the seller, e.g. "this is a pack of 6, teal not blue"
-  // forceBestModel: bypass the tier ladder and force Gemini 2.5 Pro
-  // for every user. Used by the listing analyze pipeline to give Free
-  // sellers the same quality as Business sellers on the only flow that
-  // is currently active. Falls through to the global fallback chain
-  // if the premium model errors.
+  // forceBestModel: no longer changes the model (see resolveModel).
   opts: { forceBestModel?: boolean } = {},
 ): Promise<ProductDescription> {
   if (!imageUrls.length) throw new Error("No images provided");
@@ -1170,10 +1138,7 @@ export async function aiPassA_describeProduct(
   }
   if (!process.env.GOOGLE_API_KEY) throw new Error("GOOGLE_API_KEY is not set.");
 
-  // Tier-aware model selection (Free → Lite, Paid → Flash, Business → Pro).
-  // When forceBestModel is set, every caller gets Gemini 2.5 Pro.
-  const { userId } = await auth();
-  const visionModel = await resolveModel(userId, "vision", { forceBestModel: opts.forceBestModel });
+  const visionModel = await resolveModel(null, "vision", { forceBestModel: opts.forceBestModel });
 
   // The full Jumia content policy — includes the verbatim banned-words
   // instruction, so we don't need restrictedInstr separately here.
@@ -1408,8 +1373,7 @@ export async function aiPassB0_pickDepartment(
   }
   if (!process.env.GOOGLE_API_KEY) throw new Error("GOOGLE_API_KEY is not set.");
 
-  const { userId: deptUserId } = await auth();
-  const deptVisionModel = await resolveModel(deptUserId, "vision", { forceBestModel: opts.forceBestModel });
+  const deptVisionModel = await resolveModel(null, "vision", { forceBestModel: opts.forceBestModel });
 
   const list = departments.map((d, i) => `${i + 1}. ${d.name}`).join("\n");
 
@@ -1509,7 +1473,7 @@ export async function aiPassB_rankCategory(
   // visually-similar candidates by what the product is actually FOR.
   useCase?: string | null,
   environment?: ProductDescription["environment"],
-  // Force the premium model across all tiers (see Pass A for rationale).
+  // forceBestModel: no longer changes the model (see resolveModel).
   opts: { forceBestModel?: boolean } = {},
 ): Promise<RankingResult> {
   if (candidates.length === 0) {
@@ -1534,9 +1498,7 @@ export async function aiPassB_rankCategory(
   }
   if (!process.env.GOOGLE_API_KEY) throw new Error("GOOGLE_API_KEY is not set.");
 
-  // Tier-aware model selection — Pass B is a vision call.
-  const { userId: rankUserId } = await auth();
-  const rankVisionModel = await resolveModel(rankUserId, "vision", { forceBestModel: opts.forceBestModel });
+  const rankVisionModel = await resolveModel(null, "vision", { forceBestModel: opts.forceBestModel });
 
   const candidateList = candidates
     .map((c, i) => `${i + 1}. ${c.code} — ${c.path}${c.is_leaf === false ? " [PARENT category — has more specific sub-categories on Jumia]" : ""}${liveMarker(c.liveExample)}`)
@@ -1616,7 +1578,7 @@ export async function extractAttributesForCategory(
   imageUrls:    string[],
   categoryCode: number,
   userContext?: string | null,
-  // Force the premium model across all tiers (see Pass A for rationale).
+  // forceBestModel: no longer changes the model (see resolveModel).
   opts: { forceBestModel?: boolean } = {},
 ): Promise<{
   dynamic_attributes: Record<string, string>;
@@ -1653,9 +1615,7 @@ export async function extractAttributesForCategory(
     ? `\n\nSELLER CONTEXT (treat as authoritative — these are things the seller knows that the images don't show, e.g. pack size, variant, exact spec):\n"${userContext.trim()}"\n`
     : "";
 
-  // Tier-aware model selection — Pass C is a vision call.
-  const { userId: attrUserId } = await auth();
-  const attrVisionModel = await resolveModel(attrUserId, "vision", { forceBestModel: opts.forceBestModel });
+  const attrVisionModel = await resolveModel(null, "vision", { forceBestModel: opts.forceBestModel });
 
   // Look up the category path so the policy block can specialise its
   // image rules (Fashion vs everything else). One extra DB hit per Pass
@@ -1846,8 +1806,7 @@ export async function aiPassBC_pickAndFill(
 
   if (!process.env.GOOGLE_API_KEY) throw new Error("GOOGLE_API_KEY is not set.");
 
-  const { userId } = await auth();
-  const visionModel = await resolveModel(userId, "vision", { forceBestModel: opts.forceBestModel });
+  const visionModel = await resolveModel(null, "vision", { forceBestModel: opts.forceBestModel });
 
   // Cap schemas at the first 20 inferable attributes per candidate so the
   // prompt stays under control even for huge categories like Smartphones
@@ -2128,8 +2087,7 @@ Output ONLY this JSON shape, no markdown, no prose:
   "reasoning": "one short line"
 }`;
 
-  const { userId } = await auth();
-  const visionModel = await resolveModel(userId, "vision", { forceBestModel: opts.forceBestModel });
+  const visionModel = await resolveModel(null, "vision", { forceBestModel: opts.forceBestModel });
 
   let raw: string;
   try {
@@ -2237,8 +2195,7 @@ Rules:
 
 Output ONLY the expanded description text. No JSON wrapper, no markdown fences, no quotes around the output, no explanation.`;
 
-  const { userId } = await auth();
-  const textModel = await resolveModel(userId, "text", { forceBestModel: opts.forceBestModel });
+  const textModel = await resolveModel(null, "text", { forceBestModel: opts.forceBestModel });
 
   try {
     const raw = await callGemini(prompt, [], textModel);
@@ -2348,9 +2305,7 @@ export async function analyzeProductDescription(
     );
   }
 
-  // Tier-aware model selection — no images here, so "text" kind.
-  const { userId: descUserId } = await auth();
-  const descTextModel = await resolveModel(descUserId, "text");
+  const descTextModel = await resolveModel(null, "text");
 
   // Same pool as the image path — listable parents too, not just
   // leaves — plus the brand catalogue so the AI binds to real names.
@@ -2625,11 +2580,9 @@ Examples:
   // No image is also fine; rejection text alone is usually enough.
   const imageUrls = (listing.images ?? []).slice(0, 1);
 
-  // Tier-aware model selection — rejection resolver is vision when
-  // images are present, text otherwise.
-  const { userId: resolveUserId } = await auth();
+  // Vision when images are present, text otherwise.
   const resolveModelName = await resolveModel(
-    resolveUserId,
+    null,
     imageUrls.length > 0 ? "vision" : "text",
   );
 

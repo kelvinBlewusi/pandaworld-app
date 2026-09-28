@@ -17,19 +17,13 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { ListingRow, ListingInsert } from "@/lib/supabase/types";
-import { checkQuota, incrementUsage } from "@/lib/billing/quota";
-import { PLANS, getNextTierUpgrade } from "@/lib/billing/plans";
 
-export function buildQuotaError(plan: string, used: number, limit: number): Error {
-  const next = getNextTierUpgrade(plan as keyof typeof PLANS);
-  const upgradeNote = next
-    ? ` Upgrade to ${PLANS[next].name} (${PLANS[next].display_price}/month) for ${PLANS[next].monthly_listings} listings.`
-    : " You're already on the highest tier — wait for next period or contact support.";
-  return new Error(
-    `QUOTA_EXCEEDED: You've used ${used} of ${limit} listings on the ${PLANS[plan as keyof typeof PLANS].name} plan this month.${upgradeNote}`
-  );
-}
-
+/**
+ * Creating a draft is free: what costs credits is the AI draft that fills
+ * it (WHATSAPP_DRAFT_CREDIT_COST, charged by the WhatsApp worker and the
+ * web auto-analyze route after it succeeds). The monthly listing quota
+ * that used to be checked here was removed 2026-09-28.
+ */
 export async function createListingForUser(userId: string, input: {
   title?: string;
   images?: string[];
@@ -51,12 +45,6 @@ export async function createListingForUser(userId: string, input: {
   whatsapp_seq?: number | null;
 }): Promise<ListingRow> {
   const db = createServerClient();
-
-  // ── Plan enforcement: per-period listing quota ───────────────────────────
-  const quota = await checkQuota(userId, "listing");
-  if (!quota.allowed) {
-    throw buildQuotaError(quota.plan, quota.used, quota.limit);
-  }
 
   const sku = `PA-${Date.now().toString(36).toUpperCase()}`;
 
@@ -105,10 +93,6 @@ export async function createListingForUser(userId: string, input: {
     .single();
 
   if (error) throw new Error(error.message);
-
-  // Bump the period counter only AFTER a successful insert — keeps the
-  // quota accurate even if Supabase errors mid-flight.
-  await incrementUsage(userId, "listing");
 
   revalidatePath("/listings");
   return data as ListingRow;

@@ -3,11 +3,9 @@
  * from the extension dashboard / marketing page's "Donate" modal
  * (components/extension/donate-modal.tsx).
  *
- * Stands in for app/api/extension/credits/checkout while
- * lib/billing/free-for-all.ts's FREE_FOR_ALL_MODE is on — that route and
- * its whole credit-pack purchase flow are left untouched so switching
- * back to paid credits later is just re-wiring the UI, not rebuilding
- * anything. A donation grants nothing back — see lib/billing/donations.ts.
+ * Stands in for app/api/extension/credits/checkout while billing is off
+ * (lib/billing/mode.ts). A donation grants nothing back — see
+ * lib/billing/donations.ts.
  */
 
 import { NextResponse } from "next/server";

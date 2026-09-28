@@ -1,37 +1,48 @@
 import Link from "next/link";
-import { Check, Sparkles, Zap, Rocket, Briefcase, ArrowRight } from "lucide-react";
+import { auth } from "@clerk/nextjs/server";
+import { ArrowRight, Check, Coins } from "lucide-react";
 import { MarketingFooter } from "@/components/marketing/footer";
-import { Wordmark } from "@/components/marketing/wordmark";
-import { getPublicPlans, type Plan } from "@/lib/billing/plans";
+import { HomeFloatingNav } from "@/components/marketing/home-floating-nav";
+import { BuyCreditsButton } from "@/components/billing/buy-credits-button";
+import { isBillingEnabled } from "@/lib/billing/mode";
+import {
+  CREDIT_PACKS,
+  FREE_SIGNUP_CREDITS,
+  IMAGE_CREDIT_COST,
+  LISTING_CREDIT_COST,
+  POPULAR_PACK_ID,
+  WHATSAPP_DRAFT_CREDIT_COST,
+  packReach,
+} from "@/lib/billing/credit-packs";
 
-// ─── Public pricing ──────────────────────────────────────────────────────────
+// ─── Public pricing: credit packs ─────────────────────────────────────────────
 //
-// Lives outside the (main) layout so logged-out visitors can read pricing
-// without bouncing through Clerk. Every tier number comes from
-// lib/billing/plans.ts — change a price/quota there and this page updates.
+// Pay-as-you-go credits (lib/billing/credit-packs.ts) — the only pricing
+// since the monthly plans were removed 2026-09-28. Every number on this
+// page comes from that file, so a price change there updates it.
 //
-// SEO note: this page is intentionally text-heavy (rather than a
-// React-only spec) so the GHS amounts get indexed by Google and surface
-// in seller searches like "Jumia listing tool Ghana price".
+// Reads the billing switch (lib/billing/mode.ts): while billing is off,
+// a note says nothing is charged yet and the packs can't be bought; once
+// it's on, signed-in sellers can buy right here.
+//
+// Lives outside the (main) layout so logged-out visitors can read it.
+// Text-heavy on purpose, so the GHS amounts get indexed.
 
-// Per-page metadata — overrides the root layout's defaults for SEO.
-// The title template `%s · PandaWorld` in app/layout.tsx renders this
-// as "Pricing · PandaWorld" in the browser tab + SERP.
 export const metadata: import("next").Metadata = {
   title:       "Pricing — Jumia Africa Listing Tool",
-  description: "PandaWorld pricing for Jumia sellers across Africa. Free for 5 listings/month. Starter GHS 30, Pro GHS 65, Business GHS 120 per month. Pay with Mobile Money or card. Cancel any time.",
+  description: `PandaWorld pricing for Jumia sellers: pay per listing with credits, no subscription. ${FREE_SIGNUP_CREDITS} free credits when you sign up. Credit packs from GHS ${Math.min(...CREDIT_PACKS.map((p) => p.amountGhs))}. Pay with Mobile Money or card.`,
   keywords: [
     "PandaWorld pricing",
     "Jumia tool pricing",
     "AI listing tool cost",
-    "Jumia seller subscription",
+    "Jumia listing credits",
     "Jumia Africa pricing",
     "Jumia Nigeria tool cost",
     "Jumia Kenya pricing",
   ],
   openGraph: {
     title:       "Pricing — PandaWorld for Jumia Africa Sellers",
-    description: "Free for 5 listings/month. Paid plans from GHS 30/month. Pay with Mobile Money or card. Cancel any time.",
+    description: `Pay per listing, no subscription. ${FREE_SIGNUP_CREDITS} free credits to start. Pay with Mobile Money or card.`,
     type:        "website",
   },
   alternates: {
@@ -39,58 +50,154 @@ export const metadata: import("next").Metadata = {
   },
 };
 
-// Map each tier id to a Lucide icon. Kept here (not in plans.ts) because
-// the icon set is React-only — plans.ts is consumed by server code that
-// can't import lucide-react cleanly.
-const TIER_ICON: Partial<Record<Plan, { Icon: React.ElementType; bg: string }>> = {
-  free:     { Icon: Sparkles,  bg: "bg-zinc-100 text-zinc-600" },
-  starter:  { Icon: Zap,       bg: "bg-emerald-50 text-emerald-600" },
-  pro:      { Icon: Rocket,    bg: "bg-blue-50 text-blue-600" },
-  business: { Icon: Briefcase, bg: "bg-purple-50 text-purple-600" },
-};
+const DASHBOARD_REDIRECT = "/extension/dashboard";
 
-export default function PricingPage() {
-  const tiers = getPublicPlans();
+const COSTS = [
+  { what: "Chrome extension autofill", detail: "One product filled in on Vendor Center", credits: LISTING_CREDIT_COST },
+  { what: "WhatsApp listing", detail: "Photos in, a complete draft pushed to Jumia", credits: WHATSAPP_DRAFT_CREDIT_COST },
+  { what: "AI product photo", detail: "Polish, studio rebuild or generate, per photo", credits: IMAGE_CREDIT_COST },
+];
+
+function ghs(amount: number): string {
+  return `GHS ${amount.toFixed(2)}`;
+}
+
+export default async function PricingPage() {
+  const { userId } = await auth();
+  const billingOn = await isBillingEnabled();
+
+  const signInHref = `/sign-in?redirect_url=${DASHBOARD_REDIRECT}`;
+  const signUpHref = `/sign-up?redirect_url=${DASHBOARD_REDIRECT}`;
+  const calculatorHref = userId ? "/extension/calculator" : "/sign-in?redirect_url=/extension/calculator";
+
+  // Offers for search engines: the packs only while they're actually for sale.
+  const pricingLd = {
+    "@context": "https://schema.org",
+    "@type":    "Product",
+    name:       "PandaWorld listing credits",
+    description: "Pay-as-you-go credits for AI-drafted Jumia listings.",
+    offers: [
+      { "@type": "Offer", name: "Free", price: "0", priceCurrency: "GHS", description: `${FREE_SIGNUP_CREDITS} free credits when you sign up` },
+      ...(billingOn
+        ? CREDIT_PACKS.map((p) => ({
+            "@type": "Offer",
+            name: `${p.credits} credits`,
+            price: String(p.amountGhs),
+            priceCurrency: "GHS",
+          }))
+        : []),
+    ],
+  };
 
   return (
     <div className="min-h-screen bg-white text-zinc-900">
-      <MarketingNav />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(pricingLd) }} />
+
+      <HomeFloatingNav
+        signInHref={signInHref}
+        signUpHref={signUpHref}
+        calculatorHref={calculatorHref}
+        pricingLive={billingOn}
+      />
 
       <section className="border-b border-zinc-100">
-        <div className="mx-auto max-w-6xl px-6 py-20 text-center">
-          <p className="text-xs font-semibold uppercase tracking-widest text-orange-500">
-            Pricing
-          </p>
-          <h1 className="mt-3 text-3xl font-bold tracking-tight sm:text-5xl">
-            Pick the plan that fits your store.
+        <div className="mx-auto max-w-4xl px-6 py-20 text-center">
+          <p className="text-sm font-semibold uppercase tracking-widest text-orange-500">Pricing</p>
+          <h1 className="mt-3 text-balance text-4xl font-bold tracking-tight sm:text-5xl">
+            Pay per listing. No subscription.
           </h1>
-          <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-zinc-600 sm:text-base">
-            5 free listings every month, no card needed. Move to a paid
-            plan when you scale. Cancel any time.
+          <p className="mx-auto mt-4 max-w-xl text-base leading-relaxed text-zinc-600 sm:text-lg">
+            Start with {FREE_SIGNUP_CREDITS} free credits, no card needed. Buy a pack when you need more.
+            Credits never expire.
+          </p>
+          {!billingOn && (
+            <p className="mx-auto mt-6 max-w-xl rounded-xl bg-orange-50 px-4 py-3 text-sm text-orange-800">
+              PandaWorld is free while we&apos;re getting started: nothing is charged yet. These are the
+              prices once billing begins.
+            </p>
+          )}
+        </div>
+      </section>
+
+      {/* What costs credits */}
+      <section className="bg-white">
+        <div className="mx-auto max-w-4xl px-6 py-16">
+          <h2 className="text-2xl font-bold sm:text-3xl">What a listing costs</h2>
+          <div className="mt-6 overflow-hidden rounded-2xl border border-zinc-200">
+            <table className="w-full text-left">
+              <tbody className="divide-y divide-zinc-100">
+                {COSTS.map((c) => (
+                  <tr key={c.what}>
+                    <td className="px-5 py-4">
+                      <p className="font-semibold text-zinc-900">{c.what}</p>
+                      <p className="text-sm text-zinc-500">{c.detail}</p>
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-4 text-right text-lg font-bold">
+                      {c.credits} credits
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-3 text-sm text-zinc-500">
+            A draft is only charged when it succeeds. Fixing a listing Jumia rejected is free.
           </p>
         </div>
       </section>
 
-      {/* Pricing cards */}
+      {/* Packs */}
       <section className="bg-zinc-50">
-        <div className="mx-auto max-w-6xl px-6 py-16">
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
-            {tiers.map((tier) => {
-              const iconConfig = TIER_ICON[tier.id] ?? TIER_ICON.free!;
+        <div className="mx-auto max-w-5xl px-6 py-16">
+          <h2 className="text-2xl font-bold sm:text-3xl">Credit packs</h2>
+          <div className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-3">
+            {CREDIT_PACKS.map((p) => {
+              const { autofills, drafts } = packReach(p.credits);
+              const perCredit = p.amountGhs / p.credits;
+              const popular = p.id === POPULAR_PACK_ID;
               return (
-                <PricingCard
-                  key={tier.id}
-                  tier={tier.name}
-                  price={tier.display_price}
-                  period={tier.period === "month" ? "/ month" : "forever"}
-                  tagline={tier.description}
-                  icon={iconConfig.Icon}
-                  iconBg={iconConfig.bg}
-                  badge={tier.badge}
-                  features={tier.features}
-                  ctaLabel={tier.id === "free" ? "Start free" : `Choose ${tier.name}`}
-                  ctaHref="/sign-up"
-                />
+                <div
+                  key={p.id}
+                  className={`relative flex flex-col rounded-2xl border bg-white p-6 shadow-sm ${popular ? "border-orange-300" : "border-zinc-200"}`}
+                >
+                  {popular && (
+                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-orange-500 px-3 py-0.5 text-xs font-semibold uppercase tracking-wide text-white">
+                      Popular
+                    </span>
+                  )}
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-50 text-orange-500">
+                    <Coins className="h-5 w-5" />
+                  </div>
+                  <h3 className="mt-5 text-lg font-bold">{p.credits} credits</h3>
+                  <p className="mt-1 text-3xl font-bold">GHS {p.amountGhs}</p>
+                  <ul className="mt-5 flex-1 space-y-2.5 text-sm text-zinc-700">
+                    <li className="flex items-start gap-2">
+                      <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+                      About {autofills} extension autofills ({ghs(perCredit * LISTING_CREDIT_COST)} each)
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+                      or about {drafts} WhatsApp listings ({ghs(perCredit * WHATSAPP_DRAFT_CREDIT_COST)} each)
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+                      Never expires
+                    </li>
+                  </ul>
+                  <div className="mt-6">
+                    {billingOn && userId ? (
+                      <BuyCreditsButton className="h-11 w-full rounded-lg" label="Buy credits" />
+                    ) : (
+                      <Link
+                        href={userId ? DASHBOARD_REDIRECT : signUpHref}
+                        className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-700 transition-colors hover:border-zinc-900 hover:bg-zinc-900 hover:text-white"
+                      >
+                        {userId ? "Open dashboard" : "Start free"}
+                        <ArrowRight className="h-4 w-4" />
+                      </Link>
+                    )}
+                  </div>
+                </div>
               );
             })}
           </div>
@@ -100,60 +207,45 @@ export default function PricingPage() {
       {/* FAQ */}
       <section className="border-t border-zinc-100 bg-white">
         <div className="mx-auto max-w-3xl px-6 py-20">
-          <h2 className="text-2xl font-bold sm:text-3xl">
-            Frequently asked
-          </h2>
+          <h2 className="text-2xl font-bold sm:text-3xl">Frequently asked</h2>
           <dl className="mt-8 space-y-6">
             <FAQ
-              q="What counts as a listing?"
-              a="A product you've created in PandaWorld, with AI-generated title, description, attributes, and images. You can edit a draft as many times as you like — only the act of CREATING a new draft uses up your monthly quota. Pushing the same listing to Jumia multiple times (e.g. after a QC fix) doesn't cost extra."
+              q="Is there a subscription?"
+              a="No. You buy credits when you need them and spend them as you list. There's nothing to cancel."
             />
             <FAQ
-              q="What's the difference between a listing and an image polish?"
-              a="A listing is the analysis pass (title, description, category, attributes). An image polish is when you ask us to clean up a product photo — remove the background, add a white studio look, or rebuild it with AI. They're metered separately so a seller who doesn't need polishing doesn't pay for it."
+              q="Do credits expire?"
+              a="No. Credits you buy stay on your account until you use them."
             />
             <FAQ
-              q="What happens when I hit my monthly quota?"
-              a="You'll see an upgrade prompt naming the next tier. Existing listings stay live; only NEW listing creation is paused until you upgrade or the next billing period starts (the quota resets automatically 30 days after your last payment)."
+              q="Do the same credits work on WhatsApp and the Chrome extension?"
+              a="Yes. One balance covers WhatsApp listings, extension autofills and AI photos."
             />
             <FAQ
-              q="Can I cancel any time?"
-              a="Yes. Cancel from Settings → Billing. You keep your paid tier features until the end of the current billing period, then drop back to Free. No long-term contracts."
+              q="What if a draft fails or Jumia rejects my listing?"
+              a="A draft is only charged when it succeeds, and fixing a listing Jumia rejected costs nothing."
             />
             <FAQ
               q="What payment methods do you accept?"
-              a="Paystack — local Ghana cards (Visa, Mastercard, Verve), mobile money (MTN, AirtelTigo, Vodafone), and bank transfer. International Visa and Mastercard accepted with the international transaction fee Paystack charges."
-            />
-            <FAQ
-              q="Do I keep my listings if I cancel?"
-              a="Yes. Existing listings stay in your dashboard and live on Jumia. You just can't create new ones above the Free-tier cap until you re-upgrade."
-            />
-            <FAQ
-              q="Is there a free trial?"
-              a="The Free plan IS the trial. You get 5 listings each month forever — enough to evaluate whether a paid plan is worth it for your volume."
+              a="Paystack: Ghana cards (Visa, Mastercard, Verve), mobile money (MTN, AirtelTigo, Telecel) and bank transfer. International Visa and Mastercard work too, with Paystack's international fee."
             />
             <FAQ
               q="What about VAT / NHIL?"
-              a="Pricing shown is the gross amount Paystack collects. If you need a VAT invoice for business expense reporting, email us at the contact on the support button."
+              a="Prices shown are the amount Paystack collects. If you need a VAT invoice for your business records, contact us through the support button."
             />
           </dl>
         </div>
       </section>
 
-      {/* CTA */}
       <section className="bg-zinc-50">
         <div className="mx-auto max-w-3xl px-6 py-20 text-center">
-          <h2 className="text-2xl font-bold sm:text-3xl">
-            Ready when you are.
-          </h2>
-          <p className="mt-3 text-sm text-zinc-600">
-            5 free listings every month. No card. Cancel any time.
-          </p>
+          <h2 className="text-2xl font-bold sm:text-3xl">Ready when you are.</h2>
+          <p className="mt-3 text-base text-zinc-600">{FREE_SIGNUP_CREDITS} free credits. No card.</p>
           <Link
-            href="/sign-up"
+            href={userId ? DASHBOARD_REDIRECT : signUpHref}
             className="mt-8 inline-flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-orange-500/20 transition-all hover:bg-orange-600"
           >
-            Get started
+            {userId ? "Open dashboard" : "Get started"}
             <ArrowRight className="h-4 w-4" />
           </Link>
         </div>
@@ -164,120 +256,11 @@ export default function PricingPage() {
   );
 }
 
-// ─── Components ──────────────────────────────────────────────────────────────
-
-function MarketingNav() {
-  return (
-    <header className="sticky top-0 z-20 border-b border-zinc-100 bg-white/80 backdrop-blur">
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-        <Link href="/" aria-label="pandaworld home">
-          <Wordmark size={28} />
-        </Link>
-        <nav className="flex items-center gap-1 sm:gap-4">
-          <Link
-            href="/pricing"
-            className="rounded-md px-3 py-1.5 text-sm font-medium text-orange-600"
-          >
-            Pricing
-          </Link>
-          <Link
-            href="/sign-in"
-            className="rounded-md px-3 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
-          >
-            Sign in
-          </Link>
-          <Link
-            href="/sign-up"
-            className="rounded-md bg-orange-500 px-3 py-1.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-orange-600"
-          >
-            Get started
-          </Link>
-        </nav>
-      </div>
-    </header>
-  );
-}
-
-interface PricingCardProps {
-  tier:      string;
-  price:     string;
-  period:    string;
-  tagline:   string;
-  icon:      React.ElementType;
-  iconBg:    string;
-  features:  string[];
-  ctaLabel:  string;
-  ctaHref:   string;
-  badge?:    string;
-}
-
-function PricingCard({
-  tier,
-  price,
-  period,
-  tagline,
-  icon: Icon,
-  iconBg,
-  features,
-  ctaLabel,
-  ctaHref,
-  badge,
-}: PricingCardProps) {
-  // May 2026 redesign — match the macOS-style toast aesthetic on
-  // /settings/billing. All four tier cards are visually equal-weight
-  // (no orange highlight on "Most popular"), with neutral text-only
-  // badges. The hover lift is the only differentiation, and only when
-  // the card is actually interactive.
-  return (
-    <div
-      className="relative flex flex-col rounded-2xl border border-zinc-200/70 bg-white/95 p-6 shadow-sm transition-all duration-200 [backdrop-filter:saturate(1.5)_blur(16px)] hover:shadow-md hover:border-zinc-300"
-    >
-      {badge && (
-        <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-600 shadow-sm">
-          {badge}
-        </span>
-      )}
-      <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${iconBg}`}>
-        <Icon className="h-5 w-5" />
-      </div>
-      <div className="mt-5 flex items-baseline justify-between">
-        <h3 className="text-lg font-bold">{tier}</h3>
-      </div>
-      <p className="mt-0.5 text-[11px] text-zinc-500">{tagline}</p>
-      <div className="mt-3 flex items-baseline gap-1">
-        <span className="text-3xl font-bold">{price}</span>
-        <span className="text-sm text-zinc-500">{period}</span>
-      </div>
-      <ul className="mt-5 flex-1 space-y-2.5">
-        {features.map((f) => (
-          <li key={f} className="flex items-start gap-2">
-            <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
-            <span className="text-xs text-zinc-700">{f}</span>
-          </li>
-        ))}
-      </ul>
-      {/* CTA wrapper — mt-auto pins the button to the bottom of every
-          card so all four CTAs sit on the same y-line, even when the
-          feature lists differ in length. h-11 keeps button heights
-          identical across cards (mobile + desktop). */}
-      <div className="mt-6 pt-1">
-        <Link
-          href={ctaHref}
-          className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-zinc-300 bg-white px-4 text-sm font-semibold text-zinc-700 transition-colors hover:bg-zinc-900 hover:text-white hover:border-zinc-900"
-        >
-          {ctaLabel}
-          <ArrowRight className="h-4 w-4" />
-        </Link>
-      </div>
-    </div>
-  );
-}
-
 function FAQ({ q, a }: { q: string; a: string }) {
   return (
     <div>
-      <dt className="text-sm font-semibold text-zinc-900">{q}</dt>
-      <dd className="mt-2 text-sm leading-relaxed text-zinc-600">{a}</dd>
+      <dt className="text-base font-semibold text-zinc-900">{q}</dt>
+      <dd className="mt-2 text-base leading-relaxed text-zinc-600">{a}</dd>
     </div>
   );
 }

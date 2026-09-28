@@ -21,6 +21,7 @@ import { Wordmark } from "@/components/marketing/wordmark";
 import { GoogleIcon } from "./google-icon";
 import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 import { WhatsAppBotButton } from "@/components/whatsapp/whatsapp-bot-button";
+import { BuyCreditsModal } from "./buy-credits-modal";
 import type { CreditTransaction } from "@/lib/billing/extension-credits";
 import {
   DropdownMenu,
@@ -71,6 +72,7 @@ export function ExtensionShell({
   notifications,
   notificationsSeenAt,
   isAdmin = false,
+  canBuyCredits = false,
 }: {
   children: React.ReactNode;
   planLabel: string;
@@ -78,8 +80,11 @@ export function ExtensionShell({
   notifications: CreditTransaction[];
   notificationsSeenAt: string | null;
   isAdmin?: boolean;
+  /** Show "Buy credits" — only while billing is on (lib/billing/mode.ts). */
+  canBuyCredits?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [buyOpen, setBuyOpen] = useState(false);
   const [items, setItems] = useState(notifications);
   // seenAt drives the bell's own alert dot — it clears the instant the
   // dropdown opens. displaySeenAt drives each item's "new" highlight and
@@ -195,6 +200,15 @@ export function ExtensionShell({
             <span className="flex items-center gap-1.5 rounded-full border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-600">
               <span className="h-1.5 w-1.5 rounded-full bg-orange-500" /> Credits: {creditsLabel}
             </span>
+            {canBuyCredits && (
+              <button
+                type="button"
+                onClick={() => setBuyOpen(true)}
+                className="rounded-full bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-orange-600"
+              >
+                Buy credits
+              </button>
+            )}
             <DropdownMenu onOpenChange={handleOpenChange}>
               <DropdownMenuTrigger asChild>
                 <button
@@ -267,6 +281,7 @@ export function ExtensionShell({
           <div className="min-h-full p-4 sm:p-6 lg:p-8">{children}</div>
         </main>
       </div>
+      {canBuyCredits && <BuyCreditsModal open={buyOpen} onClose={() => setBuyOpen(false)} />}
     </div>
   );
 }

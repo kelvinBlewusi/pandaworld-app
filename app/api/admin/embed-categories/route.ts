@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { isAdmin } from "@/lib/billing/admin";
+import { isAdmin } from "@/lib/auth/is-admin";
 import { embedPendingCategories } from "@/lib/jumia/embed-categories";
 
 // Embedding ~10k categories takes a few minutes total. Bump the
