@@ -1,5 +1,11 @@
 -- ─── Run ONCE, by hand, in the Supabase SQL editor ──────────────────────────
 --
+-- The commands below are the ORIGINAL schedules. Since 2026-09-28 each job
+-- checks for work before calling Vercel (Hobby's 4 hours of Active CPU a
+-- month were going on idle calls); after running this file, also run
+-- migrations/2026-09-28_cron-only-when-there-is-work.sql, or the jobs go
+-- back to calling Vercel ~6,000 times a day.
+--
 -- NOT an auto-applied migration: it needs the real CRON_SECRET, which lives
 -- in Vercel's env vars and deliberately isn't in this repo. Paste it into
 -- step 1 below and run the file in the SQL editor.

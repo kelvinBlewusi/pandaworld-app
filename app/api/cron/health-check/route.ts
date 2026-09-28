@@ -71,9 +71,10 @@ const STUCK_AFTER = {
  * because it asks the database.
  *
  * A missing object is reported the same way a stuck queue is: loudly, once
- * every five minutes, until someone runs the migration. That is the whole
- * point — shipping code whose migration was never applied should be noisy
- * within minutes, not discovered by a seller weeks later.
+ * an hour (pg_cron job 'platform-health-check'), until someone runs the
+ * migration. That is the whole point — shipping code whose migration was
+ * never applied should be noisy within the hour, not discovered by a
+ * seller weeks later.
  *
  * Each probe must be harmless to run repeatedly against production, so they
  * either read, or write against a key that cannot exist.

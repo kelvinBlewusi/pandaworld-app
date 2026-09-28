@@ -251,6 +251,17 @@ pipeline above:
     Supabase Vault rather than inlined, since `cron.job.command` is
     readable by any DB user). It schedules both the worker and
     `/api/cron/jumia-feeds` every minute.
+  - **The jobs only call Vercel when there is work (2026-09-28)**:
+    `supabase/migrations/2026-09-28_cron-only-when-there-is-work.sql`.
+    The Hobby plan includes 4 hours of Active CPU a month, and ~6,000
+    mostly-idle cron calls a day used all of it. Each job now checks
+    Postgres first: the worker runs only for queued/stale jobs or an
+    unclosed settled batch (one worker per 2 jobs, max 3); the feed poll
+    only while a feed is pending (every minute for its first 30 minutes,
+    then every 10); the Jumia keepalive only when a Self Authorization
+    connection is within 6 hours of expiring; the health check hourly.
+    Adding a cron job or changing what a route looks for: keep its SQL
+    check in step, or the route never gets called for the new work.
   - **Two safety properties worth not breaking**: `claim_analysis_jobs`
     uses `FOR UPDATE SKIP LOCKED`, so overlapping ticks (pg_cron + the
     webhook's own nudge) take disjoint work instead of double-analysing

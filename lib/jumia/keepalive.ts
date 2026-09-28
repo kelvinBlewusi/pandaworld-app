@@ -10,6 +10,11 @@
  * refreshJumiaConnection, which holds the per-seller refresh lock, stores
  * the rotated token, and only marks the connection needs_reconnect when
  * Jumia definitively refuses it.
+ *
+ * pg_cron checks every 30 minutes but only calls the route when some
+ * connection is due, using the same rule as isDueForRenewal in SQL
+ * (supabase/migrations/2026-09-28_cron-only-when-there-is-work.sql). Change
+ * RENEW_WITHIN_MS and that check has to change with it.
  */
 
 import { createServerClient } from "@/lib/supabase/server";
