@@ -105,7 +105,7 @@ export const SELF_AUTH_STEPS = [
   `1. Open Jumia Vendor Center and sign in (tap below, or go to ${VENDOR_CENTER_URL}).`,
   "2. Go to Settings → Applications → Create Application → choose *Self Authorization*.",
   `3. Name it "PandaWorld" and create it.`,
-  "4. Next to PandaWorld, in the Actions column, tap the *orange lock icon* (Generate Token) and copy the token.",
+  "4. Tap on the padlock icon 🔒 to generate a token, and copy it.",
   "5. Copy the Client ID and the token, then paste them here — together, or one at a time.",
 ].join("\n");
 
@@ -164,7 +164,7 @@ export async function promptJumiaConnection(
     await sendCtaUrlIfConfigured(
       phoneNumber,
       `${prefix}Jumia stopped accepting PandaWorld's saved token (it was regenerated, or the application was deleted in Vendor Center).\n\n` +
-        "In Vendor Center → Settings → Applications, tap the *orange lock icon* next to PandaWorld to generate a new token, then paste the Client ID and the new token here.",
+        "In Vendor Center → Settings → Applications, tap on the padlock icon 🔒 next to PandaWorld to generate a new token, then paste the Client ID and the new token here.",
       "Open Vendor Center",
       VENDOR_CENTER_URL,
     );

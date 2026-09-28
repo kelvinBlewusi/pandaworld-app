@@ -98,7 +98,7 @@ describe("buildConnectInstructions", () => {
     const text = buildConnectInstructions();
     expect(text).toContain("vendorcenter.jumia.com");
     expect(text).toContain("Self Authorization");
-    expect(text).toContain("Generate Token");
+    expect(text).toContain("padlock icon");
     expect(text).not.toContain("Web Application");
   });
 });

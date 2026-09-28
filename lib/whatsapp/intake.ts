@@ -1190,7 +1190,7 @@ async function handleAwaitingJumiaCredentials(
     await replyButtons(
       phoneNumber,
       "⚠️ Jumia didn't accept that Client ID and token. Check you copied the Client ID of the PandaWorld application " +
-        "(Self Authorization), and paste the token straight after clicking the orange lock icon, before it expires.\n\n" +
+        "(Self Authorization), and paste the token straight after tapping on the padlock icon 🔒, before it expires.\n\n" +
         "Paste your Client ID and a newly generated token again.",
       [{ id: "restart", title: "Restart 🔄" }],
     );

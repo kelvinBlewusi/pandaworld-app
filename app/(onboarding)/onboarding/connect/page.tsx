@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { PadlockIcon } from "@/components/marketing/padlock-icon";
 
 const progressSteps = ["Connect", "Done"];
 
@@ -231,8 +232,7 @@ function SelfAuthForm({ returnTo, onWebApp }: { returnTo: string | null; onWebAp
           </div>
           <div className="ml-10 space-y-1.5 text-sm text-zinc-500">
             <p>
-              On the Manage Applications screen, find PandaWorld and click the{" "}
-              <span className="font-medium text-zinc-700">orange lock icon</span> (Generate Token) in the Actions column.
+              Tap on the padlock icon <PadlockIcon /> to generate a token.
             </p>
             <p>Copy the token, and the application&apos;s <span className="font-medium text-zinc-700">Client ID</span>.</p>
           </div>
@@ -265,7 +265,7 @@ function SelfAuthForm({ returnTo, onWebApp }: { returnTo: string | null; onWebAp
             <div className="space-y-1.5">
               <Label className="text-xs font-medium text-zinc-600">Generated token</Label>
               <textarea
-                placeholder="Paste the token from the orange lock icon"
+                placeholder="Paste the token from the padlock icon"
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
                 rows={3}

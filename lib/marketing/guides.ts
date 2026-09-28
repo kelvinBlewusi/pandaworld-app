@@ -48,7 +48,7 @@ export const GUIDES: Guide[] = [
     steps: [
       "Go to vendorcenter.jumia.com and sign in to your seller account.",
       "In Vendor Center, go to Settings → Applications → Create Application, and choose \"Self Authorization\". Name it PandaWorld.",
-      "On the Manage Applications screen, click the orange lock icon (Generate Token) in the Actions column next to PandaWorld, and copy the token.",
+      "Tap on the padlock icon {padlock} to generate a token, and copy it.",
       "Copy the application's Client ID too.",
       "In PandaWorld, open the Connect Jumia page, pick your country, paste the Client ID and the token, and click \"Connect Jumia\". Or paste both into the WhatsApp chat. Paste the token straight away: a generated token only works for a short time.",
     ],

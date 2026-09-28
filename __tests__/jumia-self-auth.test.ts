@@ -132,7 +132,7 @@ describe("connectSelfAuthorization", () => {
   it("asks for a new token when Jumia says it's expired or used", async () => {
     tokenResponse = { status: 400, body: { error: "invalid_grant" } };
     const result = await connectSelfAuthorization("user_1", CLIENT_ID, OPAQUE_TOKEN, "GH");
-    expect(result).toMatchObject({ ok: false, reason: "bad_token", error: expect.stringContaining("orange lock icon") });
+    expect(result).toMatchObject({ ok: false, reason: "bad_token", error: expect.stringContaining("padlock icon") });
   });
 
   it("rejects something that isn't a token without calling Jumia", async () => {
