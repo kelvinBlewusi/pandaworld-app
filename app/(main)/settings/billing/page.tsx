@@ -3,13 +3,12 @@ import { redirect } from "next/navigation";
 import { Coins, Sparkles } from "lucide-react";
 import { isAdmin } from "@/lib/auth/is-admin";
 import { isBillingEnabled } from "@/lib/billing/mode";
-import { getOrCreateCreditBalance, getRecentTransactions } from "@/lib/billing/extension-credits";
+import { availableCredits, getOrCreateCreditBalance, getRecentTransactions } from "@/lib/billing/extension-credits";
 import {
   CREDIT_PACKS,
   FREE_SIGNUP_CREDITS,
-  IMAGE_CREDIT_COST,
   LISTING_CREDIT_COST,
-  WHATSAPP_DRAFT_CREDIT_COST,
+  LIVE_LISTING_CREDIT_COST,
   packReach,
 } from "@/lib/billing/credit-packs";
 import { BuyCreditsButton } from "@/components/billing/buy-credits-button";
@@ -24,22 +23,24 @@ import { BuyCreditsButton } from "@/components/billing/buy-credits-button";
 export const dynamic = "force-dynamic";
 
 const COSTS = [
-  { label: "Chrome extension autofill",      credits: LISTING_CREDIT_COST },
-  { label: "WhatsApp or web listing draft",   credits: WHATSAPP_DRAFT_CREDIT_COST },
-  { label: "AI photo (polish, rebuild or generate), per photo", credits: IMAGE_CREDIT_COST },
+  { label: "WhatsApp or web listing, when it goes live on Jumia", credits: LIVE_LISTING_CREDIT_COST },
+  { label: "Chrome extension autofill",                           credits: LISTING_CREDIT_COST },
 ];
 
 export default async function BillingSettingsPage() {
   const { userId } = await auth();
   if (!userId) redirect("/sign-in?redirect_url=/settings/billing");
 
-  const [billingOn, balance, activity] = await Promise.all([
+  const [billingOn, balance, available, activity] = await Promise.all([
     isBillingEnabled(),
     getOrCreateCreditBalance(userId),
+    availableCredits(userId),
     getRecentTransactions(userId, 20),
   ]);
   const admin = isAdmin(userId);
   const unlimited = !Number.isFinite(balance);
+  // Credits held for listings waiting on Jumia's review (charged if they go live).
+  const held = unlimited ? 0 : Math.round((balance - available) * 100) / 100;
 
   return (
     <div className="max-w-2xl space-y-8">
@@ -65,6 +66,11 @@ export default async function BillingSettingsPage() {
                 {admin ? "Admin account: nothing is charged." : "PandaWorld is free for now: nothing is charged."}
               </p>
             )}
+            {held > 0 && (
+              <p className="text-xs text-zinc-500">
+                {held} set aside for listings waiting on Jumia&apos;s review, charged only if they go live.
+              </p>
+            )}
           </div>
         </div>
         {billingOn && !admin && <BuyCreditsButton />}
@@ -81,7 +87,7 @@ export default async function BillingSettingsPage() {
           ))}
         </ul>
         <p className="mt-3 text-xs text-zinc-500">
-          New accounts start with {FREE_SIGNUP_CREDITS} free credits. A draft is only charged when it succeeds.
+          New accounts start with {FREE_SIGNUP_CREDITS} free credits. Drafts, redrafts and listings Jumia rejects cost nothing.
         </p>
       </section>
 
@@ -89,13 +95,13 @@ export default async function BillingSettingsPage() {
         <h2 className="font-semibold text-zinc-900">Credit packs</h2>
         <ul className="mt-3 divide-y divide-zinc-100 text-sm">
           {CREDIT_PACKS.map((p) => {
-            const { autofills, drafts } = packReach(p.credits);
+            const { autofills, listings } = packReach(p.credits);
             return (
               <li key={p.id} className="flex items-center justify-between gap-4 py-2.5">
                 <span>
                   <span className="font-semibold text-zinc-900">{p.credits} credits</span>
                   <span className="block text-xs text-zinc-500">
-                    About {autofills} autofills or {drafts} WhatsApp listings
+                    About {listings} live WhatsApp listings or {autofills} autofills
                   </span>
                 </span>
                 <span className="shrink-0 font-semibold text-zinc-900">GHS {p.amountGhs}</span>

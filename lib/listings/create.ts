@@ -19,10 +19,10 @@ import { revalidatePath } from "next/cache";
 import type { ListingRow, ListingInsert } from "@/lib/supabase/types";
 
 /**
- * Creating a draft is free: what costs credits is the AI draft that fills
- * it (WHATSAPP_DRAFT_CREDIT_COST, charged by the WhatsApp worker and the
- * web auto-analyze route after it succeeds). The monthly listing quota
- * that used to be checked here was removed 2026-09-28.
+ * Creating a draft is free: a listing is charged LIVE_LISTING_CREDIT_COST
+ * only when it goes live on Jumia (lib/billing/extension-credits.ts's
+ * chargeLiveListing). The monthly listing quota that used to be checked
+ * here was removed 2026-09-28.
  */
 export async function createListingForUser(userId: string, input: {
   title?: string;

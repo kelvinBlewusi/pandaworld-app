@@ -3,17 +3,18 @@ import { billingSwitchInfo } from "@/lib/billing/mode";
 import { billingReadiness, readyToBill, type CheckStatus } from "@/lib/billing/readiness";
 import {
   FREE_SEARCH_QUERIES_PER_MONTH,
+  liveListingsSince,
   searchOverageUsd,
   summarizeCosts,
+  unitCosts,
   usageSince,
   type FeatureCost,
 } from "@/lib/billing/costs";
 import {
   CREDIT_PACKS,
   FREE_SIGNUP_CREDITS,
-  IMAGE_CREDIT_COST,
   LISTING_CREDIT_COST,
-  WHATSAPP_DRAFT_CREDIT_COST,
+  LIVE_LISTING_CREDIT_COST,
 } from "@/lib/billing/credit-packs";
 import { setBillingAction, topUpAction } from "./actions";
 
@@ -29,11 +30,11 @@ export const dynamic = "force-dynamic";
 /** Used only to compare USD costs with GHS prices on this page. */
 const GHS_PER_USD = Number(process.env.GHS_PER_USD) || 12;
 
-const FEATURE_LABEL: Record<string, { label: string; credits: number | null }> = {
-  extension_fill:  { label: "Extension autofill", credits: LISTING_CREDIT_COST },
-  listing_draft:   { label: "WhatsApp / web draft", credits: WHATSAPP_DRAFT_CREDIT_COST },
-  category_refill: { label: "Category change refill (free to sellers)", credits: null },
-  other:           { label: "Other AI calls", credits: null },
+const FEATURE_LABEL: Record<string, string> = {
+  extension_fill:  "Extension autofill",
+  listing_draft:   "WhatsApp / web draft",
+  category_refill: "Category change refill",
+  other:           "Other AI calls (fixes, notes)",
 };
 
 const STATUS_STYLE: Record<CheckStatus, string> = {
@@ -70,21 +71,29 @@ function usd(n: number): string {
   return `$${n < 0.01 ? n.toFixed(4) : n.toFixed(2)}`;
 }
 
+/** What `credits` earn in USD, from the cheapest to the dearest pack per credit. */
+function earnRange(credits: number): string {
+  const perCredit = CREDIT_PACKS.map((p) => p.amountGhs / p.credits);
+  const low = (credits * Math.min(...perCredit)) / GHS_PER_USD;
+  const high = (credits * Math.max(...perCredit)) / GHS_PER_USD;
+  return low === high ? usd(low) : `${usd(low)}–${usd(high)}`;
+}
+
 export default async function AdminBillingPage({ searchParams }: { searchParams: { done?: string; error?: string; count?: string } }) {
   const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-  const [info, checks, usage, ledger] = await Promise.all([
+  const [info, checks, usage, ledger, liveCount] = await Promise.all([
     billingSwitchInfo(),
     billingReadiness(),
     usageSince(since30).catch(() => null),
     balances(),
+    liveListingsSince(since30).catch(() => 0),
   ]);
   const ready = readyToBill(checks);
 
   const costs: FeatureCost[] = usage ? summarizeCosts(usage) : [];
+  const units = unitCosts(costs, liveCount);
 
-  const cheapestPerCredit = Math.min(...CREDIT_PACKS.map((p) => p.amountGhs / p.credits));
-  const dearestPerCredit = Math.max(...CREDIT_PACKS.map((p) => p.amountGhs / p.credits));
   const notice = searchParams.done
     ? searchParams.done === "topup"
       ? `Topped up ${searchParams.count ?? 0} seller${searchParams.count === "1" ? "" : "s"} to ${FREE_SIGNUP_CREDITS} credits.`
@@ -98,8 +107,9 @@ export default async function AdminBillingPage({ searchParams }: { searchParams:
       <div>
         <h1 className="text-lg font-bold">Billing</h1>
         <p className="mt-1 max-w-3xl text-sm text-zinc-500">
-          Off: everyone lists for free and no credits move. On: autofills, drafts and AI photos cost credits,
-          sellers can buy packs, and the site shows pricing. Flipping it takes effect within 30 seconds.
+          Off: everyone lists for free and no credits move. On: WhatsApp and web listings cost credits when they go
+          live on Jumia, extension autofills cost credits each, sellers can buy packs, and the site shows pricing.
+          Flipping it takes effect within 30 seconds.
         </p>
       </div>
 
@@ -159,8 +169,8 @@ export default async function AdminBillingPage({ searchParams }: { searchParams:
       <section className="rounded-lg border border-zinc-200 bg-white p-6">
         <h2 className="font-semibold">Prices</h2>
         <p className="mt-1 text-sm text-zinc-500">
-          Set in lib/billing/credit-packs.ts. {FREE_SIGNUP_CREDITS} free credits on sign-up. Autofill {LISTING_CREDIT_COST},
-          draft {WHATSAPP_DRAFT_CREDIT_COST}, AI photo {IMAGE_CREDIT_COST} credits.
+          Set in lib/billing/credit-packs.ts. {FREE_SIGNUP_CREDITS} free credits on sign-up. A WhatsApp / web listing
+          costs {LIVE_LISTING_CREDIT_COST} when it goes live; an extension autofill {LISTING_CREDIT_COST}.
         </p>
         <table className="mt-4 w-full text-left text-sm">
           <thead className="text-xs uppercase tracking-wide text-zinc-500">
@@ -168,8 +178,8 @@ export default async function AdminBillingPage({ searchParams }: { searchParams:
               <th className="py-2 font-medium">Pack</th>
               <th className="py-2 font-medium">Price</th>
               <th className="py-2 font-medium">Per credit</th>
+              <th className="py-2 font-medium">Per live listing</th>
               <th className="py-2 font-medium">Per autofill</th>
-              <th className="py-2 font-medium">Per draft</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-100">
@@ -180,8 +190,8 @@ export default async function AdminBillingPage({ searchParams }: { searchParams:
                   <td className="py-2">{p.id} · {p.credits} credits</td>
                   <td className="py-2">GHS {p.amountGhs}</td>
                   <td className="py-2">GHS {perCredit.toFixed(3)}</td>
+                  <td className="py-2">GHS {(perCredit * LIVE_LISTING_CREDIT_COST).toFixed(2)}</td>
                   <td className="py-2">GHS {(perCredit * LISTING_CREDIT_COST).toFixed(2)}</td>
-                  <td className="py-2">GHS {(perCredit * WHATSAPP_DRAFT_CREDIT_COST).toFixed(2)}</td>
                 </tr>
               );
             })}
@@ -193,43 +203,64 @@ export default async function AdminBillingPage({ searchParams }: { searchParams:
       <section className="rounded-lg border border-zinc-200 bg-white p-6">
         <h2 className="font-semibold">What the AI actually costs (last 30 days)</h2>
         <p className="mt-1 text-sm text-zinc-500">
-          Token costs from every logged Gemini call (ai_usage), averaged per run. Earnings use the packs above, at
-          GHS {GHS_PER_USD} = $1 (set GHS_PER_USD to change).
+          Token costs from every logged Gemini call (ai_usage). Only live listings earn, so every draft, redraft and
+          fix is paid for by the listings that went live. Earnings use the packs above, at GHS {GHS_PER_USD} = $1
+          (set GHS_PER_USD to change).
         </p>
         {usage === null ? (
           <p className="mt-4 text-sm text-red-600">Couldn&apos;t read ai_usage.</p>
-        ) : costs.length === 0 ? (
-          <p className="mt-4 text-sm text-zinc-500">No AI calls logged yet.</p>
         ) : (
-          <table className="mt-4 w-full text-left text-sm">
-            <thead className="text-xs uppercase tracking-wide text-zinc-500">
-              <tr>
-                <th className="py-2 font-medium">Work</th>
-                <th className="py-2 font-medium">Runs</th>
-                <th className="py-2 font-medium">Calls</th>
-                <th className="py-2 font-medium">Cost per run</th>
-                <th className="py-2 font-medium">Earns per run</th>
-                <th className="py-2 font-medium">Total cost</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-100">
-              {costs.map((c) => {
-                const meta = FEATURE_LABEL[c.feature] ?? { label: c.feature, credits: null };
-                const earnLow = meta.credits !== null ? (meta.credits * cheapestPerCredit) / GHS_PER_USD : null;
-                const earnHigh = meta.credits !== null ? (meta.credits * dearestPerCredit) / GHS_PER_USD : null;
-                return (
-                  <tr key={c.feature}>
-                    <td className="py-2">{meta.label}</td>
-                    <td className="py-2">{c.runs}</td>
-                    <td className="py-2">{c.calls}</td>
-                    <td className="py-2">{c.usdPerRun !== null ? usd(c.usdPerRun) : "—"}</td>
-                    <td className="py-2">{earnLow !== null && earnHigh !== null ? `${usd(earnLow)}–${usd(earnHigh)}` : "—"}</td>
-                    <td className="py-2">{usd(c.tokenUsd)}</td>
+          <>
+            <table className="mt-4 w-full text-left text-sm">
+              <thead className="text-xs uppercase tracking-wide text-zinc-500">
+                <tr>
+                  <th className="py-2 font-medium">Seller pays for</th>
+                  <th className="py-2 font-medium">How many</th>
+                  <th className="py-2 font-medium">AI cost each</th>
+                  <th className="py-2 font-medium">Earns each</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-100">
+                <tr>
+                  <td className="py-2">Live WhatsApp / web listing</td>
+                  <td className="py-2">{units.listings.live} live from {units.listings.drafts} drafts</td>
+                  <td className="py-2">{units.listings.usdPerLive !== null ? usd(units.listings.usdPerLive) : "—"}</td>
+                  <td className="py-2">{earnRange(LIVE_LISTING_CREDIT_COST)}</td>
+                </tr>
+                <tr>
+                  <td className="py-2">Extension autofill</td>
+                  <td className="py-2">{units.autofills.count}</td>
+                  <td className="py-2">{units.autofills.usdEach !== null ? usd(units.autofills.usdEach) : "—"}</td>
+                  <td className="py-2">{earnRange(LISTING_CREDIT_COST)}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            {costs.length > 0 && (
+              <table className="mt-6 w-full text-left text-sm">
+                <thead className="text-xs uppercase tracking-wide text-zinc-500">
+                  <tr>
+                    <th className="py-2 font-medium">AI work</th>
+                    <th className="py-2 font-medium">Runs</th>
+                    <th className="py-2 font-medium">Calls</th>
+                    <th className="py-2 font-medium">Cost per run</th>
+                    <th className="py-2 font-medium">Total cost</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                </thead>
+                <tbody className="divide-y divide-zinc-100">
+                  {costs.map((c) => (
+                    <tr key={c.feature}>
+                      <td className="py-2">{FEATURE_LABEL[c.feature] ?? c.feature}</td>
+                      <td className="py-2">{c.runs}</td>
+                      <td className="py-2">{c.calls}</td>
+                      <td className="py-2">{c.usdPerRun !== null ? usd(c.usdPerRun) : "—"}</td>
+                      <td className="py-2">{usd(c.tokenUsd)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </>
         )}
         {usage && <SearchLine costs={costs} />}
       </section>

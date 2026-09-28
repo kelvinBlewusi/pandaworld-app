@@ -3,8 +3,9 @@
 /**
  * "Buy Credits" modal for the extension dashboard — one-time credit-pack
  * top-ups via Paystack (app/api/extension/credits/checkout). Credits never
- * expire and are spent per autofill / WhatsApp draft (LISTING_CREDIT_COST /
- * WHATSAPP_DRAFT_CREDIT_COST in lib/billing/credit-packs.ts). Shown only
+ * expire and are spent per autofill and per WhatsApp listing that goes live
+ * (LISTING_CREDIT_COST / LIVE_LISTING_CREDIT_COST in lib/billing/
+ * credit-packs.ts). Shown only
  * while billing is on (lib/billing/mode.ts).
  */
 
@@ -22,12 +23,12 @@ interface Tier {
 }
 
 const TIERS: Tier[] = CREDIT_PACKS.map((p) => {
-  const { autofills, drafts } = packReach(p.credits);
+  const { autofills, listings } = packReach(p.credits);
   return {
     id: p.id,
     credits: p.credits,
     price: `GHS ${p.amountGhs}`,
-    reach: `${autofills} autofills or ${drafts} WhatsApp listings`,
+    reach: `${autofills} autofills or ${listings} live WhatsApp listings`,
     popular: p.id === POPULAR_PACK_ID,
   };
 });

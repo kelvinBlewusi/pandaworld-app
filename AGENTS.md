@@ -23,9 +23,11 @@ multi-market-aware (Jumia has 9 markets); expansion to Côte d'Ivoire / Senegal 
 Cameroon (French markets) is planned but not active.
 
 **Pricing**: pay-as-you-go credits, no subscription (the monthly plans were
-removed 2026-09-28). 25 free credits on sign-up; an extension autofill costs
-1.5, a WhatsApp/web draft 2, an AI photo 4; packs 150/330/650 credits for GHS
-20/50/100 — all in `lib/billing/credit-packs.ts`. Nothing is charged until an
+removed 2026-09-28). 25 free credits on sign-up; a WhatsApp/web listing costs
+2 credits, charged only when it goes live on Jumia; an extension autofill costs
+1.5 (the extension can't see whether a product went live). 1 credit =
+GHS 0.25, so a live listing is GHS 0.50; packs 120/200/400 credits for GHS
+30/50/100 — all in `lib/billing/credit-packs.ts`. Nothing is charged until an
 admin switches billing on at `/admin/billing` — see "Billing" below.
 
 **Founder/operator**: Kelvin (single-person operation). Communication style is
@@ -219,17 +221,18 @@ pipeline above:
   `/api/admin/embed-categories` always did — extracted to
   `lib/jumia/embed-categories.ts` so both share it — looping batches
   within one invocation until either done or a 50s soft deadline.
-- **WhatsApp credits**: a WhatsApp product draft (one `runAutoAnalyze`
-  pass) now spends `WHATSAPP_DRAFT_CREDIT_COST` (2) credits from the
-  SAME ledger the Chrome extension's autofill spends
-  `LISTING_CREDIT_COST` (1.5) from — see `lib/billing/extension-
+- **WhatsApp credits** (superseded 2026-09-28 by pay-when-live, see
+  "Billing" below): a WhatsApp listing is charged `LIVE_LISTING_CREDIT_COST`
+  (2) credits when it goes live, from the SAME ledger the Chrome
+  extension's autofill spends `LISTING_CREDIT_COST` (1.5) from — see `lib/billing/extension-
   credits.ts`. `startBatchAnalysis` (`lib/whatsapp/intake.ts`) reserves
   affordability for the whole batch up front (same pattern as its
   existing rate-limit reservation), splitting listings the seller can't
   afford into their own "top up" message with a link to
   `/extension/dashboard`, and deducts per-listing only after that
   listing's draft actually succeeds. Pack sizes increased 2026-09-13
-  (100/280/600 → 150/330/650 credits, same GHS 20/50/100 prices) —
+  (100/280/600 → 150/330/650 credits, same GHS 20/50/100 prices), then
+  repriced 2026-09-28 to 120/200/400 credits for GHS 30/50/100 —
   `getCreditPackByCredits()` keeps a small legacy-amount alias so a
   purchase transaction recorded before the change still resolves to its
   pack for the dashboard's "Plan" pill. WhatsApp's pre-existing
@@ -447,7 +450,8 @@ read). It replaced the `FREE_FOR_ALL_MODE` constant.
   is a no-op for everyone (as for admins always), so no credits move. The
   homepage says "Try PandaWorld for free", the nav's Pricing link is greyed,
   the footer offers Donate, and no Buy Credits button shows.
-- On: autofills, WhatsApp/web drafts and AI photos cost credits, new sellers
+- On: WhatsApp/web listings cost credits when they go live, extension
+  autofills (and the unused AI photo tools) cost credits each, new sellers
   get 25 on first use, the dashboard / `/settings/billing` / `/pricing` show
   Buy credits, and the homepage banner, nav and footer switch to pricing.
 - Purchases always land in the stored balance, whatever the switch
@@ -457,6 +461,16 @@ read). It replaced the `FREE_FOR_ALL_MODE` constant.
   `NEXT_PUBLIC_APP_URL`), shows measured AI cost per run from `ai_usage`
   against what each run earns, and can top up old balances (the 10-credit
   welcome) to 25.
+
+**Pay when live** (WhatsApp and web listings). Drafts are free; a seller
+only needs enough available credits to draft. `pushListingToJumia` checks
+`creditsDueForSubmission` before anything reaches Jumia and records the
+price on `listings.credits_due`; while the listing waits on Jumia that
+amount is held (`availableCredits` = balance − holds on pending listings).
+`refreshPendingFeedStatus` calls `chargeLiveListing` on the pending → live
+transition (once per listing: ledger reference `live:<listingId>`) and
+clears `credits_due` when Jumia rejects it. A listing submitted while
+billing was off is never charged.
 
 Donations (`components/extension/donate-modal.tsx`,
 `app/api/donations/checkout`, `lib/billing/donations.ts`) grant nothing and
