@@ -849,7 +849,7 @@ async function retryBatchDrafts(
       phoneNumber,
       `🔁 Retrying ${queued} product${queued === 1 ? "" : "s"} with the photos you already sent — no need to send anything again.`,
     );
-    nudgeWorker();
+    await nudgeWorker();
   } catch (e) {
     console.error(`[whatsapp intake] retry enqueue failed for batch ${batchId}: ${(e as Error).message}`);
     await replyError(
@@ -1950,7 +1950,7 @@ async function startBatchAnalysis(
     // pg_cron tick — without this a 1-product draft that used to finish in
     // ~22s could take 80s, which reads as a regression. Not awaited, and
     // pg_cron remains the guarantee if it doesn't land.
-    nudgeWorker();
+    await nudgeWorker();
   } catch (e) {
     console.error(`[whatsapp intake] batch ${batchId} could not be queued: ${(e as Error).message}`);
     await updateSession(phoneNumber, { state: "awaiting_confirmation" });

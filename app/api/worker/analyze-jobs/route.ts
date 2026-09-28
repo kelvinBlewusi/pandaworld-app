@@ -184,9 +184,9 @@ export async function POST(req: NextRequest) {
 
   // Keep the queue draining without waiting for the next scheduled tick.
   // Only fires when this tick actually had work, so an empty queue can't
-  // start a loop — and pg_cron still covers the case where this nudge is
-  // cut short when the response returns.
-  nudgeWorker();
+  // start a loop. Awaited (at most 2s) so the request is out before this
+  // response freezes the function; see nudgeWorker.
+  await nudgeWorker();
 
   // Gemini counters ride along in the response body on purpose. pg_net
   // stores every response in net._http_response, so this is queryable
