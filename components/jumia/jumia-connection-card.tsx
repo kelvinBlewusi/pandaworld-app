@@ -182,12 +182,7 @@ export function JumiaConnectionCard({ returnTo }: { returnTo?: string }) {
             </div>
           </div>
 
-          {autoRenews ? (
-            <p className="text-xs text-zinc-400 flex items-center gap-1.5">
-              <Info className="h-3 w-3 shrink-0" />
-              Stays connected: PandaWorld renews access in the background, no logins needed.
-            </p>
-          ) : (
+          {!autoRenews && (
             <div className="rounded-xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-800">
               <p>
                 This connection uses a Web Application, which Jumia expires about a day after each login
