@@ -1176,8 +1176,7 @@ async function handleAwaitingJumiaCredentials(
     });
     await replyText(
       phoneNumber,
-      `🎉 Jumia connected — ${connected.storeName}! PandaWorld keeps it connected from now on, no logins needed.\n\n` +
-        "For your security, delete the message with your token from this chat.\n\n" +
+      `🎉 Jumia connected — ${connected.storeName}!\n\n` +
         "How many products are you listing today? Reply with a number to get started.",
     );
     return;
