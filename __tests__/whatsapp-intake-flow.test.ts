@@ -162,6 +162,32 @@ jest.mock("@/lib/jumia/refill-attributes", () => ({
   },
 }));
 
+// Connecting Jumia from the chat: the Self Authorization exchange and the
+// Web Application credential check both reach Jumia, so both are stood in
+// for here and record what they were asked.
+type SelfAuthMockResult =
+  | { ok: true; storeName: string }
+  | { ok: false; reason: "web_app" | "bad_token"; error: string };
+let selfAuthResult: SelfAuthMockResult = { ok: true, storeName: "Kelvin's Store" };
+const selfAuthCalls: { clientId: string; token: string; country: string }[] = [];
+jest.mock("@/lib/jumia/self-auth", () => ({
+  ...jest.requireActual("@/lib/jumia/self-auth"),
+  connectSelfAuthorization: async (_userId: string, clientId: string, token: string, country: string) => {
+    selfAuthCalls.push({ clientId, token, country });
+    return selfAuthResult;
+  },
+}));
+let webCredentialsValid = true;
+const webCredentialChecks: string[] = [];
+jest.mock("@/lib/jumia/credentials", () => ({
+  ...jest.requireActual("@/lib/jumia/credentials"),
+  testJumiaCredentials: async (appId: string) => {
+    webCredentialChecks.push(appId);
+    return webCredentialsValid ? { ok: true, message: "ok" } : { ok: false, error: "Invalid App ID or Secret Key." };
+  },
+  saveJumiaCredentialsForUser: async () => ({ ok: true }),
+}));
+
 import { handleLinkedMessage } from "@/lib/whatsapp/intake";
 import { classifyJumiaRejection, rejectionFingerprint } from "@/lib/jumia/rejection-remedy";
 
@@ -1608,5 +1634,54 @@ describe("asking the seller for a category after Jumia refuses ours twice", () =
 
     expect(sent.some((m) => m.body.includes("already tried fixing"))).toBe(true);
     expect(listSent()).toHaveLength(0);
+  });
+});
+
+describe("connecting Jumia from the chat", () => {
+  const CLIENT_ID = "7eeed0a3-ed50-4abc-a74a-16cd5aef0dcb";
+  const TOKEN = "Zq7Rk2Vn8Tw3Xb5Yc9Pd1Lf4Hg6Jm0Ns-Qa_Uv2Ew8Ko";
+
+  beforeEach(() => {
+    seedSession({ state: "awaiting_jumia_credentials", batch_id: null, batch_size: null, batch_seq: null, pending_app_id: null });
+    selfAuthResult = { ok: true, storeName: "Kelvin's Store" };
+    selfAuthCalls.length = 0;
+    webCredentialsValid = true;
+    webCredentialChecks.length = 0;
+  });
+
+  it("connects a Self Authorization app straight away and moves on to listing", async () => {
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `${CLIENT_ID}\n${TOKEN}` });
+
+    // Ghana, from the +233 number.
+    expect(selfAuthCalls).toEqual([{ clientId: CLIENT_ID, token: TOKEN, country: "GH" }]);
+    expect(webCredentialChecks).toHaveLength(0);
+    expect(session().state).toBe("awaiting_count");
+    expect(sent.at(-1)?.body).toContain("Jumia connected — Kelvin's Store");
+  });
+
+  it("takes the Client ID and the token one message at a time, in either order", async () => {
+    await handleLinkedMessage(USER, PHONE, "m1", { text: TOKEN });
+    expect(sent.at(-1)?.body).toContain("now paste the Client ID");
+    await handleLinkedMessage(USER, PHONE, "m2", { text: CLIENT_ID });
+
+    expect(selfAuthCalls).toEqual([{ clientId: CLIENT_ID, token: TOKEN, country: "GH" }]);
+    expect(session().state).toBe("awaiting_count");
+  });
+
+  it("falls back to the Web Application login when Jumia says that's what the app is", async () => {
+    selfAuthResult = { ok: false, reason: "web_app", error: "Web Application" };
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `${CLIENT_ID} ${TOKEN}` });
+
+    expect(webCredentialChecks).toEqual([CLIENT_ID]);
+    expect(session().state).toBe("awaiting_jumia_oauth");
+  });
+
+  it("asks for a fresh token when Jumia refuses this one, without trying the Web Application route", async () => {
+    selfAuthResult = { ok: false, reason: "bad_token", error: "That token has expired or was already used." };
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `${CLIENT_ID} ${TOKEN}` });
+
+    expect(webCredentialChecks).toHaveLength(0);
+    expect(session().state).toBe("awaiting_jumia_credentials");
+    expect(sent.at(-1)?.body).toContain("expired or was already used");
   });
 });
