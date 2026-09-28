@@ -1,6 +1,6 @@
 {
   "framework": "nextjs",
-  "buildCommand": "next build",
+  "buildCommand": "next build && node scripts/check-built-emoji.mjs",
   "devCommand": "next dev -p 3002",
   "installCommand": "npm install",
   "crons": [

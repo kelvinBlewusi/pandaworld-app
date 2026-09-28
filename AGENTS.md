@@ -565,6 +565,14 @@ only appear while billing is off.
 
 ## Operational gotchas (things that have bitten us)
 
+- **Emoji in WhatsApp messages built by joining lines (2026-09-28)**: the
+  production minifier folds `[...].join("\n")` of constants into one
+  string; when one line was a `${}` template it printed a new template
+  with the emoji escaped twice, and sellers got "padlock icon
+  🔒" instead of 🔒. Tests run the source, so they passed. Keep
+  joined message lines as plain strings. `scripts/check-built-emoji.mjs`
+  now runs after `next build` (package.json and vercel.json) and fails the
+  build if the server bundle contains a double-escaped emoji.
 0. **Embedding model drift (cost: four months of wrong categories)**: on
    2026-05-26 the category index was embedded with AI Studio's
    `gemini-embedding-001`. On 2026-05-29 embedding QUERIES moved to Vertex's
