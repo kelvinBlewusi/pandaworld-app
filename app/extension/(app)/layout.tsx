@@ -1,8 +1,7 @@
 import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 import { isAdmin } from "@/lib/auth/is-admin";
-import { getQuotaSummary } from "@/lib/billing/quota";
-import { isPaidPlan } from "@/lib/billing/plans";
+import { isBillingEnabled } from "@/lib/billing/mode";
 import {
   getOrCreateCreditBalance,
   getRecentTransactions,
@@ -31,20 +30,16 @@ export default async function ExtensionAppLayout({
   const { userId } = await auth();
   if (!userId) redirect("/sign-in?redirect_url=/extension/dashboard");
 
-  const [quota, balance, notifications, recentPack, notificationsSeenAt] = await Promise.all([
-    getQuotaSummary(userId),
+  const [billingOn, balance, notifications, recentPack, notificationsSeenAt] = await Promise.all([
+    isBillingEnabled(),
     getOrCreateCreditBalance(userId),
     getRecentTransactions(userId),
     getMostRecentCreditPack(userId),
     getNotificationsSeenAt(userId),
   ]);
 
-  // A real (paid) subscription tier always wins — it's the more meaningful
-  // "current plan" than a one-time credit-pack purchase. Only extension-only
-  // sellers who never subscribed (still on "free") get their most recent
-  // credit pack shown instead, so buying credits actually moves this pill
-  // off "Free" rather than leaving it stuck there forever.
-  const planId = !isPaidPlan(quota.plan) && recentPack ? recentPack.id : quota.plan;
+  // The pack the seller last bought, or "Free" until they buy one.
+  const planId = recentPack?.id ?? "free";
   const planLabel = planId.charAt(0).toUpperCase() + planId.slice(1);
   const creditsLabel = Number.isFinite(balance) ? String(balance) : "∞";
 
@@ -52,6 +47,8 @@ export default async function ExtensionAppLayout({
     <ExtensionShell
       planLabel={planLabel}
       creditsLabel={creditsLabel}
+      // Buying only makes sense once credits are being spent.
+      canBuyCredits={billingOn && !isAdmin(userId)}
       notifications={notifications}
       notificationsSeenAt={notificationsSeenAt}
       isAdmin={isAdmin(userId)}

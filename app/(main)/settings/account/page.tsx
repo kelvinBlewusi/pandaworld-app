@@ -10,9 +10,8 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
-import { getQuotaSummaryForCurrentUser } from "@/lib/actions/subscription";
-import type { Plan } from "@/lib/types/subscription";
-import { PlanBadge } from "@/components/billing/plan-badge";
+import { getMyCredits, type MyCredits } from "@/lib/actions/credits";
+import { CreditsBadge } from "@/components/billing/credits-badge";
 
 export default function AccountSettingsPage() {
   const { user, isLoaded } = useUser();
@@ -23,8 +22,7 @@ export default function AccountSettingsPage() {
   const [lastName, setLastName] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [plan, setPlan] = useState<Plan>("free");
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [credits, setCredits] = useState<MyCredits | null>(null);
 
   // Danger-zone state — surfaced at the bottom of the page.
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -65,18 +63,8 @@ export default function AccountSettingsPage() {
   } | null>(null);
   const [storesLoading, setStoresLoading] = useState(true);
 
-  // Load the EFFECTIVE subscription plan via getQuotaSummary.
-  // Don't use getSubscription() — its `plan` column can be stale
-  // until the cron downgrades expired rows. getQuotaSummary already
-  // computes the effective plan (auto-expires past-due paid plans
-  // to "free") and surfaces the admin flag.
   useEffect(() => {
-    getQuotaSummaryForCurrentUser().then((q) => {
-      if (q) {
-        setPlan(q.plan as Plan);
-        setIsAdmin(q.is_admin);
-      }
-    });
+    getMyCredits().then(setCredits);
   }, []);
 
   // Load connected store via authenticated API route
@@ -168,11 +156,7 @@ export default function AccountSettingsPage() {
             <p className="text-sm text-zinc-400">{displayEmail}</p>
             {memberSince && (
               <p className="mt-0.5 text-xs text-zinc-400 flex items-center gap-1.5">
-                {/* PlanBadge renders the EFFECTIVE plan (Free / Starter /
-                    Pro / Business) — auto-expired past-due paid plans
-                    show as Free, admin users show as "Admin · Unlimited".
-                    See components/billing/plan-badge.tsx. */}
-                <PlanBadge plan={plan} isAdmin={isAdmin} size="sm" />
+                {credits && <CreditsBadge credits={credits} size="sm" />}
                 <span>· Member since {memberSince}</span>
               </p>
             )}
@@ -357,8 +341,7 @@ export default function AccountSettingsPage() {
             <p className="text-sm font-medium text-zinc-800">Delete account</p>
             <p className="mt-1 text-xs text-zinc-500 leading-relaxed">
               Permanently remove your account, listings, images, and Jumia
-              connection. Your Pro subscription (if any) will be cancelled.
-              This cannot be undone.
+              connection, and any unused credits. This cannot be undone.
             </p>
           </div>
           <Button
@@ -389,9 +372,8 @@ export default function AccountSettingsPage() {
                 <h3 className="text-base font-bold text-zinc-900">Delete your account?</h3>
                 <p className="mt-2 text-xs text-zinc-600 leading-relaxed">
                   This will permanently delete your profile, all listings,
-                  product images, and Jumia connection. Your active Pro
-                  subscription will be cancelled with Paystack. <strong>This
-                  cannot be undone.</strong>
+                  product images, Jumia connection and any unused credits.
+                  <strong> This cannot be undone.</strong>
                 </p>
               </div>
             </div>

@@ -51,6 +51,7 @@ import { decrypt } from "@/lib/security/token-crypto";
 const USER_SCOPED_TABLES = [
   // Listing data
   "variants",                      // via listing_id — must precede listings
+  "jumia_live_listings",           // via listing_id — must precede listings
   "listings",
   "analysis_jobs",                 // queued work referencing those listings
   // Integrations and credentials — these outliving the account is the
@@ -65,10 +66,14 @@ const USER_SCOPED_TABLES = [
   "extension_credits",
   "extension_credit_transactions",
   "extension_fill_events",
+  "ai_usage",
   "billing_events",
   "subscriptions",
   "donations",
 ] as const;
+
+/** Tables reached through the seller's listing ids rather than a user_id. */
+const LISTING_SCOPED_TABLES = new Set<string>(["variants", "jumia_live_listings"]);
 
 export interface PurgeResult {
   /** Rows removed per table, for the audit line. */
@@ -198,9 +203,9 @@ export async function purgeUserData(userId: string): Promise<PurgeResult> {
   await cancelPaystackSubscription(userId, errors);
   await purgeStorage(userId, errors);
 
-  // variants has no user_id of its own — it is reached through the
-  // listings being deleted, so its ids are collected while that link is
-  // still there.
+  // variants and jumia_live_listings have no user_id of their own — they
+  // are reached through the listings being deleted, so those ids are
+  // collected while that link is still there.
   let variantListingIds: string[] = [];
   try {
     const { data } = await db.from("listings").select("id").eq("user_id", userId);
@@ -211,7 +216,7 @@ export async function purgeUserData(userId: string): Promise<PurgeResult> {
 
   for (const table of USER_SCOPED_TABLES) {
     try {
-      const query = table === "variants"
+      const query = LISTING_SCOPED_TABLES.has(table)
         ? (variantListingIds.length > 0
             ? db.from(table).delete().in("listing_id", variantListingIds)
             : null)

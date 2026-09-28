@@ -48,12 +48,10 @@ export function MarketingFooter({
   extensionPricing,
 }: {
   /**
-   * Set on extension-flavored pages (/, /extension) so "Pricing" opens the
-   * same credit-pack card the hero nav's own "Pricing" button opens,
-   * instead of navigating to /pricing — the classic web app's unrelated
-   * monthly-plan pricing. Every other caller (/pricing, /landing,
-   * /push-listings, /terms, /privacy) omits this and keeps the plain link,
-   * which is the product those pages actually mean by "Pricing."
+   * Set on the homepage and Guides while billing is off, where the footer
+   * offers a Donate card instead of a Pricing link (nothing is charged
+   * yet). Omitted once billing is on, and on every other page, for the
+   * plain link to /pricing.
    */
   extensionPricing?: { signedIn: boolean; signInHref: string };
 } = {}) {

@@ -46,7 +46,6 @@ import { CategoryDrawer } from "@/components/ui/category-drawer";
 import { PublishingLoader } from "@/components/ui/publishing-loader";
 import { EnhanceModal, type EnhanceMode } from "@/components/enhance/EnhanceModal";
 import { GenerateImageModal } from "@/components/imagen/GenerateImageModal";
-import { getQuotaSummaryForCurrentUser } from "@/lib/actions/subscription";
 import { MultiSelectDropdown } from "@/components/ui/multi-select";
 import { SchemaForm } from "@/components/jumia/SchemaForm";
 import { STATIC_FIELDS, universalInfoFields } from "@/lib/jumia/universal-fields";
@@ -1698,23 +1697,12 @@ export function ReviewClient({
     setEnhanceMode("rebuild");
   }, [listing.images, searchParams]);
 
-  // ── Imagen 3 generate-from-scratch modal state (Business-only) ──────────
+  // ── Imagen 3 generate-from-scratch modal state ─────────────────────────
   //
   // Different from the enhance modal: this generates a brand-new
-  // product photo from a text prompt via Google Imagen 3. Server
-  // enforces Business-tier gate; we ask the quota engine here just to
-  // decide whether to render the button at all (a Free user hitting
-  // the button would just see an error toast — better to hide it).
+  // product photo from a text prompt via Google Imagen 3. Costs credits
+  // once billing is on; the server checks the balance.
   const [showGenerateImage, setShowGenerateImage] = useState(false);
-  const [canGenerateImages, setCanGenerateImages] = useState(false);
-  useEffect(() => {
-    getQuotaSummaryForCurrentUser().then((q) => {
-      if (!q) return;
-      // Business + Admin only — mirrors canGenerateImagesFromScratch
-      // in lib/billing/ai-models.ts.
-      setCanGenerateImages(q.is_admin || q.plan === "business");
-    });
-  }, []);
 
   // ── Manual image upload / remove on the review page ────────────────────
   //

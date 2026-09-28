@@ -41,7 +41,10 @@ export class FakeDb {
     return filters.every((f) => {
       if (f.op === "not-is-null") return row[f.col] != null;
       if (f.op === "in") return (f.val as unknown[]).includes(row[f.col]);
-      if (f.op === "lt") return String(row[f.col] ?? "") < String(f.val);
+      if (f.op === "lt") {
+        const v = row[f.col];
+        return typeof v === "number" && typeof f.val === "number" ? v < f.val : String(v ?? "") < String(f.val);
+      }
       return row[f.col] === f.val;
     });
   }
@@ -137,6 +140,18 @@ export class FakeDb {
         return updateBuilder([]);
       },
 
+      upsert(payload: FakeRow, opts: { onConflict: string }) {
+        const key = opts.onConflict;
+        const existing = rows().find((r) => r[key] === payload[key]);
+        if (existing) Object.assign(existing, payload);
+        else db.insertRows(table, [payload]);
+        return {
+          then(resolve: (v: unknown) => unknown) {
+            return Promise.resolve({ data: null, error: null }).then(resolve);
+          },
+        };
+      },
+
       delete() {
         const deleteBuilder = (filters: Filter[]) => ({
           eq(col: string, val: unknown) { return deleteBuilder([...filters, { col, val, op: "eq" }]); },
@@ -154,6 +169,19 @@ export class FakeDb {
    *  2026-09-14_one-listing-per-batch-slot.sql, which is the whole reason
    *  the album race is fixable. */
   private insertRows(table: string, incoming: FakeRow[]): { data: FakeRow[] } | { data: null; error: { message: string; code: string } } {
+    // Primary key / unique index of the credit ledger
+    // (2026-08-24_extension-credits.sql): one balance row per seller, one
+    // transaction per Paystack reference — the dedupe creditPurchase
+    // relies on.
+    const unique: Record<string, string> = { extension_credits: "user_id", extension_credit_transactions: "reference" };
+    const uniqueCol = unique[table];
+    if (uniqueCol) {
+      for (const row of incoming) {
+        if (row[uniqueCol] != null && this.tables[table].some((r) => r[uniqueCol] === row[uniqueCol])) {
+          return { data: null, error: { message: `duplicate key value violates unique constraint on ${table}.${uniqueCol}`, code: "23505" } };
+        }
+      }
+    }
     if (table === "listings") {
       for (const row of incoming) {
         const clash = row.whatsapp_batch_id != null && this.tables.listings.some(

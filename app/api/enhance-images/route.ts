@@ -7,8 +7,8 @@ import {
   type EnhanceMode,
 } from "@/lib/gemini-image";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
-import { checkQuota, incrementUsage } from "@/lib/billing/quota";
-import { PLANS, getNextTierUpgrade, type Plan } from "@/lib/billing/plans";
+import { getOrCreateCreditBalance, deductCredits } from "@/lib/billing/extension-credits";
+import { IMAGE_CREDIT_COST } from "@/lib/billing/credit-packs";
 
 // Gemini image-gen takes 3-8s per image. 8 images × 3 concurrent = ~24s
 // theoretical wall-clock, but real-world we see 30-60s when one slot is
@@ -55,27 +55,6 @@ export async function POST(req: NextRequest) {
   // a cap a single seller can burn $30+/hour. Limit is per-user.
   const blocked = checkRateLimit(`enhance-images:${userId}`, RATE_LIMITS.enhanceImages);
   if (blocked) return blocked;
-
-  // Monthly polish quota gate — Gemini rebuild shares the polish bucket
-  // with PhotoRoom because they're the same conceptual action from the
-  // seller's POV ("make my image look better"). Free tier = 0 polishes.
-  const quota = await checkQuota(userId, "polish");
-  if (!quota.allowed) {
-    const next = getNextTierUpgrade(quota.plan as Plan);
-    const upgradeNote = next
-      ? ` Upgrade to ${PLANS[next].name} (${PLANS[next].display_price}/month) for ${PLANS[next].monthly_polishes} polishes.`
-      : "";
-    return NextResponse.json(
-      {
-        error: `QUOTA_EXCEEDED: You've used ${quota.used} of ${quota.limit} image polishes on the ${PLANS[quota.plan as Plan].name} plan this month.${upgradeNote}`,
-        plan: quota.plan,
-        used: quota.used,
-        limit: quota.limit,
-        suggested_upgrade: next,
-      },
-      { status: 402 }
-    );
-  }
 
   let listingId: string;
   let mode: EnhanceMode;
@@ -134,6 +113,24 @@ export async function POST(req: NextRequest) {
       passThrough.push({ originalUrl: url, enhancedUrl: cached });
     } else {
       needsEnhancing.push(url);
+    }
+  }
+
+  // ── Credits: IMAGE_CREDIT_COST per image that actually needs the AI ──────
+  // Checked up front for the whole set, charged after for the images that
+  // came back. Free for everyone while billing is off (lib/billing/mode.ts).
+  if (needsEnhancing.length > 0) {
+    const needed = needsEnhancing.length * IMAGE_CREDIT_COST;
+    const balance = await getOrCreateCreditBalance(userId);
+    if (balance < needed) {
+      return NextResponse.json(
+        {
+          error: `Not enough credits: ${needsEnhancing.length} photo${needsEnhancing.length === 1 ? "" : "s"} need ${needed} credits and you have ${balance}. Buy credits from your dashboard to continue.`,
+          needed,
+          balance,
+        },
+        { status: 402 },
+      );
     }
   }
 
@@ -202,12 +199,11 @@ export async function POST(req: NextRequest) {
       : { originalUrl: url, enhancedUrl: url, error: "Skipped" };
   });
 
-  // Count one polish action against the monthly quota IF Gemini ran
-  // fresh work (i.e. it wasn't 100% cache hits). Pure cache replays
-  // shouldn't burn the seller's quota — they already paid for those.
+  // Charge for the images Gemini produced; cache replays and failures are free.
   const billed = fresh.filter((f) => !f.error).length;
   if (billed > 0) {
-    await incrementUsage(userId, "polish");
+    const charged = await deductCredits(userId, billed * IMAGE_CREDIT_COST, `${mode === "polish" ? "Polished" : "Rebuilt"} ${billed} photo${billed === 1 ? "" : "s"}`);
+    if (!charged.ok) console.error(`[enhance-images] credit deduction failed for ${userId}: ${charged.error}`);
   }
 
   return NextResponse.json({

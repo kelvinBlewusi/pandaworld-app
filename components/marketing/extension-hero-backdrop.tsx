@@ -45,12 +45,13 @@ interface ExtensionHeroBackdropProps {
   ctaHref: string;
   ctaLabel: string;
   calculatorHref: string;
+  pricingLive?: boolean;
 }
 
-export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabel, calculatorHref }: ExtensionHeroBackdropProps) {
+export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabel, calculatorHref, pricingLive }: ExtensionHeroBackdropProps) {
   return (
     <section className="relative w-full bg-white" style={{ color: "#1c1917" }}>
-      <HomeFloatingNav signInHref={signInHref} signUpHref={signUpHref} calculatorHref={calculatorHref} />
+      <HomeFloatingNav signInHref={signInHref} signUpHref={signUpHref} calculatorHref={calculatorHref} pricingLive={pricingLive} />
 
       <div className="relative z-10 box-border px-5 pb-16 pt-10 sm:px-12 lg:px-24">
         <div className="flex items-center justify-center pt-16 text-center sm:pt-20">

@@ -6,6 +6,8 @@ import { MarketingFooter } from "@/components/marketing/footer";
 import { ExtensionHeroBackdrop } from "@/components/marketing/extension-hero-backdrop";
 import { LoopingVideo } from "@/components/marketing/looping-video";
 import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
+import { isBillingEnabled } from "@/lib/billing/mode";
+import { FREE_SIGNUP_CREDITS } from "@/lib/billing/credit-packs";
 
 // ─── /extension — public page for the Chrome extension + WhatsApp flows ──────
 //
@@ -209,18 +211,15 @@ export async function ExtensionPage() {
   const ctaLabel = userId ? "Open dashboard" : "Get Started";
   const signInHref = `/sign-in?redirect_url=${DASHBOARD_REDIRECT}`;
   const calculatorHref = userId ? "/extension/calculator" : "/sign-in?redirect_url=/extension/calculator";
+  const billingOn = await isBillingEnabled();
 
   return (
     <div className="min-h-screen bg-white text-zinc-900">
-      {/* "Use for free" announcement bar — a growth-phase callout (see
-          lib/billing/free-for-all.ts) sitting above the hero so it's the
-          very first thing a visitor sees. The diagonal highlight sweeping
-          across it (Tailwind's `animate-shimmer`, added for this) is pure
-          CSS — no client JS needed, so this stays a plain server-rendered
-          element even though the hero right below it is a client
-          component. Remove this whole block (and the `shimmer` keyframe/
-          animation in tailwind.config.ts, if nothing else uses them by
-          then) once free-for-all mode ends. */}
+      {/* Announcement bar above the hero, following the billing switch
+          (lib/billing/mode.ts): "free" while billing is off, the free
+          sign-up credits once it's on. The diagonal highlight sweeping
+          across it (Tailwind's `animate-shimmer`) is pure CSS, so this
+          stays a plain server-rendered element. */}
       <div
         className="relative flex items-center justify-center gap-2 overflow-hidden bg-orange-600 px-4 py-2.5 text-center text-sm font-semibold text-white animate-shimmer sm:text-base"
         style={{
@@ -229,7 +228,11 @@ export async function ExtensionPage() {
         }}
       >
         <Megaphone className="h-4 w-4 shrink-0" />
-        <span>Try PandaWorld for free — auto-push listings from WhatsApp chat to Jumia, or from the Chrome extension.</span>
+        <span>
+          {billingOn
+            ? `Start with ${FREE_SIGNUP_CREDITS} free credits — auto-push listings from WhatsApp chat to Jumia, or from the Chrome extension.`
+            : "Try PandaWorld for free — auto-push listings from WhatsApp chat to Jumia, or from the Chrome extension."}
+        </span>
       </div>
 
       {/* Hero — plain white (components/marketing/extension-hero-backdrop.tsx).
@@ -243,6 +246,7 @@ export async function ExtensionPage() {
         ctaHref={ctaHref}
         ctaLabel={ctaLabel}
         calculatorHref={calculatorHref}
+        pricingLive={billingOn}
       />
 
       {/* How it works — two tracks side by side (Chrome extension, WhatsApp),
@@ -372,7 +376,8 @@ export async function ExtensionPage() {
         </div>
       </section>
 
-      <MarketingFooter extensionPricing={{ signedIn: Boolean(userId), signInHref }} />
+      {/* Donate while everything is free; a plain Pricing link once billing is on. */}
+      <MarketingFooter extensionPricing={billingOn ? undefined : { signedIn: Boolean(userId), signInHref }} />
     </div>
   );
 }

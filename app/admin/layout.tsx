@@ -13,7 +13,7 @@ import { isAdmin } from "@/lib/auth/is-admin";
 // app/(main)/admin (outside the (main) route group, so it renders
 // without that group's own nav/shell) — the URLs don't collide since
 // this only adds /admin, /admin/messages, /admin/errors,
-// /admin/blocked-categories, none of which
+// /admin/blocked-categories, /admin/billing, none of which
 // app/(main)/admin/* already serves.
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -30,6 +30,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             <Link href="/admin/messages" className="hover:text-zinc-900">WhatsApp messages</Link>
             <Link href="/admin/errors" className="hover:text-zinc-900">Errors</Link>
             <Link href="/admin/blocked-categories" className="hover:text-zinc-900">Blocked categories</Link>
+            <Link href="/admin/billing" className="hover:text-zinc-900">Billing</Link>
             <Link href="/admin/brands" className="hover:text-zinc-900">Brands sync</Link>
             <Link href="/admin/categories" className="hover:text-zinc-900">Categories sync</Link>
           </nav>

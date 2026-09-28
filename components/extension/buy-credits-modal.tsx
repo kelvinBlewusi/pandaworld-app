@@ -2,30 +2,35 @@
 
 /**
  * "Buy Credits" modal for the extension dashboard — one-time credit-pack
- * top-ups via Paystack (app/api/extension/credits/checkout), separate from
- * the classic app's plan-based monthly quota (lib/billing/quota.ts) and its
- * own Paystack subscription checkout (app/api/paystack/*). Credits never
- * expire and are spent 2.5 per autofill (lib/billing/credit-packs.ts).
+ * top-ups via Paystack (app/api/extension/credits/checkout). Credits never
+ * expire and are spent per autofill / WhatsApp draft (LISTING_CREDIT_COST /
+ * WHATSAPP_DRAFT_CREDIT_COST in lib/billing/credit-packs.ts). Shown only
+ * while billing is on (lib/billing/mode.ts).
  */
 
 import { useState } from "react";
 import { X, Check, Loader2, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CREDIT_PACKS, POPULAR_PACK_ID } from "@/lib/billing/credit-packs";
+import { CREDIT_PACKS, POPULAR_PACK_ID, packReach } from "@/lib/billing/credit-packs";
 
 interface Tier {
   id: string;
   credits: number;
   price: string;
+  reach: string;
   popular?: boolean;
 }
 
-const TIERS: Tier[] = CREDIT_PACKS.map((p) => ({
-  id: p.id,
-  credits: p.credits,
-  price: `GHS ${p.amountGhs}`,
-  popular: p.id === POPULAR_PACK_ID,
-}));
+const TIERS: Tier[] = CREDIT_PACKS.map((p) => {
+  const { autofills, drafts } = packReach(p.credits);
+  return {
+    id: p.id,
+    credits: p.credits,
+    price: `GHS ${p.amountGhs}`,
+    reach: `${autofills} autofills or ${drafts} WhatsApp listings`,
+    popular: p.id === POPULAR_PACK_ID,
+  };
+});
 
 export function BuyCreditsModal({
   open,
@@ -115,7 +120,7 @@ export function BuyCreditsModal({
                     </span>
                   )}
                 </span>
-                <p className="mt-0.5 text-xs text-zinc-500">{t.price}</p>
+                <p className="mt-0.5 text-xs text-zinc-500">{t.price} · about {t.reach}</p>
               </div>
               <span
                 className={cn(

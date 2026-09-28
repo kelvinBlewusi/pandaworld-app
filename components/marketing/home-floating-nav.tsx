@@ -33,9 +33,11 @@ interface HomeFloatingNavProps {
   signInHref: string;
   signUpHref: string;
   calculatorHref: string;
+  /** Billing is switched on (lib/billing/mode.ts): link to /pricing. */
+  pricingLive?: boolean;
 }
 
-export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref }: HomeFloatingNavProps) {
+export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref, pricingLive = false }: HomeFloatingNavProps) {
   const [open, setOpen] = useState(false);
 
   const links: { href: string; label: string; disabled?: boolean }[] = [
@@ -44,11 +46,10 @@ export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref }: Home
     // bare fragment resolves against whatever page it's clicked from.
     { href: "/#how-it-works", label: "How it Works" },
     { href: "/how-to", label: "Guides" },
-    // Greyed out + non-clickable: /pricing shows the paid monthly tiers,
-    // which don't apply while FREE_FOR_ALL_MODE is on (see
-    // lib/billing/free-for-all.ts) — keeping it visible but disabled here
-    // signals "coming later" rather than linking somewhere misleading.
-    { href: "/pricing", label: "Pricing", disabled: true },
+    // Greyed out + non-clickable while billing is off (everything is
+    // free, so there's nothing to price yet) — visible but disabled
+    // signals "coming later". Live once billing is switched on.
+    { href: "/pricing", label: "Pricing", disabled: !pricingLive },
     { href: calculatorHref, label: "Jumia Pricing Calculator" },
   ];
 

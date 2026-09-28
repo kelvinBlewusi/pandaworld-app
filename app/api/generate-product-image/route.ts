@@ -2,9 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { generateProductImage, isImagenEnabled, type ImagenAspectRatio } from "@/lib/imagen";
-import { checkQuota, incrementUsage, getQuotaSummary } from "@/lib/billing/quota";
-import { canGenerateImagesFromScratch } from "@/lib/billing/ai-models";
-import { PLANS, getNextTierUpgrade, type Plan } from "@/lib/billing/plans";
+import { getOrCreateCreditBalance, deductCredits } from "@/lib/billing/extension-credits";
+import { IMAGE_CREDIT_COST } from "@/lib/billing/credit-packs";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 
 // Imagen 3 calls take 4–8s typically; bump function timeout above the
@@ -14,8 +13,7 @@ export const maxDuration = 60;
 // ─── POST /api/generate-product-image ────────────────────────────────────────
 //
 // Generates a brand-new studio product photo from a text prompt via
-// Google Imagen 3. Business-tier-only feature — the marketing
-// differentiator for sellers who don't have decent product photos.
+// Google Imagen 3, for sellers who don't have decent product photos.
 //
 // Body: {
 //   listingId: string,
@@ -28,11 +26,8 @@ export const maxDuration = 60;
 //   appended:   boolean,   // whether we appended it to listing.images
 // }
 //
-// Tier gates:
-//   1. canGenerateImagesFromScratch — Business + Admin only
-//   2. polish quota — shares the same quota bucket as image polish/rebuild
-//      (Business gets 150/mo, Admin unlimited). Free / Starter / Pro
-//      hit the Business-only check first and get a clear upgrade nudge.
+// Costs IMAGE_CREDIT_COST credits, charged after the image is saved to
+// the listing; free for everyone while billing is off (lib/billing/mode.ts).
 
 export async function POST(req: NextRequest) {
   if (!isImagenEnabled()) {
@@ -49,34 +44,13 @@ export async function POST(req: NextRequest) {
   const blocked = checkRateLimit(`generate-image:${userId}`, RATE_LIMITS.polishImages);
   if (blocked) return blocked;
 
-  // ── Tier gate: Business + Admin only ────────────────────────────────────
-  const summary = await getQuotaSummary(userId);
-  if (!canGenerateImagesFromScratch(summary.plan as Plan, { isAdmin: summary.is_admin })) {
-    const next = getNextTierUpgrade(summary.plan as Plan);
-    const upgradeNote = next
-      ? ` Upgrade to ${PLANS[next].name} (${PLANS[next].display_price}/month) to unlock AI-generated product photos.`
-      : "";
+  const balance = await getOrCreateCreditBalance(userId);
+  if (balance < IMAGE_CREDIT_COST) {
     return NextResponse.json(
       {
-        error:
-          `Generate-from-text is a Business-only feature.${upgradeNote}`,
-        plan:              summary.plan,
-        suggested_upgrade: "business",
-      },
-      { status: 402 },
-    );
-  }
-
-  // ── Quota gate: shares the polish bucket (Business=150/mo, Admin=∞) ─────
-  const quota = await checkQuota(userId, "polish");
-  if (!quota.allowed) {
-    return NextResponse.json(
-      {
-        error:
-          `You've used ${quota.used} of ${quota.limit} image generations on the ${PLANS[quota.plan as Plan].name} plan this month. Resets ${new Date(quota.period_resets_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}.`,
-        plan:  quota.plan,
-        used:  quota.used,
-        limit: quota.limit,
+        error:   `Not enough credits: a generated photo costs ${IMAGE_CREDIT_COST} credits and you have ${balance}. Buy credits from your dashboard to continue.`,
+        needed:  IMAGE_CREDIT_COST,
+        balance,
       },
       { status: 402 },
     );
@@ -151,8 +125,8 @@ export async function POST(req: NextRequest) {
 
   if (updateErr) {
     // We still generated the image and have the URL — return it so the
-    // UI can show + retry the append. Don't bill the quota for a
-    // partial failure, but also don't waste the generated image.
+    // UI can show + retry the append. Don't charge for a partial
+    // failure, but also don't waste the generated image.
     console.error("[generate-product-image] listing update failed:", updateErr.message);
     return NextResponse.json({
       url:      result.publicUrl,
@@ -161,8 +135,9 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // Bill one polish credit AFTER everything succeeded (skipped for admins).
-  await incrementUsage(userId, "polish");
+  // Charge AFTER everything succeeded (a no-op for admins and while billing is off).
+  const charged = await deductCredits(userId, IMAGE_CREDIT_COST, "Generated a product photo");
+  if (!charged.ok) console.error(`[generate-product-image] credit deduction failed for ${userId}: ${charged.error}`);
 
   return NextResponse.json({
     url:      result.publicUrl,

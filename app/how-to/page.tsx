@@ -4,6 +4,7 @@ import { Link2, Laptop, PlayCircle } from "lucide-react";
 import { WhatsAppIcon } from "@/components/whatsapp/whatsapp-icon";
 import { HomeFloatingNav } from "@/components/marketing/home-floating-nav";
 import { MarketingFooter } from "@/components/marketing/footer";
+import { isBillingEnabled } from "@/lib/billing/mode";
 import { WhatsAppFlowVideo } from "@/components/marketing/whatsapp-flow-video";
 
 // ─── /how-to — public, indexable step-by-step guides ─────────────────────────
@@ -144,10 +145,11 @@ export default async function HowToPage() {
   const signInHref = `/sign-in?redirect_url=${DASHBOARD_REDIRECT}`;
   const signUpHref = `/sign-up?redirect_url=${DASHBOARD_REDIRECT}`;
   const calculatorHref = userId ? "/extension/calculator" : "/sign-in?redirect_url=/extension/calculator";
+  const billingOn = await isBillingEnabled();
 
   return (
     <div className="min-h-screen bg-white text-zinc-900">
-      <HomeFloatingNav signInHref={signInHref} signUpHref={signUpHref} calculatorHref={calculatorHref} />
+      <HomeFloatingNav signInHref={signInHref} signUpHref={signUpHref} calculatorHref={calculatorHref} pricingLive={billingOn} />
 
       <div className="mx-auto max-w-3xl px-6 pb-16 pt-16 sm:pt-20">
         <div className="text-center">
@@ -208,7 +210,7 @@ export default async function HowToPage() {
         </div>
       </div>
 
-      <MarketingFooter extensionPricing={{ signedIn: Boolean(userId), signInHref }} />
+      <MarketingFooter extensionPricing={billingOn ? undefined : { signedIn: Boolean(userId), signInHref }} />
     </div>
   );
 }

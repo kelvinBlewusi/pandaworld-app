@@ -4,7 +4,7 @@
  * "Donate" modal — temporarily stands in for BuyCreditsModal on both the
  * extension dashboard (components/extension/shell.tsx) and the marketing
  * page's Pricing trigger (components/marketing/extension-hero-backdrop.tsx)
- * while lib/billing/free-for-all.ts's FREE_FOR_ALL_MODE is on: WhatsApp +
+ * while billing is off (lib/billing/mode.ts): WhatsApp +
  * the extension are free to use, so instead of selling credit packs we
  * just ask sellers who want to support the project to chip in whatever
  * they like. Grants nothing back (no credits, no plan change) — see

@@ -1,7 +1,8 @@
 /**
- * Extension credit-pack pricing — the "Buy Credits" flow on
- * /extension/dashboard, separate from the classic app's plan tiers
- * (lib/billing/plans.ts).
+ * Credit packs and what things cost in credits — the only pricing there
+ * is (the monthly plans were removed 2026-09-28). Sold from the dashboard's
+ * Buy Credits modal and shown on /pricing; charged only while billing is on
+ * (lib/billing/mode.ts).
  */
 
 export interface CreditPack {
@@ -24,14 +25,6 @@ export function getCreditPack(id: string): CreditPack | undefined {
 }
 
 /**
- * Reverse lookup by credit count — each pack has a distinct `credits`
- * value, so a purchase transaction's `amount` (see extension_credit_
- * transactions) identifies which pack was bought without needing its own
- * stored pack id. Used to show the dashboard's "Plan" pill for extension
- * sellers who never subscribed to a classic-app plan tier (lib/billing/
- * extension-credits.ts's getMostRecentCreditPack()).
- */
-/**
  * Credit amounts from before the 2026-09-13 price increase (100/280/600 ->
  * 150/330/650, same GHS price each) — kept so a purchase transaction
  * recorded before that change still resolves to its pack instead of
@@ -39,6 +32,13 @@ export function getCreditPack(id: string): CreditPack | undefined {
  */
 const LEGACY_CREDIT_AMOUNTS: Record<number, string> = { 100: "starter", 280: "small", 600: "medium" };
 
+/**
+ * Reverse lookup by credit count — each pack has a distinct `credits`
+ * value, so a purchase transaction's `amount` (see extension_credit_
+ * transactions) identifies which pack was bought without needing its own
+ * stored pack id. Used for the dashboard's "Plan" pill (lib/billing/
+ * extension-credits.ts's getMostRecentCreditPack()).
+ */
 export function getCreditPackByCredits(credits: number): CreditPack | undefined {
   return (
     CREDIT_PACKS.find((p) => p.credits === credits) ??
@@ -46,15 +46,20 @@ export function getCreditPackByCredits(credits: number): CreditPack | undefined 
   );
 }
 
-/** Every sign-up starts with this many free credits (lib/billing/extension-credits.ts). */
-export const FREE_SIGNUP_CREDITS = 10;
+/**
+ * Every sign-up starts with this many free credits, spendable on the
+ * extension and WhatsApp alike (lib/billing/extension-credits.ts). 25 as
+ * of 2026-09-28 (was 10).
+ */
+export const FREE_SIGNUP_CREDITS = 25;
 
-/** One extension autofill costs this many credits. */
-export const LISTING_CREDIT_COST = 2.5;
+/** One extension autofill costs this many credits. 1.5 as of 2026-09-28 (was 2.5). */
+export const LISTING_CREDIT_COST = 1.5;
 
 /**
  * One WhatsApp product draft (a single runAutoAnalyze pass) costs this
- * many credits — priced higher than an extension autofill (2.5) because
+ * many credits (2 as of 2026-09-28, was 3) — priced higher than an
+ * extension autofill because
  * it runs the full listing pipeline (describe + category pick + attribute
  * fill, up to 3-6 Gemini calls) rather than one single vision call.
  * Deducted only after a successful draft, same rule LISTING_CREDIT_COST
@@ -62,14 +67,33 @@ export const LISTING_CREDIT_COST = 2.5;
  * app/api/extension/fill/route.ts and its WhatsApp counterpart in
  * lib/whatsapp/intake.ts's startBatchAnalysis().
  */
-export const WHATSAPP_DRAFT_CREDIT_COST = 3;
+export const WHATSAPP_DRAFT_CREDIT_COST = 2;
+
+/**
+ * One AI image (a photo polished or rebuilt on the review page, or one
+ * generated from text) costs this many credits. Image models bill per
+ * image, about $0.04 each (Gemini image edit, Imagen 3), several times a
+ * whole listing draft, so priced to match. Charged per image that came
+ * back, after it's saved; an image served from the listing's cache is
+ * free. Set 2026-09-28 along with the move off monthly plans, whose
+ * "polish" quota these used to count against.
+ */
+export const IMAGE_CREDIT_COST = 4;
+
+/** How far a number of credits goes: whole autofills, or whole WhatsApp / web drafts. */
+export function packReach(credits: number): { autofills: number; drafts: number } {
+  return {
+    autofills: Math.floor(credits / LISTING_CREDIT_COST),
+    drafts:    Math.floor(credits / WHATSAPP_DRAFT_CREDIT_COST),
+  };
+}
 
 /**
  * Prepares a balance for a JSON API response (app/api/extension/account,
  * app/api/extension/fill) — `JSON.stringify(Infinity)` silently becomes
  * `null`, which the extension panel can't tell apart from "unknown". This
- * makes the unlimited case (admin accounts — see
- * lib/billing/extension-credits.ts) explicit instead.
+ * makes the unlimited case (admins, and everyone while billing is off —
+ * see lib/billing/extension-credits.ts) explicit instead.
  */
 export function serializeCredits(balance: number): { value: number | null; unlimited: boolean } {
   if (!Number.isFinite(balance)) return { value: null, unlimited: true };
