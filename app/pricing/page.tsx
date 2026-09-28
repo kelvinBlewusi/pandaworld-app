@@ -8,10 +8,9 @@ import { isBillingEnabled } from "@/lib/billing/mode";
 import {
   CREDIT_PACKS,
   FREE_SIGNUP_CREDITS,
-  IMAGE_CREDIT_COST,
   LISTING_CREDIT_COST,
+  LIVE_LISTING_CREDIT_COST,
   POPULAR_PACK_ID,
-  WHATSAPP_DRAFT_CREDIT_COST,
   packReach,
 } from "@/lib/billing/credit-packs";
 
@@ -30,7 +29,7 @@ import {
 
 export const metadata: import("next").Metadata = {
   title:       "Pricing — Jumia Africa Listing Tool",
-  description: `PandaWorld pricing for Jumia sellers: pay per listing with credits, no subscription. ${FREE_SIGNUP_CREDITS} free credits when you sign up. Credit packs from GHS ${Math.min(...CREDIT_PACKS.map((p) => p.amountGhs))}. Pay with Mobile Money or card.`,
+  description: `PandaWorld pricing for Jumia sellers: pay only for listings that go live, no subscription. ${FREE_SIGNUP_CREDITS} free credits when you sign up. Credit packs from GHS ${Math.min(...CREDIT_PACKS.map((p) => p.amountGhs))}. Pay with Mobile Money or card.`,
   keywords: [
     "PandaWorld pricing",
     "Jumia tool pricing",
@@ -42,7 +41,7 @@ export const metadata: import("next").Metadata = {
   ],
   openGraph: {
     title:       "Pricing — PandaWorld for Jumia Africa Sellers",
-    description: `Pay per listing, no subscription. ${FREE_SIGNUP_CREDITS} free credits to start. Pay with Mobile Money or card.`,
+    description: `Pay only for listings that go live on Jumia. No subscription. ${FREE_SIGNUP_CREDITS} free credits to start. Pay with Mobile Money or card.`,
     type:        "website",
   },
   alternates: {
@@ -53,9 +52,16 @@ export const metadata: import("next").Metadata = {
 const DASHBOARD_REDIRECT = "/extension/dashboard";
 
 const COSTS = [
-  { what: "Chrome extension autofill", detail: "One product filled in on Vendor Center", credits: LISTING_CREDIT_COST },
-  { what: "WhatsApp listing", detail: "Photos in, a complete draft pushed to Jumia", credits: WHATSAPP_DRAFT_CREDIT_COST },
-  { what: "AI product photo", detail: "Polish, studio rebuild or generate, per photo", credits: IMAGE_CREDIT_COST },
+  {
+    what:    "WhatsApp listing",
+    detail:  "Photos in, a complete listing submitted to Jumia. Charged only when it goes live.",
+    credits: LIVE_LISTING_CREDIT_COST,
+  },
+  {
+    what:    "Chrome extension autofill",
+    detail:  "One product's form filled in on Vendor Center",
+    credits: LISTING_CREDIT_COST,
+  },
 ];
 
 function ghs(amount: number): string {
@@ -104,11 +110,11 @@ export default async function PricingPage() {
         <div className="mx-auto max-w-4xl px-6 py-20 text-center">
           <p className="text-sm font-semibold uppercase tracking-widest text-orange-500">Pricing</p>
           <h1 className="mt-3 text-balance text-4xl font-bold tracking-tight sm:text-5xl">
-            Pay per listing. No subscription.
+            Pay only for listings that go live.
           </h1>
           <p className="mx-auto mt-4 max-w-xl text-base leading-relaxed text-zinc-600 sm:text-lg">
-            Start with {FREE_SIGNUP_CREDITS} free credits, no card needed. Buy a pack when you need more.
-            Credits never expire.
+            No subscription. Start with {FREE_SIGNUP_CREDITS} free credits, no card needed. Buy a pack when you
+            need more. Credits never expire.
           </p>
           {!billingOn && (
             <p className="mx-auto mt-6 max-w-xl rounded-xl bg-orange-50 px-4 py-3 text-sm text-orange-800">
@@ -141,7 +147,7 @@ export default async function PricingPage() {
             </table>
           </div>
           <p className="mt-3 text-sm text-zinc-500">
-            A draft is only charged when it succeeds. Fixing a listing Jumia rejected is free.
+            Drafts, redrafts and fixes are free. If Jumia rejects a listing, it costs nothing.
           </p>
         </div>
       </section>
@@ -152,7 +158,7 @@ export default async function PricingPage() {
           <h2 className="text-2xl font-bold sm:text-3xl">Credit packs</h2>
           <div className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-3">
             {CREDIT_PACKS.map((p) => {
-              const { autofills, drafts } = packReach(p.credits);
+              const { autofills, listings } = packReach(p.credits);
               const perCredit = p.amountGhs / p.credits;
               const popular = p.id === POPULAR_PACK_ID;
               return (
@@ -173,11 +179,11 @@ export default async function PricingPage() {
                   <ul className="mt-5 flex-1 space-y-2.5 text-sm text-zinc-700">
                     <li className="flex items-start gap-2">
                       <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-                      About {autofills} extension autofills ({ghs(perCredit * LISTING_CREDIT_COST)} each)
+                      {listings} live WhatsApp listings ({ghs(perCredit * LIVE_LISTING_CREDIT_COST)} each)
                     </li>
                     <li className="flex items-start gap-2">
                       <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-                      or about {drafts} WhatsApp listings ({ghs(perCredit * WHATSAPP_DRAFT_CREDIT_COST)} each)
+                      or {autofills} extension autofills ({ghs(perCredit * LISTING_CREDIT_COST)} each)
                     </li>
                     <li className="flex items-start gap-2">
                       <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
@@ -218,12 +224,16 @@ export default async function PricingPage() {
               a="No. Credits you buy stay on your account until you use them."
             />
             <FAQ
-              q="Do the same credits work on WhatsApp and the Chrome extension?"
-              a="Yes. One balance covers WhatsApp listings, extension autofills and AI photos."
+              q="When is a WhatsApp listing charged?"
+              a={`When Jumia confirms it live. Drafting, redrafting and fixing are free, and a listing Jumia rejects costs nothing. While a listing waits for Jumia's review, its ${LIVE_LISTING_CREDIT_COST} credits are set aside so you can't submit more than your balance covers.`}
             />
             <FAQ
-              q="What if a draft fails or Jumia rejects my listing?"
-              a="A draft is only charged when it succeeds, and fixing a listing Jumia rejected costs nothing."
+              q="Why is the Chrome extension charged per autofill?"
+              a="With the extension you submit the product on Vendor Center yourself, so we can't see whether it went live. Each autofill is charged instead, at a lower price."
+            />
+            <FAQ
+              q="Do the same credits work on WhatsApp and the Chrome extension?"
+              a="Yes. One balance covers both."
             />
             <FAQ
               q="What payment methods do you accept?"
@@ -240,7 +250,7 @@ export default async function PricingPage() {
       <section className="bg-zinc-50">
         <div className="mx-auto max-w-3xl px-6 py-20 text-center">
           <h2 className="text-2xl font-bold sm:text-3xl">Ready when you are.</h2>
-          <p className="mt-3 text-base text-zinc-600">{FREE_SIGNUP_CREDITS} free credits. No card.</p>
+          <p className="mt-3 text-base text-zinc-600">{FREE_SIGNUP_CREDITS} free credits. No card. Pay only for what goes live.</p>
           <Link
             href={userId ? DASHBOARD_REDIRECT : signUpHref}
             className="mt-8 inline-flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-orange-500/20 transition-all hover:bg-orange-600"

@@ -23,6 +23,8 @@ import {
 import { fingerprintListingContent, logFeedOutcome, type FeedOutcomeKind } from "@/lib/jumia/feed-outcomes";
 import type { PreflightNote } from "@/lib/jumia/preflight";
 import type { ListingRow, ListingStatus, VariantRow } from "@/lib/supabase/types";
+import { chargeLiveListing, creditsDueForSubmission } from "@/lib/billing/extension-credits";
+import { LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
 
 export interface PushListingVariantInput {
   variation:      string;
@@ -160,6 +162,7 @@ export type PushListingResult =
         | "jumia_no_shop_id"
         | "credentials_error"
         | "already_submitted"
+        | "insufficient_credits"
         | "push_failed";
       message: string;
       needsReconnect?: boolean;
@@ -339,6 +342,20 @@ export async function pushListingToJumia(
   // own doc comment for why seller_sku is excluded (it changes on every retry).
   const payloadFingerprint = fingerprintListingContent(row, variants);
 
+  // ── Credits: charged when the listing goes live, held from now ──────────
+  // Checked before anything reaches Jumia, so a seller can't submit more
+  // listings than they can pay for. Nothing is taken here: the amount is
+  // recorded on the listing below and charged by refreshPendingFeedStatus
+  // once Jumia confirms it live (lib/billing/extension-credits.ts).
+  const credits = await creditsDueForSubmission(userId, listingId, LIVE_LISTING_CREDIT_COST);
+  if (!credits.ok) {
+    return {
+      ok: false,
+      code: "insufficient_credits",
+      message: `Not enough credits: a listing costs ${LIVE_LISTING_CREDIT_COST} credits when it goes live on Jumia, and you have ${Math.max(0, credits.available)} available. Buy credits from your dashboard to submit it.`,
+    };
+  }
+
   // ── Get valid Jumia token + shopId ───────────────────────────────────────
   let accessToken: string;
   let shopId: string;
@@ -482,6 +499,8 @@ export async function pushListingToJumia(
         // Carried forward so refreshPendingFeedStatus can log this feed's
         // eventual per-SKU outcome against the content that produced it.
         jumia_payload_fingerprint: payloadFingerprint,
+        // Charged when Jumia confirms it live, held until then.
+        credits_due:               credits.due,
         updated_at:                new Date().toISOString(),
       })
       .eq("id", listingId);
@@ -535,7 +554,12 @@ export async function pushListingToJumia(
 
   await db
     .from("listings")
-    .update({ status: "failed", jumia_error: result.error ?? "Unknown error from Jumia", updated_at: new Date().toISOString() })
+    .update({
+      status:      "failed",
+      jumia_error: result.error ?? "Unknown error from Jumia",
+      credits_due: null, // never went live: nothing to charge or hold
+      updated_at:  new Date().toISOString(),
+    })
     .eq("id", listingId);
 
   return { ok: false, code: "push_failed", message: result.error ?? "Jumia rejected the submission", raw: result.raw };
@@ -948,6 +972,10 @@ export async function refreshPendingFeedStatus(
     if (newStatus === "live") {
       updates.jumia_rerun_fingerprint = null;
       updates.jumia_rerun_count       = 0;
+    } else {
+      // Rejected outright: release the credits held for it. A later
+      // Fix & resubmit holds them again.
+      updates.credits_due = null;
     }
     // Take the sid/qc off a product that actually succeeded — details[0]
     // may well be the rejected one, which carries no usable sid.
@@ -976,6 +1004,11 @@ export async function refreshPendingFeedStatus(
           rawError:  rejected.includes(p) ? (p.errors.find((e) => e.trim()) ?? reason ?? null) : null,
         }))
       : [{ sellerSku: null, outcome: (newStatus === "live" ? "live" : "rejected") as FeedOutcomeKind, rawError: errorMsg }];
+
+    // Pay when live: charge what was held at submission. Only on the
+    // pending → live transition, so re-checking a live listing never
+    // charges again (and the ledger's live:<id> reference guards it too).
+    if (isPending && newStatus === "live") await chargeLiveListing(listing.id);
 
     await Promise.all(outcomeItems.map((item) => logFeedOutcome({
       listingId:          listing.id,

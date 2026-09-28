@@ -20,9 +20,12 @@ import {
   deductCredits,
   creditPurchase,
   topUpBalancesTo,
+  availableCredits,
+  creditsDueForSubmission,
+  chargeLiveListing,
 } from "@/lib/billing/extension-credits";
 import { isBillingEnabled, setBillingEnabled, _resetBillingModeCache } from "@/lib/billing/mode";
-import { FREE_SIGNUP_CREDITS, LISTING_CREDIT_COST, packReach } from "@/lib/billing/credit-packs";
+import { CREDIT_PACKS, FREE_SIGNUP_CREDITS, LISTING_CREDIT_COST, LIVE_LISTING_CREDIT_COST, packReach } from "@/lib/billing/credit-packs";
 import { summarizeCosts, searchOverageUsd } from "@/lib/billing/costs";
 
 const ADMIN = "user_admin";
@@ -57,9 +60,9 @@ describe("billing off", () => {
   });
 
   it("still stores a purchase as real credits, waiting for when billing starts", async () => {
-    const result = await creditPurchase({ userId: SELLER, credits: 150, reference: "pwcr_1", description: "Purchased 150 credits" });
-    expect(result).toEqual({ ok: true, balance: FREE_SIGNUP_CREDITS + 150 });
-    expect(balances()[0]).toMatchObject({ user_id: SELLER, balance: FREE_SIGNUP_CREDITS + 150 });
+    const result = await creditPurchase({ userId: SELLER, credits: 120, reference: "pwcr_1", description: "Purchased 120 credits" });
+    expect(result).toEqual({ ok: true, balance: FREE_SIGNUP_CREDITS + 120 });
+    expect(balances()[0]).toMatchObject({ user_id: SELLER, balance: FREE_SIGNUP_CREDITS + 120 });
   });
 });
 
@@ -90,11 +93,77 @@ describe("billing on", () => {
 
   it("adds a purchase to the balance once, however many times Paystack reports it", async () => {
     db.tables.extension_credits = [{ user_id: SELLER, balance: 4 }];
-    const args = { userId: SELLER, credits: 330, reference: "pwcr_2", description: "Purchased 330 credits" };
+    const args = { userId: SELLER, credits: 200, reference: "pwcr_2", description: "Purchased 200 credits" };
 
-    expect(await creditPurchase(args)).toEqual({ ok: true, balance: 334 });
-    expect(await creditPurchase(args)).toEqual({ ok: true, balance: 334, alreadyProcessed: true });
-    expect(ledger().filter((t) => t.type === "purchase")).toEqual([expect.objectContaining({ balance_after: 334 })]);
+    expect(await creditPurchase(args)).toEqual({ ok: true, balance: 204 });
+    expect(await creditPurchase(args)).toEqual({ ok: true, balance: 204, alreadyProcessed: true });
+    expect(ledger().filter((t) => t.type === "purchase")).toEqual([expect.objectContaining({ balance_after: 204 })]);
+  });
+});
+
+describe("pay when live", () => {
+  const COST = LIVE_LISTING_CREDIT_COST;
+  const pending = (id: string, due: number | null, status = "pending_approval") =>
+    ({ id, user_id: SELLER, status, credits_due: due, title: `Product ${id}` });
+
+  beforeEach(() => setSwitch(true));
+
+  it("holds credits for listings waiting on Jumia", async () => {
+    db.tables.extension_credits = [{ user_id: SELLER, balance: 10 }];
+    db.tables.listings = [pending("a", COST), pending("b", COST), pending("c", null), pending("d", COST, "live")];
+    expect(await availableCredits(SELLER)).toBe(10 - 2 * COST);
+  });
+
+  it("lets a seller submit only what they can pay for once it's live", async () => {
+    db.tables.extension_credits = [{ user_id: SELLER, balance: 5 }];
+    db.tables.listings = [pending("a", COST), pending("b", COST)];
+    expect(await creditsDueForSubmission(SELLER, "new", COST)).toEqual({ ok: false, available: 5 - 2 * COST });
+
+    db.tables.listings = [pending("a", COST)];
+    expect(await creditsDueForSubmission(SELLER, "new", COST)).toEqual({ ok: true, due: COST });
+  });
+
+  it("doesn't count a listing's own hold against resubmitting it", async () => {
+    db.tables.extension_credits = [{ user_id: SELLER, balance: COST }];
+    db.tables.listings = [pending("a", COST)];
+    expect(await creditsDueForSubmission(SELLER, "a", COST)).toEqual({ ok: true, due: COST });
+  });
+
+  it("charges a listing once, when it goes live", async () => {
+    db.tables.extension_credits = [{ user_id: SELLER, balance: 10 }];
+    db.tables.listings = [pending("a", COST, "live")];
+
+    expect(await chargeLiveListing("a")).toEqual({ charged: COST });
+    expect(balances()[0].balance).toBe(10 - COST);
+    expect(db.tables.listings[0].credits_due).toBeNull();
+    expect(ledger()).toEqual([expect.objectContaining({ type: "deduction", amount: -COST, reference: "live:a", balance_after: 10 - COST })]);
+
+    // A re-check, or a resubmission after an edit, never charges again.
+    db.tables.listings[0].credits_due = COST;
+    expect(await chargeLiveListing("a")).toEqual({ charged: 0 });
+    expect(balances()[0].balance).toBe(10 - COST);
+    expect(await creditsDueForSubmission(SELLER, "a", COST)).toEqual({ ok: true, due: null });
+  });
+
+  it("charges nothing for a listing submitted while billing was off", async () => {
+    db.tables.extension_credits = [{ user_id: SELLER, balance: 10 }];
+    db.tables.listings = [pending("a", null, "live")];
+    expect(await chargeLiveListing("a")).toEqual({ charged: 0 });
+    expect(ledger()).toHaveLength(0);
+  });
+
+  it("charges nothing if billing was switched off before it went live", async () => {
+    db.tables.extension_credits = [{ user_id: SELLER, balance: 10 }];
+    db.tables.listings = [pending("a", COST, "live")];
+    setSwitch(false);
+    expect(await chargeLiveListing("a")).toEqual({ charged: 0 });
+    expect(balances()[0].balance).toBe(10);
+    expect(db.tables.listings[0].credits_due).toBeNull();
+  });
+
+  it("holds nothing while billing is off", async () => {
+    setSwitch(false);
+    expect(await creditsDueForSubmission(SELLER, "a", COST)).toEqual({ ok: true, due: null });
   });
 });
 
@@ -155,7 +224,13 @@ describe("costs", () => {
     expect(searchOverageUsd(5_100)).toBeCloseTo(1.4, 10);
   });
 
+  it("prices a live listing at GHS 0.50 in every pack", () => {
+    for (const p of CREDIT_PACKS) expect((p.amountGhs / p.credits) * LIVE_LISTING_CREDIT_COST).toBeCloseTo(0.5, 10);
+    expect(Math.min(...CREDIT_PACKS.map((p) => p.amountGhs))).toBe(30);
+    expect(Math.max(...CREDIT_PACKS.map((p) => p.amountGhs))).toBe(100);
+  });
+
   it("says how far a pack goes", () => {
-    expect(packReach(330)).toEqual({ autofills: 220, drafts: 165 });
+    expect(packReach(200)).toEqual({ autofills: 133, listings: 100 });
   });
 });

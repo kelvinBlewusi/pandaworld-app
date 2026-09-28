@@ -1,10 +1,9 @@
 /**
  * The credit ledger — one never-expiring balance per seller, spent on
  * extension autofills (app/api/extension/fill/route.ts) and on WhatsApp
- * and web drafts (lib/whatsapp/intake.ts, app/api/listings/[id]/
- * auto-analyze). The only billing there is: the monthly plans were
- * removed 2026-09-28. See supabase/migrations/2026-08-24_extension-
- * credits.sql.
+ * and web listings when they go live on Jumia (chargeLiveListing, below).
+ * The only billing there is: the monthly plans were removed 2026-09-28.
+ * See supabase/migrations/2026-08-24_extension-credits.sql.
  *
  * Nothing is charged while billing is switched off (lib/billing/mode.ts):
  * reads return Infinity and deductions are no-ops, so balances stay put
@@ -20,7 +19,7 @@ import { isAdmin } from "@/lib/auth/is-admin";
 import { isBillingEnabled } from "@/lib/billing/mode";
 
 /** Admins, and everyone while billing is off, spend nothing. */
-async function isUnmetered(userId: string): Promise<boolean> {
+export async function isUnmetered(userId: string): Promise<boolean> {
   return isAdmin(userId) || !(await isBillingEnabled());
 }
 
@@ -354,4 +353,129 @@ export async function topUpBalancesTo(target: number): Promise<{ toppedUp: numbe
     toppedUp++;
   }
   return { toppedUp };
+}
+
+// ─── Pay when live ────────────────────────────────────────────────────────────
+//
+// A WhatsApp or web listing is charged once, when Jumia confirms it live.
+// Submitting it records what it will cost on the listing (credits_due,
+// supabase/migrations/2026-09-28_listing-credits-due.sql), and while it
+// waits on Jumia that amount is held: counted against what the seller can
+// still commit, so they can't submit more than they can pay for. Going
+// live charges it; a failed submission releases it.
+
+/** Statuses of a submitted listing still waiting on Jumia's verdict. */
+const AWAITING_JUMIA = ["processing", "pending_approval"];
+
+const liveReference = (listingId: string) => `live:${listingId}`;
+
+/** Credits held for the seller's listings waiting on Jumia, optionally leaving one out. */
+async function creditsOnHold(userId: string, exceptListingId?: string): Promise<number> {
+  const db = createServerClient();
+  const { data } = await db
+    .from("listings")
+    .select("id, credits_due")
+    .eq("user_id", userId)
+    .in("status", AWAITING_JUMIA)
+    .not("credits_due", "is", null);
+  return ((data ?? []) as { id: string; credits_due: number | string }[])
+    .filter((r) => r.id !== exceptListingId)
+    .reduce((sum, r) => sum + Number(r.credits_due), 0);
+}
+
+/**
+ * What the seller can still commit: their balance less what's held for
+ * listings waiting on Jumia. Infinity for admins and while billing is off.
+ */
+export async function availableCredits(userId: string, exceptListingId?: string): Promise<number> {
+  if (await isUnmetered(userId)) return Infinity;
+  const [balance, held] = await Promise.all([storedBalance(userId), creditsOnHold(userId, exceptListingId)]);
+  return Math.round((balance - held) * 100) / 100;
+}
+
+/**
+ * What submitting this listing will cost once it's live: `amount`, or
+ * null when nothing will be charged (admins, billing off, or a listing
+ * already charged — a live listing resubmitted after an edit). Refused
+ * when the seller's available credits don't cover it.
+ */
+export async function creditsDueForSubmission(
+  userId:    string,
+  listingId: string,
+  amount:    number,
+): Promise<{ ok: true; due: number | null } | { ok: false; available: number }> {
+  if (await isUnmetered(userId)) return { ok: true, due: null };
+
+  const db = createServerClient();
+  const { data: charged } = await db
+    .from("extension_credit_transactions")
+    .select("id")
+    .eq("reference", liveReference(listingId))
+    .maybeSingle();
+  if (charged) return { ok: true, due: null };
+
+  const available = await availableCredits(userId, listingId);
+  return available >= amount ? { ok: true, due: amount } : { ok: false, available };
+}
+
+/**
+ * Charge a listing that just went live on Jumia the credits_due recorded
+ * when it was submitted. At most once per listing (the ledger's unique
+ * reference live:<listingId>). Nothing is charged for a listing submitted
+ * while billing was off, or if billing has been switched off since.
+ *
+ * Can take the balance below zero: the listing is already live, and the
+ * check at submission makes that possible only when two submissions race.
+ * Never throws — it runs inside feed-status refresh, which must not fail.
+ */
+export async function chargeLiveListing(listingId: string): Promise<{ charged: number }> {
+  const db = createServerClient();
+  try {
+    const { data: listing } = await db
+      .from("listings")
+      .select("user_id, credits_due, title")
+      .eq("id", listingId)
+      .maybeSingle();
+    const due = listing?.credits_due != null ? Number(listing.credits_due) : 0;
+    if (!listing || due <= 0) return { charged: 0 };
+
+    const userId = listing.user_id as string;
+    const clearDue = () => db.from("listings").update({ credits_due: null }).eq("id", listingId);
+    if (await isUnmetered(userId)) {
+      await clearDue();
+      return { charged: 0 };
+    }
+
+    const reference = liveReference(listingId);
+    const title = typeof listing.title === "string" && listing.title ? `: ${listing.title.slice(0, 60)}` : "";
+    const { error: txError } = await db.from("extension_credit_transactions").insert({
+      user_id:       userId,
+      type:          "deduction",
+      amount:        -due,
+      balance_after: 0, // corrected below once the real balance is known
+      reference,
+      description:   `Listing live on Jumia${title}`,
+    });
+    if (txError) {
+      if (txError.code === "23505") {
+        await clearDue(); // already charged
+        return { charged: 0 };
+      }
+      throw new Error(txError.message);
+    }
+
+    const newBalance = await addToBalance(userId, -due);
+    if (newBalance === null) {
+      // Leave credits_due in place (a live listing's due is no longer
+      // held) so the missed charge stays visible on the row.
+      await db.from("extension_credit_transactions").delete().eq("reference", reference);
+      throw new Error("balance update failed");
+    }
+    await db.from("extension_credit_transactions").update({ balance_after: newBalance }).eq("reference", reference);
+    await clearDue();
+    return { charged: due };
+  } catch (e) {
+    console.error(`[extension-credits] chargeLiveListing failed for ${listingId}: ${(e as Error).message}`);
+    return { charged: 0 };
+  }
 }

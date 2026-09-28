@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { runAutoAnalyze } from "@/lib/actions/auto-analyze";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
-import { getOrCreateCreditBalance, deductCredits } from "@/lib/billing/extension-credits";
-import { WHATSAPP_DRAFT_CREDIT_COST } from "@/lib/billing/credit-packs";
+import { availableCredits } from "@/lib/billing/extension-credits";
+import { LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
 
 // ─── POST /api/listings/[id]/auto-analyze ────────────────────────────────────
 //
@@ -11,13 +11,13 @@ import { WHATSAPP_DRAFT_CREDIT_COST } from "@/lib/billing/credit-packs";
 // — see that module for the actual describe → retrieve → rank+fill →
 // merge/default/gap-fill orchestration and the process-level embedding
 // circuit breaker. This route's only jobs: authenticate via Clerk,
-// rate-limit, charge credits, parse the optional userPrompt override,
+// rate-limit, check credits, parse the optional userPrompt override,
 // call the shared function, map its result to an HTTP response.
 //
-// Credits: a draft here is the same pipeline as a WhatsApp draft, so it
-// costs the same WHATSAPP_DRAFT_CREDIT_COST — balance checked before,
-// deducted only after a successful draft. Nothing is charged while
-// billing is off (lib/billing/mode.ts).
+// Credits: drafting is free. The listing is charged LIVE_LISTING_CREDIT_COST
+// when it goes live on Jumia (lib/billing/extension-credits.ts), so a draft
+// only needs the seller to have that much available — the same check a
+// WhatsApp draft makes. Nothing is checked while billing is off.
 //
 // Body (optional): { userPrompt?: string }
 
@@ -52,13 +52,13 @@ export async function POST(
   const blocked = checkRateLimit(`auto-analyze:${userId}`, RATE_LIMITS.autoAnalyze);
   if (blocked) return blocked;
 
-  const balance = await getOrCreateCreditBalance(userId);
-  if (balance < WHATSAPP_DRAFT_CREDIT_COST) {
+  const available = await availableCredits(userId);
+  if (available < LIVE_LISTING_CREDIT_COST) {
     return NextResponse.json(
       {
-        error:   `Not enough credits: a draft costs ${WHATSAPP_DRAFT_CREDIT_COST} credits and you have ${balance}. Buy credits from your dashboard to continue.`,
-        needed:  WHATSAPP_DRAFT_CREDIT_COST,
-        balance,
+        error:     `Not enough credits: a listing costs ${LIVE_LISTING_CREDIT_COST} credits when it goes live on Jumia, and you have ${Math.max(0, available)} available. Buy credits from your dashboard to continue.`,
+        needed:    LIVE_LISTING_CREDIT_COST,
+        available,
       },
       { status: 402 },
     );
@@ -80,9 +80,6 @@ export async function POST(
   const result = await runAutoAnalyze(userId, params.id, userPrompt);
 
   if (result.ok) {
-    const charged = await deductCredits(userId, WHATSAPP_DRAFT_CREDIT_COST, "Listing draft");
-    if (!charged.ok) console.error(`[auto-analyze] credit deduction failed for ${userId}: ${charged.error}`);
-
     // ── Return everything the UI needs to refresh in place ───────────────
     return NextResponse.json({
       success: true,

@@ -42,6 +42,8 @@ const CODE_TO_STATUS: Record<string, number> = {
   // push for it is in flight — so a client that retries on 5xx must not
   // retry this one.
   already_submitted:         409,
+  // A listing costs credits once it goes live, and the seller can't cover it.
+  insufficient_credits:      402,
   push_failed:               502,
 };
 

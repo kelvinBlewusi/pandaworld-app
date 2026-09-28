@@ -108,6 +108,8 @@ export interface ListingRow {
   // attempt — see lib/jumia/feed-outcomes.ts and migration
   // 2026-09-20_jumia-feed-outcomes.sql.
   jumia_payload_fingerprint?: string | null;
+  /** Credits to charge when this listing goes live (lib/billing/extension-credits.ts). */
+  credits_due?: number | null;
   // Set when this listing was created via the WhatsApp chatbot's
   // multi-product batch flow (see lib/whatsapp/intake.ts) — groups every
   // listing from one "how many products?" run and its 1-based position

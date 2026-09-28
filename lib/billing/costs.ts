@@ -58,6 +58,42 @@ export function searchOverageUsd(queriesThisMonth: number): number {
   return Math.max(0, queriesThisMonth - FREE_SEARCH_QUERIES_PER_MONTH) * SEARCH_QUERY_USD;
 }
 
+export interface UnitCosts {
+  /** Extension autofills and their average cost — each one is charged. */
+  autofills:     { count: number; usdEach: number | null };
+  /**
+   * WhatsApp / web listings: only the ones that go live are charged, so
+   * every draft, redraft, category refill and fix is paid for by them.
+   */
+  listings:      { drafts: number; live: number; usdPerLive: number | null };
+}
+
+/** What each thing a seller pays for actually costs us. */
+export function unitCosts(costs: FeatureCost[], liveListings: number): UnitCosts {
+  const fill = costs.find((c) => c.feature === "extension_fill");
+  const listingWork = costs.filter((c) => c.feature !== "extension_fill");
+  const listingUsd = listingWork.reduce((sum, c) => sum + c.tokenUsd, 0);
+  return {
+    autofills: { count: fill?.runs ?? 0, usdEach: fill?.usdPerRun ?? null },
+    listings:  {
+      drafts:     costs.find((c) => c.feature === "listing_draft")?.runs ?? 0,
+      live:       liveListings,
+      usdPerLive: liveListings > 0 ? listingUsd / liveListings : null,
+    },
+  };
+}
+
+/** Listings that went live on Jumia since `since` (jumia_live_listings). */
+export async function liveListingsSince(since: Date): Promise<number> {
+  const db = createServerClient();
+  const { count, error } = await db
+    .from("jumia_live_listings")
+    .select("listing_id", { count: "exact", head: true })
+    .gte("went_live_at", since.toISOString());
+  if (error) throw new Error(`Couldn't count live listings: ${error.message}`);
+  return count ?? 0;
+}
+
 /** Logged calls since `since`, newest first, capped (the admin page's window). */
 export async function usageSince(since: Date, cap = 20_000): Promise<UsageRow[]> {
   const db = createServerClient();

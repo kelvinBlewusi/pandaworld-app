@@ -4,6 +4,7 @@ import { MarketingFooter } from "@/components/marketing/footer";
 import { Wordmark } from "@/components/marketing/wordmark";
 import { ConnectTutorial } from "@/components/marketing/connect-tutorial";
 import { AnimatedToastReel } from "@/components/marketing/animated-toast-reel";
+import { FREE_SIGNUP_CREDITS } from "@/lib/billing/credit-packs";
 
 // ─── Public landing — reusable across / (logged-out) and /landing ────────────
 //
@@ -84,8 +85,8 @@ export function PublicLanding({ isAuthenticated = false, variant = "default" }: 
               </Link>
             </div>
             <p className="mt-4 text-xs text-zinc-400">
-              5 free listings every month. Paid plans from GHS 30/month — pick
-              the tier that matches your volume, cancel any time.
+              {FREE_SIGNUP_CREDITS} free credits to start. After that, pay only for
+              listings that go live on Jumia. No subscription.
             </p>
           </div>
 

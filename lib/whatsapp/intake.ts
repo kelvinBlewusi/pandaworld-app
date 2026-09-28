@@ -11,8 +11,8 @@ import {
 } from "@/lib/whatsapp/session";
 import { createListingForUser } from "@/lib/listings/create";
 import { runAutoAnalyze } from "@/lib/actions/auto-analyze";
-import { getOrCreateCreditBalance, deductCredits } from "@/lib/billing/extension-credits";
-import { WHATSAPP_DRAFT_CREDIT_COST } from "@/lib/billing/credit-packs";
+import { availableCredits } from "@/lib/billing/extension-credits";
+import { LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
 import { pushListingToJumia, missingFieldLabels, refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
 import { assessListingPushReadiness } from "@/lib/whatsapp/readiness";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
@@ -1777,15 +1777,14 @@ async function handleAwaitingPhotos(
 }
 
 /**
- * Reserve the hourly analyze quota and the credits for a set of products,
- * telling the seller about anything that didn't fit, and return only the
- * ones that may actually be drafted.
+ * Reserve the hourly analyze quota for a set of products and check the
+ * seller has the credits to list them, telling the seller about anything
+ * that didn't fit, and return only the ones that may actually be drafted.
  *
  * Extracted so RETRY goes through the identical gate: without this, a
  * seller who ran out of credits or hit the hourly limit could simply tap
- * Retry to queue the drafts anyway, since the ledger is only debited
- * after a draft succeeds (runQueuedAnalysis) and the limiter is only
- * consulted here. Two copies of this would have drifted; one copy makes
+ * Retry to queue the drafts anyway, since the limiter and the credit
+ * check are only consulted here. Two copies of this would have drifted; one copy makes
  * "retry costs exactly what the first attempt would have" true by
  * construction.
  */
@@ -1802,15 +1801,14 @@ async function reserveDraftCapacity(
     (limited.success ? withQuota : overQuota).push(listing);
   }
 
-  // Same up-front reservation against the shared extension-credit ledger
-  // (lib/billing/extension-credits.ts) — a WhatsApp draft costs
-  // WHATSAPP_DRAFT_CREDIT_COST from the exact same balance the Chrome
-  // extension spends from. Checked before anything is queued so a seller
-  // who's run out finds out immediately rather than after being billed
-  // for some prefix of the batch.
-  const creditBalance = await getOrCreateCreditBalance(userId);
+  // Drafting is free — a listing is charged LIVE_LISTING_CREDIT_COST only
+  // when it goes live on Jumia (lib/billing/extension-credits.ts) — but a
+  // seller can only draft as many as their credits could list, less what
+  // is already held for listings waiting on Jumia. Checked before anything
+  // is queued so a seller who's run out finds out now, not at submit.
+  const creditBalance = await availableCredits(userId);
   const affordableCount = Number.isFinite(creditBalance)
-    ? Math.max(0, Math.floor(creditBalance / WHATSAPP_DRAFT_CREDIT_COST))
+    ? Math.max(0, Math.floor(creditBalance / LIVE_LISTING_CREDIT_COST))
     : withQuota.length;
   const overCredit = withQuota.splice(affordableCount);
 
@@ -1834,7 +1832,7 @@ async function reserveDraftCapacity(
     // Same shape: top up, then tap Retry — no photo is re-sent.
     await replyError(
       phoneNumber,
-      `⚠️ Product ${listing.whatsapp_seq}: not enough credits left to draft it (${WHATSAPP_DRAFT_CREDIT_COST} needed). Top up, then tap Retry.`,
+      `⚠️ Product ${listing.whatsapp_seq}: not enough credits to list it (${LIVE_LISTING_CREDIT_COST} are charged when it goes live on Jumia). Top up, then tap Retry.`,
       {
         retryId: `retry product ${listing.whatsapp_seq}`,
         cta:     { label: "Buy credits", url: buyCreditsUrl() },
@@ -1992,13 +1990,8 @@ export async function runQueuedAnalysis(job: AnalysisJob): Promise<void> {
     );
   }
 
-  // Deducted only after a successful draft — the same rule
-  // app/api/extension/fill/route.ts follows. Fire-and-forget on failure:
-  // the draft already happened and the seller already has it, so a ledger
-  // hiccup here shouldn't block their reply.
-  deductCredits(userId, WHATSAPP_DRAFT_CREDIT_COST, "WhatsApp product draft").catch((e) =>
-    console.error(`[whatsapp worker] credit deduction failed for product ${seq}: ${(e as Error).message}`),
-  );
+  // No charge here: the listing is charged when it goes live on Jumia
+  // (chargeLiveListing, from refreshPendingFeedStatus).
 }
 
 /**
@@ -2737,6 +2730,9 @@ async function handleSubmit(
     // is carried alongside so the compiled follow-up message below can say
     // WHY each one needs a look, not just that it does.
     const notSent: { seq: number | null; listingId: string; reason: string }[] = [];
+    // Held back for lack of credits: nothing to edit, so these get a Buy
+    // credits button after the results instead of an editor link.
+    let shortOfCredits = false;
     let cursor = 0;
     const pushWorker = async (): Promise<void> => {
       for (let i = cursor++; i < targets.length; i = cursor++) {
@@ -2769,6 +2765,9 @@ async function handleSubmit(
           } else if (result.code === "validation") {
             notSent.push({ seq, listingId: listing.id, reason: result.message });
             messages[i] = `Product ${seq}: ⚠️ Not submitted — ${result.message}`;
+          } else if (result.code === "insufficient_credits") {
+            shortOfCredits = true;
+            messages[i] = `Product ${seq}: ⚠️ Not submitted — not enough credits (${LIVE_LISTING_CREDIT_COST} are charged when it goes live).`;
           } else if (result.needsReconnect) {
             // Same one-time-link mechanism as lib/whatsapp/jumia-connect.ts's
             // promptJumiaConnection, used inline here rather than through it —
@@ -2823,6 +2822,15 @@ async function handleSubmit(
     // send here would look like "submitting failed" even though every
     // product actually went through.
     await replyText(phoneNumber, [...alreadySubmittedMessages, ...raceResult].join("\n"));
+
+    if (shortOfCredits) {
+      await replyCta(
+        phoneNumber,
+        `You only pay for listings that go live on Jumia: ${LIVE_LISTING_CREDIT_COST} credits each. Top up, then reply *submit all* to send the rest.`,
+        "Buy credits",
+        buyCreditsUrl(),
+      );
+    }
 
     // One tappable way back in per product that did not reach Jumia,
     // compiled into ONE message rather than a separate cta_url send per
@@ -3346,6 +3354,15 @@ async function pushAndReport(
       result.adjustments?.length
         ? `✅ ${label}: resubmitted — pending Jumia review.\n⚠️ ${result.adjustments.join("; ")}.`
         : `✅ ${label}: resubmitted — pending Jumia review.`,
+    );
+    return;
+  }
+
+  if (result.code === "insufficient_credits") {
+    await replyError(
+      phoneNumber,
+      `⚠️ ${label}: not resubmitted — ${result.message}`,
+      { retryId: `fix:${listingId}`, retryTitle: "Fix & resubmit", cta: { label: "Buy credits", url: buyCreditsUrl() } },
     );
     return;
   }

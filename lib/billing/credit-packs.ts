@@ -11,10 +11,15 @@ export interface CreditPack {
   amountGhs: number;
 }
 
+/**
+ * 1 credit = GHS 0.25 in every pack, so a live WhatsApp / web listing
+ * (LIVE_LISTING_CREDIT_COST = 2) is GHS 0.50 however much a seller buys.
+ * Smallest purchase GHS 30, largest GHS 100 (set 2026-09-28).
+ */
 export const CREDIT_PACKS: CreditPack[] = [
-  { id: "starter", credits: 150, amountGhs: 20 },
-  { id: "small",   credits: 330, amountGhs: 50 },
-  { id: "medium",  credits: 650, amountGhs: 100 },
+  { id: "starter", credits: 120, amountGhs: 30 },
+  { id: "small",   credits: 200, amountGhs: 50 },
+  { id: "medium",  credits: 400, amountGhs: 100 },
 ];
 
 /** Pack id shown with the "Popular" badge in the Buy Credits modal. */
@@ -25,12 +30,14 @@ export function getCreditPack(id: string): CreditPack | undefined {
 }
 
 /**
- * Credit amounts from before the 2026-09-13 price increase (100/280/600 ->
- * 150/330/650, same GHS price each) — kept so a purchase transaction
- * recorded before that change still resolves to its pack instead of
- * showing no "Plan" pill at all.
+ * Credit amounts of earlier packs (100/280/600 until 2026-09-13, then
+ * 150/330/650 until 2026-09-28) — kept so a purchase transaction recorded
+ * back then still resolves to its pack instead of showing no "Plan" pill.
  */
-const LEGACY_CREDIT_AMOUNTS: Record<number, string> = { 100: "starter", 280: "small", 600: "medium" };
+const LEGACY_CREDIT_AMOUNTS: Record<number, string> = {
+  100: "starter", 280: "small", 600: "medium",
+  150: "starter", 330: "small", 650: "medium",
+};
 
 /**
  * Reverse lookup by credit count — each pack has a distinct `credits`
@@ -57,17 +64,15 @@ export const FREE_SIGNUP_CREDITS = 25;
 export const LISTING_CREDIT_COST = 1.5;
 
 /**
- * One WhatsApp product draft (a single runAutoAnalyze pass) costs this
- * many credits (2 as of 2026-09-28, was 3) — priced higher than an
- * extension autofill because
- * it runs the full listing pipeline (describe + category pick + attribute
- * fill, up to 3-6 Gemini calls) rather than one single vision call.
- * Deducted only after a successful draft, same rule LISTING_CREDIT_COST
- * follows — see deductCredits()'s call site in
- * app/api/extension/fill/route.ts and its WhatsApp counterpart in
- * lib/whatsapp/intake.ts's startBatchAnalysis().
+ * A WhatsApp or web listing costs this many credits, charged once, when
+ * Jumia confirms it live — drafts, redrafts and listings Jumia rejects
+ * cost nothing (2026-09-28). Held against the balance from submission
+ * until Jumia's verdict: see chargeLiveListing / creditsDueForSubmission
+ * in lib/billing/extension-credits.ts. Priced above an extension autofill
+ * because we draft AND submit the whole listing, where the extension only
+ * fills a form the seller submits themselves.
  */
-export const WHATSAPP_DRAFT_CREDIT_COST = 2;
+export const LIVE_LISTING_CREDIT_COST = 2;
 
 /**
  * One AI image (a photo polished or rebuilt on the review page, or one
@@ -80,11 +85,11 @@ export const WHATSAPP_DRAFT_CREDIT_COST = 2;
  */
 export const IMAGE_CREDIT_COST = 4;
 
-/** How far a number of credits goes: whole autofills, or whole WhatsApp / web drafts. */
-export function packReach(credits: number): { autofills: number; drafts: number } {
+/** How far a number of credits goes: whole autofills, or whole live WhatsApp / web listings. */
+export function packReach(credits: number): { autofills: number; listings: number } {
   return {
     autofills: Math.floor(credits / LISTING_CREDIT_COST),
-    drafts:    Math.floor(credits / WHATSAPP_DRAFT_CREDIT_COST),
+    listings:  Math.floor(credits / LIVE_LISTING_CREDIT_COST),
   };
 }
 
