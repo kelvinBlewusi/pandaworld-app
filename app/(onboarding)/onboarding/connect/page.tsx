@@ -219,7 +219,7 @@ function SelfAuthForm({ returnTo, onWebApp }: { returnTo: string | null; onWebAp
             </p>
             <p>
               Choose <span className="font-medium text-zinc-700">Self Authorization</span> and name it{" "}
-              <span className="font-medium text-zinc-700">PandaWorld</span>. No redirect URL is needed.
+              <span className="font-medium text-zinc-700">PandaWorld</span>.
             </p>
           </div>
         </div>

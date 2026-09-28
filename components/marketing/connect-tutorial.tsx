@@ -96,7 +96,6 @@ export function ConnectTutorial() {
                     Jumia lets stay connected; a Web Application needs a new login
                     about once a day.
                   </li>
-                  <li>No redirect URL is needed.</li>
                 </ul>
                 <p className="mt-2 text-xs text-zinc-500">
                   Then click <strong>CREATE</strong>.

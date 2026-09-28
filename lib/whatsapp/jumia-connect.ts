@@ -104,7 +104,7 @@ export const VENDOR_CENTER_URL = "https://vendorcenter.jumia.com";
 export const SELF_AUTH_STEPS = [
   `1. Open Jumia Vendor Center and sign in (tap below, or go to ${VENDOR_CENTER_URL}).`,
   "2. Go to Settings → Applications → Create Application → choose *Self Authorization*.",
-  `3. Name it "PandaWorld" and create it (no redirect URL needed).`,
+  `3. Name it "PandaWorld" and create it.`,
   "4. Next to PandaWorld, in the Actions column, tap the *orange lock icon* (Generate Token) and copy the token.",
   "5. Copy the Client ID and the token, then paste them here — together, or one at a time.",
 ].join("\n");
