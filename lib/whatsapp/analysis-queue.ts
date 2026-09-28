@@ -342,23 +342,32 @@ export async function claimBatchFinalization(phoneNumber: string): Promise<boole
  * that used to finish inline in ~22s could wait a further minute for the
  * schedule to come round, which would read as a regression to the seller.
  *
- * Deliberately not awaited by callers and never throws: pg_cron remains
- * the guarantee, this is only latency. There is no waitUntil available on
- * this Next version, so the request may well be cut short when the webhook
- * returns — that's fine, it costs nothing and the next tick picks the work
- * up regardless.
+ * Callers AWAIT this. It used to be fired and forgotten, and Vercel freezes
+ * a function as soon as it returns its response, so the ping often never
+ * left: 6 of the 20 batches in the 14 days to 2026-09-28 waited for the
+ * next pg_cron tick instead (42s on average, up to a minute). Awaiting
+ * holds the caller at most 2s, long enough for the request to reach the
+ * worker; hanging up after that doesn't stop the worker, because Vercel
+ * only cancels a function on disconnect when a route opts in with
+ * supportsCancellation (vercel.json), and none do. The wait is idle time,
+ * not Active CPU.
+ *
+ * Never throws: pg_cron remains the guarantee, this is only latency.
  */
-export function nudgeWorker(): void {
+export async function nudgeWorker(): Promise<void> {
   const secret = process.env.CRON_SECRET;
   if (!secret) return;
 
-  void fetch(`${appUrl()}/api/worker/analyze-jobs`, {
-    method:  "POST",
-    headers: { Authorization: `Bearer ${secret}` },
-    signal:  AbortSignal.timeout(2_000),
-  }).catch(() => {
-    // pg_cron will pick the jobs up within the minute.
-  });
+  try {
+    await fetch(`${appUrl()}/api/worker/analyze-jobs`, {
+      method:  "POST",
+      headers: { Authorization: `Bearer ${secret}` },
+      signal:  AbortSignal.timeout(2_000),
+    });
+  } catch {
+    // Timed out (the worker is busy with the jobs, which is the point) or
+    // unreachable: either way pg_cron picks the jobs up within the minute.
+  }
 }
 
 /**
