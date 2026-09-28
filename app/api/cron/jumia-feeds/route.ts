@@ -16,6 +16,11 @@ import { refreshPendingFeedStatus, notifyResolvedListings, toResolvedNotice, typ
 // kept only as a daily backstop; the comment here used to claim five
 // minutes, which was never true on this plan.
 //
+// pg_cron only calls this while a feed is pending: every minute for a
+// listing's first 30 minutes at pending_approval, every 10 after
+// (supabase/migrations/2026-09-28_cron-only-when-there-is-work.sql). Change
+// the query below and that check has to change with it.
+//
 // Security: Vercel sets the Authorization: Bearer <CRON_SECRET> header.
 // CRON_SECRET is REQUIRED — fail-secure if missing. The previous check
 // only enforced auth when the env var was set, so a misconfigured

@@ -23,6 +23,11 @@ export const maxDuration = 60;
 // once a DAY — and nudged directly by the webhook the moment a batch is
 // queued so a small batch doesn't wait for the next tick.
 //
+// pg_cron's tick only calls this when there is work: a queued or stale
+// running job, or a settled batch still waiting for its closing message
+// (supabase/migrations/2026-09-28_cron-only-when-there-is-work.sql). Keep
+// that check in step with what this route looks for.
+//
 // Safe to run concurrently with itself: claim_analysis_jobs uses FOR UPDATE
 // SKIP LOCKED, so overlapping ticks take disjoint work rather than
 // analysing (and billing for) the same product twice.
