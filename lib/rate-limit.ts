@@ -136,6 +136,10 @@ export const RATE_LIMITS = {
   // still capped — no legitimate reason a seller needs more than a
   // handful of fresh codes in an hour.
   whatsappLink:      { max: 10, windowMs: 60 * 60 * 1000 }, // 10/hour
+
+  // Connecting Jumia with a generated token: each attempt calls Jumia's
+  // token endpoint, and a wrong pair only needs a few tries to fix.
+  jumiaConnect:      { max: 10, windowMs: 60 * 60 * 1000 }, // 10/hour
 } as const;
 
 // ─── Convenience wrapper ─────────────────────────────────────────────────────

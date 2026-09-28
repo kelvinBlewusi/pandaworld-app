@@ -182,24 +182,37 @@ export class JumiaTokenError extends Error {
   }
 }
 
+/**
+ * Exchange a refresh token for a new access token (and, for a Self
+ * Authorization app, a new refresh token — Jumia rotates it on every call
+ * and the old one stops working).
+ *
+ * Self Authorization apps have no client secret: Jumia's token endpoint
+ * takes grant_type, client_id and refresh_token only. So a secret is sent
+ * only when the caller has one for this client. The platform's own
+ * JUMIA_CLIENT_ID/SECRET are used only when no client is given at all —
+ * never mixed with a seller's client id, which Jumia would reject.
+ */
 export async function refreshAccessToken(
   refreshToken: string,
   clientId?: string,
   clientSecret?: string,
 ): Promise<{
-  access_token:   string;
-  refresh_token?: string;
-  expires_in:     number;
+  access_token:        string;
+  refresh_token?:      string;
+  expires_in:          number;
+  /** Seconds until the returned refresh_token expires (Self Authorization only). */
+  refresh_expires_in?: number;
 }> {
-  const cid = clientId     ?? process.env.JUMIA_CLIENT_ID!;
-  const sec = clientSecret ?? process.env.JUMIA_CLIENT_SECRET!;
+  const cid = clientId ?? process.env.JUMIA_CLIENT_ID!;
+  const sec = clientId ? clientSecret : (clientSecret ?? process.env.JUMIA_CLIENT_SECRET);
 
   const body = new URLSearchParams({
     grant_type:    "refresh_token",
     refresh_token: refreshToken,
     client_id:     cid,
-    client_secret: sec,
   });
+  if (sec) body.set("client_secret", sec);
 
   const res = await fetch(JUMIA_TOKEN_URL, {
     method:  "POST",

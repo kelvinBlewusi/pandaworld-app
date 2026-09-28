@@ -201,6 +201,11 @@ export async function refreshJumiaConnection(
       // same rotation, so keeping it around just means the NEXT refresh
       // fails with a definitive, unrecoverable error.
       refresh_token:      fresh.refresh_token ? encrypt(fresh.refresh_token) : null,
+      // When the new refresh token lapses — what /api/worker/jumia-keepalive
+      // renews ahead of (Self Authorization apps only; null otherwise).
+      refresh_token_expires_at: fresh.refresh_expires_in
+        ? new Date(Date.now() + fresh.refresh_expires_in * 1000).toISOString()
+        : null,
       token_expires_at:    tokenExpiresAt,
       status:              "active",
       refresh_locked_at:   null,

@@ -3,9 +3,7 @@ import { createServerClient } from "@/lib/supabase/server";
 import { exchangeCodeForTokens, fetchJumiaSellerProfile } from "@/lib/jumia/oauth";
 import { encrypt, decrypt } from "@/lib/security/token-crypto";
 import { clearJumiaHealthCache } from "@/lib/jumia/api";
-import { getWhatsAppConnection } from "@/lib/whatsapp/link";
-import { sendTextIfConfigured } from "@/lib/whatsapp/client";
-import { updateSession } from "@/lib/whatsapp/session";
+import { notifyWhatsAppJumiaConnected } from "@/lib/whatsapp/jumia-connected";
 import { sanitizeReturnTo } from "@/lib/jumia/return-to";
 
 // ─── GET /api/jumia/callback ──────────────────────────────────────────────────
@@ -222,6 +220,9 @@ export async function GET(req: NextRequest) {
       // breach of jumia_connections no longer hands an attacker the
       // seller's vendor-center access. Encryption is idempotent so
       // re-running this code path is safe.
+      // A Web Application login (no refresh token from Jumia, expires
+      // daily) — see lib/jumia/self-auth.ts for the kind that doesn't.
+      auth_type:        "web",
       access_token:     encrypt(tokens.access_token),
       refresh_token:    tokens.refresh_token ? encrypt(tokens.refresh_token) : null,
       token_expires_at: tokenExpiresAt,
@@ -260,38 +261,9 @@ export async function GET(req: NextRequest) {
   // picker is already populated. Per-category attribute schemas still
   // load on demand via /api/jumia/categories/[code]/attributes.
 
-  // If this seller was waiting on Jumia to connect from the WhatsApp
-  // connect-from-chat flow (lib/whatsapp/intake.ts's awaiting_jumia_oauth
-  // state — tapped the one-time link after pasting app credentials — or
-  // awaiting_jumia_credentials, meaning they never came back to chat at
-  // all and instead finished connecting entirely on the website), unblock
-  // the listing flow and tell them here, not just on whatever browser
-  // happened to complete this redirect. Gated on those two exact states
-  // so an unrelated re-authorise (e.g. a needs_reconnect fix from the web
-  // Settings page while mid-batch) never resets a seller's in-progress
-  // batch. Best-effort — never let a WhatsApp hiccup break the OAuth flow
-  // itself.
-  try {
-    const wa = await getWhatsAppConnection(userId);
-    if (wa.connected && wa.phoneNumber) {
-      const { data: session } = await db
-        .from("whatsapp_sessions")
-        .select("state")
-        .eq("phone_number", wa.phoneNumber)
-        .maybeSingle();
-      if (session?.state === "awaiting_jumia_oauth" || session?.state === "awaiting_jumia_credentials") {
-        await updateSession(wa.phoneNumber, {
-          state: "awaiting_count", listingId: null, batchId: null, batchSize: null, batchSeq: null, pendingAppId: null,
-        });
-        await sendTextIfConfigured(
-          wa.phoneNumber,
-          `🎉 Jumia connected${resolvedStoreName ? ` — ${resolvedStoreName}` : ""}! How many products are you listing today? Reply with a number to get started.`,
-        );
-      }
-    }
-  } catch (e) {
-    console.warn(`[Jumia OAuth] WhatsApp notify failed for user=${userId}: ${(e as Error).message}`);
-  }
+  // Unblocks a seller waiting in the WhatsApp connect-from-chat flow and
+  // tells them there. See lib/whatsapp/jumia-connected.ts.
+  await notifyWhatsAppJumiaConnected(userId, resolvedStoreName);
 
   // Redirect to done page (onboarding flow) with store name — carrying
   // returnTo along so the page's own "Continue" button knows to send an

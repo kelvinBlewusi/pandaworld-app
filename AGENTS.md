@@ -434,6 +434,31 @@ Run in order. All applied through Supabase Dashboard → SQL Editor (NOT auto-ap
 
 ---
 
+## Jumia connection: Self Authorization (2026-09-28)
+
+Jumia issues refresh tokens ONLY to "Self Authorization" applications
+(vendorcenter.jumia.com/api-docs, Step-by-Step Authentication). "Web
+Application" apps — what sellers were told to create until 2026-09-28 —
+never get one, so every connection died ~24 h after each login (all 16
+rows had refresh_token null).
+
+- New default: the seller creates a Self Authorization app, clicks
+  Generate Token, and pastes Client ID + token on /onboarding/connect or
+  into the WhatsApp chat (a JWT second half = Self Authorization).
+  `connectSelfAuthorization` (lib/jumia/self-auth.ts) exchanges it with
+  grant_type=refresh_token, client_id, NO client_secret, and saves
+  auth_type='self'.
+- Jumia rotates the refresh token on every exchange and it expires
+  (refresh_expires_in, ~1 day in Jumia's example). pg_cron job
+  `jumia-keepalive` (every 30 min) → /api/worker/jumia-keepalive →
+  lib/jumia/keepalive.ts renews any self connection within 6 h of either
+  expiry, through refreshJumiaConnection (lock + rotation +
+  refresh_token_expires_at).
+- Web Application connections still work (auth_type='web') but expire
+  daily; the Jumia card, /onboarding/connect?reason=disconnected and the
+  WhatsApp prompt offer the one-time switch. getJumiaConnectionKind:
+  needs_reconnect = expired web app, needs_new_token = self token refused.
+
 ## Public SEO pages (2026-09-28)
 
 Indexable, public in middleware.ts, listed in app/sitemap.ts, and linked

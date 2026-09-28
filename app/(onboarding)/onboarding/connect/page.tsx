@@ -107,26 +107,27 @@ function ConnectPageInner() {
         </div>
         <div className="px-6 py-6 space-y-4">
           <p className="text-sm text-zinc-600">
-            Your Jumia session expired and couldn&apos;t refresh automatically. Your app credentials are
-            already on file — no need to re-enter them. Just re-authorise to restore the connection.
+            Your Jumia session expired. Connections made with a <strong>Web Application</strong> expire about a
+            day after each login. Switch to a <strong>Self Authorization</strong> application once and PandaWorld
+            keeps you connected from then on, with no more logins.
           </p>
           <Button
             className="w-full h-11 gap-2 bg-gradient-to-r from-orange-400 to-orange-500 hover:from-orange-500 hover:to-orange-600 text-white"
-            disabled={reconnecting}
-            onClick={() => { setReconnecting(true); window.location.href = withReturnTo("/api/jumia/connect", returnTo); }}
+            onClick={() => setShowFullForm(true)}
           >
-            {reconnecting ? (
-              <><Loader2 className="h-4 w-4 animate-spin" />Redirecting to Jumia…</>
-            ) : (
-              <><RefreshCw className="h-4 w-4" />Re-authorise with Jumia</>
-            )}
+            Stay connected automatically (2 minutes)
           </Button>
           <button
             type="button"
-            onClick={() => setShowFullForm(true)}
-            className="w-full text-center text-xs text-zinc-400 hover:text-zinc-600 hover:underline"
+            disabled={reconnecting}
+            onClick={() => { setReconnecting(true); window.location.href = withReturnTo("/api/jumia/connect", returnTo); }}
+            className="flex w-full items-center justify-center gap-1.5 text-center text-xs text-zinc-500 hover:text-zinc-700 hover:underline"
           >
-            Getting a &quot;client not found&quot; error from Jumia? Enter new credentials instead
+            {reconnecting ? (
+              <><Loader2 className="h-3.5 w-3.5 animate-spin" />Redirecting to Jumia…</>
+            ) : (
+              <><RefreshCw className="h-3.5 w-3.5" />Just log in again for now (expires in about a day)</>
+            )}
           </button>
         </div>
       </div>
@@ -136,7 +137,177 @@ function ConnectPageInner() {
   return <ConnectForm returnTo={returnTo} />;
 }
 
+/**
+ * The default: a Jumia Self Authorization application. Jumia gives refresh
+ * tokens only to this kind, so the connection renews itself
+ * (lib/jumia/self-auth.ts, /api/worker/jumia-keepalive) and the seller
+ * never has to log in again. The seller pastes the app's Client ID and a
+ * token from its Generate Token button; there's no redirect to Jumia.
+ */
 function ConnectForm({ returnTo }: { returnTo: string | null }) {
+  const [webApp, setWebApp] = useState(false);
+  if (webApp) return <WebAppForm returnTo={returnTo} onBack={() => setWebApp(false)} />;
+  return <SelfAuthForm returnTo={returnTo} onWebApp={() => setWebApp(true)} />;
+}
+
+function SelfAuthForm({ returnTo, onWebApp }: { returnTo: string | null; onWebApp: () => void }) {
+  const [clientId, setClientId] = useState("");
+  const [token, setToken] = useState("");
+  const [country, setCountry] = useState("GH");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function connect() {
+    setPending(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/jumia/self-auth", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ clientId: clientId.trim(), refreshToken: token.trim(), country }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        window.location.href = withReturnTo(`/onboarding/done?store=${encodeURIComponent(data.storeName ?? "Jumia Store")}`, returnTo);
+        return;
+      }
+      setError(data.error ?? "Couldn't connect. Check the Client ID and generate a new token.");
+    } catch {
+      setError("Network error — please try again.");
+    }
+    setPending(false);
+  }
+
+  const canConnect = clientId.trim().length > 0 && token.trim().length > 0 && !pending;
+
+  return (
+    <div className="mx-auto max-w-[600px] overflow-hidden rounded-2xl border bg-white shadow-sm">
+      <div className="flex items-center gap-4 border-b bg-gradient-to-r from-orange-50 to-amber-50 px-6 py-5">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-orange-400 to-orange-500 text-2xl shadow-sm">
+          🛒
+        </div>
+        <div>
+          <h1 className="text-lg font-bold text-zinc-900">Connect Jumia</h1>
+          <p className="text-sm text-zinc-500">Set it up once. PandaWorld keeps it connected from then on.</p>
+        </div>
+      </div>
+
+      <div className="divide-y">
+        <div className="space-y-3 px-6 py-5">
+          <div className="flex items-center gap-3">
+            <StepCircle n={1} />
+            <p className="text-sm font-semibold text-zinc-800">Open Jumia Vendor Center</p>
+          </div>
+          <div className="ml-10">
+            <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" asChild>
+              <a href="https://vendorcenter.jumia.com" target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="h-3.5 w-3.5" />
+                Open Vendor Center
+              </a>
+            </Button>
+          </div>
+        </div>
+
+        <div className="space-y-3 px-6 py-5">
+          <div className="flex items-center gap-3">
+            <StepCircle n={2} />
+            <p className="text-sm font-semibold text-zinc-800">Create a Self Authorization application</p>
+          </div>
+          <div className="ml-10 space-y-1.5 text-sm text-zinc-500">
+            <p>
+              Go to <span className="font-medium text-zinc-700">Settings → Applications → Create Application</span>.
+            </p>
+            <p>
+              Choose <span className="font-medium text-zinc-700">Self Authorization</span> and name it{" "}
+              <span className="font-medium text-zinc-700">PandaWorld</span>. No redirect URL is needed.
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-3 px-6 py-5">
+          <div className="flex items-center gap-3">
+            <StepCircle n={3} />
+            <p className="text-sm font-semibold text-zinc-800">Generate a token</p>
+          </div>
+          <div className="ml-10 space-y-1.5 text-sm text-zinc-500">
+            <p>
+              On the Manage Applications screen, find PandaWorld and click the{" "}
+              <span className="font-medium text-zinc-700">Generate Token</span> icon in the Actions column.
+            </p>
+            <p>Copy the token, and the application&apos;s <span className="font-medium text-zinc-700">Client ID</span>.</p>
+          </div>
+        </div>
+
+        <div className="space-y-4 px-6 py-5">
+          <div className="flex items-center gap-3">
+            <StepCircle n={4} />
+            <p className="text-sm font-semibold text-zinc-800">Paste them here</p>
+          </div>
+          <div className="ml-10 space-y-4">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-zinc-600">Country</Label>
+              <Select value={country} onValueChange={setCountry}>
+                <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {COUNTRIES.map((c) => <SelectItem key={c.code} value={c.code}>{c.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-zinc-600">Client ID</Label>
+              <Input
+                placeholder="e.g. ed0b5856-3612-5829-b8de-d95774bfcf17"
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+                className="h-9 font-mono text-sm"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs font-medium text-zinc-600">Generated token</Label>
+              <textarea
+                placeholder="eyJhbGciOi…"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                rows={3}
+                className="w-full rounded-md border border-zinc-200 px-3 py-2 font-mono text-xs text-zinc-800 focus:outline-none focus:ring-2 focus:ring-orange-200"
+              />
+              <p className="text-xs text-zinc-400">Paste it straight away: a generated token only works for a short time.</p>
+            </div>
+            {error && (
+              <p className="flex items-start gap-1.5 text-xs text-red-500">
+                <XCircle className="mt-0.5 h-4 w-4 shrink-0" /> {error}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-3 border-t bg-zinc-50 px-6 py-4">
+        <p className="flex items-center gap-2 text-xs text-zinc-400">
+          <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-500" />
+          Your token is encrypted and never shared. PandaWorld renews it in the background so you stay connected.
+        </p>
+        <Button
+          className="h-11 w-full gap-2 bg-gradient-to-r from-orange-400 to-orange-500 text-white hover:from-orange-500 hover:to-orange-600 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={!canConnect}
+          onClick={connect}
+        >
+          {pending ? <><Loader2 className="h-4 w-4 animate-spin" />Connecting…</> : "Connect Jumia →"}
+        </Button>
+        <button type="button" onClick={onWebApp} className="w-full text-center text-xs text-zinc-400 hover:text-zinc-600 hover:underline">
+          Already made a Web Application? Use it instead (you&apos;ll need to log in again about once a day)
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The older route: a Jumia Web Application and a login redirect. Jumia
+ * never gives these a refresh token, so the connection lasts about a day
+ * per login. Kept for sellers who already made one.
+ */
+function WebAppForm({ returnTo, onBack }: { returnTo: string | null; onBack: () => void }) {
   const [redirectUri, setRedirectUri] = useState("");
   const [appId, setAppId]             = useState("");
   const [secretKey, setSecretKey]     = useState("");
@@ -416,6 +587,9 @@ function ConnectForm({ returnTo }: { returnTo: string | null }) {
               "Connect Jumia →"
             )}
           </Button>
+          <button type="button" onClick={onBack} className="w-full text-center text-xs text-zinc-400 hover:text-zinc-600 hover:underline">
+            ← Use a Self Authorization application instead (stays connected)
+          </button>
         </div>
       </div>
     </div>

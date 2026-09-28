@@ -27,6 +27,12 @@ export interface JumiaConnectionPublic {
    * banner directing back to /onboarding/connect.
    */
   needs_reconnect?: boolean;
+  /**
+   * "self" = Self Authorization app, renewed automatically and never needs
+   * a login; "web" = Web Application, expires about a day after each login
+   * (lib/jumia/self-auth.ts).
+   */
+  auth_type?: "web" | "self";
   status: JumiaConnection["status"] | null;
   seller_name: string | null;
   seller_email: string | null;
