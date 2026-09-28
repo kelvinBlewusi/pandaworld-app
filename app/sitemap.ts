@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 import { GUIDES } from "@/lib/marketing/guides";
+import { JUMIA_COUNTRIES } from "@/lib/marketing/countries";
 import { CALCULATOR_HREF, COMMISSION_RATES_HREF } from "@/lib/marketing/links";
 
 // ─── sitemap.xml — Next.js convention file ───────────────────────────────────
@@ -66,6 +67,19 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: "monthly",
       priority:        0.8,                   // "Jumia commission rates Ghana"
     },
+    {
+      url:            `${APP_URL}/sell-on-jumia`,
+      lastModified,
+      changeFrequency: "monthly",
+      priority:        0.8,
+    },
+    // One page per Jumia market (app/sell-on-jumia/[country]).
+    ...JUMIA_COUNTRIES.map((c) => ({
+      url:             `${APP_URL}/sell-on-jumia/${c.slug}`,
+      lastModified,
+      changeFrequency: "monthly" as const,
+      priority:        0.8,
+    })),
     {
       url:            `${APP_URL}/terms`,
       lastModified,

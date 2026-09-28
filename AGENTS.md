@@ -434,6 +434,21 @@ Run in order. All applied through Supabase Dashboard → SQL Editor (NOT auto-ap
 
 ---
 
+## Public SEO pages (2026-09-28)
+
+Indexable, public in middleware.ts, listed in app/sitemap.ts, and linked
+from every marketing footer:
+- `/how-to` + `/how-to/<slug>` — one page per guide (lib/marketing/guides.ts).
+- `/jumia-price-calculator`, `/jumia-commission-rates` — Ghana, from the
+  rate table in lib/mock/categories.ts.
+- `/sell-on-jumia` + `/sell-on-jumia/<country>` — all 8 Jumia markets (GH,
+  NG, KE, EG, MA, CI, SN, UG) with a local-currency calculator. Fee facts
+  in lib/marketing/countries.ts are only what each country's VendorHub
+  states plainly, each page links its source; don't add per-category rates
+  for a country without an official table.
+- One listing-price formula for all calculators: listingPriceFor in
+  lib/marketing/jumia-fees.ts (rounds up without float drift).
+
 ## Billing (2026-09-28)
 
 Credits are the only billing. The monthly plans (Free/Starter/Pro/Business,

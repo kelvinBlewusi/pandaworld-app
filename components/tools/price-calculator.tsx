@@ -24,6 +24,7 @@ import {
 import { mockCategories } from "@/lib/mock/categories";
 import { formatGHS } from "@/lib/utils";
 import { cn } from "@/lib/utils";
+import { listingPriceFor } from "@/lib/marketing/jumia-fees";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -38,8 +39,7 @@ type ShippingMode = "je" | "ds";
  * Round UP to nearest 0.01
  */
 function calcListingPrice(vendorPrice: number, shippingContrib: number, commissionPct: number) {
-  const raw = (vendorPrice + shippingContrib) / (1 - commissionPct / 100);
-  return Math.ceil(raw * 100) / 100;
+  return listingPriceFor(vendorPrice, shippingContrib, commissionPct);
 }
 
 /**

@@ -84,6 +84,9 @@ export function MarketingFooter({
           <Link href={COMMISSION_RATES_HREF} className="hover:text-zinc-900">
             Jumia commission rates
           </Link>
+          <Link href="/sell-on-jumia" className="hover:text-zinc-900">
+            Sell on Jumia by country
+          </Link>
 
           {/* Terms + Privacy — intentionally non-responsive for now.
               Pages exist as drafts at /terms + /privacy but they need

@@ -60,6 +60,8 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 //   /jumia-price-calculator — the public price calculator and
 //   /jumia-commission-rates   Jumia Ghana rate table, both written to be found
 //                            by sellers searching for Jumia fees.
+//   /sell-on-jumia(/.*)     — one page per Jumia country (app/sell-on-jumia),
+//                            for "sell on Jumia Nigeria" and the like.
 //   /api/extension/fill     — the extension's autofill call. The extension has
 //                            no Clerk browser session (it runs from Jumia's
 //                            origin) — it authenticates itself with a
@@ -108,6 +110,8 @@ const isPublicRoute = createRouteMatcher([
   '/how-to/(.*)',
   '/jumia-price-calculator',
   '/jumia-commission-rates',
+  '/sell-on-jumia',
+  '/sell-on-jumia/(.*)',
   '/api/extension/fill',
   '/api/extension/account',
   '/api/whatsapp/webhook',
