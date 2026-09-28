@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { auth } from "@clerk/nextjs/server";
-import { ArrowRight } from "lucide-react";
 import { HomeFloatingNav } from "@/components/marketing/home-floating-nav";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { GuideMedia } from "@/components/marketing/guide-media";
@@ -88,13 +87,6 @@ export default async function HowToPage() {
                 <GuideMedia guide={guide} />
               </div>
 
-              <Link
-                href={`/how-to/${guide.slug}`}
-                className="mt-5 inline-flex items-center gap-1.5 text-sm font-semibold text-orange-600 hover:text-orange-700"
-              >
-                Open this guide on its own page
-                <ArrowRight className="h-4 w-4" />
-              </Link>
             </div>
           ))}
         </div>
