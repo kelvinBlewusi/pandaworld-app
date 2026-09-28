@@ -36,7 +36,7 @@ import { getValidJumiaCredentials, COUNTRY_CURRENCY, DEFAULT_JUMIA_COUNTRY, curr
 import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
 import { isFashionCategory } from "@/lib/jumia/fashion-category";
 import { getJumiaConnectionKind, testJumiaCredentials, saveJumiaCredentialsForUser, disconnectJumiaForUser } from "@/lib/jumia/credentials";
-import { connectSelfAuthorization, looksLikeRefreshToken } from "@/lib/jumia/self-auth";
+import { connectSelfAuthorization, looksLikeClientId } from "@/lib/jumia/self-auth";
 import { createConnectToken } from "@/lib/jumia/connect-token";
 import { parseGlobalCommand, type GlobalCommand } from "@/lib/whatsapp/commands";
 import { extractVariantClaim } from "@/lib/whatsapp/variant-claims";
@@ -1099,10 +1099,12 @@ async function sendJumiaConnectLink(userId: string, phoneNumber: string): Promis
  * Accepts both together in one message or one at a time; pendingAppId on
  * the session holds the first half across messages.
  *
- * The second half says which kind of Jumia app it is: a generated token
- * (a JWT) means Self Authorization, connected right here and kept alive
- * automatically; anything else is a Web Application's Client Secret,
- * which still goes through the login link and expires daily.
+ * The pair is tried as a Self Authorization app first (Client ID +
+ * generated token): connected right here and kept alive automatically.
+ * Only if Jumia says that Client ID can't do that exchange is the second
+ * half treated as a Web Application's Client Secret, which still goes
+ * through the login link and expires daily. Shape can't tell them apart:
+ * Vendor Center's generated token and a Client Secret look alike.
  */
 async function handleAwaitingJumiaCredentials(
   userId: string,
@@ -1148,27 +1150,27 @@ async function handleAwaitingJumiaCredentials(
     ({ appId, secretKey } = identifyCredentials(session.pendingAppId, tokens[0]));
   } else if (tokens.length === 1) {
     await updateSession(phoneNumber, { pendingAppId: tokens[0] });
-    await replyText(phoneNumber, looksLikeRefreshToken(tokens[0])
-      ? "Got the token — now paste the Client ID."
-      : "Got the Client ID — now paste the generated token.");
+    await replyText(phoneNumber, looksLikeClientId(tokens[0])
+      ? "Got the Client ID — now paste the generated token."
+      : "Got the token — now paste the Client ID.");
     return;
   } else {
     await replyText(phoneNumber, "Paste your Jumia Client ID and the generated token here to continue connecting.");
     return;
   }
 
-  // Self Authorization: connect now, no login link, and it stays connected.
-  if (looksLikeRefreshToken(secretKey)) {
-    const connected = await connectSelfAuthorization(userId, appId, secretKey, countryFromPhone(phoneNumber));
-    if (!connected.ok) {
-      await updateSession(phoneNumber, { pendingAppId: null });
-      await replyButtons(
-        phoneNumber,
-        `⚠️ ${connected.error}\n\nPaste your Client ID and a newly generated token again.`,
-        [{ id: "restart", title: "Restart 🔄" }],
-      );
-      return;
-    }
+  // Self Authorization first: connect now, no login link, stays connected.
+  const connected = await connectSelfAuthorization(userId, appId, secretKey, countryFromPhone(phoneNumber));
+  if (!connected.ok && connected.reason !== "web_app") {
+    await updateSession(phoneNumber, { pendingAppId: null });
+    await replyButtons(
+      phoneNumber,
+      `⚠️ ${connected.error}\n\nPaste your Client ID and a newly generated token again.`,
+      [{ id: "restart", title: "Restart 🔄" }],
+    );
+    return;
+  }
+  if (connected.ok) {
     await updateSession(phoneNumber, {
       pendingAppId: null, state: "awaiting_count", listingId: null, batchId: null, batchSize: null, batchSeq: null,
     });
@@ -1181,12 +1183,16 @@ async function handleAwaitingJumiaCredentials(
     return;
   }
 
+  // Not a Self Authorization app: maybe a Web Application's Client ID and
+  // Client Secret, which still works but needs a login about once a day.
   const testResult = await testJumiaCredentials(appId, secretKey);
   if (!testResult.ok) {
     await updateSession(phoneNumber, { pendingAppId: null });
     await replyButtons(
       phoneNumber,
-      `⚠️ ${testResult.error}\n\nPaste your Client ID and Client Secret again.`,
+      "⚠️ Jumia didn't accept that Client ID and token. Check you copied the Client ID of the PandaWorld application " +
+        "(Self Authorization), and paste the token straight after clicking the orange lock icon, before it expires.\n\n" +
+        "Paste your Client ID and a newly generated token again.",
       [{ id: "restart", title: "Restart 🔄" }],
     );
     return;

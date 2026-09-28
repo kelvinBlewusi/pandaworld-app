@@ -27,13 +27,16 @@ jest.mock("@/lib/jumia/api", () => ({
   clearJumiaHealthCache: () => {},
 }));
 
-import { connectSelfAuthorization, looksLikeClientId, looksLikeRefreshToken } from "@/lib/jumia/self-auth";
+import { connectSelfAuthorization, looksLikeClientId, looksLikeGeneratedToken } from "@/lib/jumia/self-auth";
 import { refreshAccessToken } from "@/lib/jumia/oauth";
 import { isDueForRenewal, renewExpiringConnections, RENEW_WITHIN_MS } from "@/lib/jumia/keepalive";
 import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
 
 const CLIENT_ID = "ed0b5856-3612-5829-b8de-d95774bfcf17";
 const jwt = (tag: string) => `eyJhbGciOiJIUzI1NiIsInR5cCIgOiAiSldUIn0.${tag.padEnd(120, "x")}.signature`;
+// What Vendor Center's lock icon actually hands out: a short opaque token,
+// not the JWT Jumia's docs show (a made-up one of the same shape).
+const OPAQUE_TOKEN = "Zq7Rk2Vn8Tw3Xb5Yc9Pd1Lf4Hg6Jm0Ns-Qa_Uv2Ew8Ko";
 
 let tokenCalls: URLSearchParams[] = [];
 let tokenResponse: { status: number; body: Record<string, unknown> } = { status: 200, body: {} };
@@ -61,11 +64,16 @@ beforeEach(() => {
 });
 
 describe("recognising what the seller pasted", () => {
-  it("tells a Client ID, a generated token and a Web Application secret apart", () => {
+  it("accepts a Client ID and a generated token in either format Jumia uses", () => {
     expect(looksLikeClientId(CLIENT_ID)).toBe(true);
-    expect(looksLikeRefreshToken(jwt("a"))).toBe(true);
-    expect(looksLikeRefreshToken("mXTNC33WFlKak2XfLFwmihiOOrZ5O1itDQ7djAStTwc=")).toBe(false);
+    expect(looksLikeGeneratedToken(OPAQUE_TOKEN)).toBe(true);
+    expect(looksLikeGeneratedToken(jwt("a"))).toBe(true);
+  });
+
+  it("rejects chat replies", () => {
     expect(looksLikeClientId("Okay")).toBe(false);
+    expect(looksLikeGeneratedToken("Okay")).toBe(false);
+    expect(looksLikeGeneratedToken("here is my token thanks")).toBe(false);
   });
 });
 
@@ -103,22 +111,33 @@ describe("connectSelfAuthorization", () => {
     expect(db.tables.jumia_connections[0].refresh_token_expires_at).toBeTruthy();
   });
 
-  it("explains a Web Application's Client ID", async () => {
-    tokenResponse = { status: 400, body: { error: "unauthorized_client" } };
-    const result = await connectSelfAuthorization("user_1", CLIENT_ID, jwt("generated"), "GH");
-    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("Self Authorization") });
+  it("connects with the short token the lock icon hands out", async () => {
+    const result = await connectSelfAuthorization("user_1", CLIENT_ID, OPAQUE_TOKEN, "GH");
+    expect(result).toMatchObject({ ok: true });
+    expect(tokenCalls[0].get("refresh_token")).toBe(OPAQUE_TOKEN);
+  });
+
+  it("says when the Client ID is a Web Application's, so WhatsApp can fall back to that flow", async () => {
+    for (const refusal of [
+      { status: 400, body: { error: "unauthorized_client" } },
+      { status: 401, body: { error: "invalid_client" } },
+    ]) {
+      tokenResponse = refusal;
+      const result = await connectSelfAuthorization("user_1", CLIENT_ID, OPAQUE_TOKEN, "GH");
+      expect(result).toMatchObject({ ok: false, reason: "web_app", error: expect.stringContaining("Self Authorization") });
+    }
     expect(db.tables.jumia_connections).toHaveLength(0);
   });
 
   it("asks for a new token when Jumia says it's expired or used", async () => {
     tokenResponse = { status: 400, body: { error: "invalid_grant" } };
-    const result = await connectSelfAuthorization("user_1", CLIENT_ID, jwt("generated"), "GH");
-    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("Generate Token again") });
+    const result = await connectSelfAuthorization("user_1", CLIENT_ID, OPAQUE_TOKEN, "GH");
+    expect(result).toMatchObject({ ok: false, reason: "bad_token", error: expect.stringContaining("orange lock icon") });
   });
 
-  it("rejects a pasted Client Secret without calling Jumia", async () => {
-    const result = await connectSelfAuthorization("user_1", CLIENT_ID, "mXTNC33WFlKak2XfLFwmihiOOrZ5O1itDQ7djAStTwc=", "GH");
-    expect(result.ok).toBe(false);
+  it("rejects something that isn't a token without calling Jumia", async () => {
+    const result = await connectSelfAuthorization("user_1", CLIENT_ID, "Okay", "GH");
+    expect(result).toMatchObject({ ok: false, reason: "bad_input" });
     expect(tokenCalls).toHaveLength(0);
   });
 });

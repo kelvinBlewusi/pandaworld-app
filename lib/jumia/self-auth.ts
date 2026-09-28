@@ -8,8 +8,8 @@
  * "Step-by-Step Authentication".
  *
  * With Self Authorization the seller creates the app with just a name,
- * clicks Generate Token, and gives us the Client ID and that refresh
- * token. We exchange it (grant_type=refresh_token, no client secret, no
+ * clicks Generate Token (the orange lock icon in Vendor Center's
+ * Actions column), and gives us the Client ID and that refresh token. We exchange it (grant_type=refresh_token, no client secret, no
  * browser), and every exchange returns a new refresh token that replaces
  * the old one. /api/worker/jumia-keepalive keeps rotating it before it
  * lapses, so the connection never expires.
@@ -31,35 +31,52 @@ export function looksLikeClientId(s: string): boolean {
 }
 
 /**
- * A generated refresh token is a JWT: three dot-separated base64url parts,
- * the first starting "eyJ". (A Web Application's Client Secret is a plain
- * random string, which is how a pasted pair tells us which kind of app the
- * seller made.)
+ * Plausibly a token Vendor Center generated: one unbroken run of token
+ * characters. Deliberately loose — Jumia's docs show a JWT ("eyJ…"), but
+ * the lock icon hands out a short opaque one (43 characters, confirmed
+ * 2026-09-28), and a Web Application's Client Secret looks much the same.
+ * Which kind of app it is gets settled by asking Jumia, not by shape: see
+ * the "web_app" reason below.
  */
-export function looksLikeRefreshToken(s: string): boolean {
+export function looksLikeGeneratedToken(s: string): boolean {
   const t = s.trim();
-  return t.startsWith("eyJ") && t.split(".").length === 3 && t.length > 100;
+  return t.length >= 20 && /^[A-Za-z0-9._~+/=-]+$/.test(t);
 }
+
+export type SelfAuthFailure =
+  /** Jumia won't do this exchange for that Client ID: it's a Web Application (or not a real one). */
+  | "web_app"
+  /** The token was refused: expired, already used, or replaced by a newer one. */
+  | "bad_token"
+  | "bad_input"
+  | "unreachable"
+  | "save_failed";
 
 export type SelfAuthResult =
   | { ok: true; storeName: string }
-  | { ok: false; error: string };
+  | { ok: false; reason: SelfAuthFailure; error: string };
 
-/** Seller-facing explanation for each way Jumia can refuse the pair. */
-function explain(e: unknown): string {
+/** Why Jumia refused the pair, and what to tell the seller. */
+function explain(e: unknown): { reason: SelfAuthFailure; error: string } {
   if (e instanceof JumiaTokenError) {
-    if (e.code === "unauthorized_client") {
-      return "That Client ID belongs to a Web Application. In Vendor Center, create a new application and choose Self Authorization, then generate a token for it.";
+    // A Web Application's client can't use this grant, and without its
+    // secret it fails client authentication: either way, not a Self
+    // Authorization app (or a Client ID Jumia doesn't know).
+    if (e.code === "unauthorized_client" || e.code === "invalid_client" || e.status === 401) {
+      return {
+        reason: "web_app",
+        error: "Jumia wouldn't accept that Client ID here. Use the Client ID of a Self Authorization application (Web Applications can't stay connected).",
+      };
     }
     if (e.code === "invalid_grant") {
-      return "That token has expired or was already used. In Vendor Center, click Generate Token again and paste the new one straight away.";
+      return {
+        reason: "bad_token",
+        error: "That token has expired or was already used. In Vendor Center, click the orange lock icon next to PandaWorld again and paste the new token straight away.",
+      };
     }
-    if (e.code === "invalid_client" || e.status === 401) {
-      return "Jumia doesn't recognise that Client ID. Copy it again from Settings → Applications in Vendor Center.";
-    }
-    return `Jumia refused the connection (${e.code ?? e.status}). Generate a new token and try again.`;
+    return { reason: "bad_token", error: `Jumia refused the connection (${e.code ?? e.status}). Generate a new token and try again.` };
   }
-  return "Couldn't reach Jumia just now. Try again in a minute.";
+  return { reason: "unreachable", error: "Couldn't reach Jumia just now. Try again in a minute." };
 }
 
 /**
@@ -76,10 +93,10 @@ export async function connectSelfAuthorization(
   const cid = clientId.trim();
   const token = refreshToken.trim();
   if (!looksLikeClientId(cid)) {
-    return { ok: false, error: "That doesn't look like a Client ID. It's the long code with dashes shown next to your application in Vendor Center." };
+    return { ok: false, reason: "bad_input", error: "That doesn't look like a Client ID. It's the long code with dashes shown next to your application in Vendor Center." };
   }
-  if (!looksLikeRefreshToken(token)) {
-    return { ok: false, error: "That doesn't look like a generated token. In Vendor Center, click Generate Token next to your Self Authorization application and copy the whole token." };
+  if (!looksLikeGeneratedToken(token)) {
+    return { ok: false, reason: "bad_input", error: "That doesn't look like a generated token. In Vendor Center, click the orange lock icon next to your Self Authorization application and copy the whole token." };
   }
 
   let tokens: Awaited<ReturnType<typeof refreshAccessToken>>;
@@ -88,13 +105,13 @@ export async function connectSelfAuthorization(
     tokens = await refreshAccessToken(token, cid, undefined);
   } catch (e) {
     console.warn(`[jumia self-auth] exchange failed for ${userId}: ${(e as Error).message}`);
-    return { ok: false, error: explain(e) };
+    return { ok: false, ...explain(e) };
   }
   if (!tokens.refresh_token) {
     // Only a Web Application answers without one, and it wouldn't have
     // accepted this grant in the first place — but if it ever did, saving
     // it would just be the old expires-daily connection again.
-    return { ok: false, error: "Jumia didn't return a refresh token, so this connection couldn't stay on. Make sure the application is a Self Authorization one." };
+    return { ok: false, reason: "web_app", error: "Jumia didn't return a refresh token, so this connection couldn't stay on. Make sure the application is a Self Authorization one." };
   }
 
   const profile = await fetchJumiaSellerProfile(tokens.access_token);
@@ -131,7 +148,7 @@ export async function connectSelfAuthorization(
     // The token Jumia just rotated is gone if this isn't saved; the seller
     // has to generate another.
     console.error(`[jumia self-auth] saving the connection for ${userId} failed: ${error.message}`);
-    return { ok: false, error: "Connected to Jumia but couldn't save it. Generate a new token and try again." };
+    return { ok: false, reason: "save_failed", error: "Connected to Jumia but couldn't save it. Generate a new token and try again." };
   }
   // The dashboard layout caches connection health; drop it so the next page
   // sees the new connection straight away.

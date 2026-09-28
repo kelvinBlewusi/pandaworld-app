@@ -112,8 +112,8 @@ export function ConnectTutorial() {
             title="Generate a token and paste it into PandaWorld"
             body={
               <p>
-                Back on Manage Applications, click the <strong>Generate Token</strong>{" "}
-                icon next to PandaWorld. Copy the token and the Client ID, and paste
+                Back on Manage Applications, click the <strong>orange lock icon</strong>{" "}
+                (Generate Token) next to PandaWorld. Copy the token and the Client ID, and paste
                 both into PandaWorld&rsquo;s Connect Jumia screen (or the WhatsApp
                 chat). That&rsquo;s it: PandaWorld keeps the connection alive from
                 then on, with no logins.
