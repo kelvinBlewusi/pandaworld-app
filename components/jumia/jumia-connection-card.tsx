@@ -76,6 +76,10 @@ export function JumiaConnectionCard({ returnTo }: { returnTo?: string }) {
 
   const isConnected   = conn?.connected && conn?.status === "active";
   const isExpired     = !!conn?.needs_reconnect;
+  // Self Authorization renews itself; a Web Application needs a new login
+  // about once a day (lib/jumia/self-auth.ts).
+  const autoRenews    = conn?.auth_type === "self";
+  const switchHref    = withReturnTo("/onboarding/connect", returnTo);
   const oauthRequired = !!conn?.oauth_required;
   const connectedDate = conn?.connected_at
     ? new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" }).format(
@@ -178,18 +182,31 @@ export function JumiaConnectionCard({ returnTo }: { returnTo?: string }) {
             </div>
           </div>
 
-          {expiryDate && (
+          {autoRenews ? (
             <p className="text-xs text-zinc-400 flex items-center gap-1.5">
               <Info className="h-3 w-3 shrink-0" />
-              Access token expires {expiryDate}. PandaWorld will refresh it automatically.
+              Stays connected: PandaWorld renews access in the background, no logins needed.
             </p>
+          ) : (
+            <div className="rounded-xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-800">
+              <p>
+                This connection uses a Web Application, which Jumia expires about a day after each login
+                {expiryDate ? ` (next: ${expiryDate})` : ""}. Switch once to a Self Authorization application and
+                PandaWorld keeps you connected automatically.
+              </p>
+              <Button asChild size="sm" className="mt-3 gap-2">
+                <a href={switchHref}>Stay connected automatically</a>
+              </Button>
+            </div>
           )}
 
           <div className="flex gap-3">
-            <Button variant="outline" size="sm" className="gap-2" onClick={handleConnect} disabled={connecting}>
-              <RefreshCw className={cn("h-3.5 w-3.5", connecting && "animate-spin")} />
-              Re-authorise
-            </Button>
+            {!autoRenews && (
+              <Button variant="outline" size="sm" className="gap-2" onClick={handleConnect} disabled={connecting}>
+                <RefreshCw className={cn("h-3.5 w-3.5", connecting && "animate-spin")} />
+                Re-authorise
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -227,13 +244,28 @@ export function JumiaConnectionCard({ returnTo }: { returnTo?: string }) {
         <div className="space-y-4">
           <div className="rounded-xl bg-amber-50 border border-amber-100 p-4 text-sm text-amber-700 flex items-start gap-2">
             <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-            <span>Your Jumia access token has expired. Re-authorise PandaWorld to restore the connection.</span>
+            {autoRenews ? (
+              <span>
+                Jumia stopped accepting PandaWorld&apos;s saved token (it may have been regenerated or the application
+                deleted in Vendor Center). Generate a new token and paste it to reconnect.
+              </span>
+            ) : (
+              <span>
+                Your Jumia access expired. Web Application connections need a new login about once a day. Switch once
+                to a Self Authorization application and PandaWorld keeps you connected automatically.
+              </span>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <Button onClick={handleConnect} disabled={connecting} className="gap-2">
-              {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              Re-authorise with Jumia
+            <Button asChild className="gap-2">
+              <a href={switchHref}>{autoRenews ? "Reconnect with a new token" : "Stay connected automatically"}</a>
             </Button>
+            {!autoRenews && (
+              <Button variant="outline" onClick={handleConnect} disabled={connecting} className="gap-2">
+                {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                Log in again (lasts a day)
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"

@@ -60,7 +60,14 @@ export async function testJumiaCredentials(appId: string, secretKey: string): Pr
   }
 }
 
-export type JumiaConnectionKind = "connected" | "needs_credentials" | "needs_oauth" | "needs_reconnect";
+export type JumiaConnectionKind =
+  | "connected"
+  | "needs_credentials"
+  | "needs_oauth"
+  /** A Web Application connection that expired (they never get a refresh token). */
+  | "needs_reconnect"
+  /** A Self Authorization connection Jumia stopped accepting: needs a newly generated token. */
+  | "needs_new_token";
 
 /**
  * Classifies a seller's Jumia connection for the WhatsApp connect-from-chat
@@ -89,12 +96,20 @@ export async function getJumiaConnectionKind(userId: string): Promise<JumiaConne
   const db = createServerClient();
   const { data: conn } = await db
     .from("jumia_connections")
-    .select("status, access_token")
+    .select("status, access_token, auth_type, refresh_token, token_expires_at")
     .eq("user_id", userId)
     .maybeSingle();
 
   if (!conn || conn.status === "revoked") return "needs_credentials";
   if (conn.access_token === "credential_auth") return "needs_oauth";
+  const selfAuth = conn.auth_type === "self";
+  // A Web Application's row stays "active" after its token runs out (it
+  // has no refresh token to fail with), so check the expiry itself rather
+  // than letting a seller draft a whole batch only to fail at submit.
+  if (!conn.refresh_token && conn.token_expires_at
+      && new Date(conn.token_expires_at as string).getTime() <= Date.now()) {
+    return selfAuth ? "needs_new_token" : "needs_reconnect";
+  }
   if (conn.status === "needs_reconnect") {
     // A refresh_token can outlive a single past failure — Jumia's run
     // ~1 year vs. the access token's much shorter life — so a status that
@@ -105,7 +120,7 @@ export async function getJumiaConnectionKind(userId: string): Promise<JumiaConne
       await getValidJumiaCredentials(userId);
       return "connected";
     } catch {
-      return "needs_reconnect";
+      return selfAuth ? "needs_new_token" : "needs_reconnect";
     }
   }
   return "connected";
@@ -140,6 +155,7 @@ export async function saveJumiaCredentialsForUser(
   const { error: fullError } = await db.from("jumia_connections").upsert(
     {
       user_id:      userId,
+      auth_type:    "web",               // Web Application credentials: login flow, expires daily
       access_token: "credential_auth",   // sentinel — real auth via app_id/app_secret
       app_id:       appId,
       app_secret:   encryptedSecret,

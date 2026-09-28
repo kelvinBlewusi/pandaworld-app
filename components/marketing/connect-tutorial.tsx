@@ -92,15 +92,12 @@ export function ConnectTutorial() {
                   </li>
                   <li>
                     <strong>Application Type</strong>: pick{" "}
-                    <strong>Web Application (OAuth)</strong> — NOT Self
-                    Authorization. PandaWorld needs the user-consent flow.
+                    <strong>Self Authorization</strong>. It&rsquo;s the only kind
+                    Jumia lets stay connected; a Web Application needs a new login
+                    about once a day.
                   </li>
-                  <li>
-                    <strong>Redirect URI</strong>: copy this exact URL from
-                    your PandaWorld onboarding screen and paste it in:
-                  </li>
+                  <li>No redirect URL is needed.</li>
                 </ul>
-                <CodeLine value="https://pandaworld.gh/api/jumia/callback" />
                 <p className="mt-2 text-xs text-zinc-500">
                   Then click <strong>CREATE</strong>.
                 </p>
@@ -112,13 +109,14 @@ export function ConnectTutorial() {
 
           <Step
             n={5}
-            title="Copy your Client ID and Client Secret"
+            title="Generate a token and paste it into PandaWorld"
             body={
               <p>
-                Jumia shows a one-time popup with your two credentials. Copy{" "}
-                both, then paste them into the PandaWorld onboarding screen.
-                You&rsquo;ll be redirected to authorise the app — that&rsquo;s it,
-                you&rsquo;re connected.
+                Back on Manage Applications, click the <strong>Generate Token</strong>{" "}
+                icon next to PandaWorld. Copy the token and the Client ID, and paste
+                both into PandaWorld&rsquo;s Connect Jumia screen (or the WhatsApp
+                chat). That&rsquo;s it: PandaWorld keeps the connection alive from
+                then on, with no logins.
               </p>
             }
           >
@@ -129,10 +127,10 @@ export function ConnectTutorial() {
         <div className="mx-auto mt-14 max-w-2xl rounded-xl border border-orange-200 bg-orange-50 p-5 text-sm text-orange-900">
           <p className="font-semibold">A note on security:</p>
           <p className="mt-1 text-orange-800">
-            Your Client Secret is encrypted at rest the moment it reaches our
-            database. If you ever delete the application from Jumia&rsquo;s
-            side, PandaWorld will detect the broken connection on the next
-            sync and prompt you to reconnect.
+            Your token is encrypted at rest the moment it reaches our
+            database, and PandaWorld swaps it for a fresh one before it
+            expires. If you ever delete the application or regenerate its
+            token in Jumia, PandaWorld will notice and ask you for a new one.
           </p>
         </div>
       </div>
@@ -294,32 +292,20 @@ function MockCreateApplicationModal() {
             Application Type
           </p>
           <div className="mt-2 space-y-2">
+            <label className="flex items-start gap-2 text-xs text-zinc-500">
+              <span className="mt-1 h-3.5 w-3.5 rounded-full border-2 border-zinc-300" />
+              <span>Web Application (OAuth — Authorization Code Flow)</span>
+            </label>
             <label className="flex items-start gap-2 text-xs text-zinc-700">
               <span className="mt-1 flex h-3.5 w-3.5 items-center justify-center rounded-full border-2 border-orange-500">
                 <span className="block h-1.5 w-1.5 rounded-full bg-orange-500" />
               </span>
               <span>
-                <strong>Web Application (OAuth — Authorization Code Flow)</strong>
+                <strong>Self Authorization (Integration without User interaction)</strong>
                 <br />
-                <span className="text-zinc-500">
-                  PandaWorld uses this flow.
-                </span>
+                <span className="text-zinc-500">PandaWorld uses this one: it stays connected.</span>
               </span>
             </label>
-            <label className="flex items-start gap-2 text-xs text-zinc-500">
-              <span className="mt-1 h-3.5 w-3.5 rounded-full border-2 border-zinc-300" />
-              <span>
-                Self Authorization (Integration without User interaction)
-              </span>
-            </label>
-          </div>
-        </div>
-        <div>
-          <label className="text-[10px] font-semibold uppercase tracking-wider text-orange-500">
-            Redirect URI *
-          </label>
-          <div className="mt-1 border-b border-orange-300 pb-1 font-mono text-[11px] text-zinc-700">
-            https://pandaworld.gh/api/jumia/callback
           </div>
         </div>
         <div className="flex items-center justify-end gap-2 pt-2">
@@ -348,18 +334,12 @@ function MockApplicationDetails() {
           copy
         />
         <Row
-          label="Client Secret"
-          value="sHcIhU_cPUE0ureWbUbqbuPlXqlPTdftoSRf0ck0Zll="
+          label="Generated token"
+          value="eyJhbGciOiJIUzI1NiIsInR5cCIgOiAiSldUIi…"
           copy
           mono
         />
-        <Row label="Authentication Type" value="Web Application" />
-        <Row
-          label="Manage Applications"
-          value="https://pandaworld.gh/api/…"
-          copy
-          mono
-        />
+        <Row label="Authentication Type" value="Self Authorization" />
         <div className="flex justify-end pt-1">
           <button className="text-xs font-bold uppercase tracking-wider text-orange-500">
             Close
@@ -390,15 +370,6 @@ function Row({
         {value}
       </span>
       {copy && <Copy className="h-3 w-3 shrink-0 text-zinc-400" />}
-    </div>
-  );
-}
-
-function CodeLine({ value }: { value: string }) {
-  return (
-    <div className="mt-3 flex items-center justify-between rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-[11px]">
-      <code className="truncate font-mono text-zinc-700">{value}</code>
-      <Copy className="h-3 w-3 shrink-0 text-zinc-400" />
     </div>
   );
 }

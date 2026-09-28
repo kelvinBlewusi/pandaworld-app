@@ -42,15 +42,15 @@ export const GUIDES: Guide[] = [
     title: "Connect your Vendor Center to PandaWorld",
     metaTitle: "How to Connect Jumia Vendor Center to PandaWorld",
     description:
-      "Create a Jumia Vendor Center API application and connect it to PandaWorld in five steps, so listings drafted on WhatsApp can be pushed straight to Jumia.",
+      "Create a Jumia Self Authorization application, generate a token and connect it to PandaWorld once. It stays connected, so listings drafted on WhatsApp go straight to Jumia.",
     intro:
-      "Needed before you can push listings from WhatsApp (the Chrome extension doesn't need this — it fills in Jumia's own form directly in your browser).",
+      "Needed before you can push listings from WhatsApp (the Chrome extension doesn't need this — it fills in Jumia's own form directly in your browser). You do it once: PandaWorld keeps the connection alive after that, with no logins.",
     steps: [
       "Go to vendorcenter.jumia.com and sign in to your seller account.",
-      "In Vendor Center, go to Settings → Applications → Create Application, and choose \"Web Application (OAuth)\".",
-      "Set the Redirect URI to https://pandaworldai.site/api/jumia/callback.",
-      "Copy the Client ID and Client Secret from the application you just created.",
-      "In your PandaWorld dashboard, open the Connect Jumia page, pick your country, paste in the Client ID and Client Secret, click \"Test Connection\", then \"Connect Jumia\".",
+      "In Vendor Center, go to Settings → Applications → Create Application, and choose \"Self Authorization\". Name it PandaWorld; no redirect URL is needed.",
+      "On the Manage Applications screen, click the Generate Token icon in the Actions column next to PandaWorld, and copy the token.",
+      "Copy the application's Client ID too.",
+      "In PandaWorld, open the Connect Jumia page, pick your country, paste the Client ID and the token, and click \"Connect Jumia\". Or paste both into the WhatsApp chat. Paste the token straight away: a generated token only works for a short time.",
     ],
     videoId: null,
   },

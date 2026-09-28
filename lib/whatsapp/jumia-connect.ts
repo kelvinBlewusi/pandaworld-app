@@ -95,17 +95,37 @@ export function isResendCommand(text: string): boolean {
 
 export const VENDOR_CENTER_URL = "https://vendorcenter.jumia.com";
 
-export function buildConnectInstructions(redirectUri: string): string {
-  return [
-    "Let's connect your Jumia store.",
-    "",
-    `1. Open Jumia Vendor Center and sign in (tap below, or go to ${VENDOR_CENTER_URL}).`,
-    "2. Go to Settings → Applications → Create Application → Web Application (OAuth).",
-    `3. Set Application name to "Pandaworld".`,
-    `4. Set Manage applications (Redirect URL) to: ${redirectUri}`,
-    "5. Create Application.",
-    "6. Copy the Client ID and Client Secret, then paste them here — together, or one at a time.",
-  ].join("\n");
+/**
+ * The one-time setup that keeps a seller connected for good: a Jumia
+ * Self Authorization application and a generated token (see
+ * lib/jumia/self-auth.ts). A Web Application, which these steps used to
+ * describe, never gets a refresh token from Jumia and expires daily.
+ */
+export const SELF_AUTH_STEPS = [
+  `1. Open Jumia Vendor Center and sign in (tap below, or go to ${VENDOR_CENTER_URL}).`,
+  "2. Go to Settings → Applications → Create Application → choose *Self Authorization*.",
+  `3. Name it "PandaWorld" and create it (no redirect URL needed).`,
+  "4. Next to PandaWorld, in the Actions column, tap *Generate Token*.",
+  "5. Copy the Client ID and the token, then paste them here — together, or one at a time.",
+].join("\n");
+
+export function buildConnectInstructions(): string {
+  return ["Let's connect your Jumia store. You only do this once: PandaWorld keeps it connected after that.", "", SELF_AUTH_STEPS].join("\n");
+}
+
+/**
+ * The Jumia country a WhatsApp number most likely sells in, from its
+ * dialling code; Ghana (where most sellers are) otherwise. Numbers arrive
+ * from Meta as digits with the country code and no "+".
+ */
+const DIALLING_CODES: [prefix: string, country: string][] = [
+  ["233", "GH"], ["234", "NG"], ["254", "KE"], ["20", "EG"],
+  ["212", "MA"], ["221", "SN"], ["225", "CI"], ["256", "UG"],
+];
+
+export function countryFromPhone(phoneNumber: string): string {
+  const digits = phoneNumber.replace(/\D/g, "");
+  return DIALLING_CODES.find(([prefix]) => digits.startsWith(prefix))?.[1] ?? "GH";
 }
 
 const CLEAR_BATCH = { listingId: null, batchId: null, batchSize: null, batchSeq: null, pendingAppId: null } as const;
@@ -124,26 +144,57 @@ export async function promptJumiaConnection(
   kind: Exclude<JumiaConnectionKind, "connected">,
   prefix = "",
 ): Promise<void> {
-  if (kind === "needs_oauth" || kind === "needs_reconnect") {
+  if (kind === "needs_oauth") {
     await updateSession(phoneNumber, { state: "awaiting_jumia_oauth", ...CLEAR_BATCH });
     const token = await createConnectToken(userId);
-    const body = kind === "needs_reconnect"
-      ? `${prefix}Your Jumia connection expired — tap below to reconnect (no need to re-enter anything). I'll message you here once it's done.`
-      : `${prefix}Your Jumia credentials are already on file — tap below to finish connecting. I'll message you here once it's done.`;
     await sendCtaUrlIfConfigured(
       phoneNumber,
-      body,
-      kind === "needs_reconnect" ? "Reconnect Jumia" : "Connect Jumia",
+      `${prefix}Your Jumia credentials are already on file — tap below to finish connecting. I'll message you here once it's done.`,
+      "Connect Jumia",
+      jumiaConnectLink(token),
+    );
+    return;
+  }
+
+  // Everything else ends in the seller pasting a Client ID and a generated
+  // token here (handleAwaitingJumiaCredentials in lib/whatsapp/intake.ts).
+  await updateSession(phoneNumber, { state: "awaiting_jumia_credentials", ...CLEAR_BATCH });
+
+  if (kind === "needs_new_token") {
+    await sendCtaUrlIfConfigured(
+      phoneNumber,
+      `${prefix}Jumia stopped accepting PandaWorld's saved token (it was regenerated, or the application was deleted in Vendor Center).\n\n` +
+        "In Vendor Center → Settings → Applications, tap *Generate Token* next to PandaWorld, then paste the Client ID and the new token here.",
+      "Open Vendor Center",
+      VENDOR_CENTER_URL,
+    );
+    return;
+  }
+
+  if (kind === "needs_reconnect") {
+    // A Web Application connection that ran out: offer the permanent fix,
+    // and a login link for anyone who needs to list right now.
+    await sendCtaUrlIfConfigured(
+      phoneNumber,
+      `${prefix}Your Jumia connection expired: the kind of application you set up needs a new login about once a day.\n\n` +
+        `Set up automatic access once and it won't happen again:\n${SELF_AUTH_STEPS}`,
+      "Open Vendor Center",
+      VENDOR_CENTER_URL,
+    );
+    const token = await createConnectToken(userId);
+    await sendCtaUrlIfConfigured(
+      phoneNumber,
+      "Need to list right now? Log in again for today instead:",
+      "Log in to Jumia",
       jumiaConnectLink(token),
     );
     return;
   }
 
   // needs_credentials — never connected at all
-  await updateSession(phoneNumber, { state: "awaiting_jumia_credentials", ...CLEAR_BATCH });
   await sendCtaUrlIfConfigured(
     phoneNumber,
-    `${prefix}${buildConnectInstructions(jumiaRedirectUri())}`,
+    `${prefix}${buildConnectInstructions()}`,
     "Open Vendor Center",
     VENDOR_CENTER_URL,
   );

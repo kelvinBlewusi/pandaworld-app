@@ -1,4 +1,4 @@
-import { splitCredentialTokens, identifyCredentials, looksLikeCredential, isResendCommand, buildConnectInstructions, jumiaConnectLink } from "@/lib/whatsapp/jumia-connect";
+import { splitCredentialTokens, identifyCredentials, looksLikeCredential, isResendCommand, buildConnectInstructions, countryFromPhone, jumiaConnectLink } from "@/lib/whatsapp/jumia-connect";
 
 describe("splitCredentialTokens", () => {
   it("splits on whitespace", () => {
@@ -92,10 +92,31 @@ describe("isResendCommand", () => {
 });
 
 describe("buildConnectInstructions", () => {
-  it("includes the redirect URI the seller must paste into Jumia", () => {
-    const text = buildConnectInstructions("https://pandaworld.gh/api/jumia/callback");
-    expect(text).toContain("https://pandaworld.gh/api/jumia/callback");
+  it("walks the seller through a Self Authorization app and a generated token", () => {
+    // A Web Application never gets a refresh token from Jumia and expires
+    // daily; Self Authorization is the kind PandaWorld can keep alive.
+    const text = buildConnectInstructions();
     expect(text).toContain("vendorcenter.jumia.com");
+    expect(text).toContain("Self Authorization");
+    expect(text).toContain("Generate Token");
+    expect(text).not.toContain("Web Application");
+  });
+});
+
+describe("countryFromPhone", () => {
+  it("reads the Jumia country from the dialling code", () => {
+    expect(countryFromPhone("233548534323")).toBe("GH");
+    expect(countryFromPhone("2348031234567")).toBe("NG");
+    expect(countryFromPhone("254712345678")).toBe("KE");
+    expect(countryFromPhone("201001234567")).toBe("EG");
+    expect(countryFromPhone("212612345678")).toBe("MA");
+    expect(countryFromPhone("221771234567")).toBe("SN");
+    expect(countryFromPhone("2250701234567")).toBe("CI");
+    expect(countryFromPhone("256701234567")).toBe("UG");
+  });
+
+  it("falls back to Ghana for anywhere else", () => {
+    expect(countryFromPhone("447700900123")).toBe("GH");
   });
 });
 

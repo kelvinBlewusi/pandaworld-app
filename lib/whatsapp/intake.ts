@@ -36,6 +36,7 @@ import { getValidJumiaCredentials, COUNTRY_CURRENCY, DEFAULT_JUMIA_COUNTRY, curr
 import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
 import { isFashionCategory } from "@/lib/jumia/fashion-category";
 import { getJumiaConnectionKind, testJumiaCredentials, saveJumiaCredentialsForUser, disconnectJumiaForUser } from "@/lib/jumia/credentials";
+import { connectSelfAuthorization, looksLikeRefreshToken } from "@/lib/jumia/self-auth";
 import { createConnectToken } from "@/lib/jumia/connect-token";
 import { parseGlobalCommand, type GlobalCommand } from "@/lib/whatsapp/commands";
 import { extractVariantClaim } from "@/lib/whatsapp/variant-claims";
@@ -61,7 +62,7 @@ import {
   COUNT_QUICK_PICKS,
   MAX_BATCH_SIZE,
 } from "@/lib/whatsapp/batch";
-import { splitCredentialTokens, identifyCredentials, looksLikeCredential, isResendCommand, jumiaConnectLink, promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
+import { splitCredentialTokens, identifyCredentials, looksLikeCredential, isResendCommand, jumiaConnectLink, promptJumiaConnection, countryFromPhone } from "@/lib/whatsapp/jumia-connect";
 import { classifyBatchIntent, looksActionable } from "@/lib/whatsapp/intent";
 import type { ListingRow } from "@/lib/supabase/types";
 import { enqueueAnalysisJobs, nudgeWorker, isBatchSettled, type AnalysisJob } from "@/lib/whatsapp/analysis-queue";
@@ -951,7 +952,7 @@ async function describeStatus(
   switch (session.state) {
     case "awaiting_jumia_credentials":
       return {
-        text: "Waiting for your Jumia Client ID + Client Secret — paste them here, or reply *restart* to back out.",
+        text: "Waiting for your Jumia Client ID and generated token — paste them here, or reply *restart* to back out.",
         buttons: [{ id: "restart", title: "Restart 🔄" }],
       };
     case "awaiting_jumia_oauth":
@@ -1093,11 +1094,15 @@ async function sendJumiaConnectLink(userId: string, phoneNumber: string): Promis
 }
 
 /**
- * Waiting for the seller to paste their Jumia Client ID + Client Secret
- * (see the instructions sent right after linking — buildConnectInstructions
- * in lib/whatsapp/jumia-connect.ts). Accepts both together in one message
- * or one at a time; pendingAppId on the session holds the first half
- * across messages.
+ * Waiting for the seller to paste their Jumia Client ID and generated
+ * token (see buildConnectInstructions in lib/whatsapp/jumia-connect.ts).
+ * Accepts both together in one message or one at a time; pendingAppId on
+ * the session holds the first half across messages.
+ *
+ * The second half says which kind of Jumia app it is: a generated token
+ * (a JWT) means Self Authorization, connected right here and kept alive
+ * automatically; anything else is a Web Application's Client Secret,
+ * which still goes through the login link and expires daily.
  */
 async function handleAwaitingJumiaCredentials(
   userId: string,
@@ -1107,7 +1112,7 @@ async function handleAwaitingJumiaCredentials(
 ): Promise<void> {
   const text = content.text?.trim();
   if (!text) {
-    await replyText(phoneNumber, "Paste your Jumia Client ID and Client Secret here to continue connecting.");
+    await replyText(phoneNumber, "Paste your Jumia Client ID and the generated token here to continue connecting.");
     return;
   }
 
@@ -1126,7 +1131,7 @@ async function handleAwaitingJumiaCredentials(
   if (tokens.length > 0 && implausible) {
     await replyButtons(
       phoneNumber,
-      "That doesn't look like a Jumia Client ID or Client Secret — they're both long strings from Vendor Center → Settings → Applications. Paste your Client ID and Client Secret again.",
+      "That doesn't look like a Jumia Client ID or token — they're both long codes from Vendor Center → Settings → Applications. Paste your Client ID and the generated token again.",
       [{ id: "restart", title: "Restart 🔄" }],
     );
     return;
@@ -1143,10 +1148,36 @@ async function handleAwaitingJumiaCredentials(
     ({ appId, secretKey } = identifyCredentials(session.pendingAppId, tokens[0]));
   } else if (tokens.length === 1) {
     await updateSession(phoneNumber, { pendingAppId: tokens[0] });
-    await replyText(phoneNumber, "Got the Client ID — now paste the Client Secret.");
+    await replyText(phoneNumber, looksLikeRefreshToken(tokens[0])
+      ? "Got the token — now paste the Client ID."
+      : "Got the Client ID — now paste the generated token.");
     return;
   } else {
-    await replyText(phoneNumber, "Paste your Jumia Client ID and Client Secret here to continue connecting.");
+    await replyText(phoneNumber, "Paste your Jumia Client ID and the generated token here to continue connecting.");
+    return;
+  }
+
+  // Self Authorization: connect now, no login link, and it stays connected.
+  if (looksLikeRefreshToken(secretKey)) {
+    const connected = await connectSelfAuthorization(userId, appId, secretKey, countryFromPhone(phoneNumber));
+    if (!connected.ok) {
+      await updateSession(phoneNumber, { pendingAppId: null });
+      await replyButtons(
+        phoneNumber,
+        `⚠️ ${connected.error}\n\nPaste your Client ID and a newly generated token again.`,
+        [{ id: "restart", title: "Restart 🔄" }],
+      );
+      return;
+    }
+    await updateSession(phoneNumber, {
+      pendingAppId: null, state: "awaiting_count", listingId: null, batchId: null, batchSize: null, batchSeq: null,
+    });
+    await replyText(
+      phoneNumber,
+      `🎉 Jumia connected — ${connected.storeName}! PandaWorld keeps it connected from now on, no logins needed.\n\n` +
+        "For your security, delete the message with your token from this chat.\n\n" +
+        "How many products are you listing today? Reply with a number to get started.",
+    );
     return;
   }
 
