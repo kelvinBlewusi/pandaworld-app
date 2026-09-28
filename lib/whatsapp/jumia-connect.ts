@@ -100,17 +100,23 @@ export const VENDOR_CENTER_URL = "https://vendorcenter.jumia.com";
  * Self Authorization application and a generated token (see
  * lib/jumia/self-auth.ts). A Web Application, which these steps used to
  * describe, never gets a refresh token from Jumia and expires daily.
+ *
+ * Plain strings only, no `${}` templates: the production minifier folds
+ * this join into one string, and when any piece was a template it built a
+ * new template that escaped the 🔒 twice, so sellers got the text
+ * "🔒" instead of the icon (2026-09-28).
+ * scripts/check-built-emoji.mjs fails the build if that happens again.
  */
 export const SELF_AUTH_STEPS = [
-  `1. Open Jumia Vendor Center and sign in (tap below, or go to ${VENDOR_CENTER_URL}).`,
+  "1. Open Jumia Vendor Center and sign in (tap below, or go to " + VENDOR_CENTER_URL + ").",
   "2. Go to Settings → Applications → Create Application → choose *Self Authorization*.",
-  `3. Name it "PandaWorld" and create it.`,
+  "3. Name it \"PandaWorld\" and create it.",
   "4. Tap on the padlock icon 🔒 to generate a token, and copy it.",
   "5. Copy the Client ID and the token, then paste them here — together, or one at a time.",
 ].join("\n");
 
 export function buildConnectInstructions(): string {
-  return ["Let's connect your Jumia store. You only do this once: PandaWorld keeps it connected after that.", "", SELF_AUTH_STEPS].join("\n");
+  return ["Let's connect your Jumia store.", "", SELF_AUTH_STEPS].join("\n");
 }
 
 /**

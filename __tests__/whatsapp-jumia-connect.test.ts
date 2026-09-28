@@ -98,8 +98,19 @@ describe("buildConnectInstructions", () => {
     const text = buildConnectInstructions();
     expect(text).toContain("vendorcenter.jumia.com");
     expect(text).toContain("Self Authorization");
-    expect(text).toContain("padlock icon");
+    expect(text).toContain("padlock icon 🔒 to generate");
     expect(text).not.toContain("Web Application");
+  });
+
+  it("is exactly the message sellers are sent", () => {
+    expect(buildConnectInstructions()).toBe(
+      "Let's connect your Jumia store.\n\n" +
+      "1. Open Jumia Vendor Center and sign in (tap below, or go to https://vendorcenter.jumia.com).\n" +
+      "2. Go to Settings → Applications → Create Application → choose *Self Authorization*.\n" +
+      "3. Name it \"PandaWorld\" and create it.\n" +
+      "4. Tap on the padlock icon 🔒 to generate a token, and copy it.\n" +
+      "5. Copy the Client ID and the token, then paste them here — together, or one at a time.",
+    );
   });
 });
 
