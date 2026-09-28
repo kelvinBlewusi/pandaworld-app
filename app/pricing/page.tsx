@@ -5,6 +5,7 @@ import { MarketingFooter } from "@/components/marketing/footer";
 import { HomeFloatingNav } from "@/components/marketing/home-floating-nav";
 import { BuyCreditsButton } from "@/components/billing/buy-credits-button";
 import { isBillingEnabled } from "@/lib/billing/mode";
+import { CALCULATOR_HREF } from "@/lib/marketing/links";
 import {
   CREDIT_PACKS,
   FREE_SIGNUP_CREDITS,
@@ -74,7 +75,8 @@ export default async function PricingPage() {
 
   const signInHref = `/sign-in?redirect_url=${DASHBOARD_REDIRECT}`;
   const signUpHref = `/sign-up?redirect_url=${DASHBOARD_REDIRECT}`;
-  const calculatorHref = userId ? "/extension/calculator" : "/sign-in?redirect_url=/extension/calculator";
+  // The public calculator page: usable signed in or not, and indexable.
+  const calculatorHref = CALCULATOR_HREF;
 
   // Offers for search engines: the packs only while they're actually for sale.
   const pricingLd = {

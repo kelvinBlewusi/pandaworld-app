@@ -56,6 +56,10 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 //                            Exists specifically to be indexed by Google;
 //                            leaving it off this list meant Googlebot and
 //                            every logged-out visitor got bounced to /sign-in.
+//   /how-to/(.*)            — one page per guide (app/how-to/[slug]), same reason.
+//   /jumia-price-calculator — the public price calculator and
+//   /jumia-commission-rates   Jumia Ghana rate table, both written to be found
+//                            by sellers searching for Jumia fees.
 //   /api/extension/fill     — the extension's autofill call. The extension has
 //                            no Clerk browser session (it runs from Jumia's
 //                            origin) — it authenticates itself with a
@@ -101,6 +105,9 @@ const isPublicRoute = createRouteMatcher([
   '/api/worker/(.*)',
   '/extension',
   '/how-to',
+  '/how-to/(.*)',
+  '/jumia-price-calculator',
+  '/jumia-commission-rates',
   '/api/extension/fill',
   '/api/extension/account',
   '/api/whatsapp/webhook',

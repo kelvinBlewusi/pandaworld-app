@@ -1,4 +1,6 @@
 import type { MetadataRoute } from "next";
+import { GUIDES } from "@/lib/marketing/guides";
+import { CALCULATOR_HREF, COMMISSION_RATES_HREF } from "@/lib/marketing/links";
 
 // ─── sitemap.xml — Next.js convention file ───────────────────────────────────
 //
@@ -44,6 +46,25 @@ export default function sitemap(): MetadataRoute.Sitemap {
       lastModified,
       changeFrequency: "monthly",
       priority:        0.8,                   // setup guides — targets "how to" searches
+    },
+    // One page per guide (app/how-to/[slug]), each aimed at its own search.
+    ...GUIDES.map((g) => ({
+      url:             `${APP_URL}/how-to/${g.slug}`,
+      lastModified,
+      changeFrequency: "monthly" as const,
+      priority:        0.7,
+    })),
+    {
+      url:            `${APP_URL}${CALCULATOR_HREF}`,
+      lastModified,
+      changeFrequency: "monthly",
+      priority:        0.8,                   // free tool — "Jumia price calculator"
+    },
+    {
+      url:            `${APP_URL}${COMMISSION_RATES_HREF}`,
+      lastModified,
+      changeFrequency: "monthly",
+      priority:        0.8,                   // "Jumia commission rates Ghana"
     },
     {
       url:            `${APP_URL}/terms`,
