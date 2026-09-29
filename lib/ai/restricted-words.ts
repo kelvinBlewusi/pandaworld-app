@@ -123,8 +123,15 @@ export function buildRestrictedWordsInstruction(): string {
 - Branded names (unless this product is actually that brand confirmed by visible logo): Chanel, Allure, Gucci, Louis Vuitton, Rolex, Ray-Ban, Hermes, Versace, Armani, Tag Heuer, Bose, MAC, Bobbi Brown, Urban Decay, Yeezy, Tissot, Givenchy, Saint Laurent, Balmain, Hublot, Tom Ford, Swatch, Bio-Oil, Sebamed, Soundlink, Beoplay, Lighter, Speedo, Spy, Tobacco, Shisha, Hookah, Oriflame, Bio Oil.
 - Inflated battery claims: any mAh number above 50,000 (60,000mah, 100,000mah etc.).
 - All profanity and vulgar language.
-- SKU and Konga references.
+- SKU and Konga references.${learnedLine()}
 If a restricted term seems to fit, find a generic alternative or omit that field.`;
+}
+
+function learnedLine(): string {
+  const words = learnedRestrictedWords();
+  return words.length > 0
+    ? `\n- Words Jumia has rejected listings for: ${words.map((w) => `"${w}"`).join(", ")}.`
+    : "";
 }
 
 /**
@@ -136,15 +143,67 @@ If a restricted term seems to fit, find a generic alternative or omit that field
  */
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-const RESTRICTED_REGEX = new RegExp(
-  "\\b(" +
-    JUMIA_RESTRICTED_WORDS
-      .filter((w) => w.length > 0)
-      .map(escapeRegex)
-      .join("|") +
-  ")\\b",
-  "gi"
-);
+function buildRegex(words: Iterable<string>): RegExp {
+  return new RegExp(
+    "\\b(" +
+      Array.from(words)
+        .filter((w) => w.length > 0)
+        .map(escapeRegex)
+        .join("|") +
+    ")\\b",
+    "gi"
+  );
+}
+
+let RESTRICTED_REGEX = buildRegex(JUMIA_RESTRICTED_WORDS);
+
+// ─── Words learned from Jumia's own rejections ─────────────────────────────
+//
+// The list above is fixed in code. When Jumia rejects a listing for a word
+// it doesn't have ("The Attribute [description] contains the restricted
+// words : supreme"), lib/jumia/feed-outcomes.ts records it in
+// jumia_learned_restricted_words, and lib/jumia/learned-restricted-words.ts
+// loads those into this process before drafting and pushing. From then on
+// they're in the prompt instruction, stripped after drafting, and stripped
+// again before a push, like every word above.
+
+const LEARNED = new Set<string>();
+
+/** Treat these as restricted from now on in this process. */
+export function addLearnedRestrictedWords(words: string[]): void {
+  const known = new Set(JUMIA_RESTRICTED_WORDS);
+  let changed = false;
+  for (const raw of words) {
+    const w = raw.trim().toLowerCase();
+    if (!w || known.has(w) || LEARNED.has(w)) continue;
+    LEARNED.add(w);
+    changed = true;
+  }
+  if (changed) RESTRICTED_REGEX = buildRegex(JUMIA_RESTRICTED_WORDS.concat(Array.from(LEARNED)));
+}
+
+export function learnedRestrictedWords(): string[] {
+  return Array.from(LEARNED).sort();
+}
+
+/**
+ * The words a Jumia rejection names as restricted, lowercased:
+ * "The Attribute [description] contains the restricted words : supreme"
+ * gives ["supreme"]; a comma-separated list gives each. Empty for any other
+ * kind of rejection.
+ */
+export function restrictedWordsInJumiaRejection(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  const out = new Set<string>();
+  for (const m of Array.from(raw.matchAll(/restricted words?\s*:\s*([^.\n|\]]+)/gi))) {
+    for (const part of m[1].split(/[,;]/)) {
+      const w = part.replace(/["'`]/g, "").trim().toLowerCase();
+      // A word or short phrase, not a sentence that happens to follow a colon.
+      if (w.length >= 2 && w.length <= 40 && w.split(/\s+/).length <= 4) out.add(w);
+    }
+  }
+  return Array.from(out);
+}
 
 export function stripRestrictedWords(text: string): string {
   if (!text) return text;
