@@ -30,3 +30,44 @@ describe("checkProhibitedCategory", () => {
     expect(result.warnings.map((w) => w.keyword)).toContain("Battery");
   });
 });
+
+// Real 2026-09-29 batch: a collagen supplement drafted into Jumia's own
+// "Health & Beauty > ... > Supplements > Hyaluronic Acid" category was held
+// as "Acid", a GH row that means lab chemicals ("Industrial & Scientific /
+// Lab & Scientific Products / Lab Chemicals / Acids").
+describe("checkProhibitedCategory, rows scoped to one department", () => {
+  const supplement = [
+    "Collagen With Burn Dietary Supplement - Metabolism Support, Skin Health",
+    "Health & Beauty > Vitamins & Dietary Supplements > Supplements > Hyaluronic Acid",
+  ];
+
+  it("doesn't apply a row outside its department", () => {
+    const result = checkProhibitedCategory("GH", supplement, "Health & Beauty");
+    expect(result.blocked).toBeNull();
+  });
+
+  it("still applies it inside its department", () => {
+    const result = checkProhibitedCategory(
+      "GH",
+      ["Hydrochloric Acid 1L", "Industrial & Scientific > Lab & Scientific Products > Lab Chemicals > Acids"],
+      "Industrial & Scientific",
+    );
+    expect(result.blocked?.keyword).toBe("Acid");
+  });
+
+  it("still applies it when the listing has no category yet", () => {
+    expect(checkProhibitedCategory("GH", [supplement[0] + " with Acid", null], null).blocked?.keyword).toBe("Acid");
+  });
+
+  it("keeps applying rows whose label isn't a Jumia department everywhere", () => {
+    // "Home / Health & Beauty / ..." — "Home" isn't a department, so the
+    // row can't be scoped and keeps blocking in any department.
+    const result = checkProhibitedCategory("GH", ["Pansement Adhesive Bandage", "Health & Beauty > Health Care"], "Health & Beauty");
+    expect(result.blocked?.keyword).toBe("Pansement");
+  });
+
+  it("blocks Meat inside Grocery, as before", () => {
+    const result = checkProhibitedCategory("GH", ["Frozen Beef Meat Pack 1kg", "Grocery > Meat"], "Grocery");
+    expect(result.blocked?.keyword).toBe("Meat");
+  });
+});

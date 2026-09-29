@@ -8,7 +8,7 @@
  * await it, which only helps if the promise really waits for the request.
  */
 
-import { nudgeWorker } from "@/lib/whatsapp/analysis-queue";
+import { nudgeWorker, workersFor } from "@/lib/whatsapp/analysis-queue";
 
 const realFetch = global.fetch;
 
@@ -52,4 +52,15 @@ it("does nothing without the worker's secret", async () => {
   global.fetch = fetchMock as unknown as typeof fetch;
   await nudgeWorker();
   expect(fetchMock).not.toHaveBeenCalled();
+});
+
+it("starts one worker per two products, up to three", () => {
+  expect([1, 2, 3, 4, 5, 6, 20].map(workersFor)).toEqual([1, 1, 2, 2, 3, 3, 3]);
+});
+
+it("can start several workers at once", async () => {
+  const fetchMock = jest.fn(async () => new Response("{}"));
+  global.fetch = fetchMock as unknown as typeof fetch;
+  await nudgeWorker(3);
+  expect(fetchMock).toHaveBeenCalledTimes(3);
 });

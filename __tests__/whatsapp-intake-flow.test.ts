@@ -46,12 +46,14 @@ jest.mock("@/lib/whatsapp/media", () => ({
 // The queue is exercised by its own tests; here we only care THAT a batch
 // is enqueued, never that it runs.
 const enqueued: { listingId: string; seq: number | null }[] = [];
+const nudges: number[] = [];
 jest.mock("@/lib/whatsapp/analysis-queue", () => ({
   enqueueAnalysisJobs: async (p: { listings: { listingId: string; seq: number | null }[] }) => {
     enqueued.push(...p.listings);
     return p.listings.length;
   },
-  nudgeWorker:   () => {},
+  nudgeWorker:   (workers?: number) => { nudges.push(workers ?? 1); },
+  workersFor:    jest.requireActual("@/lib/whatsapp/analysis-queue").workersFor,
   isBatchSettled: async () => false,
 }));
 
@@ -110,8 +112,13 @@ jest.mock("@/lib/jumia/push-listing", () => ({
 // should report as blocked on a disconnected Jumia account, mirroring
 // readiness.ts's own not_connected branch (needsReconnect: true).
 const needsReconnectFor = new Set<string>();
+// Settable per test — Held reasons to report verbatim for a listing.
+const heldReasonsFor = new Map<string, string[]>();
 jest.mock("@/lib/whatsapp/readiness", () => ({
   assessListingPushReadiness: async (_userId: string, listingId: string) => {
+    if (heldReasonsFor.has(listingId)) {
+      return { ready: false, reasons: heldReasonsFor.get(listingId) };
+    }
     if (needsReconnectFor.has(listingId)) {
       return { ready: false, reasons: ["Jumia needs to be (re)connected before this can be checked"], needsReconnect: true };
     }
@@ -221,6 +228,7 @@ beforeEach(() => {
   sent.length = 0;
   enqueued.length = 0;
   needsReconnectFor.clear();
+  heldReasonsFor.clear();
   pushResultFor.clear();
   pushResult = { ok: true };
   pushCallCount = 0;
@@ -998,6 +1006,20 @@ describe("message volume on a large batch", () => {
     expect(body).toContain("Product 2: ⚠️ Held — needs price.");
     expect(body).toContain("Product 3: ✅ Ready — Drafted product number 3.");
   });
+
+  it("ends a Held line with one full stop even when the reason already has one", async () => {
+    seedDrafted(2);
+    heldReasonsFor.set("listing-1", ['This looks like "Meat" — Jumia blocks that product type in GH, so nothing was sent.']);
+    seedSession({ state: "awaiting_confirmation", batch_size: 2, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 2);
+
+    const body = sent.find((m) => m.kind === "text" && m.body.includes("Product 1"))!.body;
+    expect(body).toContain("in GH, so nothing was sent.\n");
+    expect(body).not.toContain("..");
+  });
 });
 
 describe("quiet batch mode", () => {
@@ -1089,6 +1111,9 @@ describe("quiet batch mode", () => {
     expect(drafting!.body).not.toContain("bigger batch");
     expect(session().state).toBe("analyzing");
     expect(enqueued.map((e) => e.seq).sort()).toEqual([1, 2, 3]);
+    // Two workers (two products each), so product 3 doesn't wait for the
+    // next cron tick.
+    expect(nudges.at(-1)).toBe(2);
   });
 
   it("treats a number that doesn't match the current product as a note, not an advance", async () => {

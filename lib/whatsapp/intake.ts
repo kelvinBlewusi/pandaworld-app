@@ -65,7 +65,7 @@ import {
 import { splitCredentialTokens, identifyCredentials, looksLikeCredential, isResendCommand, jumiaConnectLink, promptJumiaConnection, countryFromPhone } from "@/lib/whatsapp/jumia-connect";
 import { classifyBatchIntent, looksActionable } from "@/lib/whatsapp/intent";
 import type { ListingRow } from "@/lib/supabase/types";
-import { enqueueAnalysisJobs, nudgeWorker, isBatchSettled, type AnalysisJob } from "@/lib/whatsapp/analysis-queue";
+import { enqueueAnalysisJobs, nudgeWorker, workersFor, isBatchSettled, type AnalysisJob } from "@/lib/whatsapp/analysis-queue";
 
 /**
  * WhatsApp chatbot, Stage 4: multi-product batches, entirely in chat.
@@ -849,7 +849,7 @@ async function retryBatchDrafts(
       phoneNumber,
       `🔁 Retrying ${queued} product${queued === 1 ? "" : "s"} with the photos you already sent — no need to send anything again.`,
     );
-    await nudgeWorker();
+    await nudgeWorker(workersFor(queued));
   } catch (e) {
     console.error(`[whatsapp intake] retry enqueue failed for batch ${batchId}: ${(e as Error).message}`);
     await replyError(
@@ -1948,9 +1948,10 @@ async function startBatchAnalysis(
 
     // Start the work now rather than waiting up to a minute for the next
     // pg_cron tick — without this a 1-product draft that used to finish in
-    // ~22s could take 80s, which reads as a regression. Not awaited, and
-    // pg_cron remains the guarantee if it doesn't land.
-    await nudgeWorker();
+    // ~22s could take 80s, which reads as a regression. One worker per two
+    // products (workersFor), and pg_cron remains the guarantee if a nudge
+    // doesn't land.
+    await nudgeWorker(workersFor(withQuota.length));
   } catch (e) {
     console.error(`[whatsapp intake] batch ${batchId} could not be queued: ${(e as Error).message}`);
     await updateSession(phoneNumber, { state: "awaiting_confirmation" });
@@ -2187,6 +2188,13 @@ async function hardFailedListingIds(batchId: string): Promise<Set<string>> {
  * moves the session out of "analyzing", and what guarantees only one
  * worker gets here per batch.
  */
+/** Held reasons as one sentence: "a; b." Some reasons are already full
+ *  sentences ending in "." (the prohibited-category one), which used to
+ *  come out as "sent..". */
+function heldReasonsText(reasons: string[]): string {
+  return `${reasons.map((r) => r.trim().replace(/[.\s]+$/, "")).join("; ")}.`;
+}
+
 export async function finalizeBatch(
   batchId:     string,
   phoneNumber: string,
@@ -2219,7 +2227,7 @@ export async function finalizeBatch(
         ...(assessment.ready ? [] : noteResult.softWarnings),
       ];
       const ready = reasons.length === 0;
-      const heldText = reasons.length > 0 ? `\n⚠️ ${reasons.join("; ")}.` : "";
+      const heldText = reasons.length > 0 ? `\n⚠️ ${heldReasonsText(reasons)}` : "";
       // A disconnected Jumia account can't be fixed by opening the editor —
       // "Edit product" would send the seller to a form with nothing wrong
       // on it. Offer the reconnect link instead, same one-time-token
@@ -2373,7 +2381,7 @@ export async function finalizeBatch(
       const { ready, reasons } = assessments[i];
       return ready
         ? `Product ${l.whatsapp_seq}: ✅ Ready — ${l.title}.`
-        : `Product ${l.whatsapp_seq}: ⚠️ Held — ${reasons.join("; ")}.`;
+        : `Product ${l.whatsapp_seq}: ⚠️ Held — ${heldReasonsText(reasons)}`;
     });
     // One product held on a disconnected Jumia account means every OTHER
     // product held for the same reason is fixed by the exact same tap —

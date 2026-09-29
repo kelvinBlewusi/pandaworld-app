@@ -99,9 +99,11 @@ export function assertListingReady(
   // type. Title and category_path are short and specific to WHAT the
   // product actually is; description is long-form marketing copy that
   // routinely mentions materials, ingredients and use-cases in passing.
-  const categoryCheck = checkProhibitedCategory(countryCode, [
-    listing.title, listing.category_path,
-  ]);
+  const categoryCheck = checkProhibitedCategory(
+    countryCode,
+    [listing.title, listing.category_path],
+    listing.category_path?.split(/\s*[>/]\s*/)[0] ?? null,
+  );
   if (categoryCheck.blocked) {
     blockers.push(
       `This looks like "${categoryCheck.blocked.keyword}" — Jumia blocks that product type in ${countryCode}, so nothing was sent.`,
