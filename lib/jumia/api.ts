@@ -24,6 +24,7 @@ import { getCategoryAttributes, getVariantAxes, getCategoryByCode, fetchAttribut
 import { isFashionCategory } from "@/lib/jumia/fashion-category";
 import { assertListingReady } from "@/lib/jumia/listing-ready";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
+import { loadLearnedRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 
 // ─── Country → ISO 4217 currency code ────────────────────────────────────────
 //
@@ -1706,6 +1707,7 @@ export async function buildJumiaPayload(
     // Last-mile content gate — restricted words plus the prohibited-
     // category/restricted-brand catalog, run right before anything is
     // POSTed. See lib/jumia/listing-ready.ts.
+    await loadLearnedRestrictedWords();
     const ready = assertListingReady(listing, countryCode, products);
     adjustments.push(...ready.warnings);
     if (!ready.ok) {

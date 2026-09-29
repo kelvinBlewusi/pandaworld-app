@@ -570,6 +570,21 @@ only appear while billing is off.
 
 ## Operational gotchas (things that have bitten us)
 
+- **Jumia's banned words vs blocked product types (2026-09-29)**: two
+  different checks. Banned *words* (`lib/ai/restricted-words.ts`) are kept
+  out of drafts three times: named in every prompt, stripped after
+  drafting, stripped again before a push (`lib/jumia/listing-ready.ts`).
+  When a rejection names a new one ("contains the restricted words :
+  supreme"), `logFeedOutcome` records it in
+  `jumia_learned_restricted_words` and every later draft/push uses it
+  (`lib/jumia/learned-restricted-words.ts`); no code change needed.
+  Blocked *product types* (`lib/jumia/prohibited-catalog.ts`, from Jumia's
+  per-country sheet) hold the listing instead: re-categorising to dodge
+  one would be evading Jumia's rules. A row that names a category path in
+  one Jumia department only applies inside that department; GH's "Acid"
+  (lab chemicals) used to hold a collagen supplement in "Supplements >
+  Hyaluronic Acid".
+
 - **Supabase Free Plan limits (2026-09-29)**: database size (500 MB,
   doesn't reset; over it the project can go read-only) and egress (5 GB
   uncached per billing cycle). The database hit 605 MB: a 277 MB ivfflat

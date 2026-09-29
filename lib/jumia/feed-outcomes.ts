@@ -19,6 +19,8 @@ import { JUMIA_API_ENV_NAME } from "@/lib/jumia/oauth";
 import { isUnlistableCategoryError, recordUnlistableCategory, sellerCountry } from "@/lib/jumia/unlistable-categories";
 import { recordLiveListing } from "@/lib/jumia/live-listings";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
+import { restrictedWordsInJumiaRejection } from "@/lib/ai/restricted-words";
+import { rememberRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 
 /**
  * A stable hash of the listing content that actually drives a Jumia
@@ -97,6 +99,9 @@ export async function logFeedOutcome(input: FeedOutcomeInput): Promise<void> {
     const categoryCode = input.categoryCode && /^\d+$/.test(input.categoryCode) ? Number(input.categoryCode) : null;
     if (input.outcome === "rejected" && country && categoryCode && isUnlistableCategoryError(input.rawError)) {
       await recordUnlistableCategory(country, categoryCode, input.rawError ?? null);
+    }
+    if (input.outcome === "rejected") {
+      await rememberRestrictedWords(restrictedWordsInJumiaRejection(input.rawError), input.rawError ?? null);
     }
     if (input.outcome === "live" && country && categoryCode && listing?.title) {
       await recordLiveListing(input.listingId, country, categoryCode, listing.title);

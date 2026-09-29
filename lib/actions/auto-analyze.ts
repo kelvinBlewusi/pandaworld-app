@@ -71,6 +71,7 @@ import { provenCategoriesFor } from "@/lib/jumia/live-listings";
 import { withAiUsageContext } from "@/lib/ai/usage";
 import { AI_DYNAMIC_ATTR_DEFAULTS, resolvePatternDefault } from "@/lib/ai/policy";
 import { webSearch, formatSearchSnippetsForPrompt, isWebSearchEnabled } from "@/lib/ai/web-search";
+import { loadLearnedRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 
 export type AutoAnalyzeResult =
   | {
@@ -333,6 +334,7 @@ export async function runAutoAnalyze(
   listingId: string,
   userPromptOverride?: string | null,
 ): Promise<AutoAnalyzeResult> {
+  await loadLearnedRestrictedWords();
   // Every AI call in one draft (first draft or a Fix & resubmit redraft)
   // is costed as one run — see lib/ai/usage.ts.
   return withAiUsageContext({ feature: "listing_draft", userId, listingId }, () =>

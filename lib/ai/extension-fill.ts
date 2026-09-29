@@ -19,6 +19,7 @@ import { buildContentPolicyInstructions, stripBrandFromTitle } from "@/lib/ai/ju
 import { stripRestrictedWords } from "@/lib/ai/restricted-words";
 import { buildStyleGuideBlock, buildSearchGroundingInstruction } from "@/lib/ai/content-style-rules";
 import { isDegenerateName, type HarvestedField } from "@/lib/extension/fill";
+import { loadLearnedRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 
 export interface AiFillResult {
   raw:      Record<string, string>; // value per field label, policy-cleaned
@@ -204,6 +205,7 @@ export async function aiFillRenderedFields(args: {
   notes?:      string;
   market?:     string;
 }): Promise<AiFillResult> {
+  await loadLearnedRestrictedWords();
   const { images, notes, market = "GH" } = args;
   const warnings: string[] = [];
 

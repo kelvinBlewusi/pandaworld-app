@@ -45,6 +45,7 @@ import {
 } from "@/lib/ai/content-style-rules";
 import { pickModelForOwnImagesFlow, type ModelKind } from "@/lib/billing/ai-models";
 import { trackGeminiCall, isQuotaError } from "@/lib/ai/quota-telemetry";
+import { loadLearnedRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 
 // ─── Model selection ────────────────────────────────────────────────────────
 //
@@ -911,6 +912,7 @@ export async function analyzeProductImages(
   imageUrls:   string[],
   userContext?: string | null,  // free-text AI-chat from the seller; threaded into every prompt pass
 ): Promise<AIProductAnalysis> {
+  await loadLearnedRestrictedWords();
   if (!imageUrls.length) throw new Error("No images provided");
 
   // Dev-only mock for local development without a Gemini key
@@ -2294,6 +2296,7 @@ export async function analyzeProductDescription(
   description:  string,
   userContext?: string | null,  // free-text AI-chat from the seller; threaded into every prompt pass
 ): Promise<AIProductAnalysis> {
+  await loadLearnedRestrictedWords();
   if (USE_MOCK_AI) {
     console.warn("[AI] USE_MOCK_AI=true — returning mock analysis");
     return buildMockAnalysis();
