@@ -41,6 +41,8 @@
  * not what's inside the brackets.
  */
 
+import { restrictedWordsInJumiaRejection } from "@/lib/ai/restricted-words";
+
 export type RemedyKind =
   /** Worth a full re-draft (runAutoAnalyze) informed by the rejection —
    *  a bad title, an over-broad category, a short description, or a
@@ -57,6 +59,11 @@ export type RemedyKind =
   /** Jumia already has this SKU. The push path generates a fresh suffix
    *  on the next attempt, so simply pushing again resolves it. */
   | "repush"
+  /** Jumia named a banned word ("The Attribute [ description ] contains
+   *  the restricted words : color may vary"). Recorded as a learned word
+   *  (lib/jumia/learned-restricted-words.ts), which the pre-push check
+   *  strips, so pushing again is the whole fix: no redraft. */
+  | "restricted_words"
   /** Only the seller can supply this — a price, a barcode, a re-uploaded
    *  image. Never pretend to fix it. */
   | "seller"
@@ -98,6 +105,20 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
 
   if (!msg.trim()) {
     return { kind: "unknown", explanation: "Jumia didn't say why." };
+  }
+
+  // ── Banned words, before the attribute bucket below, whose "the
+  // attribute" test also matches this message. Classed there, a
+  // 2026-09-29 rejection for "color may vary" was redrafted (the phrase
+  // survived: it wasn't on our list) and rejected again, and the seller
+  // was told "Some category fields Jumia wants are missing or invalid".
+  const banned = restrictedWordsInJumiaRejection(raw);
+  if (banned.length > 0) {
+    const named = banned.map((w) => `"${w}"`).join(", ");
+    return {
+      kind: "restricted_words",
+      explanation: `Jumia doesn't allow ${named} in listings — I'll take ${banned.length === 1 ? "it" : "them"} out and resubmit.`,
+    };
   }
 
   // ── Duplicate VARIATION, checked before the generic duplicate/repush
@@ -364,7 +385,7 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
 /** True when the system should attempt an automatic repair rather than
  *  handing straight back to the seller. */
 export function isAutoFixable(kind: RemedyKind): boolean {
-  return kind === "rerun" || kind === "not_visible_attributes" || kind === "repush" || kind === "unknown";
+  return kind === "rerun" || kind === "not_visible_attributes" || kind === "repush" || kind === "restricted_words" || kind === "unknown";
 }
 
 /**

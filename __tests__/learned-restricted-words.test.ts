@@ -40,6 +40,11 @@ describe("restrictedWordsInJumiaRejection", () => {
     expect(restrictedWordsInJumiaRejection("The Attribute [name] contains the restricted words : Deluxe, Genuine")).toEqual(["deluxe", "genuine"]);
   });
 
+  it("never takes a template placeholder for a word", () => {
+    expect(restrictedWordsInJumiaRejection("The Attribute [material] contains the restricted words : [banned_word];")).toEqual([]);
+    expect(restrictedWordsInJumiaRejection("The Attribute [{0}] contains the restricted words : {1}")).toEqual([]);
+  });
+
   it("finds nothing in other rejections", () => {
     expect(restrictedWordsInJumiaRejection("You can't list products in this category. Please choose a different (more specific) category and try again.")).toEqual([]);
     expect(restrictedWordsInJumiaRejection(null)).toEqual([]);
@@ -66,5 +71,14 @@ describe("learned words", () => {
     await loadLearnedRestrictedWords();
     expect(learnedRestrictedWords()).toContain("gorgeous");
     expect(stripRestrictedWords("Gorgeous Silk Scarf")).toBe("Silk Scarf");
+  });
+});
+
+describe("the live 2026-09-29 rejection", () => {
+  it("is read as the phrase Jumia named, and stripped once learned", async () => {
+    const raw = "The highlighted word has been placed on the blacklist, prohibiting its usage in Ghana\nThe Attribute [ description ] contains the restricted words : color may vary;";
+    expect(restrictedWordsInJumiaRejection(raw)).toEqual(["color may vary"]);
+    await rememberRestrictedWords(["color may vary"], raw);
+    expect(stripRestrictedWords("Note: Color may vary slightly from the photos.")).toBe("Note: slightly from the photos.");
   });
 });

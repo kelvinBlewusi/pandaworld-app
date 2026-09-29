@@ -10,6 +10,18 @@ import {
 
 // Real rejection strings from this account's failed pushes.
 describe("classifyJumiaRejection", () => {
+  it("names a banned word and fixes it by resubmitting, not redrafting", () => {
+    // The exact live rejection, 2026-09-29. It used to fall into the
+    // attribute bucket ("the attribute"): redrafted, rejected again, and
+    // the seller told "Some category fields Jumia wants are missing".
+    const r = classifyJumiaRejection(
+      "The highlighted word has been placed on the blacklist, prohibiting its usage in Ghana\nThe Attribute [ description ] contains the restricted words : color may vary;",
+    );
+    expect(r.kind).toBe("restricted_words");
+    expect(r.explanation).toBe(`Jumia doesn't allow "color may vary" in listings — I'll take it out and resubmit.`);
+    expect(isAutoFixable(r.kind)).toBe(true);
+  });
+
   it("treats a missing column as fixable by a rerun of the draft", () => {
     // The exact message from a live rejection.
     const r = classifyJumiaRejection("The column [product_weight] is missing from the file.");
