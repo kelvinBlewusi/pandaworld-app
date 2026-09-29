@@ -354,20 +354,33 @@ export async function claimBatchFinalization(phoneNumber: string): Promise<boole
  *
  * Never throws: pg_cron remains the guarantee, this is only latency.
  */
-export async function nudgeWorker(): Promise<void> {
+export async function nudgeWorker(workers = 1): Promise<void> {
   const secret = process.env.CRON_SECRET;
   if (!secret) return;
 
-  try {
-    await fetch(`${appUrl()}/api/worker/analyze-jobs`, {
-      method:  "POST",
-      headers: { Authorization: `Bearer ${secret}` },
-      signal:  AbortSignal.timeout(2_000),
-    });
-  } catch {
-    // Timed out (the worker is busy with the jobs, which is the point) or
-    // unreachable: either way pg_cron picks the jobs up within the minute.
-  }
+  await Promise.all(Array.from({ length: Math.max(1, workers) }, async () => {
+    try {
+      await fetch(`${appUrl()}/api/worker/analyze-jobs`, {
+        method:  "POST",
+        headers: { Authorization: `Bearer ${secret}` },
+        signal:  AbortSignal.timeout(2_000),
+      });
+    } catch {
+      // Timed out (the worker is busy with the jobs, which is the point) or
+      // unreachable: either way pg_cron picks the jobs up within the minute.
+    }
+  }));
+}
+
+/**
+ * How many workers to start for `jobs` newly queued jobs: one per
+ * CLAIM_LIMIT (2, app/api/worker/analyze-jobs) up to 3, the same fan-out
+ * the 'minute-workers' pg_cron job uses. With one nudge, the third product
+ * of a 3-product batch waited for the next cron tick (28.6s on
+ * 2026-09-29) while the first two drafted.
+ */
+export function workersFor(jobs: number): number {
+  return Math.min(3, Math.max(1, Math.ceil(jobs / 2)));
 }
 
 /**

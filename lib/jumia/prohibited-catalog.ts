@@ -49,6 +49,35 @@ interface ProhibitedEntry {
 
 const BY_COUNTRY = prohibitedProductTypes.byCountry as Record<string, ProhibitedEntry[]>;
 
+/** Jumia's top-level departments, as category paths start. */
+const DEPARTMENTS = new Set([
+  "automobile", "baby products", "books, movies and music", "computing", "electronics",
+  "fashion", "gaming", "garden & outdoors", "grocery", "health & beauty", "home & office",
+  "industrial & scientific", "livestock", "miscellaneous", "musical instruments",
+  "pet supplies", "phones & tablets", "services", "sporting goods", "toys & games", "wholesale",
+]);
+
+/**
+ * The one department a row is about, when its category cell names a path
+ * in a real Jumia department ("Industrial & Scientific / Lab & Scientific
+ * Products / Lab Chemicals / Acids" → "industrial & scientific").
+ *
+ * Such a row only applies to listings in that department. GH's "Acid" row
+ * means lab chemicals, and matching its keyword anywhere held a collagen
+ * supplement drafted into Jumia's own "Health & Beauty > ... > Supplements
+ * > Hyaluronic Acid" category (2026-09-29).
+ *
+ * Null (the row applies everywhere, as before) for anything less clear-cut:
+ * no category, several departments run together ("Sporting Goods Grocery
+ * Health & Beauty ..."), or a label that isn't a Jumia department ("Home",
+ * "#N"). Loosening those could let a genuinely blocked product through.
+ */
+function scopedDepartment(category: string | null): string | null {
+  if (!category || !category.includes("/")) return null;
+  const first = category.split("/")[0].trim().toLowerCase();
+  return DEPARTMENTS.has(first) ? first : null;
+}
+
 export interface ProhibitedCategoryCheck {
   /** "Blocked" for this country — never push. */
   blocked:  { keyword: string; category: string | null } | null;
@@ -74,7 +103,13 @@ export interface ProhibitedCategoryCheck {
  * ("cook meat, fish or vegetables", "1x Battery") that happened to contain
  * the word, not from the product itself being that type.
  */
-export function checkProhibitedCategory(countryCode: string, texts: (string | null | undefined)[]): ProhibitedCategoryCheck {
+export function checkProhibitedCategory(
+  countryCode: string,
+  texts: (string | null | undefined)[],
+  /** The listing's top-level Jumia department ("Health & Beauty"), when
+   *  it has a category. See scopedDepartment. */
+  listingDepartment?: string | null,
+): ProhibitedCategoryCheck {
   const haystack = texts.filter(Boolean).join(" \n ").toLowerCase();
   const entries = BY_COUNTRY[countryCode.toUpperCase()] ?? [];
   if (!haystack || entries.length === 0) return { blocked: null, warnings: [] };
@@ -82,6 +117,10 @@ export function checkProhibitedCategory(countryCode: string, texts: (string | nu
   let blocked: ProhibitedCategoryCheck["blocked"] = null;
   const warnings: ProhibitedCategoryCheck["warnings"] = [];
   const seen = new Set<string>();
+  // Only a real Jumia department can rule a row out; anything else (no
+  // category yet, a path from elsewhere) keeps every row applying.
+  const listingDept = listingDepartment?.trim().toLowerCase() ?? "";
+  const department = DEPARTMENTS.has(listingDept) ? listingDept : null;
 
   for (const entry of entries) {
     // Only the first line of a keyword cell — some rows carry a long
@@ -89,6 +128,8 @@ export function checkProhibitedCategory(countryCode: string, texts: (string | nu
     // matched verbatim, only the short keyword before it.
     const keyword = entry.keyword.split("\n")[0].trim().toLowerCase();
     if (keyword.length < 4 || !matchesWholeKeyword(haystack, keyword)) continue;
+    const scope = scopedDepartment(entry.category);
+    if (scope && department && scope !== department) continue;
     if (seen.has(keyword)) continue;
     seen.add(keyword);
 
