@@ -1083,7 +1083,10 @@ describe("quiet batch mode", () => {
     // message the interactive flow already sends once all N products'
     // photos are in, via the shared startBatchAnalysis. Nothing product-
     // specific went out at any of the three closes above.
-    expect(sent.some((m) => m.body.includes("Got everything for all 3 products"))).toBe(true);
+    const drafting = sent.find((m) => m.body.includes("Got everything for all 3 products"));
+    expect(drafting).toBeDefined();
+    // "Bigger batch" is for 10-20 products, not 3.
+    expect(drafting!.body).not.toContain("bigger batch");
     expect(session().state).toBe("analyzing");
     expect(enqueued.map((e) => e.seq).sort()).toEqual([1, 2, 3]);
   });

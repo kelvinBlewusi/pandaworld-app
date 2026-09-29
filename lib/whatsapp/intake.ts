@@ -108,12 +108,12 @@ const MAX_LISTING_IMAGES = 8;
 // wasn't even a "still working" message.
 const SUBMIT_DEADLINE_MS = 45_000;
 
-// Batch size at or above which drafting is slow enough to be worth filling
-// the silence (the "tell me a story" offer). Was a hardcoded 10, which
-// became unreachable when MAX_BATCH_SIZE dropped to 5 — and 10 was always
-// the wrong shape for this, since it has to move whenever the cap does.
-// At ~22s for a single product, three concurrent is already a real wait.
-const BIG_BATCH_SIZE = 3;
+// Batch size at or above which the "drafting them now" message adds "This
+// is a bigger batch, so it may take a little while." 10, so it's said for
+// 10-20 products (MAX_BATCH_SIZE is 20) and not for a handful, which the
+// queue drafts in about the time a single product takes. Was 3 while the
+// cap was 5.
+const BIG_BATCH_SIZE = 10;
 
 // Session states in which a typed reply can be an answer to
 // askSellerForCategory's question — see handleLinkedMessage.

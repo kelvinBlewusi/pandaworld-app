@@ -283,7 +283,7 @@ pipeline above:
   kills at 60s; a single product measured 22.7s in production, already half
   `ANALYSIS_DEADLINE_MS`. At 20 that meant 60-80 concurrent Gemini vision
   calls and up to 160 images in the shared in-process cache from one
-  instance. The `>= 10` "big batch" thresholds became `BIG_BATCH_SIZE` (3)
+  instance. The `>= 10` "big batch" thresholds became `BIG_BATCH_SIZE` (3, back to 10 on 2026-09-29)
   since a literal 10 was unreachable under the new cap. Raising the cap
   again needs the analysis moved off the request path onto a background
   worker — changing the number alone just moves the failure.
