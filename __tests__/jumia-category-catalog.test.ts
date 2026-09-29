@@ -1,31 +1,31 @@
 /**
  * The category catalog loader (lib/jumia/categories.ts).
  *
- * Downloading the catalog was most of the project's Supabase egress: two
- * paged reads of ~8.6 MB each (listable, then the full tree, which differ
- * by one row) for every new server instance. It's now one compact
- * category_catalog() call per instance, shared by every reader, with the
- * old paged read kept as a fallback.
+ * One copy of the catalog per server process, shared by every reader and by
+ * concurrent callers. On 2026-09-29 two drafting runs started six catalog
+ * loads at once: the database timed out, both runs overran Vercel's 60s
+ * limit, and a 3-product batch sat for 6 minutes.
  */
 
-const rpc = jest.fn();
-const pagedReads: { from: number; to: number }[] = [];
-let pagedRows: Record<string, unknown>[] = [];
+const pageRequests: { from: number; to: number; order: string[] }[] = [];
+let tableRows: Record<string, unknown>[] = [];
 
 function pagedQuery() {
+  const order: string[] = [];
   const q = {
     select: () => q,
-    order:  () => q,
+    order:  (col: string) => { order.push(col); return q; },
     range:  (from: number, to: number) => {
-      pagedReads.push({ from, to });
-      return Promise.resolve({ data: pagedRows.slice(from, to + 1), error: null });
+      pageRequests.push({ from, to, order });
+      // Let other callers run before this page answers, as a real request would.
+      return new Promise((resolve) => setTimeout(() => resolve({ data: tableRows.slice(from, to + 1), error: null }), 5));
     },
   };
   return q;
 }
 
 jest.mock("@/lib/supabase/server", () => ({
-  createServerClient: () => ({ rpc: (...args: unknown[]) => rpc(...args), from: () => pagedQuery() }),
+  createServerClient: () => ({ from: () => pagedQuery() }),
 }));
 
 import {
@@ -35,57 +35,52 @@ import {
   invalidateListableCategoriesCache,
 } from "@/lib/jumia/categories";
 
-// category_catalog()'s column order: code, name, path, parent_code, level,
-// is_leaf, attribute_set_sid, attribute_set_name.
-const TUPLES = [
-  [100, "Phones & Tablets", "Phones & Tablets", null, 1, false, null, null],
-  [101, "Power Banks", "Phones & Tablets > Power Banks", 100, 2, true, "sid-1", "Accessories"],
-  [102, "Watches", "Fashion > Watches", 200, 2, false, "sid-2", "Watches"],
+// In primary-key order, as the table pages come back.
+const ROWS = [
+  { code: 100, name: "Phones & Tablets", path: "Phones & Tablets", parent_code: null, level: 1, is_leaf: false, attribute_set_sid: null, attribute_set_name: null },
+  { code: 101, name: "Power Banks", path: "Phones & Tablets > Power Banks", parent_code: 100, level: 2, is_leaf: true, attribute_set_sid: "sid-1", attribute_set_name: "Accessories" },
+  { code: 102, name: "Watches", path: "Fashion > Watches", parent_code: 200, level: 2, is_leaf: false, attribute_set_sid: "sid-2", attribute_set_name: "Watches" },
+  { code: 103, name: "Earbuds", path: "Electronics > Earbuds", parent_code: 300, level: 2, is_leaf: true, attribute_set_sid: "sid-3", attribute_set_name: "Audio" },
 ];
 
 beforeEach(() => {
   invalidateListableCategoriesCache();
-  rpc.mockReset();
-  pagedReads.length = 0;
-  pagedRows = [];
+  pageRequests.length = 0;
+  tableRows = ROWS;
 });
 
-it("reads the catalog once, in one call, for every kind of reader", async () => {
-  rpc.mockResolvedValue({ data: TUPLES, error: null });
+it("loads the catalog once for concurrent readers of every kind", async () => {
+  const [all, listable, leaves, again] = await Promise.all([
+    getAllCategoriesForTree(),
+    getListableCategories(),
+    getLeafCategories(),
+    getListableCategories(),
+  ]);
 
-  const all = await getAllCategoriesForTree();
-  const listable = await getListableCategories();
-  const leaves = await getLeafCategories();
+  // One paged load (one parallel batch of pages), not one per caller.
+  const firstPages = pageRequests.filter((r) => r.from === 0);
+  expect(firstPages).toHaveLength(1);
+  // Read in key order, which the database serves from its index.
+  expect(pageRequests[0].order).toEqual(["code"]);
 
-  expect(rpc).toHaveBeenCalledTimes(1);
-  expect(rpc).toHaveBeenCalledWith("category_catalog");
-  expect(pagedReads).toHaveLength(0);
-
-  expect(all[1]).toEqual({
-    code: 101, name: "Power Banks", path: "Phones & Tablets > Power Banks", parent_code: 100,
-    level: 2, is_leaf: true, attribute_set_sid: "sid-1", attribute_set_name: "Accessories",
-  });
-  expect(all.map((c) => c.code)).toEqual([100, 101, 102]);
+  // Sorted by name for callers, as they always got it.
+  expect(all.map((c) => c.name)).toEqual(["Earbuds", "Phones & Tablets", "Power Banks", "Watches"]);
   // Listable = has an attribute set (a listable parent like Watches counts).
-  expect(listable.map((c) => c.code)).toEqual([101, 102]);
-  expect(leaves.map((c) => c.code)).toEqual([101]);
+  expect(listable.map((c) => c.code)).toEqual([103, 101, 102]);
+  expect(again).toBe(listable);
+  expect(leaves.map((c) => c.code)).toEqual([103, 101]);
 });
 
-it("falls back to paging the table when the function isn't there", async () => {
-  rpc.mockResolvedValue({ data: null, error: { message: "Could not find the function public.category_catalog" } });
-  pagedRows = TUPLES.map(([code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name]) =>
-    ({ code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name }));
-
-  const listable = await getListableCategories();
-
-  expect(listable.map((c) => c.code)).toEqual([101, 102]);
-  expect(pagedReads.length).toBeGreaterThan(0);
+it("serves later reads from the cache", async () => {
+  await getAllCategoriesForTree();
+  const loaded = pageRequests.length;
+  await getListableCategories();
+  expect(pageRequests.length).toBe(loaded);
 });
 
 it("reloads after the cache is invalidated", async () => {
-  rpc.mockResolvedValue({ data: TUPLES, error: null });
   await getAllCategoriesForTree();
   invalidateListableCategoriesCache();
   await getAllCategoriesForTree();
-  expect(rpc).toHaveBeenCalledTimes(2);
+  expect(pageRequests.filter((r) => r.from === 0)).toHaveLength(2);
 });

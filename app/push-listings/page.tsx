@@ -2,6 +2,7 @@ import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { createServerClient } from "@/lib/supabase/server";
 import { PublicLanding } from "@/components/marketing/public-landing";
+import { isAdmin } from "@/lib/auth/is-admin";
 
 // ─── /push-listings — intro page behind the extension dashboard's ────────────
 // "Push Listings from here" button.
@@ -17,6 +18,10 @@ import { PublicLanding } from "@/components/marketing/public-landing";
 // friction, so they skip straight to /dashboard. Only a logged-in seller
 // with no active Jumia connection sees the intro at all.
 //
+// Admins only since 2026-09-29, like the button (components/extension/
+// sidebar.tsx): sellers list through WhatsApp and the extension, and anyone
+// else who lands here goes back to their dashboard.
+//
 // Reuses PublicLanding's content (variant="push-listings" strips Pricing +
 // Sign-in from the nav and points every CTA at /dashboard) so editing the
 // shared marketing copy keeps both surfaces in sync — see that component
@@ -29,6 +34,7 @@ export const metadata: import("next").Metadata = {
 
 export default async function PushListingsPage() {
   const { userId } = await auth();
+  if (!isAdmin(userId)) redirect("/extension/dashboard");
 
   if (userId) {
     // Same "connected" definition as GET /api/jumia/status — active status

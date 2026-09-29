@@ -71,30 +71,29 @@ export async function getLeafCategories(): Promise<JumiaCategoryRow[]> {
 
 // ─── The catalog, loaded once per process ─────────────────────────────────
 //
-// Every read below comes from one copy of the whole catalog, fetched with
-// the category_catalog() function (supabase/migrations/2026-09-29_
-// category-catalog-rpc.sql): one request returning ~28k rows as compact
-// arrays, 5.6 MB. It used to be two separate paged reads of ~8.6 MB each
-// (listable, then the full tree, which differ by one row), 56 requests and
-// ~17 MB of Supabase egress for every new server instance. That was most
-// of the project's egress.
+// Every read below comes from one copy of the whole catalog (~28k rows,
+// ~8.6 MB), paged out of Supabase once per server process and shared. It
+// used to be two separate paged reads (listable, then the full tree, which
+// differ by one row) for every caller that found the cache cold, so one
+// drafting run with two products started four at once: ~17 MB+ of egress
+// per new instance, most of the project's egress.
+//
+// Concurrent callers share the load already in flight (_catalogLoading).
+// Without that, on 2026-09-29 two drafting runs started six loads at once
+// through a single-query version of this (category_catalog(), sorting and
+// packing the whole table in one statement): the free-plan database hit
+// its statement timeout on five of them, the fallback paged reads piled on
+// top, both runs overran Vercel's 60s limit, and a 3-product batch sat for
+// 6 minutes until pg_cron reclaimed it. That function is gone
+// (supabase/migrations/2026-09-29_drop-category-catalog-rpc.sql).
+//
+// Pages are read in primary-key order, an index walk the database does
+// cheaply, and sorted by name here, which is the order callers always got.
 //
 // Categories change infrequently (sync runs nightly via cron), so an hour
 // of staleness is fine for category selection: the worst case is the AI
 // not seeing a category Jumia added in the last hour. The sync can call
 // the invalidate functions to drop it straight away.
-
-/** One category_catalog() row, in the function's column order. */
-type CatalogTuple = [
-  code:               number,
-  name:               string,
-  path:               string,
-  parent_code:        number | null,
-  level:              number,
-  is_leaf:            boolean,
-  attribute_set_sid:  string | null,
-  attribute_set_name: string | null,
-];
 
 interface Catalog {
   all:      JumiaCategoryRow[];
@@ -103,6 +102,7 @@ interface Catalog {
 
 const CATALOG_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 let _catalogCache: { data: Catalog; expires: number } | null = null;
+let _catalogLoading: Promise<Catalog> | null = null;
 
 /** Bust the in-memory cache. Call after a successful jumia_categories sync. */
 export function invalidateListableCategoriesCache(): void {
@@ -118,31 +118,27 @@ async function loadCatalog(): Promise<Catalog> {
   if (_catalogCache && _catalogCache.expires > Date.now()) {
     return _catalogCache.data;
   }
-
-  const db = createServerClient();
-  let all: JumiaCategoryRow[];
-  const { data, error } = await db.rpc("category_catalog");
-  if (!error && Array.isArray(data)) {
-    all = (data as CatalogTuple[]).map(
-      ([code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name]) =>
-        ({ code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name }),
-    );
-  } else {
-    // The function missing (migration not applied) or a transient error:
-    // the old paged read still gets the same rows, just less efficiently.
-    console.warn(`[categories] category_catalog() failed (${error?.message ?? "no data"}), paging the table instead`);
-    // Page through in 1000-row chunks — Supabase enforces a hard
-    // server-side `max_rows` cap (default 1000) that .range() can't
-    // override. See lib/supabase/paginate.ts.
-    all = await selectAllPaginatedParallel<JumiaCategoryRow>((from, to) =>
-      db
-        .from("jumia_categories")
-        .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name")
-        .order("name")
-        .order("code")
-        .range(from, to),
-    );
+  if (!_catalogLoading) {
+    _catalogLoading = fetchCatalog().finally(() => { _catalogLoading = null; });
   }
+  return _catalogLoading;
+}
+
+const byName = new Intl.Collator("en");
+
+async function fetchCatalog(): Promise<Catalog> {
+  const db = createServerClient();
+  // Page through in 1000-row chunks — Supabase enforces a hard server-side
+  // `max_rows` cap (default 1000) that .range() can't override. See
+  // lib/supabase/paginate.ts.
+  const all = await selectAllPaginatedParallel<JumiaCategoryRow>((from, to) =>
+    db
+      .from("jumia_categories")
+      .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name")
+      .order("code")
+      .range(from, to),
+  );
+  all.sort((a, b) => byName.compare(a.name, b.name) || a.code - b.code);
 
   const catalog = { all, listable: all.filter((c) => c.attribute_set_sid != null) };
   if (all.length > 0) {

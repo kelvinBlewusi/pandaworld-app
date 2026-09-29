@@ -157,6 +157,35 @@ describe("parseEditCommand", () => {
     expect(parseEditCommand("submit 2", 3)).toBeNull();
     expect(parseEditCommand("", 3)).toBeNull();
   });
+
+  // The exact messages a seller sent on 2026-09-29, each answered with
+  // "Which product number is this for?".
+  it("reads a product number followed by a space and words", () => {
+    expect(parseEditCommand("2 change price to 150", 3)).toEqual({
+      needsSeq: false, seq: 2, text: "change price to 150", explicit: true,
+    });
+    expect(parseEditCommand("product 2 quantity 30", 3)).toEqual({
+      needsSeq: false, seq: 2, text: "quantity 30", explicit: true,
+    });
+    expect(parseEditCommand("2 Make stock 39", 3)).toEqual({
+      needsSeq: false, seq: 2, text: "Make stock 39", explicit: true,
+    });
+    // ...and what handleEdit then pulls out of those.
+    expect(extractPrice("change price to 150")).toBe(150);
+    expect(extractStock("quantity 30")).toBe(30);
+    expect(extractStock("Make stock 39")).toBe(39);
+    // The bot's own example wording, and the same shape for stock.
+    expect(extractPrice("change the price to GHS 150")).toBe(150);
+    expect(extractStock("set the stock to 39")).toBe(39);
+  });
+
+  it("never takes a price or an amount for a product number", () => {
+    expect(parseEditCommand("150", 3)?.needsSeq).toBe(true);
+    expect(parseEditCommand("150 cedis", 3)?.needsSeq).toBe(true);
+    expect(parseEditCommand("2 cedis", 3)?.needsSeq).toBe(true);
+    // A number that isn't a product in this batch.
+    expect(parseEditCommand("7 change price to 150", 3)?.needsSeq).toBe(true);
+  });
 });
 
 describe("extractPrice", () => {

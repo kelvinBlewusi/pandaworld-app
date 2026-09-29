@@ -126,10 +126,29 @@ export function parseEditCommand(text: string, batchSize: number): EditCommand |
     if (editText) return { needsSeq: false, seq, text: editText, explicit: true };
   }
 
+  // "2 change price to 150", "product 2 quantity 30": a product number,
+  // a space, then words. How sellers actually typed it on 2026-09-29, and
+  // each got "Which product number is this for?" back because only "2:"
+  // and "2 -" were understood. Only for a number that's a product in this
+  // batch and followed by a word, so a bare price ("150") or "150 cedis"
+  // is never read as a product number.
+  const spaced = trimmed.match(/^(?:product\s*)?#?(\d+)\s+([a-z][\s\S]*)$/i);
+  if (spaced) {
+    const seq = parseInt(spaced[1], 10);
+    const editText = spaced[2].trim();
+    if (seq >= 1 && seq <= batchSize && !UNIT_ONLY.test(editText)) {
+      return { needsSeq: false, seq, text: editText, explicit: true };
+    }
+  }
+
   if (batchSize === 1) return { needsSeq: false, seq: 1, text: trimmed, explicit: false };
 
   return { needsSeq: true, text: trimmed };
 }
+
+/** A number followed only by a currency or unit ("2 cedis", "3 pcs") is an
+ *  amount, not a product number and an edit. */
+const UNIT_ONLY = /^(?:cedis?|ghs|gh₵|ghc|naira|ngn|ksh|kes|shillings?|dirhams?|mad|egp|pounds?|fcfa|xof|ugx|units?|pcs|pieces?)\.?$/i;
 
 // ─── Deterministic price/stock extraction ──────────────────────────────────
 //
@@ -208,7 +227,9 @@ export function extractPrice(text: string, currency: string = "GHS"): number | n
   // extractSalePrice's territory (below); without this guard, a message
   // that states ONLY a sale price (no regular price at all) would have
   // its sale price misread as the regular selling price.
-  const labeled = text.match(new RegExp(`(?<!sale\\s)price\\s*(?:is|was)?\\s*[:=]?\\s*(?:${spec.prefix})?\\s*(\\d+(?:\\.\\d+)?)`, "i"));
+  // "to"/"of"/"at"/"now": "change the price to 150" is the example the bot
+  // itself gives sellers, and read as no price at all before 2026-09-29.
+  const labeled = text.match(new RegExp(`(?<!sale\\s)price\\s*(?:is|was|to|of|at|now)?\\s*[:=]?\\s*(?:${spec.prefix})?\\s*(\\d+(?:\\.\\d+)?)`, "i"));
   if (labeled) return parseFloat(labeled[1]);
   const currencyMatch = text.match(new RegExp(`(?:${spec.prefix})\\s*(\\d+(?:\\.\\d+)?)`, "i"))
     ?? text.match(new RegExp(`(\\d+(?:\\.\\d+)?)\\s*${spec.names}`, "i"));
@@ -258,7 +279,7 @@ export function extractPrice(text: string, currency: string = "GHS"): number | n
  *  reason — a seller phrasing it as a full sentence shouldn't silently
  *  fail to register. */
 export function extractStock(text: string): number | null {
-  const match = text.match(/(?:stock|qty|quantity)\s*(?:is|was)?\s*[:=]?\s*(\d+)/i);
+  const match = text.match(/(?:stock|qty|quantity)\s*(?:is|was|to|of|at|now)?\s*[:=]?\s*(\d+)/i);
   if (!match) return null;
   const n = parseInt(match[1], 10);
   return Number.isFinite(n) && n > 0 ? n : null;
