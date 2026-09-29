@@ -109,7 +109,7 @@ export default async function AdminBillingPage({ searchParams }: { searchParams:
         <p className="mt-1 max-w-3xl text-sm text-zinc-500">
           Off: everyone lists for free and no credits move. On: WhatsApp and web listings cost credits when they go
           live on Jumia, extension autofills cost credits each, sellers can buy packs, and the site shows pricing.
-          Flipping it takes effect within 30 seconds.
+          Flipping it takes effect within 5 minutes.
         </p>
       </div>
 

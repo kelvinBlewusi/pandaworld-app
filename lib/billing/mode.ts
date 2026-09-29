@@ -12,8 +12,13 @@
  * is one button rather than a code change and redeploy. Replaces the
  * FREE_FOR_ALL_MODE constant (2026-09-13 to 2026-09-28).
  *
- * Read on every metered request, so each server instance caches it for
- * CACHE_MS: a flip reaches every instance within that window. If the
+ * Read on every metered request and public page, so each server instance
+ * caches it for CACHE_MS: a flip reaches every instance within that
+ * window (the instance that flips it sees it at once). Five minutes, not
+ * the 30 seconds it started at: at 30s these reads were ~90% of the
+ * project's idle Supabase API traffic, each one a ~2.7 KB entry in
+ * Supabase's metered log ingest, for a switch flipped a handful of times
+ * ever. If the
  * setting can't be read, the last value this instance saw is kept, and an
  * instance that never read it stays free: a settings outage must not lock
  * sellers out of their listings.
@@ -22,7 +27,7 @@
 import { createServerClient } from "@/lib/supabase/server";
 
 const KEY = "billing_enabled";
-const CACHE_MS = 30_000;
+const CACHE_MS = 5 * 60_000;
 
 let cached: { on: boolean; at: number } | null = null;
 
