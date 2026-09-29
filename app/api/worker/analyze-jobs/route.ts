@@ -25,8 +25,9 @@ export const maxDuration = 60;
 //
 // pg_cron's tick only calls this when there is work: a queued or stale
 // running job, or a settled batch still waiting for its closing message
-// (supabase/migrations/2026-09-28_cron-only-when-there-is-work.sql). Keep
-// that check in step with what this route looks for.
+// (the 'minute-workers' job, supabase/migrations/2026-09-29_one-every-
+// minute-cron-job.sql). Keep that check in step with what this route
+// looks for.
 //
 // Safe to run concurrently with itself: claim_analysis_jobs uses FOR UPDATE
 // SKIP LOCKED, so overlapping ticks take disjoint work rather than

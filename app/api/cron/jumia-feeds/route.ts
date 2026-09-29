@@ -9,8 +9,8 @@ import { refreshPendingFeedStatus, notifyResolvedListings, toResolvedNotice, typ
 // ─── GET /api/cron/jumia-feeds ────────────────────────────────────────────────
 // Checks all pending_approval listings across all users and updates statuses.
 //
-// Scheduled by pg_cron every minute (supabase/schedule-workers.sql, job
-// 'jumia-feed-poll'), NOT by vercel.json — the Hobby plan caps its own cron
+// Scheduled by pg_cron (job 'minute-workers', supabase/migrations/
+// 2026-09-29_one-every-minute-cron-job.sql), NOT by vercel.json — the Hobby plan caps its own cron
 // at once a DAY, which is what left listings sitting at "pending Jumia
 // review" for up to 24 hours in the first place. The vercel.json entry is
 // kept only as a daily backstop; the comment here used to claim five
@@ -18,8 +18,9 @@ import { refreshPendingFeedStatus, notifyResolvedListings, toResolvedNotice, typ
 //
 // pg_cron only calls this while a feed is pending: every minute for a
 // listing's first 30 minutes at pending_approval, every 10 after
-// (supabase/migrations/2026-09-28_cron-only-when-there-is-work.sql). Change
-// the query below and that check has to change with it.
+// (the 'minute-workers' job in supabase/migrations/2026-09-29_one-every-
+// minute-cron-job.sql). Change the query below and that check has to
+// change with it.
 //
 // Security: Vercel sets the Authorization: Bearer <CRON_SECRET> header.
 // CRON_SECRET is REQUIRED — fail-secure if missing. The previous check
