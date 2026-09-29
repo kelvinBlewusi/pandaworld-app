@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase/server";
+import { clearOldLivePhotos, removeUnusedPhotos } from "@/lib/listings/retention";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,11 @@ export const dynamic = "force-dynamic";
 //
 // Nothing is refunded, same as a seller deleting one by hand
 // (lib/actions/listings.ts's deleteListing): credits paid for the AI work.
+//
+// Also the photo side of retention (lib/listings/retention.ts): photos
+// are removed from listings live on Jumia for 30 days, and photos no
+// listing uses (including the ones these deletions leave behind) are
+// deleted 7 days after upload.
 //
 // Security: Vercel sets `Authorization: Bearer <CRON_SECRET>`. If
 // CRON_SECRET is unset we refuse — better than exposing a route that
@@ -45,30 +51,51 @@ export async function GET(req: NextRequest) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
 
+  // Each step runs whatever happened to the others, and reports on its
+  // own. Drafts go first so their photos count as unused on a later run.
+  const errors: string[] = [];
+  const step = async (name: string, run: () => Promise<number>): Promise<number> => {
+    try {
+      return await run();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Unknown error";
+      console.error(`[cron/delete-stale-drafts] ${name} failed:`, msg);
+      errors.push(`${name}: ${msg}`);
+      return 0;
+    }
+  };
+
+  const deleted_count = await step("stale drafts", deleteStaleDrafts);
+  const live_photos_cleared = await step("old live photos", () => clearOldLivePhotos());
+  const unused_photos_removed = await step("unused photos", removeUnusedPhotos);
+
+  if (deleted_count || live_photos_cleared || unused_photos_removed) {
+    console.log(
+      `[cron/delete-stale-drafts] deleted ${deleted_count} listing(s) older than ${STALE_DAYS}d, ` +
+      `cleared photos from ${live_photos_cleared} old live listing(s), removed ${unused_photos_removed} unused photo(s)`,
+    );
+  }
+  return NextResponse.json(
+    { ok: errors.length === 0, deleted_count, live_photos_cleared, unused_photos_removed, ...(errors.length ? { errors } : {}) },
+    { status: errors.length ? 500 : 200 },
+  );
+}
+
+async function deleteStaleDrafts(): Promise<number> {
   const cutoff = new Date(Date.now() - STALE_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const db = createServerClient();
 
-  try {
-    const { data: stale, error: selectError } = await db
-      .from("listings")
-      .select("id")
-      .in("status", ["draft", "failed"])
-      .lt("created_at", cutoff);
+  const { data: stale, error: selectError } = await db
+    .from("listings")
+    .select("id")
+    .in("status", ["draft", "failed"])
+    .lt("created_at", cutoff);
 
-    if (selectError) throw new Error(selectError.message);
-    if (!stale || stale.length === 0) {
-      return NextResponse.json({ ok: true, deleted_count: 0 });
-    }
+  if (selectError) throw new Error(selectError.message);
+  if (!stale || stale.length === 0) return 0;
 
-    const ids = stale.map((r) => r.id as string);
-    const { error: deleteError } = await db.from("listings").delete().in("id", ids);
-    if (deleteError) throw new Error(deleteError.message);
-
-    console.log(`[cron/delete-stale-drafts] deleted ${ids.length} listing(s) older than ${STALE_DAYS}d`);
-    return NextResponse.json({ ok: true, deleted_count: ids.length });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Unknown error";
-    console.error(`[cron/delete-stale-drafts] failed:`, msg);
-    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
-  }
+  const ids = stale.map((r) => r.id as string);
+  const { error: deleteError } = await db.from("listings").delete().in("id", ids);
+  if (deleteError) throw new Error(deleteError.message);
+  return ids.length;
 }

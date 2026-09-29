@@ -200,9 +200,18 @@ export default function PrivacyPage() {
               chargebacks, then permanently delete.
             </li>
             <li>
-              <strong>Product images</strong>: until you delete the
-              listing or close your account. On closure, deleted
-              after the 30-day grace period.
+              <strong>Product images</strong>: 30 days after a listing
+              goes live on Jumia (Jumia keeps its own copies), or until
+              you delete the listing or close your account if that
+              comes first. Photos not attached to any listing are
+              deleted 7 days after upload. On closure, deleted after
+              the 30-day grace period.
+            </li>
+            <li>
+              <strong>Unfinished listings</strong>: drafts you never
+              submitted, and listings Jumia rejected, are deleted 2 days
+              after they were created. Listings that went live stay in
+              your history.
             </li>
             <li>
               <strong>Jumia tokens</strong>: until you disconnect

@@ -262,6 +262,11 @@ pipeline above:
     connection is within 6 hours of expiring; the health check hourly.
     Adding a cron job or changing what a route looks for: keep its SQL
     check in step, or the route never gets called for the new work.
+    Since 2026-09-29 the worker and feed-poll checks run as ONE job,
+    'minute-workers' (`supabase/migrations/2026-09-29_one-every-minute-
+    cron-job.sql`): pg_cron logs two lines per run that can't be switched
+    off, and they were most of Supabase's metered log ingest. Prefer
+    adding to that job over scheduling another every-minute one.
   - **Two safety properties worth not breaking**: `claim_analysis_jobs`
     uses `FOR UPDATE SKIP LOCKED`, so overlapping ticks (pg_cron + the
     webhook's own nudge) take disjoint work instead of double-analysing
