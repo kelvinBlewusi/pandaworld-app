@@ -66,6 +66,8 @@ import { splitCredentialTokens, identifyCredentials, looksLikeCredential, isRese
 import { classifyBatchIntent, looksActionable } from "@/lib/whatsapp/intent";
 import type { ListingRow } from "@/lib/supabase/types";
 import { enqueueAnalysisJobs, nudgeWorker, workersFor, isBatchSettled, type AnalysisJob } from "@/lib/whatsapp/analysis-queue";
+import { restrictedWordsInJumiaRejection } from "@/lib/ai/restricted-words";
+import { rememberRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 
 /**
  * WhatsApp chatbot, Stage 4: multi-product batches, entirely in chat.
@@ -3313,7 +3315,19 @@ async function handleFixAndResubmit(
     updated_at:              new Date().toISOString(),
   }).eq("id", listingId);
 
-  await replyText(phoneNumber, `🔧 ${label}:\nFixing and resubmitting…`);
+  await replyText(
+    phoneNumber,
+    remedy.kind === "restricted_words" ? `🔧 ${label}: ${remedy.explanation}` : `🔧 ${label}:\nFixing and resubmitting…`,
+  );
+
+  // A banned word Jumia named: record it (logFeedOutcome normally has
+  // already) so the pre-push check strips it, and push again. A redraft
+  // can't be relied on here: the AI wrote the phrase in the first place.
+  if (remedy.kind === "restricted_words") {
+    await rememberRestrictedWords(restrictedWordsInJumiaRejection(rejectionText), rejectionText);
+    await pushAndReport(userId, phoneNumber, listingId, label);
+    return;
+  }
 
   // A "not visible for category" rejection means OUR cached schema is
   // wrong, not the listing — no redraft can fix an attribute that was

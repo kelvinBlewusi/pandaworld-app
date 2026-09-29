@@ -198,6 +198,9 @@ export function restrictedWordsInJumiaRejection(raw: string | null | undefined):
   for (const m of Array.from(raw.matchAll(/restricted words?\s*:\s*([^.\n|\]]+)/gi))) {
     for (const part of m[1].split(/[,;]/)) {
       const w = part.replace(/["'`]/g, "").trim().toLowerCase();
+      // Never a template placeholder ("[banned_word]", "{0}") from Jumia's
+      // error catalogue: learning one would strip that text everywhere.
+      if (/[[\]{}]/.test(w)) continue;
       // A word or short phrase, not a sentence that happens to follow a colon.
       if (w.length >= 2 && w.length <= 40 && w.split(/\s+/).length <= 4) out.add(w);
     }
