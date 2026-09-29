@@ -66,20 +66,89 @@ export interface JumiaCategoryAttribute {
 // ─── Supabase reads ───────────────────────────────────────────────────────────
 
 export async function getLeafCategories(): Promise<JumiaCategoryRow[]> {
+  return (await loadCatalog()).all.filter((c) => c.is_leaf);
+}
+
+// ─── The catalog, loaded once per process ─────────────────────────────────
+//
+// Every read below comes from one copy of the whole catalog, fetched with
+// the category_catalog() function (supabase/migrations/2026-09-29_
+// category-catalog-rpc.sql): one request returning ~28k rows as compact
+// arrays, 5.6 MB. It used to be two separate paged reads of ~8.6 MB each
+// (listable, then the full tree, which differ by one row), 56 requests and
+// ~17 MB of Supabase egress for every new server instance. That was most
+// of the project's egress.
+//
+// Categories change infrequently (sync runs nightly via cron), so an hour
+// of staleness is fine for category selection: the worst case is the AI
+// not seeing a category Jumia added in the last hour. The sync can call
+// the invalidate functions to drop it straight away.
+
+/** One category_catalog() row, in the function's column order. */
+type CatalogTuple = [
+  code:               number,
+  name:               string,
+  path:               string,
+  parent_code:        number | null,
+  level:              number,
+  is_leaf:            boolean,
+  attribute_set_sid:  string | null,
+  attribute_set_name: string | null,
+];
+
+interface Catalog {
+  all:      JumiaCategoryRow[];
+  listable: JumiaCategoryRow[];
+}
+
+const CATALOG_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+let _catalogCache: { data: Catalog; expires: number } | null = null;
+
+/** Bust the in-memory cache. Call after a successful jumia_categories sync. */
+export function invalidateListableCategoriesCache(): void {
+  _catalogCache = null;
+}
+
+/** Same cache as invalidateListableCategoriesCache: there's only one copy. */
+export function invalidateAllCategoriesCache(): void {
+  _catalogCache = null;
+}
+
+async function loadCatalog(): Promise<Catalog> {
+  if (_catalogCache && _catalogCache.expires > Date.now()) {
+    return _catalogCache.data;
+  }
+
   const db = createServerClient();
-  // Page through in 1000-row chunks — Supabase enforces a hard server-side
-  // `max_rows` cap (default 1000) that .range() can't override. The full
-  // GH catalogue runs to ~30k rows; an un-paginated read would see only
-  // the first 1000 alphabetically. See lib/supabase/paginate.ts.
-  const rows = await selectAllPaginated<JumiaCategoryRow>((from, to) =>
-    db
-      .from("jumia_categories")
-      .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name")
-      .eq("is_leaf", true)
-      .order("name")
-      .range(from, to),
-  );
-  return rows;
+  let all: JumiaCategoryRow[];
+  const { data, error } = await db.rpc("category_catalog");
+  if (!error && Array.isArray(data)) {
+    all = (data as CatalogTuple[]).map(
+      ([code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name]) =>
+        ({ code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name }),
+    );
+  } else {
+    // The function missing (migration not applied) or a transient error:
+    // the old paged read still gets the same rows, just less efficiently.
+    console.warn(`[categories] category_catalog() failed (${error?.message ?? "no data"}), paging the table instead`);
+    // Page through in 1000-row chunks — Supabase enforces a hard
+    // server-side `max_rows` cap (default 1000) that .range() can't
+    // override. See lib/supabase/paginate.ts.
+    all = await selectAllPaginatedParallel<JumiaCategoryRow>((from, to) =>
+      db
+        .from("jumia_categories")
+        .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name")
+        .order("name")
+        .order("code")
+        .range(from, to),
+    );
+  }
+
+  const catalog = { all, listable: all.filter((c) => c.attribute_set_sid != null) };
+  if (all.length > 0) {
+    _catalogCache = { data: catalog, expires: Date.now() + CATALOG_CACHE_TTL_MS };
+  }
+  return catalog;
 }
 
 /**
@@ -98,57 +167,9 @@ export async function getLeafCategories(): Promise<JumiaCategoryRow[]> {
  * UI layer decide selectability (CategoryRow.isSelectable based on
  * hasChildren) but include intermediate-listable parents in the tree.
  */
-// ─── Process-level cache for getListableCategories ─────────────────────────
-//
-// The listable categories table is ~27k rows on a fully-synced GH
-// project. Paginating it server-side (Supabase max_rows=1000) takes
-// 28 sequential queries × ~500ms each = ~14 SECONDS per analyze. With
-// 10 products in a batch this used to burn 140 seconds just on
-// Supabase paging.
-//
-// Categories change infrequently (sync runs nightly via cron). Caching
-// the result at module scope for 1 hour is safe: stale-by-up-to-an-hour
-// is fine for category selection — the worst case is the AI rank pass
-// not seeing a category Jumia added in the last hour, and the seller
-// can re-run analyze after the cache expires.
-//
-// Invalidation: the sync endpoint can call invalidateListableCategoriesCache()
-// to bust the cache immediately after a successful sync. The TTL is the
-// safety net.
-
-let _listableCache: { data: JumiaCategoryRow[]; expires: number } | null = null;
-const LISTABLE_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
-
-/** Bust the in-memory cache. Call after a successful jumia_categories sync. */
-export function invalidateListableCategoriesCache(): void {
-  _listableCache = null;
-}
-
 export async function getListableCategories(): Promise<JumiaCategoryRow[]> {
-  // Fast path: warm cache.
-  if (_listableCache && _listableCache.expires > Date.now()) {
-    return _listableCache.data;
-  }
-
-  const db = createServerClient();
-  // Page through in 1000-row chunks — see getLeafCategories for the cap
-  // rationale. The AI's candidate pool and Vendor-Center picker both
-  // depend on getting the FULL listable set, not just the first 1000.
-  const query = () =>
-    selectAllPaginatedParallel<JumiaCategoryRow>((from, to) =>
-      db
-        .from("jumia_categories")
-        .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name")
-        .not("attribute_set_sid", "is", null)
-        .order("name")
-        .range(from, to),
-    );
-
-  let rows = await query();
-  if (rows.length > 0) {
-    _listableCache = { data: rows, expires: Date.now() + LISTABLE_CACHE_TTL_MS };
-    return rows;
-  }
+  const { listable } = await loadCatalog();
+  if (listable.length > 0) return listable;
 
   // Empty table — try to seed from the bundled snapshot. If the seed
   // also yields nothing (snapshot is empty), return [] — the picker
@@ -156,20 +177,8 @@ export async function getListableCategories(): Promise<JumiaCategoryRow[]> {
   const { inserted } = await seedFromBundledSnapshot();
   if (inserted === 0) return [];
 
-  rows = await query();
-  if (rows.length > 0) {
-    _listableCache = { data: rows, expires: Date.now() + LISTABLE_CACHE_TTL_MS };
-  }
-  return rows;
-}
-
-// ─── Process-level cache for getAllCategoriesForTree ───────────────────────
-
-let _allCache: { data: JumiaCategoryRow[]; expires: number } | null = null;
-
-/** Bust the in-memory cache. Call after a successful jumia_categories sync. */
-export function invalidateAllCategoriesCache(): void {
-  _allCache = null;
+  invalidateListableCategoriesCache();
+  return (await loadCatalog()).listable;
 }
 
 /**
@@ -186,23 +195,7 @@ export function invalidateAllCategoriesCache(): void {
  * non-empty, so an empty result here would mean something else broke.
  */
 export async function getAllCategoriesForTree(): Promise<JumiaCategoryRow[]> {
-  if (_allCache && _allCache.expires > Date.now()) {
-    return _allCache.data;
-  }
-
-  const db = createServerClient();
-  const rows = await selectAllPaginatedParallel<JumiaCategoryRow>((from, to) =>
-    db
-      .from("jumia_categories")
-      .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid, attribute_set_name")
-      .order("name")
-      .range(from, to),
-  );
-
-  if (rows.length > 0) {
-    _allCache = { data: rows, expires: Date.now() + LISTABLE_CACHE_TTL_MS };
-  }
-  return rows;
+  return (await loadCatalog()).all;
 }
 
 /**

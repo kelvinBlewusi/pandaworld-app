@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { createServerClient } from "@/lib/supabase/server";
-import { selectAllPaginated } from "@/lib/supabase/paginate";
 import {
+  getAllCategoriesForTree,
   getListableCategories,
   getLeafCategories,
   getCategoriesLastSyncedAt,
@@ -47,19 +46,19 @@ export async function GET(req: NextRequest) {
 
   let categoriesPayload: unknown;
   if (wantAll) {
-    const db = createServerClient();
-    // Page through in 1000-row chunks. Supabase's hard server-side max_rows
-    // cap (default 1000) overrides any explicit .range(0, 99_999) — we'd
-    // still get only 1000 rows, alphabetically dominated by a single
-    // top-level (e.g. all "Automobile / ..." paths). Paging is the only
-    // reliable way to actually pull the whole tree.
-    categoriesPayload = await selectAllPaginated<DrawerCategoryRow>((from, to) =>
-      db
-        .from("jumia_categories")
-        .select("code, name, path, parent_code, level, is_leaf, attribute_set_sid")
-        .order("path")
-        .range(from, to),
-    );
+    // From the server's cached catalog (lib/jumia/categories.ts) rather
+    // than paging all ~28k rows out of Supabase on every drawer open.
+    // Same fields and path order as the paged read it replaces.
+    const rows: DrawerCategoryRow[] = (await getAllCategoriesForTree()).map((c) => ({
+      code:              c.code,
+      name:              c.name,
+      path:              c.path,
+      parent_code:       c.parent_code,
+      level:             c.level,
+      is_leaf:           c.is_leaf,
+      attribute_set_sid: c.attribute_set_sid,
+    }));
+    categoriesPayload = rows.sort((a, b) => a.path.localeCompare(b.path));
   } else if (wantLeafOnly) {
     categoriesPayload = await getLeafCategories();
   } else {
