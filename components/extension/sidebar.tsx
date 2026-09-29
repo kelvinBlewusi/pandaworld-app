@@ -176,31 +176,23 @@ export function ExtensionSidebar({ onClose, isAdmin = false }: { onClose?: () =>
       </nav>
 
       <div className="shrink-0 px-3 pb-4">
-        {/* Explicit, opt-in bridge into the classic Jumia-OAuth flow — greyed
-            out for regular sellers (2026-09-13) while WhatsApp + the
-            extension are the focus, but left live for admins (see
-            lib/auth/is-admin.ts) who still need it for testing/support. */}
-        {isAdmin ? (
+        {/* Explicit bridge into the classic Jumia-OAuth flow, for admins
+            only (lib/auth/is-admin.ts), who still use it for testing and
+            support. Sellers used to see it greyed out; since 2026-09-29 they
+            don't see it at all: WhatsApp and the extension are how they list. */}
+        {isAdmin && (
           <Link
             href="/push-listings"
-            className="flex items-center justify-center gap-1.5 rounded-lg border border-zinc-200 px-3 py-2 text-xs font-medium text-zinc-500 transition-colors hover:border-zinc-300 hover:text-zinc-900"
+            className="mb-3 flex items-center justify-center gap-1.5 rounded-lg border border-zinc-200 px-3 py-2 text-xs font-medium text-zinc-500 transition-colors hover:border-zinc-300 hover:text-zinc-900"
           >
             Push Listings from here <ArrowRight className="h-3 w-3" />
           </Link>
-        ) : (
-          <div
-            aria-disabled="true"
-            title="Temporarily unavailable — use WhatsApp or the Chrome extension instead"
-            className="flex cursor-not-allowed items-center justify-center gap-1.5 rounded-lg border border-zinc-100 px-3 py-2 text-xs font-medium text-zinc-300"
-          >
-            Push Listings from here <ArrowRight className="h-3 w-3" />
-          </div>
         )}
 
         {/* Sized for a thumb: 44px is Apple's minimum tap target, and the
             avatar was 28px in a row that measured about 34. The text steps
             up with it — 10px email on a phone is decorative, not legible. */}
-        <div className="mt-3 flex min-h-[44px] items-center gap-2.5 rounded-lg border border-zinc-100 px-2 py-2 hover:bg-zinc-50">
+        <div className="flex min-h-[44px] items-center gap-2.5 rounded-lg border border-zinc-100 px-2 py-2 hover:bg-zinc-50">
           <UserButton appearance={{ elements: { avatarBox: "h-8 w-8 md:h-7 md:w-7" } }} />
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium text-zinc-800 md:text-xs">

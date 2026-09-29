@@ -592,10 +592,14 @@ only appear while billing is off.
   re-syncs and pg_cron/pg_net logs. Now ~190 MB; see
   `supabase/migrations/2026-09-29_shrink-database-under-free-plan-limit.sql`.
   Egress was mostly the category catalog: every new server instance paged
-  all ~28k rows twice (~17 MB). It now loads once per instance through
-  `category_catalog()` (one call, 5.6 MB) and every reader, including the
-  category drawer's `/api/jumia/categories?all=1`, shares that copy
-  (`loadCatalog` in `lib/jumia/categories.ts`). Check size with
+  all ~28k rows twice (~17 MB). It now pages them once per instance, in
+  primary-key order, and every reader shares that copy, including the
+  category drawer's `/api/jumia/categories?all=1` and concurrent callers
+  while a load is in flight (`loadCatalog` in `lib/jumia/categories.ts`).
+  Don't move the load into one SQL function: `category_catalog()` did
+  that and took 2–19s; six at once hit the statement timeout and stalled
+  a 3-product batch for 6 minutes (dropped in
+  `2026-09-29_drop-category-catalog-rpc.sql`). Check size with
   `select pg_size_pretty(pg_database_size(current_database()))` before
   adding big indexes or vector columns.
 - **Emoji in WhatsApp messages built by joining lines (2026-09-28)**: the
