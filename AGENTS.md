@@ -565,6 +565,19 @@ only appear while billing is off.
 
 ## Operational gotchas (things that have bitten us)
 
+- **Supabase Free Plan limits (2026-09-29)**: database size (500 MB,
+  doesn't reset; over it the project can go read-only) and egress (5 GB
+  uncached per billing cycle). The database hit 605 MB: a 277 MB ivfflat
+  index nothing used (every search is department-scoped) plus bloat from
+  re-syncs and pg_cron/pg_net logs. Now ~190 MB; see
+  `supabase/migrations/2026-09-29_shrink-database-under-free-plan-limit.sql`.
+  Egress was mostly the category catalog: every new server instance paged
+  all ~28k rows twice (~17 MB). It now loads once per instance through
+  `category_catalog()` (one call, 5.6 MB) and every reader, including the
+  category drawer's `/api/jumia/categories?all=1`, shares that copy
+  (`loadCatalog` in `lib/jumia/categories.ts`). Check size with
+  `select pg_size_pretty(pg_database_size(current_database()))` before
+  adding big indexes or vector columns.
 - **Emoji in WhatsApp messages built by joining lines (2026-09-28)**: the
   production minifier folds `[...].join("\n")` of constants into one
   string; when one line was a `${}` template it printed a new template
