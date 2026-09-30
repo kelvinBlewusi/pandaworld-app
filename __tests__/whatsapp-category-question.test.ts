@@ -147,6 +147,62 @@ describe("matchCategoryAnswer", () => {
   });
 });
 
+// Real 2026-09-30 answers for a body lotion Jumia had refused twice. A
+// breadcrumb copied off jumia.com.gh reached us with no separators at all,
+// and the bot answered with cycling accessories and safety shoes.
+describe("matchCategoryAnswer without separators", () => {
+  const BODY_LOTIONS     = cat(1006357, "Health & Beauty > Beauty & Personal Care > Personal Care > Skin Care > Body > Moisturizers > Lotions");
+  const BODY_LOTIONS_OLD = cat(1015946, "Health & Beauty > Personal Care > Skin Care > Body > Moisturizers > Lotions");
+  const BODY_BUTTER_OLD  = cat(1015932, "Health & Beauty > Personal Care > Skin Care > Body > Moisturizers > Body Butter");
+  const BABY_LOTIONS     = cat(1000269, "Health & Beauty > Baby & Child Care > Personal Care > Baby Skin Care > Lotions");
+  const FACE_LOTIONS     = cat(1006849, "Health & Beauty > Beauty & Personal Care > Personal Care > Skin Care > Face > Cleansers > Creams & Lotions > Lotions");
+  const DERMO_BODY_CARE  = cat(1029447, "Health & Beauty > Dermocosmetics > Skin Care > Body Care");
+  const CYCLING_CARE     = cat(1006483, "Sporting Goods > Outdoor Recreation > Cycling > Accessories > Personal Care Products");
+  // Every other "Lotions" Jumia has.
+  const OTHER_LOTIONS = [
+    cat(1004180, "Baby Products > Bathing & Skin Care > Skin Care > Lotions"),
+    cat(1016188, "Health & Beauty > Personal Care > Skin Care > Face > Cleansers > Creams & Lotions > Lotions"),
+    cat(1017174, "Health & Beauty > Sexual Wellness > Sensual Delights > Erotic Massage > Oils & Lotions > Lotions"),
+  ];
+  const SKIN = [BODY_LOTIONS, BODY_LOTIONS_OLD, BODY_BUTTER_OLD, BABY_LOTIONS, FACE_LOTIONS, DERMO_BODY_CARE, CYCLING_CARE, ...OTHER_LOTIONS];
+  const refused = new Set([1015932, 1029447]);
+  const codes = (a: unknown) => (a as { options: { code: number }[] }).options.map((o) => o.code).sort();
+
+  it("reads a pasted breadcrumb whose separators were lost", () => {
+    const answer = matchCategoryAnswer(
+      "Home Health & Beauty Beauty & Personal Care Personal Care Skin Care Body Moisturizers Lotions",
+      SKIN, refused,
+    );
+    expect(answer).toMatchObject({ kind: "match", category: { code: 1006357 } });
+  });
+
+  it("reads the last two names typed with or without '>' the same way", () => {
+    const withArrow = matchCategoryAnswer("Moisturizers > Lotions", SKIN, refused);
+    const spaced    = matchCategoryAnswer("Moisturizers  Lotions", SKIN, refused);
+    expect(withArrow).toMatchObject({ kind: "choose", exact: true });
+    expect(codes(withArrow)).toEqual([1006357, 1015946]);
+    expect(spaced).toEqual(withArrow);
+  });
+
+  it("reads a partly separated path", () => {
+    const answer = matchCategoryAnswer("Beauty & Personal Care Personal Care > Moisturizers Lotions", SKIN, refused);
+    expect(answer).toMatchObject({ kind: "match", category: { code: 1006357 } });
+  });
+
+  it("keeps a multi-word name whole", () => {
+    expect(matchCategoryAnswer("Body Butter", SKIN, new Set())).toMatchObject({ kind: "match", category: { code: 1015932 } });
+    expect(matchCategoryAnswer("Body Butter", SKIN, refused)).toEqual({ kind: "refused", name: "Body Butter" });
+  });
+
+  it("still reads a product name at the end of the breadcrumb", () => {
+    const answer = matchCategoryAnswer(
+      "Home Health & Beauty Beauty & Personal Care Personal Care Skin Care Body Moisturizers Lotions Nivea Cocoa Butter Body Lotion 400ml",
+      SKIN, refused,
+    );
+    expect(answer).toMatchObject({ kind: "match", category: { code: 1006357 } });
+  });
+});
+
 describe("parseCategoryAnswer", () => {
   it("keeps the seller's wording for display", () => {
     expect(parseCategoryAnswer("Home > Phones & Tablets > Accessories").raw).toEqual(["Phones & Tablets", "Accessories"]);
