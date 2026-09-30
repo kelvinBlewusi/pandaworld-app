@@ -137,6 +137,114 @@ function rankByTitle(options: JumiaCategoryRow[], title: string | null | undefin
   return [...options].sort((a, b) => rank(a) - rank(b));
 }
 
+type IndexedLeaf = { c: JumiaCategoryRow; path: string[]; name: string };
+
+/**
+ * Steps 1 and 2 of matchCategoryAnswer over one reading of the answer.
+ * Null when no segment names a category or a parent.
+ *
+ * `inOrder` is for segments we split apart ourselves (splitByCategoryNames).
+ * Words from a product name at the end can then name a category too
+ * ("… Power Banks Oraimo Power Bank with Charger"), so the segment chosen
+ * is the one whose category has the most of its own parents right before
+ * it, in order, rather than simply the deepest.
+ */
+function matchSegments(
+  raw:     string[],
+  typed:   string[],
+  indexed: IndexedLeaf[],
+  isOk:    (c: JumiaCategoryRow) => boolean,
+  title:   string | null | undefined,
+  inOrder: boolean,
+): CategoryAnswer | null {
+  // How many of x's parents come right before segment i, nearest first.
+  const chain = (x: IndexedLeaf, i: number) => {
+    let n = 0;
+    while (n < i && n + 1 < x.path.length && typed[i - 1 - n] === x.path[x.path.length - 2 - n]) n++;
+    return n;
+  };
+  const scorer = (i: number) => {
+    const context = typed.filter((_, j) => j !== i);
+    const overlap = (x: IndexedLeaf) => context.filter((t) => x.path.includes(t)).length;
+    // Overlap never reaches 1000: it counts segments of one path.
+    return inOrder ? (x: IndexedLeaf) => chain(x, i) * 1000 + overlap(x) : overlap;
+  };
+  const hitsAt = (i: number) => indexed.filter((x) => x.name === typed[i] || x.path[x.path.length - 1] === typed[i]);
+
+  // 1. A segment that names a category itself: the deepest one, or in
+  //    order, the best placed (ties to the deepest).
+  let at = -1;
+  let atBest = -1;
+  for (let i = typed.length - 1; i >= 0; i--) {
+    const hits = hitsAt(i);
+    if (hits.length === 0) continue;
+    if (!inOrder) { at = i; break; }
+    const best = Math.max(...hits.map(scorer(i)));
+    if (best > atBest) { at = i; atBest = best; }
+  }
+  if (at >= 0) {
+    const hits = hitsAt(at);
+    const score = scorer(at);
+    const best = Math.max(...hits.map(score));
+    const ok = hits.filter((x) => isOk(x.c));
+    const bestOk = ok.length > 0 ? Math.max(...ok.map(score)) : -1;
+    // The seller's path points at a refused category more precisely than
+    // at any allowed one: that's the one they meant.
+    if (ok.length === 0 || bestOk < best) {
+      return { kind: "refused", name: hits.find((x) => score(x) === best)!.c.name };
+    }
+    const top = ok.filter((x) => score(x) === bestOk).map((x) => x.c);
+    if (top.length === 1) return { kind: "match", category: toChoice(top[0]) };
+    return { kind: "choose", exact: true, options: rankByTitle(top, title).slice(0, 10).map(toChoice) };
+  }
+
+  // 2. A segment that names a parent.
+  for (let i = typed.length - 1; i >= 0; i--) {
+    const under = indexed.filter((x) => x.path.slice(0, -1).includes(typed[i]));
+    if (under.length === 0) continue;
+    const ok = under.filter((x) => isOk(x.c)).map((x) => x.c);
+    if (ok.length === 0) return { kind: "refused", name: raw[i] };
+    if (ok.length === 1) return { kind: "match", category: toChoice(ok[0]) };
+    return { kind: "choose", exact: false, under: raw[i], options: rankByTitle(ok, title).slice(0, 10).map(toChoice) };
+  }
+  return null;
+}
+
+/**
+ * Split segments that aren't a category name into the category names they
+ * run together, longest name first from the left: "Beauty & Personal Care
+ * Personal Care Skin Care" → "Beauty & Personal Care", "Personal Care",
+ * "Skin Care". A word that starts no name stands on its own.
+ */
+function splitByCategoryNames(
+  raw:   string[],
+  typed: string[],
+  known: Set<string>,
+): { raw: string[]; typed: string[] } {
+  const maxWords = Math.min(12, Math.max(1, ...Array.from(known, (k) => k.split(" ").length)));
+  const out = { raw: [] as string[], typed: [] as string[] };
+  typed.forEach((t, i) => {
+    if (known.has(t)) {
+      out.raw.push(raw[i]);
+      out.typed.push(t);
+      return;
+    }
+    const words = raw[i].split(/\s+/).filter((w) => normalizeWords(w));
+    let start = 0;
+    while (start < words.length) {
+      let end = Math.min(words.length, start + maxWords);
+      for (; end > start + 1; end--) {
+        if (known.has(normalizeWords(words.slice(start, end).join(" ")))) break;
+      }
+      const piece = words.slice(start, end).join(" ");
+      out.raw.push(piece);
+      out.typed.push(normalizeWords(piece));
+      start = end;
+    }
+  });
+  return out;
+}
+
 /**
  * Read the seller's answer against Jumia's categories.
  *
@@ -151,6 +259,8 @@ function rankByTitle(options: JumiaCategoryRow[], title: string | null | undefin
  *   2. Otherwise the deepest segment naming a parent, whose categories are
  *      offered ranked by the product title — "Mobile Accessories" alone
  *      can't say which one.
+ *   If neither finds anything and the levels were run together (no ">"),
+ *   1 and 2 again with them split apart by Jumia's own category names.
  *   3. Otherwise near matches.
  *
  * Only a single clear fit is applied without asking; everything else is
@@ -171,34 +281,21 @@ export function matchCategoryAnswer(
   const isOk = (c: JumiaCategoryRow) => !refused.has(Number(c.code));
   const indexed = leaves.map((c) => ({ c, path: segments(c.path), name: normalizeWords(c.name) }));
 
-  // 1. A segment that names a category itself.
-  for (let i = typed.length - 1; i >= 0; i--) {
-    const hits = indexed.filter((x) => x.name === typed[i] || x.path[x.path.length - 1] === typed[i]);
-    if (hits.length === 0) continue;
+  const found = matchSegments(raw, typed, indexed, isOk, opts.title, false);
+  if (found) return found;
 
-    const context = typed.filter((_, j) => j !== i);
-    const overlap = (x: (typeof hits)[number]) => context.filter((t) => x.path.includes(t)).length;
-    const best = Math.max(...hits.map(overlap));
-    const ok = hits.filter((x) => isOk(x.c));
-    const bestOk = ok.length > 0 ? Math.max(...ok.map(overlap)) : -1;
-    // The seller's path points at a refused category more precisely than
-    // at any allowed one: that's the one they meant.
-    if (ok.length === 0 || bestOk < best) {
-      return { kind: "refused", name: hits.find((x) => overlap(x) === best)!.c.name };
-    }
-    const top = ok.filter((x) => overlap(x) === bestOk).map((x) => x.c);
-    if (top.length === 1) return { kind: "match", category: toChoice(top[0]) };
-    return { kind: "choose", exact: true, options: rankByTitle(top, opts.title).slice(0, 10).map(toChoice) };
-  }
-
-  // 2. A segment that names a parent.
-  for (let i = typed.length - 1; i >= 0; i--) {
-    const under = indexed.filter((x) => x.path.slice(0, -1).includes(typed[i]));
-    if (under.length === 0) continue;
-    const ok = under.filter((x) => isOk(x.c)).map((x) => x.c);
-    if (ok.length === 0) return { kind: "refused", name: raw[i] };
-    if (ok.length === 1) return { kind: "match", category: toChoice(ok[0]) };
-    return { kind: "choose", exact: false, under: raw[i], options: rankByTitle(ok, opts.title).slice(0, 10).map(toChoice) };
+  // The same again with the levels told apart by Jumia's own category
+  // names, when what was sent runs several together. A breadcrumb copied
+  // off jumia.com.gh can reach us with its separators gone ("Home Health &
+  // Beauty Beauty & Personal Care … Body Moisturizers Lotions", 2026-09-30),
+  // and sellers type "Moisturizers Lotions" as readily as "Moisturizers >
+  // Lotions". Only after the text as sent found nothing, so a separated
+  // path reads exactly as before.
+  const known = new Set(indexed.flatMap((x) => x.path));
+  if (typed.some((t) => !known.has(t))) {
+    const split = splitByCategoryNames(raw, typed, known);
+    const found = matchSegments(split.raw, split.typed, indexed, isOk, opts.title, true);
+    if (found) return found;
   }
 
   // 3. Near matches.
