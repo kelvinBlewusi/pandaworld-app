@@ -13,7 +13,8 @@
  * check (qc_followup_candidates(), supabase/migrations/2026-10-01_jumia-
  * qc-followup.sql) to followUpQc, which reads each one's QC from
  * GET /catalog/products. Approved: recorded, along with the product sid
- * that price and stock updates need. Rejected: the listing goes back to
+ * that price and stock updates need, and the seller gets the "🎉 passed
+ * Jumia QC" message that acceptance promised. Rejected: the listing goes back to
  * failed with Jumia's reason, stops counting as a live example, any charge
  * is refunded, and the seller gets the usual rejection message with a
  * Fix & resubmit button. A "Wrong Category" rejection names the category
@@ -25,7 +26,7 @@ import { getProductQc, type ProductQc } from "@/lib/jumia/api";
 import { logFeedOutcome } from "@/lib/jumia/feed-outcomes";
 import { forgetLiveListing } from "@/lib/jumia/live-listings";
 import { refundLiveListing } from "@/lib/billing/extension-credits";
-import { toResolvedNotice, type ResolvedListingNotice } from "@/lib/jumia/push-listing";
+import { QC_APPROVED, toResolvedNotice, type ResolvedListingNotice } from "@/lib/jumia/push-listing";
 
 export interface QcCandidate {
   id:                string;
@@ -90,8 +91,8 @@ export function describeQcRejection(reason: string | null, comment: string | nul
 
 /**
  * Check QC for one seller's candidates and act on each verdict. Returns
- * the rejections to notify about, for the caller to send together with
- * the feed resolutions from the same run. Never throws.
+ * the approvals and rejections to notify about, for the caller to send
+ * together with the feed resolutions from the same run. Never throws.
  */
 export async function followUpQc(
   accessToken: string,
@@ -134,6 +135,11 @@ export async function followUpQc(
           jumia_qc_checked_at: checkedAt,
           ...(verdict.productSid ? { jumia_product_sid: verdict.productSid } : {}),
         }).eq("id", c.id);
+        // The "🎉 live" message: acceptance only promised this one.
+        const notice = toResolvedNotice(c, "live", {
+          status: QC_APPROVED, error: null, liveCount: skus.length, totalCount: skus.length, rejectedSkus: [],
+        });
+        if (notice) notices.push(notice);
         continue;
       }
 

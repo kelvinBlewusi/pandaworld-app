@@ -655,13 +655,24 @@ type ResolutionCounts = { liveCount: number; totalCount: number; rejectedSkus: s
  *  rejected used to be reported to the seller (when it was reported at
  *  all) as a flat failure, which contradicted the four live products
  *  sitting in their Vendor Center. */
+//
+// A finished feed only means Jumia accepted the product; its quality check
+// comes after (lib/jumia/qc-followup.ts). So "live" here says accepted and
+// promises the QC verdict, and QC_APPROVED is the "🎉 live" message, sent
+// when that check passes. Wording set by the owner, 2026-10-01.
+export const QC_APPROVED = "qc_approved";
+
+/** Not a rejection: nothing to fix. */
+const isGoodNews = (status: string) => status === "live" || status === QC_APPROVED;
+
 function resolutionLine(name: string, newStatus: string, errorMsg: string | null, counts: ResolutionCounts): string {
+  if (newStatus === QC_APPROVED) return `🎉 "${name}" passed Jumia QC and is now live on Jumia!`;
   const partial = newStatus === "live" && counts.totalCount > counts.liveCount && counts.liveCount > 0;
   return newStatus !== "live"
     ? `⚠️ "${name}" was rejected by Jumia: ${errorMsg ?? "see the app for details"}`
     : partial
-      ? `✅ "${name}" is live on Jumia — ${counts.liveCount} of ${counts.totalCount} variants went through.\n\n⚠️ Jumia rejected ${counts.rejectedSkus.length ? counts.rejectedSkus.join(", ") : "the rest"}. You can fix and resubmit just those from your listings.`
-      : `🎉 "${name}" is now live on Jumia!`;
+      ? `✅ "${name}": Jumia accepted ${counts.liveCount} of ${counts.totalCount} variants — Will alert you if they pass Jumia QC\n\n⚠️ Jumia rejected ${counts.rejectedSkus.length ? counts.rejectedSkus.join(", ") : "the rest"}. You can fix and resubmit just those from your listings.`
+      : `✅ "${name}": Jumia accepted it — Will alert you if it passes Jumia QC`;
 }
 
 /**
@@ -703,7 +714,7 @@ async function notifyListingResolved(
     // The button id carries the listing id because a rejection lands
     // whenever Jumia finishes processing — often long after the batch
     // closed and the session moved on — so it cannot rely on chat state.
-    if (newStatus !== "live") {
+    if (!isGoodNews(newStatus)) {
       await sendButtonsIfConfigured(wa.phoneNumber, text, [
         { id: `fix:${listingId}`, title: "Fix & resubmit" },
       ]);
@@ -818,7 +829,7 @@ export async function notifyBatchResolved(
       const item = items[0];
       const name = item.title ?? "Your product";
       const text = resolutionLine(name, item.newStatus, item.errorMsg, item.counts);
-      if (item.newStatus !== "live") {
+      if (!isGoodNews(item.newStatus)) {
         await sendButtonsIfConfigured(phoneNumber, text, [{ id: `fix:${item.listingId}`, title: "Fix & resubmit" }]);
         return;
       }
@@ -826,14 +837,23 @@ export async function notifyBatchResolved(
       return;
     }
 
-    const rejected = items.filter((i) => i.newStatus !== "live");
-    const liveCount = items.length - rejected.length;
+    const rejected = items.filter((i) => !isGoodNews(i.newStatus));
+    const accepted = items.filter((i) => i.newStatus === "live").length;
+    const passed   = items.filter((i) => i.newStatus === QC_APPROVED).length;
     const lines = items.map((i) => resolutionLine(i.title ?? "Your product", i.newStatus, i.errorMsg, i.counts));
-    const header = rejected.length === 0
-      ? `🎉 Since your last update: ${liveCount} more product${liveCount === 1 ? "" : "s"} went live on Jumia!`
-      : liveCount === 0
-        ? `⚠️ Since your last update: ${rejected.length} product${rejected.length === 1 ? "" : "s"} ${rejected.length === 1 ? "was" : "were"} rejected by Jumia.`
-        : `Since your last update: ${liveCount} went live, ${rejected.length} rejected.`;
+    const products = (n: number) => `${n} product${n === 1 ? "" : "s"}`;
+    const header =
+      passed === items.length
+        ? `🎉 Since your last update: ${products(passed)} passed Jumia QC and ${passed === 1 ? "is" : "are"} now live on Jumia!`
+        : accepted === items.length
+          ? `✅ Since your last update: Jumia accepted ${products(accepted)} — Will alert you as they pass Jumia QC`
+          : rejected.length === items.length
+            ? `⚠️ Since your last update: ${products(rejected.length)} ${rejected.length === 1 ? "was" : "were"} rejected by Jumia.`
+            : `Since your last update: ${[
+                accepted > 0 ? `${accepted} accepted` : null,
+                passed > 0 ? `${passed} passed QC` : null,
+                rejected.length > 0 ? `${rejected.length} rejected` : null,
+              ].filter(Boolean).join(", ")}.`;
 
     await sendTextIfConfigured(phoneNumber, [header, "", ...lines].join("\n"));
 
@@ -985,7 +1005,11 @@ export async function refreshPendingFeedStatus(
     // may well be the rejected one, which carries no usable sid.
     const succeeded = details.find((p) => p.productSid);
     if (succeeded?.productSid) updates.jumia_product_sid = succeeded.productSid;
-    if (succeeded?.qcStatus)   updates.jumia_qc_status   = succeeded.qcStatus;
+    // An approval is left for lib/jumia/qc-followup.ts to confirm minutes
+    // later, so the seller gets its "🎉 passed Jumia QC" message.
+    if (succeeded?.qcStatus && succeeded.qcStatus.toLowerCase() !== "approved") {
+      updates.jumia_qc_status = succeeded.qcStatus;
+    }
 
     const db = createServerClient();
     const { data: updatedRows } = await db

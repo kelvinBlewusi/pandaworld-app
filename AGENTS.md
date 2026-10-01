@@ -613,7 +613,10 @@ only appear while billing is off.
   GET /catalog/products. A rejection sends the listing back to failed with
   Jumia's reason, refunds it and drops it from the live examples; Fix &
   resubmit switches to the category Jumia suggests. Every new push clears
-  `jumia_qc_status` so a resubmission gets its own check.
+  `jumia_qc_status` so a resubmission gets its own check. Messages (owner's
+  wording): on acceptance "✅ Jumia accepted it — Will alert you if it
+  passes Jumia QC", on approval "🎉 … passed Jumia QC and is now live on
+  Jumia!" (`QC_APPROVED` in `lib/jumia/push-listing.ts`).
 - **Emoji in WhatsApp messages built by joining lines (2026-09-28)**: the
   production minifier folds `[...].join("\n")` of constants into one
   string; when one line was a `${}` template it printed a new template

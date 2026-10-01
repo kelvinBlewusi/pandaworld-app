@@ -174,12 +174,12 @@ describe("followUpQc", () => {
     expect(logged).toEqual([expect.objectContaining({ listingId: MALTA.id, outcome: "rejected", rawError: `${MALTA_REASON}: ${MALTA_COMMENT}` })]);
   });
 
-  it("records approval and the product sid that updates need, without a message", async () => {
+  it("records approval and the product sid that updates need, and announces it live", async () => {
     qcBySku["PA-MUO503EV-P6X330"] = { status: "APPROVED" };
 
     const notices = await followUpQc("token", "GH", [MALTA]);
 
-    expect(notices).toEqual([]);
+    expect(notices).toEqual([expect.objectContaining({ listingId: MALTA.id, batchId: "batch-1", newStatus: "qc_approved", errorMsg: null })]);
     expect(listing()).toMatchObject({ status: "live", jumia_qc_status: "approved", jumia_product_sid: "d335de79-79c4-4403-b6eb-0ea6a0efe43e" });
   });
 

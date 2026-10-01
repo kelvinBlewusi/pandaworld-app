@@ -49,7 +49,7 @@ jest.mock("@/lib/jumia/api", () => ({
   getFeedProductDetails: async () => feedProductDetailsResult,
 }));
 
-import { refreshPendingFeedStatus, notifyBatchResolved, notifyResolvedListings, toResolvedNotice, type ResolvedListingNotice, type FeedResolution } from "@/lib/jumia/push-listing";
+import { refreshPendingFeedStatus, notifyBatchResolved, notifyResolvedListings, toResolvedNotice, QC_APPROVED, type ResolvedListingNotice, type FeedResolution } from "@/lib/jumia/push-listing";
 
 const PHONE = "233550607231";
 
@@ -89,7 +89,20 @@ describe("refreshPendingFeedStatus — skipNotify", () => {
     await refreshPendingFeedStatus("tok", { id: "listing-1", status: "pending_approval", jumia_ref: "feed-1" });
 
     expect(sent).toHaveLength(1);
-    expect(sent[0].body).toContain("is now live on Jumia");
+    expect(sent[0].body).toBe('✅ "Kettle": Jumia accepted it — Will alert you if it passes Jumia QC');
+  });
+
+  // An approval in the feed is left for lib/jumia/qc-followup.ts to
+  // confirm, so the seller gets its "🎉 passed Jumia QC" message.
+  it("leaves a QC approval reported by the feed for the QC follow-up to confirm", async () => {
+    seedListing();
+    feedStatusResult = { status: "DONE", total: 1, success: 1, failed: 0, errors: [], raw: null };
+    feedProductDetailsResult = [{ sellerSku: "SKU-1", productSid: "sid-1", qcStatus: "approved", errors: [] }];
+
+    await refreshPendingFeedStatus("tok", { id: "listing-1", status: "pending_approval", jumia_ref: "feed-1" }, { skipNotify: true });
+
+    expect(db.tables.listings[0].jumia_qc_status).toBeUndefined();
+    expect(db.tables.listings[0].jumia_product_sid).toBe("sid-1");
   });
 });
 
@@ -123,10 +136,10 @@ describe("notifyBatchResolved", () => {
 
     const texts = sent.filter((m) => m.kind === "text");
     expect(texts).toHaveLength(1);
-    expect(texts[0].body).toContain("Since your last update: 2 went live, 1 rejected");
-    expect(texts[0].body).toContain('"Electric Kettle" is now live');
+    expect(texts[0].body).toContain("Since your last update: 2 accepted, 1 rejected.");
+    expect(texts[0].body).toContain('"Electric Kettle": Jumia accepted it — Will alert you if it passes Jumia QC');
     expect(texts[0].body).toContain('"Baby Carrier" was rejected by Jumia: Attribute [variation]');
-    expect(texts[0].body).toContain('"Blender" is now live');
+    expect(texts[0].body).toContain('"Blender": Jumia accepted it');
 
     // 3 or fewer items: a Fix button per REJECTED item (only the one that
     // needs it), no button for the live ones — nothing to fix there.
@@ -145,7 +158,32 @@ describe("notifyBatchResolved", () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0].kind).toBe("text");
-    expect(sent[0].body).toContain("2 more products went live");
+    expect(sent[0].body).toContain("Since your last update: Jumia accepted 2 products — Will alert you as they pass Jumia QC");
+  });
+
+  it("announces a product live once it passes Jumia QC, with nothing to fix", async () => {
+    await notifyBatchResolved(PHONE, "batch-1", [notice({ newStatus: QC_APPROVED })]);
+
+    expect(sent).toEqual([expect.objectContaining({ kind: "text", body: '🎉 "Electric Kettle" passed Jumia QC and is now live on Jumia!' })]);
+  });
+
+  it("counts QC passes, acceptances and rejections apart in one summary", async () => {
+    await notifyBatchResolved(PHONE, "batch-1", [
+      notice({ listingId: "listing-1", title: "Kettle", whatsappSeq: 1, newStatus: QC_APPROVED }),
+      notice({ listingId: "listing-2", title: "Blender", whatsappSeq: 2, newStatus: QC_APPROVED }),
+      notice({ listingId: "listing-3", title: "Toaster", whatsappSeq: 3, newStatus: "failed", errorMsg: "Wrong Category (quality check)." }),
+    ]);
+
+    expect(sent[0].body).toContain("Since your last update: 2 passed QC, 1 rejected.");
+    expect(sent.filter((m) => m.kind === "buttons")[0].buttons).toEqual(["fix:listing-3"]);
+
+    sent.length = 0;
+    await notifyBatchResolved(PHONE, "batch-1", [
+      notice({ listingId: "listing-1", newStatus: QC_APPROVED }),
+      notice({ listingId: "listing-2", newStatus: QC_APPROVED }),
+    ]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body).toContain("🎉 Since your last update: 2 products passed Jumia QC and are now live on Jumia!");
   });
 
   it("uses a tappable LIST, not chunked buttons, when 4+ items are REJECTED in one tick — live ones never get a row", async () => {
