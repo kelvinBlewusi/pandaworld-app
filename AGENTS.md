@@ -779,9 +779,32 @@ Listed by priority. Pick from here when looking for "what to do next".
 10. **Cloud Translation API** — when expanding to French Jumia markets.
 11. **Firebase Cloud Messaging** — push notifications on Jumia approve/reject.
 12. **BigQuery + Looker Studio** — analytics pipeline. Pipe Supabase → BigQuery.
+13. **WhatsApp order alerts + printable shipping labels** — requested by the
+    owner 2026-10-01, parked for later ("will do that in the future"). Nothing
+    built yet: the app reads no orders and the WhatsApp client sends no files.
+    Planned flow:
+    1. Poll new orders per WhatsApp-linked seller (GET /orders?status=PENDING,
+       every few minutes; mind the Vercel CPU budget) and alert: "🛒 New
+       Jumia order #… [Get shipping label]".
+    2. On tap: GET /orders/shipment-providers?orderItemId=… (ask if several),
+       POST /v2/orders/pack (assigns the tracking number), POST
+       /orders/print-labels (returns `success.labels[].label`, a base64 PDF
+       per package), upload it to WhatsApp (POST /{phone-number-id}/media)
+       and send it as a document, e.g. `Label-<order>.pdf`.
+    3. "Mark ready to ship" button: POST /orders/ready-to-ship.
+
+    Before building: (a) confirm the seller's token has the **VC - Order
+    Manager** role, which every order call needs (one read-only GET /orders
+    with the owner's OK); (b) the owner submits a Meta **utility template**
+    for the order alert, since it usually lands outside WhatsApp's 24-hour
+    window, where only templates are delivered. QC/rejection alerts
+    (`lib/jumia/qc-followup.ts`) arriving hours later have the same problem
+    and could use a template too. Labels exist only for seller-shipped
+    (Dropshipping) items, not Fulfilled by Jumia. Spec:
+    vendorcenter.jumia.com/api-docs/ (`openapi.yaml` → `paths/orders/*.yaml`).
 
 ### Marketing
-13. **Google Business Profile** — full content drafted in
+14. **Google Business Profile** — full content drafted in
     `/Users/macbell/.claude/plans/reflective-jumping-hummingbird.md`
     (archived section). Paste into business.google.com when ready.
 
