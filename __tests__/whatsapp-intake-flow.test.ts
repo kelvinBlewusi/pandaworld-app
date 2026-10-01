@@ -150,6 +150,9 @@ const CATEGORY_ROWS = [
   { code: 1000279, path: "Phones & Tablets > Mobile Accessories > Portable Power Banks & Battery Packs" },
   { code: 3000001, path: "Phones & Tablets > Mobile Accessories > Chargers" },
   { code: 3000002, path: "Electronics > Accessories > Chargers" },
+  { code: 1029505, path: "Phones & Tablets > Tablets > Educational Tablets" },
+  { code: 1002640, path: "Phones & Tablets > Tablet Accessories > Bags, Cases & Sleeves > Cases" },
+  { code: 1002623, path: "Phones & Tablets > Tablet Accessories > Bags, Cases & Sleeves > Bags" },
 ].map((c) => ({
   ...c,
   name: c.path.split(" > ").pop()!,
@@ -1951,5 +1954,94 @@ describe("fixing a quality-check rejection", () => {
     expect(question()).toBeNull();
     expect(qcRow().dynamic_attributes).toEqual({});
     expect(pushCallCount).toBe(0);
+  });
+});
+
+// The drafting-time "🤔 not sure of product N's category" message. Its
+// buttons only offer the AI's alternates; a seller whose category isn't
+// among them types it (2026-10-01: "Product one category is “Educational
+// Tablets”" got the generic help back), often before the rest of the batch
+// has finished drafting.
+describe("typing the category for a draft the bot wasn't sure of", () => {
+  const TABLET = "33333333-3333-3333-3333-333333333331";
+  const LOTION = "33333333-3333-3333-3333-333333333332";
+  const DRINK  = "33333333-3333-3333-3333-333333333333";
+
+  function seedBatch(state: "analyzing" | "awaiting_confirmation") {
+    seedSession({ state, batch_id: "batch-9", batch_size: 3, batch_seq: 3 });
+    db.tables.listings = [
+      { id: TABLET, user_id: USER, whatsapp_batch_id: "batch-9", whatsapp_seq: 1, status: "draft", category_unsure: true,
+        title: "Kids Tablet PC - 4GB RAM, 64GB Storage", category_code: "1002640", selling_price: 120, field_sources: {} },
+      { id: LOTION, user_id: USER, whatsapp_batch_id: "batch-9", whatsapp_seq: 2, status: "draft", category_unsure: false,
+        title: "Body Lotion Nourishing Cocoa", category_code: "1006357", selling_price: 130, field_sources: {} },
+      { id: DRINK, user_id: USER, whatsapp_batch_id: "batch-9", whatsapp_seq: 3, status: "draft", category_unsure: false,
+        title: "Soft Drink - 330ml, Pack of 6", category_code: "1002615", selling_price: 120, field_sources: {} },
+    ];
+  }
+
+  beforeEach(() => {
+    refillCalls.length = 0;
+    db.tables.jumia_connections = [{ user_id: USER, country: "GH" }];
+    db.tables.jumia_unlistable_categories = [];
+  });
+
+  it("switches the draft when the seller names its category, without submitting it", async () => {
+    seedBatch("awaiting_confirmation");
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "Product one category is “Educational Tablets”" });
+
+    expect(refillCalls).toEqual([{ listingId: TABLET, code: 1029505 }]);
+    expect(pushCallCount).toBe(0);
+    expect(db.tables.listings[0].category_unsure).toBe(false);
+    expect(sent.some((m) => m.body.startsWith("✅ Product 1 switched"))).toBe(true);
+    expect(sent.some((m) => m.body.startsWith("Reply *submit all*"))).toBe(false);
+  });
+
+  it("takes a bare category name while the rest of the batch is still drafting", async () => {
+    seedBatch("analyzing");
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "Educational Tablets" });
+
+    expect(refillCalls).toEqual([{ listingId: TABLET, code: 1029505 }]);
+    expect(sent.some((m) => m.body.includes("Still drafting"))).toBe(false);
+  });
+
+  it("applies a tapped alternate while the rest of the batch is still drafting", async () => {
+    seedBatch("analyzing");
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `category:${TABLET}:1002623` });
+
+    expect(refillCalls).toEqual([{ listingId: TABLET, code: 1002623 }]);
+    expect(sent.some((m) => m.body.includes("Still drafting"))).toBe(false);
+  });
+
+  it("uses the product number the seller gives", async () => {
+    seedBatch("awaiting_confirmation");
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "2 category: Educational Tablets" });
+    expect(refillCalls).toEqual([{ listingId: LOTION, code: 1029505 }]);
+  });
+
+  it("waits for a product that's still being drafted", async () => {
+    seedBatch("analyzing");
+    db.tables.analysis_jobs = [{ id: "job-3", listing_id: DRINK, status: "running" }];
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "3 category: Educational Tablets" });
+
+    expect(refillCalls).toHaveLength(0);
+    expect(sent.some((m) => m.body.includes("Product 3 is still being drafted"))).toBe(true);
+  });
+
+  it("says so when the named category isn't on Jumia", async () => {
+    seedBatch("awaiting_confirmation");
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "1 category: Flying Carpets" });
+
+    expect(refillCalls).toHaveLength(0);
+    expect(sent.some((m) => m.body.includes("I couldn't find \"Flying Carpets\""))).toBe(true);
+  });
+
+  it("leaves edits and bare names alone when no draft's category is in question", async () => {
+    seedBatch("awaiting_confirmation");
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "make the title shorter" });
+    expect(refillCalls).toHaveLength(0);
+
+    db.tables.listings[0].category_unsure = false;
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "Educational Tablets" });
+    expect(refillCalls).toHaveLength(0);
   });
 });

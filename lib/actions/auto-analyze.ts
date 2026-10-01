@@ -63,6 +63,7 @@ import {
   searchCategoriesByEmbeddingMulti,
   poolByRank,
   mergeCandidates,
+  diverseTop,
   type CategoryCandidate,
 } from "@/lib/jumia/category-search";
 import { getValidJumiaCredentials, reconcileDraftVariation } from "@/lib/jumia/api";
@@ -687,8 +688,12 @@ async function runAutoAnalyzeUnmetered(
     const tCombined        = Date.now();
     const TOP_N_FOR_COMBINED = 3;
     // Live-listing categories sit in front and don't count against the
-    // retrieval top N, so the model still sees retrieval's best three.
-    const topNCandidates   = candidates.slice(0, TOP_N_FOR_COMBINED + provenCount);
+    // retrieval top N, so the model still sees retrieval's best three, no
+    // more than two of them siblings (diverseTop).
+    const topNCandidates   = [
+      ...candidates.slice(0, provenCount),
+      ...diverseTop(candidates.slice(provenCount), TOP_N_FOR_COMBINED),
+    ];
 
     // Parallel schema fetch for top-N candidates. We need them all in hand
     // before the combined Gemini call so the model can pick + fill from
