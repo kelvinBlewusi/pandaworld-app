@@ -65,9 +65,6 @@ const COSTS = [
   },
 ];
 
-function ghs(amount: number): string {
-  return `GHS ${amount.toFixed(2)}`;
-}
 
 export default async function PricingPage() {
   const { userId } = await auth();
@@ -161,7 +158,6 @@ export default async function PricingPage() {
           <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
             {CREDIT_PACKS.map((p) => {
               const { autofills, listings } = packReach(p.credits);
-              const perCredit = p.amountGhs / p.credits;
               const popular = p.id === POPULAR_PACK_ID;
               return (
                 <div
@@ -181,11 +177,11 @@ export default async function PricingPage() {
                   <ul className="mt-5 flex-1 space-y-2.5 text-sm text-zinc-700">
                     <li className="flex items-start gap-2">
                       <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-                      {listings} live WhatsApp listings ({ghs(perCredit * LIVE_LISTING_CREDIT_COST)} each)
+                      {listings} live WhatsApp listings
                     </li>
                     <li className="flex items-start gap-2">
                       <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-                      or {autofills} extension autofills ({ghs(perCredit * LISTING_CREDIT_COST)} each)
+                      or {autofills} extension autofills
                     </li>
                     <li className="flex items-start gap-2">
                       <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
