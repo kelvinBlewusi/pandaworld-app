@@ -4,7 +4,12 @@ import { MarketingFooter } from "@/components/marketing/footer";
 import { Wordmark } from "@/components/marketing/wordmark";
 import { ConnectTutorial } from "@/components/marketing/connect-tutorial";
 import { AnimatedToastReel } from "@/components/marketing/animated-toast-reel";
-import { FREE_SIGNUP_CREDITS } from "@/lib/billing/credit-packs";
+import {
+  CREDIT_PACKS,
+  FREE_SIGNUP_CREDITS,
+  LISTING_CREDIT_COST,
+  LIVE_LISTING_CREDIT_COST,
+} from "@/lib/billing/credit-packs";
 
 // ─── Public landing — reusable across / (logged-out) and /landing ────────────
 //
@@ -106,44 +111,45 @@ export function PublicLanding({ isAuthenticated = false, variant = "default" }: 
         </div>
       </section>
 
-      {/* What you get — feature highlights mapped to the new 4-tier model */}
+      {/* Pricing preview — pay-as-you-go credits, every number from
+          lib/billing/credit-packs.ts like the pricing page itself */}
       <section className="bg-zinc-50/60">
         <div className="mx-auto max-w-6xl px-6 py-20">
           <div className="mx-auto max-w-2xl text-center">
             <h2 className="text-2xl font-bold sm:text-3xl">
-              Plans that grow with your store.
+              Pay only for listings that go live.
             </h2>
             <p className="mt-3 text-sm text-zinc-600">
-              Start free, upgrade when you hit volume. Monthly quotas reset
-              automatically — never get locked out of your listings.
+              No subscription. Start with {FREE_SIGNUP_CREDITS} free credits and
+              buy a pack when you need more. Credits never expire.
             </p>
           </div>
           <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <TierTile
-              name="Free"
-              price="GHS 0"
-              line="5 listings every month"
-              detail="Get a feel for it. No credit card."
-            />
-            <TierTile
-              name="Starter"
-              price="GHS 30"
-              line="30 listings + 10 image polishes"
-              detail="Casual sellers, 10–20 listings/mo."
+              name="To start"
+              price={`${FREE_SIGNUP_CREDITS} credits`}
+              line="Free when you sign up"
+              detail="No card needed."
               accent
             />
             <TierTile
-              name="Pro"
-              price="GHS 65"
-              line="70 listings + 30 image polishes"
-              detail="Serious sellers — bulk push, priority support."
-              badge="Most popular"
+              name="WhatsApp listing"
+              price={`${LIVE_LISTING_CREDIT_COST} credits`}
+              line="Charged once it goes live on Jumia"
+              detail="Drafts, fixes and rejected listings are free."
+              badge="Most used"
             />
             <TierTile
-              name="Business"
-              price="GHS 120"
-              line="100 listings + 50 image polishes"
-              detail="Resellers + high-volume stores. Advanced analytics."
+              name="Extension autofill"
+              price={`${LISTING_CREDIT_COST} credits`}
+              line="Per Jumia product form filled"
+              detail="You review and submit it in Vendor Center."
+            />
+            <TierTile
+              name="Credit packs"
+              price={`From GHS ${Math.min(...CREDIT_PACKS.map((p) => p.amountGhs))}`}
+              line="Mobile Money or card"
+              detail="Buy more whenever you run low."
             />
           </div>
           <p className="mt-6 text-center text-xs text-zinc-500">
@@ -165,7 +171,7 @@ export function PublicLanding({ isAuthenticated = false, variant = "default" }: 
             Spend less time uploading products to Jumia.
           </h2>
           <p className="mt-3 text-sm text-zinc-600">
-            5 free listings every month. No credit card. Cancel any time.
+            {FREE_SIGNUP_CREDITS} free credits to start. No card needed. No subscription.
           </p>
           <Link
             href={ctaHref}
@@ -182,7 +188,7 @@ export function PublicLanding({ isAuthenticated = false, variant = "default" }: 
   );
 }
 
-// ─── Tier tile — used in the landing's plan-preview row ──────────────────────
+// ─── Tier tile — used in the landing's pricing-preview row ───────────────────
 
 function TierTile({
   name,
@@ -211,7 +217,7 @@ function TierTile({
         </span>
       )}
       <p className="text-sm font-semibold text-zinc-900">{name}</p>
-      <p className="mt-2 text-2xl font-bold tracking-tight text-zinc-900">{price}<span className="text-sm font-normal text-zinc-500"> / mo</span></p>
+      <p className="mt-2 text-2xl font-bold tracking-tight text-zinc-900">{price}</p>
       <p className="mt-3 text-xs font-medium text-zinc-700">{line}</p>
       <p className="mt-1 text-[11px] text-zinc-500">{detail}</p>
     </div>

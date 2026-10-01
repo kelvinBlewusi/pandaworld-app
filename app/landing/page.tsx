@@ -1,5 +1,6 @@
 import { auth } from "@clerk/nextjs/server";
 import { PublicLanding } from "@/components/marketing/public-landing";
+import { FREE_SIGNUP_CREDITS } from "@/lib/billing/credit-packs";
 
 // ─── /landing — public landing for logged-in sellers ─────────────────────────
 //
@@ -22,7 +23,7 @@ import { PublicLanding } from "@/components/marketing/public-landing";
 
 export const metadata: import("next").Metadata = {
   title:       "AI Listing Assistant for Jumia Africa Sellers",
-  description: "Generate complete Jumia listings from product photos in seconds. AI-picked categories, attributes filled, white-background images, push straight to Vendor Center. Works across Ghana, Nigeria, Kenya, Egypt, Morocco, and more. Free for 5 listings every month.",
+  description: `Generate complete Jumia listings from product photos in seconds. AI-picked categories, attributes filled, white-background images, push straight to Vendor Center. Works across Ghana, Nigeria, Kenya, Egypt, Morocco, and more. ${FREE_SIGNUP_CREDITS} free credits to start, then pay only for listings that go live.`,
   alternates: {
     canonical: "/landing",
   },
