@@ -602,6 +602,18 @@ only appear while billing is off.
   `2026-09-29_drop-category-catalog-rpc.sql`). Check size with
   `select pg_size_pretty(pg_database_size(current_database()))` before
   adding big indexes or vector columns.
+- **A finished feed is not QC approval (2026-10-01)**: a feed with no
+  errors means Jumia created the product; its quality check runs after
+  and can still reject it. Two products announced "🎉 live" on 2026-09-30
+  were rejected in Vendor Center ("Wrong Category: Category mismatch: AI
+  suggests Grocery / Beverages / … / Soft Drinks") and the seller was never
+  told. The feeds cron now follows live listings until QC decides
+  (`lib/jumia/qc-followup.ts`, `qc_followup_candidates()` in
+  `2026-10-01_jumia-qc-followup.sql`), reading `businessClients[].qc` from
+  GET /catalog/products. A rejection sends the listing back to failed with
+  Jumia's reason, refunds it and drops it from the live examples; Fix &
+  resubmit switches to the category Jumia suggests. Every new push clears
+  `jumia_qc_status` so a resubmission gets its own check.
 - **Emoji in WhatsApp messages built by joining lines (2026-09-28)**: the
   production minifier folds `[...].join("\n")` of constants into one
   string; when one line was a `${}` template it printed a new template

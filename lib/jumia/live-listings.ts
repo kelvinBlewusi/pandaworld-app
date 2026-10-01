@@ -45,6 +45,20 @@ export async function recordLiveListing(
   }
 }
 
+/**
+ * Stop learning from a listing: Jumia's quality check rejected it after
+ * the feed went through (lib/jumia/qc-followup.ts), so its category was
+ * never really accepted. Best-effort and never throws.
+ */
+export async function forgetLiveListing(listingId: string): Promise<void> {
+  try {
+    const db = createServerClient();
+    await db.from("jumia_live_listings").delete().eq("listing_id", listingId);
+  } catch (e) {
+    console.warn(`[live-listings] failed to forget ${listingId}: ${(e as Error).message}`);
+  }
+}
+
 export interface LiveExample {
   title:         string;
   category_code: number;

@@ -32,6 +32,7 @@ import {
   jumiaStorefront,
   type CategoryChoice,
 } from "@/lib/whatsapp/category-question";
+import { jumiaSuggestedCategoryPath } from "@/lib/jumia/qc-followup";
 import { getValidJumiaCredentials, COUNTRY_CURRENCY, DEFAULT_JUMIA_COUNTRY, currencySymbol, currencyNameWord } from "@/lib/jumia/api";
 import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
 import { isFashionCategory } from "@/lib/jumia/fashion-category";
@@ -3237,6 +3238,35 @@ async function handleFixAndResubmit(
     await replyText(phoneNumber, `🔧 ${label}: "${row.brand}" isn't a brand Jumia will list here, so I switched it to "${fallbackBrand}". Resubmitting…`);
     await pushAndReport(userId, phoneNumber, listingId, label);
     return;
+  }
+
+  // Jumia's quality check named the category it wants ("Wrong Category …
+  // AI suggests Grocery / Beverages / … / Soft Drinks", lib/jumia/
+  // qc-followup.ts): switch to it rather than have a redraft guess again.
+  const suggestedPath = jumiaSuggestedCategoryPath(rejectionText);
+  if (suggestedPath) {
+    const answer = matchCategoryAnswer(
+      suggestedPath,
+      await listableLeafCategories(),
+      await refusedCategoryCodes(userId, (row.category_code as string | null) ?? null),
+      { title: row.title as string | null },
+    );
+    if (answer.kind === "match") {
+      await applySellerCategory(userId, phoneNumber, listingId, answer.category.code);
+      return;
+    }
+    // A parent with a few categories under it ("Soft Drinks": Multipack,
+    // Single): the seller picks, from just those.
+    if (answer.kind === "choose" && answer.options.length > 0) {
+      await updateSession(phoneNumber, { awaitingCategoryFor: listingId });
+      await replyList(
+        phoneNumber,
+        `${label}: Jumia's quality check says it belongs in "${suggestedPath}". Which one fits it?`,
+        "Pick a category",
+        answer.options.slice(0, 10).map((c) => categoryListRow(listingId, c)),
+      );
+      return;
+    }
   }
 
   const remedy = classifyJumiaRejection(rejectionText);
