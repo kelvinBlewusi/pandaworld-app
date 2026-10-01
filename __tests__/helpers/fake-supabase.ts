@@ -219,6 +219,17 @@ export class FakeDb {
       return { data: [{ image_count: images.length }], error: null };
     }
 
+    if (name === "append_qc_photo") {
+      // Mirrors append_qc_photo (2026-10-01_qc-remedies.sql): atomic append
+      // to the replacement photos, capped, ignoring a redelivered URL.
+      const row = this.tables.listings.find((r) => r.id === args.p_listing_id);
+      if (!row) return { data: [{ image_count: 0 }], error: null };
+      const photos = ((row.qc_new_images ?? []) as string[]).slice();
+      if (photos.length < (args.p_max as number) && !photos.includes(args.p_url as string)) photos.push(args.p_url as string);
+      row.qc_new_images = photos;
+      return { data: [{ image_count: photos.length }], error: null };
+    }
+
     if (name === "claim_photo_confirmation") {
       const row = this.tables.whatsapp_sessions.find((r) => r.phone_number === args.p_phone);
       if (!row) return { data: false, error: null };

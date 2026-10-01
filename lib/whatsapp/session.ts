@@ -77,12 +77,29 @@ export interface WhatsAppSession {
    */
   awaitingCategoryFor: string | null;
   /**
+   * The question the bot asked after Jumia's quality check rejected a
+   * listing (lib/jumia/qc-remedy.ts): an FDA number, the brand, a price,
+   * new photos, or the reason itself. Null when none is outstanding. Read
+   * between batches only, like awaitingCategoryFor; anything that isn't an
+   * answer drops it.
+   */
+  awaitingQcAnswer: QcQuestion | null;
+  /**
    * True when the seller picked "just send it all" at the how-many-
    * products step instead of the default step-by-step flow. Nothing sent
    * back for any product but the last — see handleQuietBatchText in
    * lib/whatsapp/intake.ts.
    */
   batchQuiet: boolean;
+}
+
+/** What awaitingQcAnswer holds. */
+export interface QcQuestion {
+  listingId:   string;
+  kind:        "value" | "brand" | "price" | "photos" | "details";
+  /** ask_value: the category field the answer goes in, null for the description. */
+  field?:      string | null;
+  fieldLabel?: string;
 }
 
 function fromRow(row: Record<string, unknown>): WhatsAppSession {
@@ -100,6 +117,7 @@ function fromRow(row: Record<string, unknown>): WhatsAppSession {
     lastImageAt:   (row.last_image_at as string | null) ?? null,
     awaitingPriceFor: (row.awaiting_price_for as string | null) ?? null,
     awaitingCategoryFor: (row.awaiting_category_for as string | null) ?? null,
+    awaitingQcAnswer: (row.awaiting_qc_answer as QcQuestion | null) ?? null,
     batchQuiet: (row.batch_quiet as boolean | null) ?? false,
   };
 }
@@ -167,6 +185,7 @@ export async function getOrCreateSession(
           last_message_id: null,
           awaiting_price_for: null,
           awaiting_category_for: null,
+          awaiting_qc_answer: null,
           batch_quiet:     false,
           updated_at:      new Date().toISOString(),
         })
@@ -225,6 +244,7 @@ export async function updateSession(
     lastImageAt:   string | null;
     awaitingPriceFor: string | null;
     awaitingCategoryFor: string | null;
+    awaitingQcAnswer: QcQuestion | null;
     batchQuiet: boolean;
   }>,
 ): Promise<void> {
@@ -240,6 +260,7 @@ export async function updateSession(
   if (patch.lastImageAt   !== undefined) update.last_image_at   = patch.lastImageAt;
   if (patch.awaitingPriceFor !== undefined) update.awaiting_price_for = patch.awaitingPriceFor;
   if (patch.awaitingCategoryFor !== undefined) update.awaiting_category_for = patch.awaitingCategoryFor;
+  if (patch.awaitingQcAnswer !== undefined) update.awaiting_qc_answer = patch.awaitingQcAnswer;
   if (patch.batchQuiet !== undefined) update.batch_quiet = patch.batchQuiet;
   await db.from("whatsapp_sessions").update(update).eq("phone_number", phoneNumber);
 }
@@ -325,6 +346,8 @@ export async function resetSession(phoneNumber: string): Promise<void> {
     // message is never an answer to it. Its list rows still work after a
     // restart, since those carry the listing id themselves.
     awaitingCategoryFor: null,
+    // And for a quality-check question: the Fix button asks it again.
+    awaitingQcAnswer: null,
     // A mode choice belongs to the batch it was made for. Without this,
     // restarting after a quiet batch would silently carry quiet mode into
     // the next one before the seller ever gets asked again.

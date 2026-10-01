@@ -7,6 +7,7 @@ import {
   resetSession,
   claimPhotoConfirmation,
   claimMessageId,
+  type QcQuestion,
   type WhatsAppSession,
 } from "@/lib/whatsapp/session";
 import { createListingForUser } from "@/lib/listings/create";
@@ -16,7 +17,8 @@ import { LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
 import { pushListingToJumia, missingFieldLabels, refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
 import { assessListingPushReadiness } from "@/lib/whatsapp/readiness";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
-import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames, isStaleCategoryError } from "@/lib/jumia/rejection-remedy";
+import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames, isStaleCategoryError, type Remedy } from "@/lib/jumia/rejection-remedy";
+import { decideQcAction, type QcContext } from "@/lib/jumia/qc-remedy";
 import { removeAttributesFromCache, getCategoryByCode } from "@/lib/jumia/categories";
 import { isUnlistableCategoryError, sellerCountry } from "@/lib/jumia/unlistable-categories";
 import { provenCategoriesFor } from "@/lib/jumia/live-listings";
@@ -32,7 +34,6 @@ import {
   jumiaStorefront,
   type CategoryChoice,
 } from "@/lib/whatsapp/category-question";
-import { jumiaSuggestedCategoryPath } from "@/lib/jumia/qc-followup";
 import { getValidJumiaCredentials, COUNTRY_CURRENCY, DEFAULT_JUMIA_COUNTRY, currencySymbol, currencyNameWord } from "@/lib/jumia/api";
 import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
 import { isFashionCategory } from "@/lib/jumia/fashion-category";
@@ -525,6 +526,13 @@ export async function handleLinkedMessage(
     } else if (text && CATEGORY_ANSWER_STATES.has(session.state)) {
       if (await handleCategoryAnswer(userId, phoneNumber, session.awaitingCategoryFor, text)) return;
     }
+  }
+
+  // An answer to a quality-check question (fixQcRejection): an FDA number,
+  // the brand, a price, new photos, or Vendor Center's reason. Between
+  // batches only, like the category question.
+  if (!globalCmd && session.awaitingQcAnswer) {
+    if (await handleQcAnswer(userId, phoneNumber, session, content)) return;
   }
 
   if (globalCmd) {
@@ -3156,11 +3164,12 @@ async function handleFixAndResubmit(
   userId:      string,
   phoneNumber: string,
   listingId:   string,
+  opts:        { qcDetailsGiven?: boolean } = {},
 ): Promise<void> {
   const db = createServerClient();
   const { data: row } = await db
     .from("listings")
-    .select("id, whatsapp_seq, title, status, brand, field_sources, field_confidence, jumia_error, category_code, category_path, category_alternates, user_prompt, jumia_rerun_fingerprint, jumia_rerun_count")
+    .select("id, whatsapp_seq, title, status, brand, field_sources, field_confidence, jumia_error, category_code, category_path, category_alternates, user_prompt, jumia_rerun_fingerprint, jumia_rerun_count, jumia_qc_status, jumia_qc_reason, jumia_qc_comment")
     .eq("id", listingId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -3240,36 +3249,19 @@ async function handleFixAndResubmit(
     return;
   }
 
-  // Jumia's quality check named the category it wants ("Wrong Category …
-  // AI suggests Grocery / Beverages / … / Soft Drinks", lib/jumia/
-  // qc-followup.ts): switch to it rather than have a redraft guess again.
-  const suggestedPath = jumiaSuggestedCategoryPath(rejectionText);
-  if (suggestedPath) {
-    const answer = matchCategoryAnswer(
-      suggestedPath,
-      await listableLeafCategories(),
-      await refusedCategoryCodes(userId, (row.category_code as string | null) ?? null),
-      { title: row.title as string | null },
-    );
-    if (answer.kind === "match") {
-      await applySellerCategory(userId, phoneNumber, listingId, answer.category.code);
-      return;
-    }
-    // A parent with a few categories under it ("Soft Drinks": Multipack,
-    // Single): the seller picks, from just those.
-    if (answer.kind === "choose" && answer.options.length > 0) {
-      await updateSession(phoneNumber, { awaitingCategoryFor: listingId });
-      await replyList(
-        phoneNumber,
-        `${label}: Jumia's quality check says it belongs in "${suggestedPath}". Which one fits it?`,
-        "Pick a category",
-        answer.options.slice(0, 10).map((c) => categoryListRow(listingId, c)),
-      );
-      return;
-    }
+  // Rejected by Jumia's quality check after the upload went through
+  // (lib/jumia/qc-followup.ts). Decided by lib/jumia/qc-remedy.ts: the
+  // upload-error classifier below reads every QC reason as "unknown".
+  // Only a redraft comes back here, to go through the rerun path and its
+  // loop guard like any other.
+  let remedy: Remedy;
+  if (row.jumia_qc_status === "rejected") {
+    const next = await fixQcRejection(userId, phoneNumber, row, label, rejectionText, { noDetailsAsk: opts.qcDetailsGiven });
+    if (!next) return;
+    remedy = next;
+  } else {
+    remedy = classifyJumiaRejection(rejectionText);
   }
-
-  const remedy = classifyJumiaRejection(rejectionText);
 
   if (!isAutoFixable(remedy.kind)) {
     await replyError(
@@ -3463,6 +3455,311 @@ async function pushAndReport(
     `⚠️ ${label}: Jumia still isn't happy — ${result.message}`,
     { retryId: `fix:${listingId}`, retryTitle: "Fix & resubmit", cta: { label: "Open editor", url: focusedEditorUrl(listingId) } },
   );
+}
+
+// ─── Quality-check rejections ────────────────────────────────────────────────
+//
+// lib/jumia/qc-remedy.ts decides; these carry it out. What only the seller
+// knows is asked in chat and the answer is applied here (handleQcAnswer):
+// the bot never invents an FDA number, a brand or a price.
+
+const NO_QC_REASON_TEXT = /^its quality check gave no reason/i;
+
+/** Jumia's words and the listing, for decideQcAction. */
+async function qcContextFor(row: Record<string, unknown>, rejectionText: string): Promise<QcContext> {
+  const reason = (row.jumia_qc_reason as string | null) ?? null;
+  let comment = (row.jumia_qc_comment as string | null) ?? null;
+  // Rejected before Jumia's own words were kept: read the stored message,
+  // unless it's the one saying Jumia gave no reason.
+  if (!reason && !comment && rejectionText && !NO_QC_REASON_TEXT.test(rejectionText)) comment = rejectionText;
+
+  let fields: QcContext["fields"] = [];
+  const code = row.category_code ? parseInt(row.category_code as string, 10) : NaN;
+  if (Number.isFinite(code)) {
+    const { data } = await createServerClient()
+      .from("jumia_category_attributes")
+      .select("name, label")
+      .eq("category_code", code);
+    const seen = new Set<string>();
+    fields = ((data ?? []) as { name: string; label: string | null }[]).filter((f) => !seen.has(f.name) && !!seen.add(f.name));
+  }
+  return {
+    reason,
+    comment,
+    title:        (row.title as string | null) ?? null,
+    brand:        (row.brand as string | null) ?? null,
+    categoryPath: (row.category_path as string | null) ?? null,
+    fields,
+  };
+}
+
+async function askQc(phoneNumber: string, question: QcQuestion, text: string): Promise<void> {
+  await updateSession(phoneNumber, { awaitingQcAnswer: question });
+  await replyText(phoneNumber, text);
+}
+
+/**
+ * Do what decideQcAction says for a listing Jumia's quality check
+ * rejected. Returns the remedy for the caller's rerun path when the answer
+ * is a redraft, null when it was handled here.
+ */
+async function fixQcRejection(
+  userId:        string,
+  phoneNumber:   string,
+  row:           Record<string, unknown>,
+  label:         string,
+  rejectionText: string,
+  opts:          { noDetailsAsk?: boolean } = {},
+): Promise<Remedy | null> {
+  const listingId = row.id as string;
+  const ctx = await qcContextFor(row, rejectionText);
+  const decided = await decideQcAction(ctx);
+  // The seller already pasted Vendor Center's reason: never ask again.
+  const action = decided.action.kind === "ask_details" && opts.noDetailsAsk
+    ? { kind: "redraft" as const, why: "Jumia's quality check rejected it." }
+    : decided.action;
+  console.info(`[qc-fix] ${listingId}: ${action.kind} (${decided.source})`);
+
+  switch (action.kind) {
+    case "switch_category": {
+      const answer = matchCategoryAnswer(
+        action.path,
+        await listableLeafCategories(),
+        await refusedCategoryCodes(userId, (row.category_code as string | null) ?? null),
+        { title: row.title as string | null },
+      );
+      if (answer.kind === "match") {
+        await applySellerCategory(userId, phoneNumber, listingId, answer.category.code);
+        return null;
+      }
+      // A parent with a few categories under it ("Soft Drinks": Multipack,
+      // Single): the seller picks, from just those.
+      if (answer.kind === "choose" && answer.options.length > 0) {
+        await updateSession(phoneNumber, { awaitingCategoryFor: listingId });
+        await replyList(
+          phoneNumber,
+          `${label}: Jumia's quality check says it belongs in "${action.path}". Which one fits it?`,
+          "Pick a category",
+          answer.options.slice(0, 10).map((c) => categoryListRow(listingId, c)),
+        );
+        return null;
+      }
+      await askSellerForCategory(userId, phoneNumber, row, label, `Jumia's quality check says it belongs in "${action.path}", and I can't find a category there it accepts.`);
+      return null;
+    }
+    case "ask_category":
+      await askSellerForCategory(userId, phoneNumber, row, label, "Jumia's quality check says the category is wrong, without saying which one is right.");
+      return null;
+    case "redraft":
+      return { kind: "rerun", explanation: action.why };
+    case "cannot_fix":
+      await replyText(phoneNumber, `⚠️ ${label}: ${action.why}`);
+      return null;
+    case "ask_value":
+      await askQc(
+        phoneNumber,
+        { listingId, kind: "value", field: action.field, fieldLabel: action.fieldLabel },
+        `🔍 ${label}: Jumia's quality check needs something only you have. ${action.question}\n\nReply with it here and I'll add it and resubmit.`,
+      );
+      return null;
+    case "ask_brand":
+      await askQc(
+        phoneNumber,
+        { listingId, kind: "brand" },
+        `🔍 ${label}: Jumia's quality check says the brand is wrong${action.why}. What brand is on the product? Reply with the brand name, or *generic* if it has none, and I'll resubmit.`,
+      );
+      return null;
+    case "ask_price":
+      await askQc(
+        phoneNumber,
+        { listingId, kind: "price" },
+        `🔍 ${label}: Jumia's quality check flagged the price${action.why}. What should it sell for? Reply with the amount and I'll resubmit.`,
+      );
+      return null;
+    case "ask_photos":
+      await createServerClient().from("listings").update({ qc_new_images: null }).eq("id", listingId);
+      await askQc(
+        phoneNumber,
+        { listingId, kind: "photos" },
+        `📷 ${label}: Jumia's quality check rejected the photos${action.why}. Send new photos of the product (clear, well lit, plain background, no watermarks), then reply *done* and I'll resubmit with them.`,
+      );
+      return null;
+    case "ask_details":
+      await askQc(
+        phoneNumber,
+        { listingId, kind: "details" },
+        `🔍 ${label}: Jumia's quality check didn't say why it rejected this. Open it in Vendor Center (Products → Manage Products → Rejected), copy the rejection reason and its details, and paste them here. I'll work out the fix.`,
+      );
+      return null;
+  }
+}
+
+/** Could this be the answer to the question, rather than something else? */
+function looksLikeQcAnswer(kind: QcQuestion["kind"], text: string): boolean {
+  if (!text || text.length > 1500) return false;
+  if (/^(?!https?:)[a-z_]+:\S/i.test(text)) return false; // a tapped button's id
+  if (/^submit\b/i.test(text)) return false;
+  if (/^(hi|hello|hey|ok|okay|thanks|thank you|thx|yes|yeah|no|good|great|cool|nice|skip)[.!]*$/i.test(text)) return false;
+  // An amount, perhaps with its currency: "150", "GHS 150", "150 cedis".
+  if (kind === "price") return /^\D{0,6}\d[\d,]*(?:\.\d+)?\s*[a-z₵]{0,8}\.?$/i.test(text);
+  // A batch edit ("2 change price to 150", "2: …") belongs to the batch.
+  if (/^(?:product\s*)?#?\d+\s*(?:[:.)-]|\s(?:change|set|make|edit|update|price|stock|qty|quantity)\b)/i.test(text)) return false;
+  // A short bare number is a product count or number, not a brand or a reason.
+  if (/^\d{1,3}$/.test(text)) return false;
+  return true;
+}
+
+/**
+ * A reply while a quality-check question is open. True when it was the
+ * answer (and was handled); false hands it to the normal flow, dropping
+ * the question unless it's a photo answer still in progress.
+ */
+async function handleQcAnswer(
+  userId:      string,
+  phoneNumber: string,
+  session:     WhatsAppSession,
+  content:     { text?: string; imageMediaId?: string },
+): Promise<boolean> {
+  const q = session.awaitingQcAnswer!;
+  if (!CATEGORY_ANSWER_STATES.has(session.state)) return false;
+  const text = content.text?.trim() ?? "";
+
+  if (q.kind === "photos") {
+    if (content.imageMediaId) {
+      await addQcPhoto(userId, phoneNumber, q.listingId, content.imageMediaId);
+      return true;
+    }
+    if (/^(done|finished|that'?s all|ok done)[.!]*$/i.test(text)) {
+      await finishQcPhotos(userId, phoneNumber, q.listingId);
+      return true;
+    }
+    await updateSession(phoneNumber, { awaitingQcAnswer: null });
+    return false;
+  }
+
+  if (content.imageMediaId || !looksLikeQcAnswer(q.kind, text)) {
+    await updateSession(phoneNumber, { awaitingQcAnswer: null });
+    return false;
+  }
+  await applyQcAnswer(userId, phoneNumber, q, text);
+  return true;
+}
+
+const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
+
+async function applyQcAnswer(userId: string, phoneNumber: string, q: QcQuestion, text: string): Promise<void> {
+  const db = createServerClient();
+  const { data: row } = await db
+    .from("listings")
+    .select("id, whatsapp_seq, title, description, dynamic_attributes, field_sources, sale_price")
+    .eq("id", q.listingId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!row) {
+    await updateSession(phoneNumber, { awaitingQcAnswer: null });
+    await replyError(phoneNumber, "⚠️ I couldn't find that product — it may have been removed.");
+    return;
+  }
+  const label = row.whatsapp_seq != null ? `Product ${row.whatsapp_seq}` : (row.title as string | null) ?? "That product";
+  const sources = { ...((row.field_sources as Record<string, string> | null) ?? {}) };
+
+  if (q.kind === "price") {
+    const n = Number(text.replace(/,/g, "").match(/\d+(?:\.\d+)?/)?.[0]);
+    if (!Number.isFinite(n) || n <= 0) {
+      await replyText(phoneNumber, `I couldn't read a price in that. Reply with just the amount, e.g. *150*.`);
+      return;
+    }
+    const sale = row.sale_price != null ? Number(row.sale_price) : null;
+    await db.from("listings").update({
+      selling_price: n,
+      ...(sale != null && sale >= n ? { sale_price: null } : {}),
+      field_sources: { ...sources, selling_price: "user" },
+    }).eq("id", q.listingId);
+    await updateSession(phoneNumber, { awaitingQcAnswer: null });
+    await replyText(phoneNumber, `🔧 ${label}: price set to ${n}. Resubmitting…`);
+    await pushAndReport(userId, phoneNumber, q.listingId, label);
+    return;
+  }
+
+  if (q.kind === "brand") {
+    const brand = /^(generic|none|no brand|unbranded|n\/?a)[.!]*$/i.test(text) ? "Generic" : text.slice(0, 80);
+    await db.from("listings").update({ brand, field_sources: { ...sources, brand: "user" } }).eq("id", q.listingId);
+    await updateSession(phoneNumber, { awaitingQcAnswer: null });
+    await replyText(phoneNumber, `🔧 ${label}: brand set to "${brand}". Resubmitting…`);
+    await pushAndReport(userId, phoneNumber, q.listingId, label);
+    return;
+  }
+
+  if (q.kind === "value") {
+    const value = text.slice(0, 300);
+    const fieldLabel = q.fieldLabel ?? "Detail";
+    if (q.field) {
+      const attrs = { ...((row.dynamic_attributes as Record<string, unknown> | null) ?? {}), [q.field]: value };
+      await db.from("listings").update({
+        dynamic_attributes: attrs,
+        field_sources: { ...sources, [`dynamic_attributes.${q.field}`]: "user" },
+      }).eq("id", q.listingId);
+    } else {
+      // The category has no field for it: say it in the description.
+      const description = `${(row.description as string | null) ?? ""}<p><strong>${escapeHtml(fieldLabel)}:</strong> ${escapeHtml(value)}</p>`;
+      await db.from("listings").update({ description }).eq("id", q.listingId);
+    }
+    await updateSession(phoneNumber, { awaitingQcAnswer: null });
+    await replyText(phoneNumber, `🔧 ${label}: added ${fieldLabel} "${value}". Resubmitting…`);
+    await pushAndReport(userId, phoneNumber, q.listingId, label);
+    return;
+  }
+
+  // details: the reason the seller copied from Vendor Center. Decided
+  // again from their words, and never asked for a second time.
+  await db.from("listings").update({
+    jumia_qc_comment: text.slice(0, 1000),
+    jumia_error:      `quality check: ${text.slice(0, 450)}`,
+  }).eq("id", q.listingId);
+  await updateSession(phoneNumber, { awaitingQcAnswer: null });
+  await handleFixAndResubmit(userId, phoneNumber, q.listingId, { qcDetailsGiven: true });
+}
+
+async function addQcPhoto(userId: string, phoneNumber: string, listingId: string, mediaId: string): Promise<void> {
+  const url = await ingestWhatsAppImage(mediaId, userId);
+  if (!url) {
+    await replyError(phoneNumber, "⚠️ That photo didn't come through cleanly (unsupported format or too large) — try another one.");
+    return;
+  }
+  // Atomic append — an album arrives as concurrent deliveries
+  // (2026-10-01_qc-remedies.sql, like append_listing_image).
+  const { data } = await createServerClient().rpc("append_qc_photo", {
+    p_listing_id: listingId, p_url: url, p_max: MAX_LISTING_IMAGES,
+  });
+  const count = ((data as { image_count: number }[] | null)?.[0]?.image_count) ?? 0;
+  if (count === 1) {
+    await replyButtons(phoneNumber, "📷 Got it. Send any more photos, then reply *done*.", [{ id: "done", title: "Done ✅" }]);
+  }
+}
+
+async function finishQcPhotos(userId: string, phoneNumber: string, listingId: string): Promise<void> {
+  const db = createServerClient();
+  const { data: row } = await db
+    .from("listings")
+    .select("id, whatsapp_seq, title, qc_new_images")
+    .eq("id", listingId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!row) {
+    await updateSession(phoneNumber, { awaitingQcAnswer: null });
+    await replyError(phoneNumber, "⚠️ I couldn't find that product — it may have been removed.");
+    return;
+  }
+  const photos = ((row.qc_new_images as string[] | null) ?? []).filter(Boolean);
+  if (photos.length === 0) {
+    await replyText(phoneNumber, "I haven't received any new photos yet. Send them, then reply *done*.");
+    return;
+  }
+  const label = row.whatsapp_seq != null ? `Product ${row.whatsapp_seq}` : (row.title as string | null) ?? "That product";
+  await db.from("listings").update({ images: photos, image_variants: null, qc_new_images: null }).eq("id", listingId);
+  await updateSession(phoneNumber, { awaitingQcAnswer: null });
+  await replyText(phoneNumber, `🔧 ${label}: using your ${photos.length} new photo${photos.length === 1 ? "" : "s"}. Resubmitting…`);
+  await pushAndReport(userId, phoneNumber, listingId, label);
 }
 
 /**

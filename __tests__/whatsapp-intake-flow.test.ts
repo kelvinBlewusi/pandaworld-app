@@ -1751,3 +1751,161 @@ describe("connecting Jumia from the chat", () => {
     expect(sent.at(-1)?.body).toContain("expired or was already used");
   });
 });
+
+// Jumia's quality check rejected a listing after the upload went through
+// (lib/jumia/qc-followup.ts). Fix & resubmit does what lib/jumia/
+// qc-remedy.ts decides, and asks the seller for what only they know.
+describe("fixing a quality-check rejection", () => {
+  const QC_ID = "33333333-3333-3333-3333-333333333333";
+  let msg = 0;
+  const say = (text: string) => handleLinkedMessage(USER, PHONE, `qc-${++msg}`, { text });
+  const photo = (id: string) => handleLinkedMessage(USER, PHONE, `qc-${++msg}`, { imageMediaId: id });
+  const qcRow = () => db.tables.listings[0];
+  const question = () => session().awaiting_qc_answer as Record<string, unknown> | null | undefined;
+  const lastBody = () => sent.at(-1)?.body ?? "";
+
+  function seedQcRejected(reason: string | null, comment: string | null) {
+    db.tables.listings = [{
+      id: QC_ID,
+      user_id: USER,
+      whatsapp_seq: 3,
+      title: "Collagen With Burn Dietary Supplement",
+      description: "<p>A long enough description to clear the fifty-character minimum check easily.</p>",
+      category_code: "5000001",
+      category_path: "Health & Beauty > Vitamins & Dietary Supplements",
+      brand: "Generic",
+      images: ["https://cdn.test/old.jpg"],
+      selling_price: 126,
+      sale_price: null,
+      status: "failed",
+      jumia_qc_status: "rejected",
+      jumia_qc_reason: reason,
+      jumia_qc_comment: comment,
+      jumia_error: "rejected in quality check",
+      field_sources: {},
+      dynamic_attributes: {},
+    }];
+  }
+
+  beforeEach(() => {
+    pushCallCount = 0;
+    pushResult = { ok: true };
+    autoAnalyzeCalls.length = 0;
+    autoAnalyzeResult = { ok: true };
+    db.tables.jumia_connections = [{ user_id: USER, country: "GH" }];
+    db.tables.jumia_unlistable_categories = [];
+    db.tables.jumia_category_attributes = [
+      { category_code: 5000001, name: "fda", label: "FDA" },
+      { category_code: 5000001, name: "fda", label: "FDA" },
+      { category_code: 5000001, name: "product_weight", label: "Weight (kg)" },
+    ];
+    seedSession({ state: "awaiting_confirmation", awaiting_category_for: null, awaiting_qc_answer: null });
+  });
+
+  it("asks for the FDA number and puts the answer in the category's FDA field", async () => {
+    seedQcRejected(null, "Kindly Provide Product's Health/Food Regulation Registration Number. (Mandatory FDA registration number is missing.)");
+
+    await say(`fix:${QC_ID}`);
+
+    expect(lastBody()).toContain("What is the product's FDA registration number?");
+    expect(question()).toEqual({ listingId: QC_ID, kind: "value", field: "fda", fieldLabel: "FDA" });
+    expect(pushCallCount).toBe(0);
+    expect(autoAnalyzeCalls).toHaveLength(0);
+
+    await say("FDA/DS.24-5678");
+
+    expect(qcRow().dynamic_attributes).toEqual({ fda: "FDA/DS.24-5678" });
+    expect((qcRow().field_sources as Record<string, string>)["dynamic_attributes.fda"]).toBe("user");
+    expect(pushCallCount).toBe(1);
+    expect(question()).toBeNull();
+    expect(sent.some((m) => m.body.includes('added FDA "FDA/DS.24-5678"'))).toBe(true);
+  });
+
+  it("asks for Vendor Center's reason when Jumia gave none, then acts on what the seller pastes", async () => {
+    seedQcRejected("Other Reason", "Rejected");
+
+    await say(`fix:${QC_ID}`);
+    expect(lastBody()).toContain("paste them here");
+    expect(question()).toEqual({ listingId: QC_ID, kind: "details" });
+
+    await say("Wrong Brand: The product image shows NIVEA, please create it with the correct brand");
+    expect(qcRow().jumia_qc_comment).toContain("shows NIVEA");
+    expect(question()).toEqual({ listingId: QC_ID, kind: "brand" });
+    expect(lastBody()).toContain("What brand is on the product?");
+
+    await say("Nivea");
+    expect(qcRow()).toMatchObject({ brand: "Nivea", field_sources: { brand: "user" } });
+    expect(pushCallCount).toBe(1);
+  });
+
+  it("collects new photos and resubmits with them on done", async () => {
+    seedQcRejected("Poor Image Quality", "Images are blurry");
+
+    await say(`fix:${QC_ID}`);
+    expect(lastBody()).toContain("Send new photos of the product");
+
+    await photo("new-1");
+    await photo("new-2");
+    // One acknowledgement for the burst, not one per photo.
+    expect(sent.filter((m) => m.body.includes("Send any more photos"))).toHaveLength(1);
+    expect(qcRow().images).toEqual(["https://cdn.test/old.jpg"]);
+
+    await say("done");
+    expect(qcRow().images).toEqual(["https://cdn.test/new-1.jpg", "https://cdn.test/new-2.jpg"]);
+    expect(qcRow().qc_new_images).toBeNull();
+    expect(pushCallCount).toBe(1);
+    expect(question()).toBeNull();
+  });
+
+  it("asks for a price and sets it", async () => {
+    seedQcRejected("Product Pricing", "Price is not realistic");
+
+    await say(`fix:${QC_ID}`);
+    await say("GHS 150");
+
+    expect(qcRow().selling_price).toBe(150);
+    expect(pushCallCount).toBe(1);
+  });
+
+  it("explains what can't be fixed, and resubmits nothing", async () => {
+    seedQcRejected("Brand Banned", null);
+
+    await say(`fix:${QC_ID}`);
+
+    expect(lastBody()).toContain("Jumia doesn't let your shop sell this brand");
+    expect(pushCallCount).toBe(0);
+    expect(autoAnalyzeCalls).toHaveLength(0);
+    expect(question()).toBeFalsy();
+  });
+
+  it("redrafts what a redraft can fix", async () => {
+    seedQcRejected("Wrong Title", null);
+
+    await say(`fix:${QC_ID}`);
+
+    expect(autoAnalyzeCalls).toHaveLength(1);
+    expect(pushCallCount).toBe(1);
+  });
+
+  it("leaves a batch edit to the batch rather than reading it as the answer", async () => {
+    seedQcRejected("Product Pricing", null);
+    await say(`fix:${QC_ID}`);
+
+    await say("2 change price to 150");
+
+    expect(qcRow().selling_price).toBe(126);
+    expect(question()).toBeNull();
+    expect(pushCallCount).toBe(0);
+  });
+
+  it("drops the question when the seller moves on", async () => {
+    seedQcRejected(null, "Kindly provide the product's FDA registration number");
+    await say(`fix:${QC_ID}`);
+
+    await say("thanks");
+
+    expect(question()).toBeNull();
+    expect(qcRow().dynamic_attributes).toEqual({});
+    expect(pushCallCount).toBe(0);
+  });
+});

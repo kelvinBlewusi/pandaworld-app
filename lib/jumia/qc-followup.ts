@@ -150,6 +150,9 @@ export async function followUpQc(
         jumia_qc_status:     "rejected",
         jumia_qc_checked_at: checkedAt,
         jumia_error:         errorMsg,
+        // Jumia's own words, for lib/jumia/qc-remedy.ts to decide the fix.
+        jumia_qc_reason:     verdict.reason,
+        jumia_qc_comment:    verdict.comment,
         credits_due:         null,
       }).eq("id", c.id).eq("status", "live").select("id");
       if (!moved || moved.length === 0) continue;
