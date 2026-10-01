@@ -1285,6 +1285,19 @@ function isDuplicateSlot(e: unknown): boolean {
   return /duplicate key value|23505|already exists/i.test(msg);
 }
 
+/** The listing already holding this batch position, if any. */
+async function findBatchSlotListing(userId: string, batchId: string | null, seq: number): Promise<string | null> {
+  if (!batchId) return null;
+  const { data } = await createServerClient()
+    .from("listings")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("whatsapp_batch_id", batchId)
+    .eq("whatsapp_seq", seq)
+    .maybeSingle();
+  return (data?.id as string | undefined) ?? null;
+}
+
 /**
  * The one listing for this product, creating it only if nobody else
  * already has. See the call site for the album race this exists for.
@@ -1297,19 +1310,7 @@ async function claimBatchSlot(
   batchId: string | null,
   seq:     number,
 ): Promise<{ ok: true; listingId: string } | { ok: false; message: string }> {
-  const db = createServerClient();
-
-  const findExisting = async (): Promise<string | null> => {
-    if (!batchId) return null;
-    const { data } = await db
-      .from("listings")
-      .select("id")
-      .eq("user_id", userId)
-      .eq("whatsapp_batch_id", batchId)
-      .eq("whatsapp_seq", seq)
-      .maybeSingle();
-    return (data?.id as string | undefined) ?? null;
-  };
+  const findExisting = () => findBatchSlotListing(userId, batchId, seq);
 
   const existing = await findExisting();
   if (existing) return { ok: true, listingId: existing };
@@ -1419,7 +1420,7 @@ async function appendPhotoToListing(
   listingId:   string | null,
   imageMediaId: string,
   quiet:       boolean,
-): Promise<{ ok: true; listingId: string } | { ok: false }> {
+): Promise<{ ok: true; listingId: string } | { ok: false; listingId?: string }> {
   if (!listingId) {
     // CLAIM the (batch, position) slot rather than just creating a row.
     //
@@ -1466,7 +1467,9 @@ async function appendPhotoToListing(
         [{ id: "done", title: "Done ✅" }],
       );
     }
-    return { ok: false };
+    // The photo is dropped, but the listing comes back so a caption on it
+    // is still saved: it is the seller's note, not part of the photo.
+    return { ok: false, listingId };
   }
 
   const url = await ingestWhatsAppImage(imageMediaId, userId);
@@ -1521,20 +1524,94 @@ async function settlePhotosBeforeClose(listingId: string): Promise<void> {
 }
 
 /**
+ * How long a close marker waits for a photo that has reached the webhook
+ * but not yet made its listing. A cold start on the photo's own delivery
+ * can take a few seconds; this is what that wait is bounded by.
+ */
+const PHOTO_IN_FLIGHT_MS = 10_000;
+const PHOTO_IN_FLIGHT_POLL_MS = 1_000;
+
+/** Whether an inbound photo from this number reached the webhook since
+ *  `sinceMs`. The webhook logs every message on arrival, before handling
+ *  it (app/api/whatsapp/webhook/route.ts), so this sees a photo whose
+ *  handling is still under way. */
+async function photoReceivedSince(phoneNumber: string, sinceMs: number): Promise<boolean> {
+  const { data, error } = await createServerClient()
+    .from("whatsapp_message_log")
+    .select("id")
+    .eq("phone_number", phoneNumber)
+    .eq("direction", "inbound")
+    .eq("message_type", "image")
+    .gt("created_at", new Date(sinceMs).toISOString())
+    .limit(1);
+  return !error && Array.isArray(data) && data.length > 0;
+}
+
+/**
+ * The listing for this product, waiting for one whose photo is still being
+ * handled. Live, 2026-10-01: a seller sent product 1's photo and "1" a
+ * second apart, exactly as quiet mode tells them to. The "1" was handled
+ * before the photo had made product 1's listing, found nothing to close,
+ * and was filed as a note; product 1 never closed, and products 2 to 4's
+ * photos all landed on it. Only waits when a photo did arrive just now, so
+ * a marker sent with no photo at all is answered straight away.
+ */
+async function slotListingOnceInFlightPhotoLands(
+  userId:      string,
+  phoneNumber: string,
+  batchId:     string | null,
+  seq:         number,
+): Promise<string | null> {
+  const found = await findBatchSlotListing(userId, batchId, seq);
+  if (found || !(await photoReceivedSince(phoneNumber, Date.now() - PHOTO_IN_FLIGHT_MS))) return found;
+  const deadline = Date.now() + PHOTO_IN_FLIGHT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, PHOTO_IN_FLIGHT_POLL_MS));
+    const listingId = await findBatchSlotListing(userId, batchId, seq);
+    if (listingId) return listingId;
+  }
+  return null;
+}
+
+/**
+ * Notes still parked on the session when a product closes belong to it: a
+ * note that overtook its photo is parked, and the photo's delivery only
+ * picks up what it saw parked when it started. Read fresh, applied here,
+ * then cleared by the advance, instead of being cleared unread.
+ */
+async function applyParkedNotes(userId: string, phoneNumber: string, listingId: string): Promise<void> {
+  const fresh = await getOrCreateSession(userId, phoneNumber);
+  if (fresh.pendingNotes) await applyNotes(listingId, fresh.pendingNotes);
+}
+
+/** A message that is only the number of another product in this batch
+ *  ("2", "*2*"). Never a price: quiet mode asks for these numbers, and
+ *  "2" and "4" read as prices left a draft priced at 4. */
+function otherProductNumber(text: string, seq: number, batchSize: number): number | null {
+  const m = /^\*?(\d{1,2})\*?[.,!]*$/.exec(text.trim());
+  if (!m) return null;
+  const n = Number(m[1]);
+  return n >= 1 && n <= batchSize && n !== seq ? n : null;
+}
+
+/**
  * Quiet batch mode: the seller sends every product's photos back to back
  * with no per-product confirmations, closing each one by replying with
  * just its number (or "done") — see the rule message sent when the mode
  * is chosen, in handleAwaitingPhotos above.
  *
  * Design constraint: a bare number is otherwise a price everywhere else
- * in this flow (extractPrice's bare-number rule, awaitingPriceFor).
- * Deliberately narrow to avoid that collision: ONLY the string form of
- * the CURRENT product's own sequence number closes it. Anything else —
- * including a number that doesn't match, which is far more likely to be
- * a miscount than a deliberate signal — falls through to being parked as
- * an ordinary note on whatever product is currently open, same as free
- * text always has been. Nothing is ever silently discarded; a mismatched
- * marker just doesn't get to skip the settle-window safety.
+ * in this flow (extractPrice's bare-number rule, awaitingPriceFor). Only
+ * the CURRENT product's own number closes it. Another product's number on
+ * its own means the seller and the bot disagree about which product is
+ * open, which is worth breaking the silence for (a later one) or ignoring
+ * (an earlier one, already closed). Any other text is a note on whatever
+ * product is open.
+ *
+ * Quiet mode replies between products only when something is wrong right
+ * now: a close with no photo, a number out of turn, a slot that couldn't
+ * be claimed or a photo that wouldn't ingest. Staying silent through those
+ * is how a seller sent four products and got nothing back.
  */
 async function handleQuietBatchMessage(
   userId:      string,
@@ -1548,8 +1625,9 @@ async function handleQuietBatchMessage(
 
   if (content.imageMediaId) {
     const appended = await appendPhotoToListing(userId, phoneNumber, session, seq, listingId, content.imageMediaId, true);
-    if (!appended.ok) return;
-    listingId = appended.listingId;
+    // Over the photo cap the photo is dropped but its caption still counts.
+    if (!appended.ok && !appended.listingId) return;
+    listingId = appended.listingId ?? listingId;
   }
 
   const text = content.text?.trim();
@@ -1561,9 +1639,15 @@ async function handleQuietBatchMessage(
   // with the number the same natural way they'd combine one with "done"
   // must not lose the note.
   const tokens = text.split(/\s+/);
-  const lastToken = (tokens[tokens.length - 1] ?? "").replace(/[.,!]+$/, "");
-  const isCloseMarker = Boolean(listingId) && (lastToken === String(seq) || /^done$/i.test(lastToken));
-  if (!isCloseMarker) {
+  const lastToken = (tokens[tokens.length - 1] ?? "").replace(/^\*+/, "").replace(/[*.,!]+$/, "");
+  const closesThis = lastToken === String(seq) || /^done$/i.test(lastToken);
+
+  if (!closesThis) {
+    const other = otherProductNumber(text, seq, batchSize);
+    if (other != null) {
+      if (other > seq) await sayStillOnProduct(phoneNumber, listingId, seq, batchSize);
+      return;
+    }
     // Free text that isn't this product's closing signal — park it as a
     // note on whatever's open, exactly like the interactive flow, just
     // without the "got it" reply.
@@ -1572,13 +1656,19 @@ async function handleQuietBatchMessage(
     return;
   }
 
+  const notes = tokens.slice(0, -1).join(" ").trim();
+
+  // This delivery may have read the session before the product's photo
+  // made its listing; look for it, and wait for one still being handled.
+  if (!listingId) listingId = await slotListingOnceInFlightPhotoLands(userId, phoneNumber, session.batchId, seq);
+
   if (!listingId) {
-    // Closing a product that never got a photo. Under the interactive
-    // flow this gets an immediate "send at least one photo first" — quiet
-    // mode stays quiet and simply doesn't advance, so the seller's next
-    // photo lands on this same still-open slot instead of a phantom next
-    // product. The gap surfaces in the missing-photos warning once the
-    // batch actually finishes.
+    // Closing a product that has no photo. Not advanced, so the photos
+    // that follow land on this product rather than the next, and the
+    // seller is told: going on in silence would put the next product's
+    // photos on this one.
+    if (notes) await parkNotes(phoneNumber, session, notes);
+    await replyText(phoneNumber, `I haven't received any photos for product ${seq} yet. Send them, then reply *${seq}*.`);
     return;
   }
 
@@ -1589,14 +1679,12 @@ async function handleQuietBatchMessage(
   // interactive flow's own "done" handling already had to learn once.
   await settlePhotosBeforeClose(listingId);
 
-  const notes = tokens.slice(0, -1).join(" ").trim();
   if (notes) await applyNotes(listingId, notes);
+  await applyParkedNotes(userId, phoneNumber, listingId);
 
   if (seq < batchSize) {
-    // pendingNotes cleared with the advance: anything still parked
-    // belongs to the product just finished, and carrying it forward would
-    // staple one product's price and variants onto the next — same rule
-    // the interactive advance follows.
+    // Any note still parked was applied just above, so clearing it with
+    // the advance can't staple this product's price onto the next.
     await updateSession(phoneNumber, {
       state:        "awaiting_photos",
       listingId:    null,
@@ -1612,6 +1700,31 @@ async function handleQuietBatchMessage(
   // neither of which this function has touched, so it's safe to hand the
   // same object off unchanged.
   await startBatchAnalysis(phoneNumber, userId, session);
+}
+
+/** A later product's number while this one is still open: the seller
+ *  thinks they've moved on and the bot hasn't, so everything they send
+ *  next would land on the wrong product. Says so once, with a way out. */
+async function sayStillOnProduct(
+  phoneNumber: string,
+  listingId:   string | null,
+  seq:         number,
+  batchSize:   number,
+): Promise<void> {
+  const photos = listingId ? (await listingIntakeSummary(listingId)).photos : 0;
+  if (photos === 0) {
+    await replyText(
+      phoneNumber,
+      `⚠️ I'm still on product ${seq} of ${batchSize} and haven't received its photos yet. Send product ${seq}'s photos, then reply *${seq}*.`,
+    );
+    return;
+  }
+  await replyButtons(
+    phoneNumber,
+    `⚠️ I'm still on product ${seq} of ${batchSize}: I didn't get *${seq}*, so the photos you sent after it went onto product ${seq} too (${photos} so far).\n\n` +
+      `Tap *Restart* to send this batch again. If they're all product ${seq}'s photos, reply *${seq}* instead.`,
+    [{ id: "restart", title: "Restart 🔄" }],
+  );
 }
 
 async function handleAwaitingPhotos(
@@ -1654,8 +1767,9 @@ async function handleAwaitingPhotos(
   // ── Photo, with or without a caption in the same message ────────────────
   if (content.imageMediaId) {
     const appended = await appendPhotoToListing(userId, phoneNumber, session, seq, listingId, content.imageMediaId, false);
-    if (!appended.ok) return;
-    listingId = appended.listingId;
+    // Over the photo cap the photo is dropped but its caption still counts.
+    if (!appended.ok && !appended.listingId) return;
+    listingId = appended.listingId ?? listingId;
 
     // Falls through to the text handling below — a caption ("Price 40,
     // done") sent alongside this photo used to be silently dropped
@@ -1696,6 +1810,7 @@ async function handleAwaitingPhotos(
     // still gets saved instead of discarded.
     const notes = stripDoneSignal(text);
     if (notes && listingId) await applyNotes(listingId, notes);
+    if (listingId) await applyParkedNotes(userId, phoneNumber, listingId);
 
     if (!listingId) {
       // The note is PARKED, not dropped. It used to be discarded right
@@ -1769,8 +1884,9 @@ async function handleAwaitingPhotos(
 
     if (seq < batchSize) {
       // pendingNotes cleared with the advance: anything still parked
-      // belongs to the product just finished, and carrying it forward
-      // would staple one product's price and variants onto the next.
+      // belonged to the product just finished and was applied to it above,
+      // and carrying it forward would staple one product's price and
+      // variants onto the next.
       await updateSession(phoneNumber, {
         state:        "awaiting_photos",
         listingId:    null,

@@ -1173,15 +1173,112 @@ describe("quiet batch mode", () => {
     expect(session().batch_seq).toBe(2);
   });
 
-  it("never advances a product with no photo yet — the marker just waits", async () => {
+  // Silence here let the next product's photos land on this one.
+  it("never advances a product with no photo, and says so", async () => {
     seedSession({ batch_size: 2, batch_seq: 1, batch_quiet: true });
     sent.length = 0;
 
-    await handleLinkedMessage(USER, PHONE, "m1", { text: "1" });
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "Price 40\n1" });
 
-    expect(sent).toHaveLength(0);
+    expect(sent.map((m) => m.body)).toEqual(["I haven't received any photos for product 1 yet. Send them, then reply *1*."]);
     expect(session().batch_seq).toBe(1);
     expect(listings()).toHaveLength(0);
+    // The note waits for the photo; the marker isn't kept as a note.
+    expect(session().pending_notes).toBe("Price 40");
+  });
+
+  // Live, 2026-10-01: product 1's photo and "1" a second apart. The "1"
+  // was handled before the photo had made the listing, so it was filed as
+  // a note, product 1 never closed, and products 2 to 4 landed on it.
+  it("closes a product whose photo is still being handled when its number arrives", async () => {
+    jest.useFakeTimers({ doNotFake: ["nextTick"] });
+    try {
+      seedSession({ batch_size: 2, batch_seq: 1, batch_quiet: true });
+      // The webhook logs every message on arrival, before handling it.
+      db.tables.whatsapp_message_log = [{ phone_number: PHONE, direction: "inbound", message_type: "image", created_at: new Date().toISOString() }];
+      sent.length = 0;
+
+      const closing = handleLinkedMessage(USER, PHONE, "m2", { text: "1" });
+      await jest.advanceTimersByTimeAsync(0);
+      expect(listings()).toHaveLength(0); // the "1" is waiting for the photo
+
+      await handleLinkedMessage(USER, PHONE, "m1", { imageMediaId: "p1a", text: "Brand is Palmolive\nPrice 240" });
+      await jest.advanceTimersByTimeAsync(8_000);
+      await closing;
+
+      expect(sent).toHaveLength(0);
+      expect(session().batch_seq).toBe(2);
+      expect(session().listing_id).toBeNull();
+      expect(session().pending_notes).toBeNull();
+      expect(String(listings()[0].user_prompt)).toBe("Brand is Palmolive\nPrice 240");
+
+      await handleLinkedMessage(USER, PHONE, "m3", photo("p2a"));
+      expect(listings()).toHaveLength(2);
+      expect(listings()[0].images).toEqual(["https://cdn.test/p1a.jpg"]);
+      expect(listings()[1].images).toEqual(["https://cdn.test/p2a.jpg"]);
+    } finally {
+      jest.useRealTimers();
+      db.tables.whatsapp_message_log = [];
+    }
+  });
+
+  // The same session read "2" as a price of 2, and later "4" as 4.
+  it("says it's still on the open product when a later product's number arrives, and never takes it as a price", async () => {
+    seedSession({ batch_size: 4, batch_seq: 1, batch_quiet: true });
+    await handleLinkedMessage(USER, PHONE, "m1", { imageMediaId: "p1a", text: "Price 240" });
+    await handleLinkedMessage(USER, PHONE, "m2", photo("p2a"));
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m3", { text: "2" });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body).toContain("I'm still on product 1 of 4");
+    expect(sent[0].body).toContain("(2 so far)");
+    expect(sent[0].rows).toEqual(["restart"]);
+    expect(session().batch_seq).toBe(1);
+    expect(listings()[0].selling_price).toBe(240);
+    expect(String(listings()[0].user_prompt)).toBe("Price 240");
+  });
+
+  it("ignores an earlier product's number, which is already closed", async () => {
+    seedSession({ batch_size: 3, batch_seq: 2, batch_quiet: true });
+    await handleLinkedMessage(USER, PHONE, "m1", { imageMediaId: "p2a", text: "Price 89" });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "1" });
+
+    expect(sent).toHaveLength(0);
+    expect(session().batch_seq).toBe(2);
+    expect(listings()[0].selling_price).toBe(89);
+  });
+
+  // "Price GHC 89, Category is wigs" was lost with a photo over the cap.
+  it("keeps the caption of a photo sent over the photo limit", async () => {
+    seedSession({ batch_size: 2, batch_seq: 1, batch_quiet: true });
+    for (let i = 0; i < 8; i++) await handleLinkedMessage(USER, PHONE, `m${i}`, photo(`p${i}`));
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m9", { imageMediaId: "p9", text: "Price GHC 89\nCategory is wigs" });
+
+    expect(sent).toHaveLength(0);
+    expect(listings()[0].images).toHaveLength(8);
+    expect(String(listings()[0].user_prompt)).toContain("Category is wigs");
+  });
+
+  // A note that overtook its photo is parked; the photo's delivery only
+  // applies what it saw parked when it started, so one parked a moment
+  // later was cleared unread by the close.
+  it("applies a note still parked when the product closes, instead of clearing it", async () => {
+    seedSession({ batch_size: 2, batch_seq: 1, batch_quiet: true });
+    await handleLinkedMessage(USER, PHONE, "m1", photo("p1a"));
+    session().pending_notes = "Brand is Palmolive";
+    listings()[0].updated_at = new Date(Date.now() - 60_000).toISOString();
+
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "1" });
+
+    expect(session().batch_seq).toBe(2);
+    expect(session().pending_notes).toBeNull();
+    expect(String(listings()[0].user_prompt)).toContain("Brand is Palmolive");
   });
 
   it("holds a close marker out until a fresh photo settles, exactly like the interactive flow's guard", async () => {

@@ -711,6 +711,17 @@ only appear while billing is off.
   tight". The model sees at most two siblings in its top three
   (`diverseTop`): a kids' tablet was offered only Tablet Accessories >
   Bags, Cases & Sleeves > Cases/Bags/Sleeves and picked Cases.
+- **Quiet batch mode's product numbers (2026-10-01)**: in mode I the
+  seller closes each product by sending its number. Live, a photo and "1"
+  sent a second apart: the "1" was handled before the photo had made the
+  listing, was filed as a note, and products 2 to 4 all landed on product
+  1 (8-photo cap, later captions dropped, "2" and "4" read as prices), with
+  no reply at all. Now a number with no listing looks for one, waiting up
+  to 10s when whatsapp_message_log shows a photo just arrived; with none it
+  says so instead of staying silent. Another product's bare number is
+  never a price: a later one gets "I'm still on product N" with Restart,
+  an earlier one is ignored. A photo over the cap keeps its caption, and
+  notes still parked when a product closes are applied to it, not cleared.
 - **Undelivered WhatsApp messages (2026-10-01)**: the send API answers
   200 for a message it later fails to deliver; the failure comes back as a
   webhook status update. The webhook records each one in app_errors
