@@ -52,17 +52,19 @@ export function packRank(id: string | null | undefined): number {
 export interface PackFeature {
   id:          string;
   label:       string;
+  /** For tight spaces such as the Buy credits modal's pack rows. */
+  short:       string;
   minPack:     string;
   comingSoon?: boolean;
 }
 
 export const PACK_FEATURES: PackFeature[] = [
-  { id: "qc_fix",               label: "Jumia QC rejection alerts and guided fixes", minPack: "standard" },
-  { id: "order_alerts",         label: "Order alerts on WhatsApp",                   minPack: "pro", comingSoon: true },
-  { id: "shipping_labels",      label: "Shipping labels on WhatsApp",                minPack: "pro", comingSoon: true },
-  { id: "fee_calc_whatsapp",    label: "Jumia fee calculator on WhatsApp",           minPack: "pro", comingSoon: true },
-  { id: "fee_calc_extension",   label: "Jumia fee calculator on the extension panel", minPack: "pro", comingSoon: true },
-  { id: "image_polish_extension", label: "Jumia image polish on the Chrome extension", minPack: "pro", comingSoon: true },
+  { id: "qc_fix",                 label: "Jumia QC rejection alerts and guided fixes",  short: "QC alerts & fixes",          minPack: "standard" },
+  { id: "order_alerts",           label: "Order alerts on WhatsApp",                    short: "Order alerts",               minPack: "pro", comingSoon: true },
+  { id: "shipping_labels",        label: "Shipping labels on WhatsApp",                 short: "Shipping labels",            minPack: "pro", comingSoon: true },
+  { id: "fee_calc_whatsapp",      label: "Jumia fee calculator on WhatsApp",            short: "Fee calculator on WhatsApp", minPack: "pro", comingSoon: true },
+  { id: "fee_calc_extension",     label: "Jumia fee calculator on the extension panel", short: "Fee calculator in the extension", minPack: "pro", comingSoon: true },
+  { id: "image_polish_extension", label: "Jumia image polish on the Chrome extension",  short: "Image polish in the extension",   minPack: "pro", comingSoon: true },
 ];
 
 /** What a pack includes, in PACK_FEATURES order. */
