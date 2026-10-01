@@ -82,7 +82,7 @@ jest.mock("@/lib/actions/auto-analyze", () => ({
 // "seller still needs to supply X" test depends on its actual logic.
 type PushMockResult =
   | { ok: true; adjustments?: string[] }
-  | { ok: false; message: string; code?: "validation"; needsReconnect?: boolean };
+  | { ok: false; message: string; code?: "validation" | "already_submitted"; needsReconnect?: boolean };
 let pushResult: PushMockResult = { ok: true };
 let pushCallCount = 0;
 // Per-listing override for handleSubmit's "submit all" fan-out, where a
@@ -2043,5 +2043,51 @@ describe("typing the category for a draft the bot wasn't sure of", () => {
     db.tables.listings[0].category_unsure = false;
     await handleLinkedMessage(USER, PHONE, "m2", { text: "Educational Tablets" });
     expect(refillCalls).toHaveLength(0);
+  });
+});
+
+// Jumia refusing fields its category doesn't show, as stored before
+// 2026-10-01: cut at 500 characters, mid-word. Fix & resubmit used to read
+// it as a mixed rejection and redraft (which re-sends the same fields),
+// then send the seller to the editor on the second tap.
+describe("Fix & resubmit for fields Jumia doesn't show in the category", () => {
+  const TABLET_ID = "44444444-4444-4444-4444-444444444444";
+  const EDU = 1029505;
+  const STORED = ["color_family", "main_material", "manufacturer_txt", "battery_feature", "material_family", "note"]
+    .map((n) => `Attribute [${n}] is not visible for category [Educational Tablets].`).join(" ")
+    + " Attribute [warranty_duration] is not visi";
+
+  beforeEach(() => {
+    autoAnalyzeCalls.length = 0;
+    pushResult = { ok: true };
+    pushCallCount = 0;
+    seedSession({ state: "awaiting_count" });
+    db.tables.jumia_excluded_attributes = [];
+    db.tables.jumia_category_attributes = ["color_family", "main_material", "manufacturer_txt", "battery_feature", "material_family", "note", "warranty_duration", "ram"]
+      .map((name) => ({ category_code: EDU, name }));
+    db.tables.listings = [{
+      id: TABLET_ID, user_id: USER, whatsapp_seq: 1, status: "failed",
+      title: "Kids Tablet PC - 4GB RAM, 64GB Storage", description: "A long enough description to clear the fifty-character minimum check easily.",
+      category_code: String(EDU), category_path: "Phones & Tablets > Tablets > Educational Tablets",
+      brand: "Generic", images: ["https://cdn.test/a.jpg"], selling_price: 128, field_sources: {},
+      jumia_error: STORED, jumia_rerun_fingerprint: null, jumia_rerun_count: 0,
+    }];
+  });
+
+  it("drops the named fields and resubmits, without a redraft", async () => {
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${TABLET_ID}` });
+
+    expect(autoAnalyzeCalls).toHaveLength(0);
+    expect(pushCallCount).toBe(1);
+    expect(db.tables.jumia_category_attributes.map((r) => r.name)).toEqual(["ram"]);
+    expect(sent.some((m) => m.body.includes("resubmitted"))).toBe(true);
+  });
+
+  it("says the listing is already submitted instead of \"Jumia still isn't happy\"", async () => {
+    pushResult = { ok: false, code: "already_submitted", message: "This listing is already with Jumia and waiting on their review." };
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${TABLET_ID}` });
+
+    expect(sent.some((m) => m.body.includes("already submitted, so I didn't send it again"))).toBe(true);
+    expect(sent.some((m) => m.body.includes("still isn't happy"))).toBe(false);
   });
 });

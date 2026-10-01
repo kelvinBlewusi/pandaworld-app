@@ -21,6 +21,8 @@ import { recordLiveListing } from "@/lib/jumia/live-listings";
 import type { ListingRow, VariantRow } from "@/lib/supabase/types";
 import { restrictedWordsInJumiaRejection } from "@/lib/ai/restricted-words";
 import { rememberRestrictedWords } from "@/lib/jumia/learned-restricted-words";
+import { extractNotVisibleAttributeNames } from "@/lib/jumia/rejection-remedy";
+import { removeAttributesFromCache } from "@/lib/jumia/categories";
 
 /**
  * A stable hash of the listing content that actually drives a Jumia
@@ -102,6 +104,16 @@ export async function logFeedOutcome(input: FeedOutcomeInput): Promise<void> {
     }
     if (input.outcome === "rejected") {
       await rememberRestrictedWords(restrictedWordsInJumiaRejection(input.rawError), input.rawError ?? null);
+    }
+    // Fields Jumia says this category doesn't show ("Attribute [x] is not
+    // visible for category [y]") leave its cached schema for good, so the
+    // push leaves them out from now on: this listing's next attempt and every
+    // later listing in the category. Until 2026-10-01 that only happened
+    // when the seller tapped Fix & resubmit, so a second listing in the same
+    // category (Educational Tablets) hit the identical rejection.
+    if (input.outcome === "rejected" && categoryCode) {
+      const invisible = extractNotVisibleAttributeNames(input.rawError);
+      if (invisible.length > 0) await removeAttributesFromCache(categoryCode, invisible);
     }
     if (input.outcome === "live" && country && categoryCode && listing?.title) {
       await recordLiveListing(input.listingId, country, categoryCode, listing.title);

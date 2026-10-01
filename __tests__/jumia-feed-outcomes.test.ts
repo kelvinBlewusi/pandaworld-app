@@ -96,3 +96,34 @@ describe("logFeedOutcome — source_env", () => {
     expect(db.tables.jumia_feed_outcomes[0]).toMatchObject({ source_env: "staging" });
   });
 });
+
+// "Attribute [x] is not visible for category [y]" names fields Jumia doesn't
+// show for that category. They leave its cached schema the moment the
+// rejection is logged, so the next push in that category leaves them out
+// (2026-10-01: a second Educational Tablets listing hit the same rejection).
+describe("logFeedOutcome — fields Jumia doesn't show for the category", () => {
+  const EDU = 1029505;
+  const NOT_VISIBLE = ["color_family", "main_material", "manufacturer_txt", "package_content"]
+    .map((n) => `Attribute [${n}] is not visible for category [Educational Tablets].`).join(" ");
+
+  beforeEach(() => {
+    db.tables.jumia_feed_outcomes = [];
+    db.tables.jumia_excluded_attributes = [];
+    db.tables.jumia_category_attributes = ["color_family", "main_material", "manufacturer_txt", "package_content", "ram", "operating_system"]
+      .map((name) => ({ category_code: EDU, name }));
+  });
+
+  it("drops them from the category's cached schema and remembers them", async () => {
+    await logFeedOutcome({ listingId: "listing-1", outcome: "rejected", categoryCode: String(EDU), rawError: NOT_VISIBLE, country: "GH" });
+
+    expect(db.tables.jumia_category_attributes.map((r) => r.name).sort()).toEqual(["operating_system", "ram"]);
+    expect(db.tables.jumia_excluded_attributes.map((r) => r.name).sort())
+      .toEqual(["color_family", "main_material", "manufacturer_txt", "package_content"]);
+  });
+
+  it("leaves the schema alone for any other rejection", async () => {
+    await logFeedOutcome({ listingId: "listing-1", outcome: "rejected", categoryCode: String(EDU), rawError: "Price must be greater than 0", country: "GH" });
+    expect(db.tables.jumia_category_attributes).toHaveLength(6);
+    expect(db.tables.jumia_excluded_attributes).toHaveLength(0);
+  });
+});

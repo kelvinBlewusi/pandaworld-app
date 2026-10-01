@@ -45,6 +45,16 @@ describe("classifyJumiaRejection", () => {
     expect(r.kind).toBe("not_visible_attributes");
   });
 
+  // Stored rejections were cut at 500 characters, mid-word. This one (the
+  // live Educational Tablets rejection, as stored) was read as a mixed
+  // message and redrafted, which can't fix it.
+  it("classifies a not-visible rejection cut off mid-word as a cache correction", () => {
+    const stored = "Attribute [color_family] is not visible for category [Educational Tablets]. Attribute [main_material] is not visible for category [Educational Tablets]. Attribute [manufacturer_txt] is not visible for category [Educational Tablets]. Attribute [battery_feature] is not visible for category [Educational Tablets]. Attribute [material_family] is not visible for category [Educational Tablets]. Attribute [note] is not visible for category [Educational Tablets]. Attribute [warranty_duration] is not visi";
+    expect(classifyJumiaRejection(stored).kind).toBe("not_visible_attributes");
+    expect(classifyJumiaRejection(stored.replace(/ is not visi$/, " is not visible for category [Educati")).kind).toBe("not_visible_attributes");
+    expect(classifyJumiaRejection(stored.replace(/ is not visi$/, " is not visible for category [Educational Tablets]. The column [x")).kind).toBe("rerun");
+  });
+
   // A mixed rejection — a not-visible attribute alongside a different kind
   // of problem — means more than a stale cache is wrong, so it should
   // still fall through to a full rerun rather than only clearing the

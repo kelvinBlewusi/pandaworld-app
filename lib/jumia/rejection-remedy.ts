@@ -89,15 +89,26 @@ export interface Remedy {
  * generic rerun bucket instead of being treated as a pure cache-correction
  * case.
  *
- * Tolerates one trailing truncated fragment ("Attribute [warranty_address]"
- * with no closing clause) — the live rejection this branch was built from
- * was itself cut off mid-sentence there.
+ * Tolerates one trailing fragment cut off anywhere inside the complaint
+ * ("Attribute [warranty_address]", "Attribute [warranty_duration] is not
+ * visi"): stored rejections were cut at 500 characters until 2026-10-01,
+ * and a 13-attribute one for Educational Tablets was read as a mixed
+ * message and redrafted, which can't help, instead of dropping the fields.
  */
 function isEntirelyNotVisibleAttributeComplaints(msg: string): boolean {
   const stripped = msg
     .replace(/attribute\s*\[\s*[^\]]+?\s*\]\s+is not visible for category\s*\[\s*[^\]]*\]\.?/gi, "")
     .trim();
-  return stripped === "" || /^attribute\s*\[\s*[^\]]*\]?\.?$/i.test(stripped);
+  return stripped === "" || isCutOffNotVisibleComplaint(stripped);
+}
+
+/** "Attribute [x" … "Attribute [x] is not visible for category [y": one complaint cut off before its end. */
+function isCutOffNotVisibleComplaint(fragment: string): boolean {
+  const m = /^attribute\s*\[\s*[^\]]*(?:\]\s*([\s\S]*))?$/i.exec(fragment);
+  if (!m) return false;
+  const rest = (m[1] ?? "").toLowerCase().replace(/\s+/g, " ").replace(/\.$/, "");
+  const full = "is not visible for category [";
+  return full.startsWith(rest) || (rest.startsWith(full) && !rest.includes("]"));
 }
 
 export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
@@ -483,6 +494,14 @@ export function extractNotVisibleAttributeNames(raw: string | null | undefined):
   while ((match = re.exec(msg)) !== null) {
     names.push(match[1]);
   }
+  // A last complaint cut off when the message was stored, once its clause
+  // has begun ("Attribute [warranty_duration] is not visi"): its name counts
+  // too. A bare "Attribute [x]" could be any complaint, so it doesn't.
+  const tail = msg
+    .replace(/attribute\s*\[\s*[^\]]+?\s*\]\s+is not visible for category\s*\[\s*[^\]]*\]\.?/gi, "")
+    .trim();
+  const cutName = /^attribute\s*\[\s*([^\]]+?)\s*\]\s+is\b/i.exec(tail)?.[1];
+  if (names.length > 0 && cutName && isCutOffNotVisibleComplaint(tail) && !names.includes(cutName)) names.push(cutName);
   return names;
 }
 
