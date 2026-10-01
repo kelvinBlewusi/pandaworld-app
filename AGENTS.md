@@ -722,10 +722,12 @@ only appear while billing is off.
   never a price: a later one gets "I'm still on product N" with Restart,
   an earlier one is ignored. A photo over the cap keeps its caption, and
   notes still parked when a product closes are applied to it, not cleared.
-  Picking mode I now answers "…See example below." followed by a worked
-  example image (public/whatsapp/quiet-mode-example.jpg, sent by link with
-  sendImage; its source page is scripts/whatsapp/quiet-mode-example.html).
-  Meta fetches the link, so it only works where the app URL is public.
+  Picking mode I now answers with ONE message: a worked example image
+  (public/whatsapp/quiet-mode-example.jpg, sent by link with sendImage;
+  its source page is scripts/whatsapp/quiet-mode-example.html) captioned
+  with the instruction, "…like in the example above" (the caption shows
+  under the picture). If the send is refused the instruction goes as plain
+  text. Meta fetches the link, so it only works where the app URL is public.
 - **Undelivered WhatsApp messages (2026-10-01)**: the send API answers
   200 for a message it later fails to deliver; the failure comes back as a
   webhook status update. The webhook records each one in app_errors

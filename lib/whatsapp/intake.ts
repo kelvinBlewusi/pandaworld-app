@@ -1756,12 +1756,15 @@ async function handleAwaitingPhotos(
     // The mechanic was already spelled out in the choice message above, so
     // this confirms the pick and SHOWS it: a worked example (photo, price
     // as the caption, then the product's number) is clearer than another
-    // paragraph. The image is a bonus, so failing to send it costs nothing.
-    await replyText(phoneNumber, `Got it — send product ${seq}'s photos, then reply *${seq}* once you're done with it. See example below.`);
+    // paragraph. One message, the instruction as the image's caption,
+    // which WhatsApp shows under the picture. If the image is refused, the
+    // instruction still goes out as plain text.
+    const instruction = `Got it — send product ${seq}'s photos, then reply *${seq}* once you're done with it`;
     try {
-      await sendImageIfConfigured(phoneNumber, quietModeExampleUrl());
+      await sendImageIfConfigured(phoneNumber, quietModeExampleUrl(), `${instruction}, like in the example above.`);
     } catch (e) {
       console.warn(`[whatsapp intake] quiet-mode example image failed for ${phoneNumber}: ${(e as Error).message}`);
+      await replyText(phoneNumber, `${instruction}.`);
     }
     return;
   }
