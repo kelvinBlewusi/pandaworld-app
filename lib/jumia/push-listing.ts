@@ -909,6 +909,12 @@ export async function notifyBatchResolved(
   }
 }
 
+// Jumia's reason, as kept on the listing. It was cut at 500 characters,
+// which cut a 13-attribute "not visible for category" rejection mid-word;
+// Fix & resubmit then misread it as a mixed rejection and redrafted
+// (2026-10-01). Long enough for any rejection seen so far.
+const MAX_STORED_ERROR = 4000;
+
 /**
  * Fan out every listing that genuinely resolved in one cron pass for ONE
  * user — grouped by whatsapp_batch_id (see notifyBatchResolved) so a
@@ -989,8 +995,8 @@ export async function refreshPendingFeedStatus(
     const errorMsg = failedCount === 0
       ? null
       : liveCount > 0
-        ? `${liveCount} of ${totalCount} variants went live. Jumia rejected ${rejectedSkus.length ? rejectedSkus.join(", ") : `${failedCount} variant(s)`}${reason ? `: ${reason}` : "."}`.slice(0, 500)
-        : (reason ?? "Jumia rejected every product in this feed").slice(0, 500);
+        ? `${liveCount} of ${totalCount} variants went live. Jumia rejected ${rejectedSkus.length ? rejectedSkus.join(", ") : `${failedCount} variant(s)`}${reason ? `: ${reason}` : "."}`.slice(0, MAX_STORED_ERROR)
+        : (reason ?? "Jumia rejected every product in this feed").slice(0, MAX_STORED_ERROR);
 
     if (newStatus === listing.status && !isPending) {
       return { status: listing.status, error: errorMsg, liveCount, totalCount, rejectedSkus };

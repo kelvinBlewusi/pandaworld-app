@@ -3467,6 +3467,14 @@ async function pushAndReport(
     return;
   }
 
+  // Already submitted by something else while this fix ran (2026-10-01: a
+  // "Submit all" tapped during Fix & resubmit). Not a rejection: say what
+  // happened, not "Jumia still isn't happy".
+  if (result.code === "already_submitted") {
+    await replyText(phoneNumber, `ℹ️ ${label}: already submitted, so I didn't send it again. ${result.message}`);
+    return;
+  }
+
   // Failed again. Say so rather than looping silently: a second identical
   // rejection means the automatic repair isn't the right one, and the
   // seller needs to see that instead of tapping the same button forever.

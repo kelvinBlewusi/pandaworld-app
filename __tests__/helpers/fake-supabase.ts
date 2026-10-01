@@ -148,11 +148,14 @@ export class FakeDb {
         return updateBuilder([]);
       },
 
-      upsert(payload: FakeRow, opts: { onConflict: string }) {
-        const key = opts.onConflict;
-        const existing = rows().find((r) => r[key] === payload[key]);
-        if (existing) Object.assign(existing, payload);
-        else db.insertRows(table, [payload]);
+      upsert(payload: FakeRow | FakeRow[], opts: { onConflict: string }) {
+        // onConflict may name several columns ("category_code,name").
+        const keys = opts.onConflict.split(",").map((k) => k.trim());
+        for (const row of Array.isArray(payload) ? payload : [payload]) {
+          const existing = rows().find((r) => keys.every((k) => r[k] === row[k]));
+          if (existing) Object.assign(existing, row);
+          else db.insertRows(table, [row]);
+        }
         return {
           then(resolve: (v: unknown) => unknown) {
             return Promise.resolve({ data: null, error: null }).then(resolve);
@@ -163,6 +166,7 @@ export class FakeDb {
       delete() {
         const deleteBuilder = (filters: Filter[]) => ({
           eq(col: string, val: unknown) { return deleteBuilder([...filters, { col, val, op: "eq" }]); },
+          in(col: string, val: unknown[]) { return deleteBuilder([...filters, { col, val, op: "in" }]); },
           then(resolve: (v: unknown) => unknown) {
             db.tables[table] = rows().filter((r) => !db.match(r, filters));
             return Promise.resolve({ data: null, error: null }).then(resolve);
