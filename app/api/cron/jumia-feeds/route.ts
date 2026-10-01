@@ -5,7 +5,7 @@ import { decrypt } from "@/lib/security/token-crypto";
 export const dynamic = "force-dynamic";
 import { refreshJumiaConnection } from "@/lib/jumia/api";
 import { refreshPendingFeedStatus, notifyResolvedListings, toResolvedNotice, type ResolvedListingNotice } from "@/lib/jumia/push-listing";
-import { followUpQc, type QcCandidate } from "@/lib/jumia/qc-followup";
+import { followUpQc, qcAlertPromised, type QcCandidate } from "@/lib/jumia/qc-followup";
 import { hasFeature } from "@/lib/billing/features";
 
 // ─── GET /api/cron/jumia-feeds ────────────────────────────────────────────────
@@ -111,11 +111,15 @@ export async function GET(req: NextRequest) {
     // QC follow-up comes with the Standard pack and up (lib/billing/
     // features.ts). Without it nothing is checked: the listings are paced
     // like a check that found nothing, so pg_cron doesn't call back for
-    // them every minute.
-    if (qcByUser.has(userId) && !(await hasFeature(userId, "qc_fix"))) {
-      await markQcChecked(db, qcByUser.get(userId));
-      qcByUser.delete(userId);
-      if (listings.length === 0) continue;
+    // them every minute. Listings accepted before the gate went live keep
+    // their follow-up: their acceptance message promised the QC alert.
+    const qc = qcByUser.get(userId);
+    if (qc && !(await hasFeature(userId, "qc_fix"))) {
+      const promised = qc.filter(qcAlertPromised);
+      await markQcChecked(db, qc.filter((c) => !qcAlertPromised(c)));
+      if (promised.length > 0) qcByUser.set(userId, promised);
+      else qcByUser.delete(userId);
+      if (listings.length === 0 && promised.length === 0) continue;
     }
 
     // Get a valid access token for this user

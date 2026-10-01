@@ -36,6 +36,21 @@ export interface QcCandidate {
   whatsapp_seq:      number | null;
   sku:               string | null;
   category_code:     string | null;
+  /** When Jumia accepted it (qc_followup_candidates). */
+  live_at?:          string | null;
+}
+
+/**
+ * When QC follow-up became a pack feature (deployed 2026-10-01 ~14:56
+ * UTC). Every listing Jumia accepted before then was told "Will alert you
+ * if it passes Jumia QC" whatever the seller's pack, so it keeps its
+ * follow-up. Follow-up stops 3 days after acceptance
+ * (qc_followup_candidates), so this does nothing after 2026-10-04.
+ */
+const QC_GATE_STARTED_AT = Date.parse("2026-10-01T15:00:00Z");
+
+export function qcAlertPromised(candidate: Pick<QcCandidate, "live_at">): boolean {
+  return candidate.live_at != null && Date.parse(candidate.live_at) < QC_GATE_STARTED_AT;
 }
 
 export type QcVerdict =
