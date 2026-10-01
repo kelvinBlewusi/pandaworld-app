@@ -15,6 +15,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { creditPurchase } from "@/lib/billing/extension-credits";
+import { creditsPaidFor } from "@/lib/billing/paystack-purchase";
 
 export const runtime = "nodejs";
 
@@ -51,16 +52,18 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Reference does not match this purchase" }, { status: 400 });
   }
 
-  const credits = Number(tx.metadata?.credits) || 0;
-  if (credits <= 0) {
-    return NextResponse.json({ error: "Invalid credit amount on transaction" }, { status: 400 });
+  const paidFor = creditsPaidFor(tx);
+  if (!paidFor.ok) {
+    console.error(`[extension credits verify] ${reference} not credited: ${paidFor.error}`);
+    return NextResponse.json({ error: "This payment doesn't match a credit pack. Contact support with your receipt." }, { status: 400 });
   }
+  const credits = paidFor.credits;
 
   const result = await creditPurchase({
     userId,
     credits,
     reference,
-    description: `Purchased ${credits} credits (${tx.metadata?.pack ?? "custom"} pack)`,
+    description: `Purchased ${credits} credits (${paidFor.packId} pack)`,
   });
 
   if (!result.ok) {
