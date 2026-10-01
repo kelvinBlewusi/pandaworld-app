@@ -122,7 +122,7 @@ export default function TermsPage() {
             after a listing is accepted, and if Jumia rejects it there, the
             credits are returned. Without that feature, the quality-check
             result is shown in your Jumia Vendor Center only. Features
-            marked as coming soon are not yet available.
+            shown greyed out on the pricing page are not yet available.
           </p>
           <p>
             Credits don&apos;t expire, have no cash value, can&apos;t be
