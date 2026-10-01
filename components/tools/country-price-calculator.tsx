@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * Jumia price calculator for one country, on /sell-on-jumia/<country>:
+ * Jumia price calculator for one country, on /sell-on-jumia/<country> and
+ * in the app for sellers outside Ghana (seller-price-calculator.tsx):
  * pick the category and the commission fills in from Jumia's own table for
  * that country (lib/marketing/country-fees.ts), along with the per-item fee
  * where Jumia publishes one by category or by item size. Where it doesn't

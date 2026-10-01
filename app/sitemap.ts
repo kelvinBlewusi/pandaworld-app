@@ -1,7 +1,7 @@
 import type { MetadataRoute } from "next";
 import { GUIDES } from "@/lib/marketing/guides";
 import { JUMIA_COUNTRIES } from "@/lib/marketing/countries";
-import { CALCULATOR_HREF, COMMISSION_RATES_HREF } from "@/lib/marketing/links";
+import { COMMISSION_RATES_HREF, GHANA_CALCULATOR_HREF } from "@/lib/marketing/links";
 
 // ─── sitemap.xml — Next.js convention file ───────────────────────────────────
 //
@@ -56,7 +56,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority:        0.7,
     })),
     {
-      url:            `${APP_URL}${CALCULATOR_HREF}`,
+      url:            `${APP_URL}${GHANA_CALCULATOR_HREF}`,
       lastModified,
       changeFrequency: "monthly",
       priority:        0.8,                   // free tool — "Jumia price calculator"

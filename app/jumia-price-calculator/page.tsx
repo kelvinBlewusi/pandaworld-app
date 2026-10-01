@@ -5,9 +5,10 @@ import { HomeFloatingNav } from "@/components/marketing/home-floating-nav";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { BreadcrumbLd } from "@/components/marketing/breadcrumb-ld";
 import { PriceCalculator } from "@/components/tools/price-calculator";
+import { CalculatorCountrySwitch } from "@/components/tools/calculator-country-switch";
 import { isBillingEnabled } from "@/lib/billing/mode";
 import { JUMIA_GH_CATEGORIES, commissionRange, listingPriceFor } from "@/lib/marketing/jumia-fees";
-import { CALCULATOR_HREF, COMMISSION_RATES_HREF, SIGN_IN_HREF, SIGN_UP_HREF } from "@/lib/marketing/links";
+import { CALCULATOR_HREF, COMMISSION_RATES_HREF, GHANA_CALCULATOR_HREF, SIGN_IN_HREF, SIGN_UP_HREF } from "@/lib/marketing/links";
 import { formatGHS } from "@/lib/utils";
 
 // ─── /jumia-price-calculator — public, indexable ──────────────────────────────
@@ -32,7 +33,7 @@ export const metadata: import("next").Metadata = {
     "Jumia listing price",
     "Jumia payout calculator",
   ],
-  alternates: { canonical: CALCULATOR_HREF },
+  alternates: { canonical: GHANA_CALCULATOR_HREF },
   openGraph: {
     title:       "Jumia Price Calculator — what to list at, what you'll be paid",
     description: "Work out your Jumia Ghana listing price after commission and shipping contribution. Free, no sign-up.",
@@ -55,7 +56,7 @@ export default async function JumiaPriceCalculatorPage() {
     "@context":          "https://schema.org",
     "@type":             "WebApplication",
     name:                "Jumia Price Calculator",
-    url:                 `${APP_URL}${CALCULATOR_HREF}`,
+    url:                 `${APP_URL}${GHANA_CALCULATOR_HREF}`,
     applicationCategory: "BusinessApplication",
     operatingSystem:     "Web",
     description:         "Works out the Jumia Ghana listing price for a payout you want, or the payout at a listing price, after commission and shipping contribution.",
@@ -65,7 +66,7 @@ export default async function JumiaPriceCalculatorPage() {
   return (
     <div className="min-h-screen bg-white text-zinc-900">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(appLd) }} />
-      <BreadcrumbLd items={[["PandaWorld", "/"], ["Jumia price calculator", CALCULATOR_HREF]]} />
+      <BreadcrumbLd items={[["PandaWorld", "/"], ["Jumia price calculator", GHANA_CALCULATOR_HREF]]} />
       <HomeFloatingNav signInHref={SIGN_IN_HREF} signUpHref={SIGN_UP_HREF} calculatorHref={CALCULATOR_HREF} pricingLive={billingOn} />
 
       <div className="mx-auto max-w-3xl px-6 pb-16 pt-12 sm:pt-16">
@@ -79,6 +80,9 @@ export default async function JumiaPriceCalculatorPage() {
 
         <div className="mt-8">
           <PriceCalculator showHeader={false} />
+        </div>
+        <div className="mt-4">
+          <CalculatorCountrySwitch current="GH" />
         </div>
 
         <section className="mt-14">
