@@ -95,13 +95,13 @@ export default async function BillingSettingsPage() {
         <h2 className="font-semibold text-zinc-900">Credit packs</h2>
         <ul className="mt-3 divide-y divide-zinc-100 text-sm">
           {CREDIT_PACKS.map((p) => {
-            const { autofills, listings } = packReach(p.credits);
+            const { listings } = packReach(p.credits);
             return (
               <li key={p.id} className="flex items-center justify-between gap-4 py-2.5">
                 <span>
                   <span className="font-semibold text-zinc-900">{p.credits} credits</span>
                   <span className="block text-xs text-zinc-500">
-                    About {listings} live WhatsApp listings or {autofills} autofills
+                    About {listings}+ listings
                   </span>
                 </span>
                 <span className="shrink-0 font-semibold text-zinc-900">GHS {p.amountGhs}</span>
