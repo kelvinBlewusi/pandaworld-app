@@ -2044,6 +2044,81 @@ export async function getFeedProductDetails(
   }
 }
 
+/**
+ * One product's quality-check result, from GET /catalog/products.
+ *
+ * A feed that finishes cleanly only means Jumia created the product; QC
+ * reviews it afterwards and can still reject it (2026-09-30: "Wrong
+ * Category" / "Category mismatch: AI suggests Grocery / Beverages / …").
+ * The feed never reports that, this does. Per the API docs
+ * (vendorcenter.jumia.com/api-docs, Retrieve Products), each variation
+ * has a qc block per country it's sold in (businessClients[].qc):
+ * status NOT_READY_TO_QC | PENDING | APPROVED | REJECTED, and on a
+ * rejection a rejectionReason and rejectionComment.
+ */
+export interface ProductQc {
+  sellerSku:  string;
+  productSid: string | null;
+  /** Uppercase as Jumia sends it; null when Jumia didn't say. */
+  status:     string | null;
+  reason:     string | null;
+  comment:    string | null;
+}
+
+/**
+ * QC for one seller SKU. `country` (the seller's, e.g. "GH") picks the
+ * matching business client ("jumia-gh") when a product is sold in several.
+ * Null when the product isn't found or the call fails; never throws.
+ */
+export async function getProductQc(
+  accessToken: string,
+  sellerSku:   string,
+  country?:    string | null,
+): Promise<ProductQc | null> {
+  try {
+    const res = await fetch(
+      `${JUMIA_API_BASE}/catalog/products?sellerSku=${encodeURIComponent(sellerSku)}&size=10`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+        signal:  AbortSignal.timeout(10_000),
+      },
+    );
+    if (!res.ok) {
+      console.warn(`[jumia] product QC lookup for ${sellerSku}: HTTP ${res.status}`);
+      return null;
+    }
+    const raw = await res.json() as { products?: Record<string, unknown>[] };
+    const want = sellerSku.toLowerCase();
+    for (const product of raw.products ?? []) {
+      const variations = (product.variations ?? []) as Record<string, unknown>[];
+      const variation = variations.find((v) => String(v.sellerSku ?? "").toLowerCase() === want);
+      if (!variation) continue;
+
+      const clients = (variation.businessClients ?? []) as Record<string, unknown>[];
+      const code = country ? `jumia-${country.toLowerCase()}` : null;
+      const client =
+        clients.find((c) => code && String(c.code ?? "").toLowerCase() === code) ??
+        clients.find((c) => (c.qc as Record<string, unknown> | undefined)?.status) ??
+        clients[0];
+      const qc = (client?.qc ?? {}) as Record<string, unknown>;
+      const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+
+      const sid = typeof product.id === "string" && /^[0-9a-f-]{36}$/i.test(product.id) ? product.id : null;
+      return {
+        sellerSku,
+        productSid: sid,
+        status:     text(qc.status)?.toUpperCase() ?? null,
+        reason:     text(qc.rejectionReason),
+        comment:    text(qc.rejectionComment),
+      };
+    }
+    return null;
+  } catch (e) {
+    console.warn(`[jumia] product QC lookup for ${sellerSku} failed: ${(e as Error).message}`);
+    return null;
+  }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function extractFeedId(raw: unknown): string | null {

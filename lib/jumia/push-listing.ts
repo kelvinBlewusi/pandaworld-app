@@ -501,6 +501,10 @@ export async function pushListingToJumia(
         jumia_payload_fingerprint: payloadFingerprint,
         // Charged when Jumia confirms it live, held until then.
         credits_due:               credits.due,
+        // A new product, so a new quality check: a resubmission must not
+        // inherit the last one's verdict (lib/jumia/qc-followup.ts).
+        jumia_qc_status:           null,
+        jumia_qc_checked_at:       null,
         updated_at:                new Date().toISOString(),
       })
       .eq("id", listingId);

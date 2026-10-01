@@ -479,3 +479,48 @@ export async function chargeLiveListing(listingId: string): Promise<{ charged: n
     return { charged: 0 };
   }
 }
+
+/**
+ * Give back what chargeLiveListing took for a listing Jumia's quality check
+ * rejected after the feed went through (lib/jumia/qc-followup.ts): a
+ * rejected listing costs nothing. At most once per listing (reference
+ * refund:live:<listingId>). The charge's own reference stays taken, so a
+ * resubmission that goes live isn't charged again. Never throws.
+ */
+export async function refundLiveListing(listingId: string): Promise<{ refunded: number }> {
+  const db = createServerClient();
+  try {
+    const { data: charge } = await db
+      .from("extension_credit_transactions")
+      .select("user_id, amount")
+      .eq("reference", liveReference(listingId))
+      .maybeSingle();
+    const amount = charge ? -Number(charge.amount) : 0;
+    if (!charge || amount <= 0) return { refunded: 0 };
+
+    const userId = charge.user_id as string;
+    const reference = `refund:${liveReference(listingId)}`;
+    const { error: txError } = await db.from("extension_credit_transactions").insert({
+      user_id:       userId,
+      type:          "refund",
+      amount,
+      balance_after: 0, // corrected below once the real balance is known
+      reference,
+      description:   "Refund: Jumia's quality check rejected the listing",
+    });
+    if (txError) {
+      if (txError.code === "23505") return { refunded: 0 }; // already refunded
+      throw new Error(txError.message);
+    }
+    const newBalance = await addToBalance(userId, amount);
+    if (newBalance === null) {
+      await db.from("extension_credit_transactions").delete().eq("reference", reference);
+      throw new Error("balance update failed");
+    }
+    await db.from("extension_credit_transactions").update({ balance_after: newBalance }).eq("reference", reference);
+    return { refunded: amount };
+  } catch (e) {
+    console.error(`[extension-credits] refundLiveListing failed for ${listingId}: ${(e as Error).message}`);
+    return { refunded: 0 };
+  }
+}

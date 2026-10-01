@@ -5,9 +5,12 @@ import { decrypt } from "@/lib/security/token-crypto";
 export const dynamic = "force-dynamic";
 import { refreshJumiaConnection } from "@/lib/jumia/api";
 import { refreshPendingFeedStatus, notifyResolvedListings, toResolvedNotice, type ResolvedListingNotice } from "@/lib/jumia/push-listing";
+import { followUpQc, type QcCandidate } from "@/lib/jumia/qc-followup";
 
 // ─── GET /api/cron/jumia-feeds ────────────────────────────────────────────────
-// Checks all pending_approval listings across all users and updates statuses.
+// Checks all pending_approval listings across all users and updates statuses,
+// then the quality-check result of listings that went live recently
+// (lib/jumia/qc-followup.ts: a finished feed isn't QC approval).
 //
 // Scheduled by pg_cron (job 'minute-workers', supabase/migrations/
 // 2026-09-29_one-every-minute-cron-job.sql), NOT by vercel.json — the Hobby plan caps its own cron
@@ -19,8 +22,9 @@ import { refreshPendingFeedStatus, notifyResolvedListings, toResolvedNotice, typ
 // pg_cron only calls this while a feed is pending: every minute for a
 // listing's first 30 minutes at pending_approval, every 10 after
 // (the 'minute-workers' job in supabase/migrations/2026-09-29_one-every-
-// minute-cron-job.sql). Change the query below and that check has to
-// change with it.
+// minute-cron-job.sql), or while qc_followup_candidates() has a listing
+// due a QC check (2026-10-01_jumia-qc-followup.sql). Change the pending
+// query below and that check has to change with it.
 //
 // Security: Vercel sets the Authorization: Bearer <CRON_SECRET> header.
 // CRON_SECRET is REQUIRED — fail-secure if missing. The previous check
@@ -71,21 +75,33 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ checked: 0, updated: 0, error: pendingError.message }, { status: 500 });
   }
 
+  // Live listings due a quality-check look. A failure here only skips the
+  // QC checks; the pending feeds above still get refreshed.
+  const { data: qcRows, error: qcError } = await db.rpc("qc_followup_candidates");
+  if (qcError) console.error(`[Cron] Could not list QC follow-ups: ${qcError.message}`);
+  const qcDue = ((qcRows ?? []) as (QcCandidate & { user_id: string })[]);
+
   // Logged unconditionally, INCLUDING the zero case. A route that says
   // nothing when idle cannot be told apart from a route that is not
   // running at all — which is exactly how this went unnoticed.
-  console.info(`[Cron] Checking ${pending?.length ?? 0} pending Jumia feeds`);
+  console.info(`[Cron] Checking ${pending?.length ?? 0} pending Jumia feeds, ${qcDue.length} QC follow-ups`);
 
-  if (!pending || pending.length === 0) {
+  if ((!pending || pending.length === 0) && qcDue.length === 0) {
     return NextResponse.json({ checked: 0, updated: 0 });
   }
 
   // ── Group by user so we only fetch each token once ────────────────────────
-  const byUser = new Map<string, typeof pending>();
-  for (const row of pending) {
+  const byUser = new Map<string, NonNullable<typeof pending>>();
+  const qcByUser = new Map<string, QcCandidate[]>();
+  for (const row of pending ?? []) {
     const uid = row.user_id as string;
     if (!byUser.has(uid)) byUser.set(uid, []);
     byUser.get(uid)!.push(row);
+  }
+  for (const row of qcDue) {
+    if (!byUser.has(row.user_id)) byUser.set(row.user_id, []);
+    if (!qcByUser.has(row.user_id)) qcByUser.set(row.user_id, []);
+    qcByUser.get(row.user_id)!.push(row);
   }
 
   let updated = 0;
@@ -93,15 +109,20 @@ export async function GET(req: NextRequest) {
   for (const [userId, listings] of Array.from(byUser)) {
     // Get a valid access token for this user
     let accessToken: string;
+    let country: string | null = null;
     try {
       const { data: conn } = await db
         .from("jumia_connections")
-        .select("access_token, refresh_token, token_expires_at, app_id, app_secret")
+        .select("access_token, refresh_token, token_expires_at, app_id, app_secret, country")
         .eq("user_id", userId)
         .eq("status", "active")
         .maybeSingle();
 
-      if (!conn) continue;
+      if (!conn) {
+        await markQcChecked(db, qcByUser.get(userId));
+        continue;
+      }
+      country = (conn.country as string | null) ?? null;
 
       // Decrypt — handles both encrypted (enc:v1:…) rows and the
       // legacy plaintext format transparently.
@@ -127,6 +148,7 @@ export async function GET(req: NextRequest) {
       }
     } catch (e) {
       console.warn(`[Cron] Skipping user ${userId}: ${(e as Error).message}`);
+      await markQcChecked(db, qcByUser.get(userId));
       continue;
     }
 
@@ -178,8 +200,29 @@ export async function GET(req: NextRequest) {
       );
       if (notice) resolved.push(notice);
     }
+
+    // Quality check on listings that went live: rejections are told in the
+    // same message as this run's feed resolutions.
+    const qcRejected = await followUpQc(accessToken, country, qcByUser.get(userId) ?? []);
+    updated += qcRejected.length;
+    resolved.push(...qcRejected);
+
     await notifyResolvedListings(userId, resolved);
   }
 
-  return NextResponse.json({ checked: pending.length, updated });
+  return NextResponse.json({ checked: (pending?.length ?? 0) + qcDue.length, updated });
+}
+
+/**
+ * Count a QC check as done for listings whose seller can't be checked right
+ * now (no active Jumia connection, or the token wouldn't refresh), so
+ * qc_followup_candidates() paces them like any other check instead of
+ * having pg_cron call this route every minute for them.
+ */
+async function markQcChecked(db: ReturnType<typeof createServerClient>, candidates: QcCandidate[] | undefined) {
+  if (!candidates || candidates.length === 0) return;
+  await db
+    .from("listings")
+    .update({ jumia_qc_checked_at: new Date().toISOString() })
+    .in("id", candidates.map((c) => c.id));
 }

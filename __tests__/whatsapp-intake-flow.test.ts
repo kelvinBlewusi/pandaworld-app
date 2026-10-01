@@ -1663,6 +1663,44 @@ describe("asking the seller for a category after Jumia refuses ours twice", () =
     expect(sent.some((m) => m.body.includes("already tried fixing"))).toBe(true);
     expect(listSent()).toHaveLength(0);
   });
+
+  // Jumia's quality check rejected a "live" listing and named the category
+  // it wants (lib/jumia/qc-followup.ts). Fix & resubmit switches to it.
+  describe("a quality-check rejection that names a category", () => {
+    const qcRejected = (jumia_error: string) =>
+      seedTwiceRefused({ jumia_error, jumia_qc_status: "rejected", jumia_rerun_fingerprint: null, jumia_rerun_count: 0 });
+
+    it("switches to the category Jumia suggested and resubmits", async () => {
+      qcRejected('Wrong Category (quality check). Jumia suggests "Phones & Tablets > Mobile Accessories > Portable Power Banks & Battery Packs".');
+
+      await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${LISTING_ID}` });
+
+      expect(refillCalls).toEqual([{ listingId: LISTING_ID, code: 1000279 }]);
+      expect(pushCallCount).toBe(1);
+      expect(autoAnalyzeCalls).toHaveLength(0);
+      expect(sent.some((m) => m.body.includes('Switching to "Portable Power Banks & Battery Packs"'))).toBe(true);
+    });
+
+    it("reads Jumia's own wording too", async () => {
+      qcRejected("Wrong Category: Category mismatch: AI suggests Electronics / Accessories / Chargers (shares 3 path segments but leaf differs)");
+
+      await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${LISTING_ID}` });
+
+      expect(refillCalls).toEqual([{ listingId: LISTING_ID, code: 3000002 }]);
+    });
+
+    it("lets the seller pick when Jumia names a parent with several categories under it", async () => {
+      qcRejected('Wrong Category (quality check). Jumia suggests "Phones & Tablets > Mobile Accessories".');
+
+      await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${LISTING_ID}` });
+
+      const pick = listSent().find((m) => m.body.includes("quality check says it belongs in"));
+      expect(pick!.rows!.sort()).toEqual([`recat:${LISTING_ID}:1000279`, `recat:${LISTING_ID}:3000001`]);
+      expect(session().awaiting_category_for).toBe(LISTING_ID);
+      expect(refillCalls).toHaveLength(0);
+      expect(pushCallCount).toBe(0);
+    });
+  });
 });
 
 describe("connecting Jumia from the chat", () => {
