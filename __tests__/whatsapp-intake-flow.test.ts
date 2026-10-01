@@ -11,7 +11,9 @@
 import { FakeDb } from "./helpers/fake-supabase";
 
 const db = new FakeDb();
-const sent: { to: string; body: string; kind: string; rows?: string[] }[] = [];
+const sent: { to: string; body: string; kind: string; rows?: string[]; link?: string }[] = [];
+// Set to make the next image send fail, as Meta refusing it would.
+let failImageSends = false;
 
 jest.mock("@/lib/supabase/server", () => ({
   createServerClient: () => db,
@@ -23,7 +25,10 @@ jest.mock("@/lib/whatsapp/client", () => ({
     sent.push({ to, body, kind: "buttons", rows: buttons.map((b) => b.id) });
   },
   sendCtaUrlIfConfigured:  async (to: string, body: string) => { sent.push({ to, body, kind: "cta" }); },
-  sendImageIfConfigured:   async (to: string, link: string) => { sent.push({ to, body: link, kind: "image" }); },
+  sendImageIfConfigured:   async (to: string, link: string, caption?: string) => {
+    if (failImageSends) throw new Error("WhatsApp send failed (400): media download error");
+    sent.push({ to, body: caption ?? "", kind: "image", link });
+  },
   sendListIfConfigured:    async (to: string, body: string, _btn: string, rows: { id: string }[]) => {
     sent.push({ to, body, kind: "list", rows: rows.map((r) => r.id) });
   },
@@ -1083,16 +1088,32 @@ describe("quiet batch mode", () => {
     expect(sent.some((m) => m.body.includes("Let's go"))).toBe(true);
   });
 
-  it("sets batchQuiet and sends the rule message, then a worked example, when quiet mode is picked", async () => {
+  it("sets batchQuiet and sends the rule as the caption of a worked example, in one message", async () => {
     seedSession({ batch_size: 3, batch_seq: 1 });
     sent.length = 0;
 
     await handleLinkedMessage(USER, PHONE, "m1", { text: "batch_mode:quiet" });
 
     expect(session().batch_quiet).toBe(true);
-    expect(sent.map((m) => m.kind)).toEqual(["text", "image"]);
-    expect(sent[0].body).toBe("Got it — send product 1's photos, then reply *1* once you're done with it. See example below.");
-    expect(sent[1].body).toMatch(/\/whatsapp\/quiet-mode-example\.jpg\?v=\d+$/);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].kind).toBe("image");
+    expect(sent[0].link).toMatch(/\/whatsapp\/quiet-mode-example\.jpg\?v=\d+$/);
+    expect(sent[0].body).toBe("Got it — send product 1's photos, then reply *1* once you're done with it, like in the example above.");
+  });
+
+  it("still sends the rule as text when the example image is refused", async () => {
+    seedSession({ batch_size: 3, batch_seq: 1 });
+    sent.length = 0;
+    failImageSends = true;
+    try {
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "batch_mode:quiet" });
+    } finally {
+      failImageSends = false;
+    }
+
+    expect(sent.map((m) => [m.kind, m.body])).toEqual([
+      ["text", "Got it — send product 1's photos, then reply *1* once you're done with it."],
+    ]);
   });
 
   it("sends no example image for 'guide me each step'", async () => {
