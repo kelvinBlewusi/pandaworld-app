@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
+import { isAdmin } from "@/lib/auth/is-admin";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { JUMIA_API_BASE } from "@/lib/jumia/oauth";
 
@@ -13,6 +14,7 @@ import { JUMIA_API_BASE } from "@/lib/jumia/oauth";
 export async function GET() {
   const { userId } = await auth();
   if (!userId) return new NextResponse("Unauthorized", { status: 401 });
+  if (!isAdmin(userId)) return NextResponse.json({ error: "Admin only" }, { status: 403 });
 
   let accessToken: string;
   try {

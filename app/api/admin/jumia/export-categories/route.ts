@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
+import { isAdmin } from "@/lib/auth/is-admin";
 import { createServerClient } from "@/lib/supabase/server";
 import { selectAllPaginated } from "@/lib/supabase/paginate";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
@@ -49,6 +50,7 @@ export const maxDuration = 60;
 export async function GET(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return new NextResponse("Unauthorized", { status: 401 });
+  if (!isAdmin(userId)) return NextResponse.json({ error: "Admin only" }, { status: 403 });
 
   const live   = req.nextUrl.searchParams.get("live")   === "1";
   const format = req.nextUrl.searchParams.get("format") === "tsv" ? "tsv" : "csv";

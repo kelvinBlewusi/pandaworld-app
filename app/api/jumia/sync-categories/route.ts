@@ -3,11 +3,14 @@ import { auth } from "@clerk/nextjs/server";
 import { createServerClient } from "@/lib/supabase/server";
 import { fetchAndCacheCategoryTree } from "@/lib/jumia/categories";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
+import { isAdmin } from "@/lib/auth/is-admin";
 
 // Category-list-only sync walks ~10 pages with 260ms rate-limit delays
 // between them — typically 5-10s. We allow 60s as the Hobby-tier ceiling
 // for safety margin on slow Jumia API responses.
 export const maxDuration = 60;
+
+const SELLER_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 // ─── POST /api/jumia/sync-categories ─────────────────────────────────────────
 // User-facing category sync endpoint (non-admin).
@@ -21,6 +24,23 @@ export async function POST() {
   if (!userId) return new NextResponse("Unauthorized", { status: 401 });
 
   const db = createServerClient();
+
+  // The catalog is shared by every seller, and a sync rewrites all ~28k
+  // rows (database bloat, egress, Vercel CPU). A seller's "Sync now" only
+  // needs it fresh, so it's a no-op when anyone synced it in the last few
+  // hours. Admins can always force one.
+  if (!isAdmin(userId)) {
+    const { data: latest } = await db
+      .from("jumia_categories")
+      .select("synced_at")
+      .order("synced_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const syncedAt = latest?.synced_at ? Date.parse(latest.synced_at as string) : 0;
+    if (Date.now() - syncedAt < SELLER_SYNC_INTERVAL_MS) {
+      return NextResponse.json({ success: true, categories: null, message: "Categories are already up to date" });
+    }
+  }
 
   // Use getValidJumiaCredentials which auto-refreshes tokens and marks
   // the connection as needs_reconnect if refresh fails (deleted app).
