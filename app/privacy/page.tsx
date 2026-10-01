@@ -4,8 +4,9 @@ import { Wordmark } from "@/components/marketing/wordmark";
 
 // ─── Public Privacy Policy ───────────────────────────────────────────────────
 //
-// DRAFT TEMPLATE — review with a Ghana-qualified lawyer before public
-// launch. Aligned with:
+// Published 2026-10-01 as written, without a lawyer's review (owner's
+// decision); a Ghana-qualified lawyer's review is still advisable.
+// Aligned with:
 //   - Ghana Data Protection Act, 2012 (Act 843)
 //   - GDPR principles (since we serve customers via international
 //     processors like Clerk, Supabase, Google)
@@ -374,20 +375,20 @@ function SimpleNav({ active }: { active: "terms" | "privacy" }) {
           <Wordmark size={28} />
         </Link>
         <nav className="flex items-center gap-1 sm:gap-4">
-          {/* Terms + Privacy intentionally non-responsive — these
-              pages need a lawyer review before public link-out. */}
-          <span
-            className="cursor-not-allowed rounded-md px-3 py-1.5 text-sm font-medium text-zinc-300"
-            aria-disabled="true"
-          >
-            Terms
-          </span>
-          <span
-            className="cursor-not-allowed rounded-md px-3 py-1.5 text-sm font-medium text-zinc-300"
-            aria-disabled="true"
-          >
-            Privacy
-          </span>
+          {(["terms", "privacy"] as const).map((page) => (
+            <Link
+              key={page}
+              href={`/${page}`}
+              aria-current={active === page ? "page" : undefined}
+              className={
+                active === page
+                  ? "rounded-md px-3 py-1.5 text-sm font-semibold text-zinc-900"
+                  : "rounded-md px-3 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
+              }
+            >
+              {page === "terms" ? "Terms" : "Privacy"}
+            </Link>
+          ))}
           <Link
             href="/pricing"
             className="rounded-md px-3 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"

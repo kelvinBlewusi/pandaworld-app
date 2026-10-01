@@ -4,8 +4,9 @@ import { Wordmark } from "@/components/marketing/wordmark";
 
 // ─── Public Terms of Service ─────────────────────────────────────────────────
 //
-// DRAFT TEMPLATE — review with a Ghana-qualified lawyer before public
-// launch. Covers the structural points a SaaS ToS needs to make:
+// Published 2026-10-01 as written, without a lawyer's review (owner's
+// decision); a Ghana-qualified lawyer's review is still advisable.
+// Covers the structural points a SaaS ToS needs to make:
 // service description, payment terms, refunds, IP, acceptable use,
 // limitation of liability, governing law. Tailored to:
 //   - Ghana jurisdiction (Data Protection Act 2012)
@@ -271,15 +272,6 @@ export default function TermsPage() {
             .
           </p>
 
-          <hr />
-          <p className="text-xs text-zinc-500">
-            <strong>Notice:</strong> This document is a draft template.
-            Before launching publicly, have it reviewed by a Ghana-qualified
-            lawyer to confirm compliance with the Electronic Transactions
-            Act, 2008 (Act 772), the Data Protection Act, 2012 (Act 843),
-            the Consumer Protection Act, 2024, and Paystack&apos;s
-            merchant agreement.
-          </p>
         </div>
       </main>
 
@@ -297,20 +289,20 @@ function SimpleNav({ active }: { active: "terms" | "privacy" }) {
           <Wordmark size={28} />
         </Link>
         <nav className="flex items-center gap-1 sm:gap-4">
-          {/* Terms + Privacy intentionally non-responsive — these
-              pages need a lawyer review before public link-out. */}
-          <span
-            className="cursor-not-allowed rounded-md px-3 py-1.5 text-sm font-medium text-zinc-300"
-            aria-disabled="true"
-          >
-            Terms
-          </span>
-          <span
-            className="cursor-not-allowed rounded-md px-3 py-1.5 text-sm font-medium text-zinc-300"
-            aria-disabled="true"
-          >
-            Privacy
-          </span>
+          {(["terms", "privacy"] as const).map((page) => (
+            <Link
+              key={page}
+              href={`/${page}`}
+              aria-current={active === page ? "page" : undefined}
+              className={
+                active === page
+                  ? "rounded-md px-3 py-1.5 text-sm font-semibold text-zinc-900"
+                  : "rounded-md px-3 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"
+              }
+            >
+              {page === "terms" ? "Terms" : "Privacy"}
+            </Link>
+          ))}
           <Link
             href="/pricing"
             className="rounded-md px-3 py-1.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900"

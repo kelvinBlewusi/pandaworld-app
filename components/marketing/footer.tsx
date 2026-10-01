@@ -43,9 +43,8 @@ const SOCIAL_ICON_MAP: Record<string, (p: { className?: string }) => JSX.Element
  * the copyright and the legal links. Redesigned 2026-10-01: it was one
  * row of eleven items whose tagline wrapped onto three lines.
  *
- * Terms and Privacy stay non-clickable for now: the pages exist but are
- * waiting on a Ghana-qualified lawyer's review before sellers are sent to
- * them. They're readable and marked "coming soon" rather than faint.
+ * Terms and Privacy are linked since 2026-10-01, when the owner published
+ * them as written (they were held back pending a lawyer's review).
  */
 
 const linkClass = "text-sm text-zinc-600 transition-colors hover:text-zinc-900";
@@ -164,8 +163,8 @@ export function MarketingFooter({
         <div className="mt-10 flex flex-col-reverse items-center justify-between gap-3 border-t border-zinc-200 pt-6 text-xs text-zinc-500 sm:flex-row">
           <p>© {new Date().getFullYear()} PandaWorld</p>
           <div className="flex items-center gap-5">
-            <span aria-disabled="true" title="Coming soon" className="cursor-not-allowed">Terms (coming soon)</span>
-            <span aria-disabled="true" title="Coming soon" className="cursor-not-allowed">Privacy (coming soon)</span>
+            <Link href="/terms" className="transition-colors hover:text-zinc-900">Terms</Link>
+            <Link href="/privacy" className="transition-colors hover:text-zinc-900">Privacy</Link>
           </div>
         </div>
       </div>

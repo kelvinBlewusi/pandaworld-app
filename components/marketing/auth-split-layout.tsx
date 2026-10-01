@@ -39,6 +39,11 @@ export function AuthSplitLayout({
           <h1 className="mt-10 text-3xl font-bold text-zinc-900">{title}</h1>
           <p className="mt-2 text-sm text-zinc-500">{subtitle}</p>
           <div className="mt-8">{children}</div>
+          <p className="mt-6 text-xs text-zinc-500">
+            By continuing you agree to our{" "}
+            <Link href="/terms" className="underline hover:text-zinc-900">Terms</Link> and{" "}
+            <Link href="/privacy" className="underline hover:text-zinc-900">Privacy Policy</Link>.
+          </p>
         </div>
       </div>
       <div className="hidden bg-zinc-100 p-6 lg:block">

@@ -840,14 +840,15 @@ Listed by priority. Pick from here when looking for "what to do next".
 0. **Billing is on (2026-10-01) while three things aren't ready** (audit,
    2026-10-01): Vercel's Hobby plan allows no commercial use, "any method
    of requesting or processing payment" included (Fair Use Guidelines;
-   donations are allowed), so Pro is needed while selling credits; Terms
-   and Privacy aren't linked anywhere a buyer pays (footer shows them as
-   "coming soon", the pages carry a draft notice); and Supabase Free has no
-   automatic backups of the credit ledger. Also open: Next.js 15.5.24+ for
+   donations are allowed), so Pro is needed while selling credits; and
+   Supabase Free has no automatic backups of the credit ledger. (Terms and
+   Privacy were published as written on 2026-10-01: linked in the footer,
+   the buy modal and the sign-in pages. The Privacy Policy, last updated
+   2026-05-20, doesn't name WhatsApp/Meta as a processor yet.) Also open: Next.js 15.5.24+ for
    the critical advisories 14.x won't get (on 14.2.35 now), and a Meta
    utility template for QC/rejection alerts outside the 24-hour window.
-1. **Lawyer review** of `app/terms/page.tsx` + `app/privacy/page.tsx`. Both are
-   substantive (not lorem) but marked as drafts needing sign-off.
+1. **Lawyer review** of `app/terms/page.tsx` + `app/privacy/page.tsx`, published
+   as written on 2026-10-01 (owner's decision); a review is still advisable.
 2. **Production smoke tests** — 7 paths to walk through on the live URL after
    Clerk prod keys land. Listed in the launch audit (sign-up → onboarding →
    Jumia connect → free listing → submit; payment → tier upgrade → quota tightens;
