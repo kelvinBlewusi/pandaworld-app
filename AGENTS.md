@@ -23,12 +23,11 @@ multi-market-aware (Jumia has 9 markets); expansion to Côte d'Ivoire / Senegal 
 Cameroon (French markets) is planned but not active.
 
 **Pricing**: pay-as-you-go credits, no subscription (the monthly plans were
-removed 2026-09-28). 25 free credits on sign-up; a WhatsApp/web listing costs
-2 credits, charged only when it goes live on Jumia; an extension autofill costs
-1.5 (the extension can't see whether a product went live). 1 credit =
-GHS 0.25, so a live listing is GHS 0.50; packs 120/200/400 credits for GHS
-30/50/100 — all in `lib/billing/credit-packs.ts`. Nothing is charged until an
-admin switches billing on at `/admin/billing` — see "Billing" below.
+removed 2026-09-28). 20 free credits on sign-up; a WhatsApp/web listing costs
+2 credits, charged only when Jumia accepts it; an extension autofill costs 1.
+1 credit = GHS 0.35, so a live listing is GHS 0.70; packs 100/210/440/940
+credits for GHS 35/70/140/280, all in `lib/billing/credit-packs.ts`. Billing
+was switched on at `/admin/billing` on 2026-10-01 — see "Billing" below.
 
 **Founder/operator**: Kelvin (single-person operation). Communication style is
 concise, direct, file-path-specific. Prefers small focused commits over big
@@ -489,6 +488,14 @@ from every marketing footer:
   for a country without an official table.
 - One listing-price formula for all calculators: listingPriceFor in
   lib/marketing/jumia-fees.ts (rounds up without float drift).
+- Every country page has a category-aware calculator and rate table
+  (2026-10-01): `lib/marketing/country-fees.ts` holds each market's 2026
+  commission table from its VendorHub (mostly images, read off them), with
+  the per-item fee by category (GH, MA, SN, UG), by size (NG, EG; Egypt
+  has a 10 EGP minimum commission on drop shipping) or typed in (KE, CI,
+  no published table). Ghana's rows come from lib/mock/categories. The
+  VendorHub sites block plain fetches (Cloudflare); Chromium through the
+  proxy works once the proxy CA is in /root/.pki/nssdb.
 
 ## Billing (2026-09-28)
 
@@ -552,6 +559,23 @@ amount is held (`availableCredits` = balance − holds on pending listings).
 transition (once per listing: ledger reference `live:<listingId>`) and
 clears `credits_due` when Jumia rejects it. A listing submitted while
 billing was off is never charged.
+
+A listing can be charged more than once: Jumia's quality check can reject
+it after acceptance (refunded) and the fixed resubmission is charged again
+when accepted. Charges are `live:<id>`, `live:<id>:2`, … and each refund is
+`refund:<charge>`; `liveCharges()` finds the one still standing.
+
+**Purchases are checked against the money.** The webhook and /verify credit
+a pack only through `creditsPaidFor()` (`lib/billing/paystack-purchase.ts`):
+GHS, at least the named pack's price, no more credits than it holds.
+Paystack accepts transactions started in a browser with the public key, so
+metadata alone is never trusted. A refused one is logged to app_errors
+(source `paystack-webhook`).
+
+**QC follow-up promised before the gate.** Listings Jumia accepted before
+2026-10-01 15:00 UTC were told "Will alert you if it passes Jumia QC", so
+`qcAlertPromised()` keeps their follow-up whatever the pack. It does
+nothing after 2026-10-04 and can be deleted then.
 
 Donations (`components/extension/donate-modal.tsx`,
 `app/api/donations/checkout`, `lib/billing/donations.ts`) grant nothing and
@@ -666,6 +690,12 @@ only appear while billing is off.
   (buttons for ≤2 ready, a list for more), and submit results + the batch
   sign-off are one. Before adding a message, fold it into one that's
   already going out.
+- **Undelivered WhatsApp messages (2026-10-01)**: the send API answers
+  200 for a message it later fails to deliver; the failure comes back as a
+  webhook status update. The webhook records each one in app_errors
+  (source `whatsapp-delivery`, `lib/whatsapp/delivery-status.ts`). Watch
+  for 131047: a free-form message outside the 24-hour window, which QC
+  alerts arriving days later will hit until they're sent as a template.
 - **Emoji in WhatsApp messages built by joining lines (2026-09-28)**: the
   production minifier folds `[...].join("\n")` of constants into one
   string; when one line was a `${}` template it printed a new template
@@ -794,6 +824,15 @@ Read these commit messages for context on architectural decisions:
 Listed by priority. Pick from here when looking for "what to do next".
 
 ### Pre-launch blockers
+0. **Billing is on (2026-10-01) while three things aren't ready** (audit,
+   2026-10-01): Vercel's Hobby plan allows no commercial use, "any method
+   of requesting or processing payment" included (Fair Use Guidelines;
+   donations are allowed), so Pro is needed while selling credits; Terms
+   and Privacy aren't linked anywhere a buyer pays (footer shows them as
+   "coming soon", the pages carry a draft notice); and Supabase Free has no
+   automatic backups of the credit ledger. Also open: Next.js 15.5.24+ for
+   the critical advisories 14.x won't get (on 14.2.35 now), and a Meta
+   utility template for QC/rejection alerts outside the 24-hour window.
 1. **Lawyer review** of `app/terms/page.tsx` + `app/privacy/page.tsx`. Both are
    substantive (not lorem) but marked as drafts needing sign-off.
 2. **Production smoke tests** — 7 paths to walk through on the live URL after
