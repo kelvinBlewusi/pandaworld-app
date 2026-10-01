@@ -184,6 +184,12 @@ export function BuyCreditsModal({
         <p className="mt-2.5 flex items-center justify-center gap-1 text-[11px] text-zinc-400">
           <Lock className="h-3 w-3" /> Secure checkout by Paystack
         </p>
+        <p className="mt-1 text-center text-[11px] text-zinc-400">
+          By buying you agree to our{" "}
+          <a href="/terms" target="_blank" rel="noopener noreferrer" className="underline hover:text-zinc-600">Terms</a>
+          {" "}and{" "}
+          <a href="/privacy" target="_blank" rel="noopener noreferrer" className="underline hover:text-zinc-600">Privacy Policy</a>.
+        </p>
       </div>
     </div>
   );
