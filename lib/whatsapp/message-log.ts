@@ -58,7 +58,7 @@ export function logInboundMessage(
  * for the mark-read/typing-indicator call (`status: "read"`), which
  * carries no message content of its own. Split out from
  * logOutboundMessage so the branching per Graph API message shape
- * (text/button/list/cta_url) has a return value a test can assert on,
+ * (text/image/button/list/cta_url) has a return value a test can assert on,
  * rather than only being reachable through a fire-and-forget DB insert.
  */
 export function describeOutboundMessage(
@@ -71,6 +71,11 @@ export function describeOutboundMessage(
   if (type === "text") {
     const text = (body.text as { body?: string } | undefined)?.body;
     return { phoneNumber: to, direction: "outbound", messageType: "text", bodyText: text ?? null };
+  }
+
+  if (type === "image") {
+    const image = body.image as { link?: string; caption?: string } | undefined;
+    return { phoneNumber: to, direction: "outbound", messageType: "image", bodyText: image?.caption ?? null, payload: { link: image?.link } };
   }
 
   if (type === "interactive") {
@@ -108,7 +113,7 @@ export function describeOutboundMessage(
 /**
  * Log an outbound message from the exact body callGraphApi is about to
  * POST to the Graph API — one call site covers every send helper in
- * client.ts (text, buttons, list, cta_url) with no per-caller wiring.
+ * client.ts (text, image, buttons, list, cta_url) with no per-caller wiring.
  */
 export function logOutboundMessage(to: string, body: Record<string, unknown>): void {
   const fields = describeOutboundMessage(to, body);

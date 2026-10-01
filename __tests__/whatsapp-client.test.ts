@@ -14,7 +14,7 @@ const ENV = {
   WHATSAPP_PHONE_NUMBER_ID: "123456",
 };
 
-import { sendText, sendList, LIST_MAX_ROWS } from "@/lib/whatsapp/client";
+import { sendText, sendList, sendImage, LIST_MAX_ROWS } from "@/lib/whatsapp/client";
 
 const realFetch = global.fetch;
 
@@ -95,6 +95,18 @@ describe("throttled sends", () => {
     mockFetch([reply(429)]);
     await expect(runWithTimers(sendText("233550607231", "hello"))).rejects.toThrow(/429/);
     expect(calls).toHaveLength(3);
+  });
+});
+
+describe("sendImage", () => {
+  it("sends the picture by link, with no caption unless one is given", async () => {
+    mockFetch([reply(200), reply(200)]);
+    await runWithTimers(sendImage("233550607231", "https://pandaworldai.site/whatsapp/quiet-mode-example.jpg"));
+    await runWithTimers(sendImage("233550607231", "https://pandaworldai.site/a.jpg", "Like this"));
+
+    expect(calls[0].body).toMatchObject({ to: "233550607231", type: "image", image: { link: "https://pandaworldai.site/whatsapp/quiet-mode-example.jpg" } });
+    expect(calls[0].body.image).not.toHaveProperty("caption");
+    expect(calls[1].body.image).toEqual({ link: "https://pandaworldai.site/a.jpg", caption: "Like this" });
   });
 });
 
