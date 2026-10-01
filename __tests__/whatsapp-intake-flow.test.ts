@@ -23,6 +23,7 @@ jest.mock("@/lib/whatsapp/client", () => ({
     sent.push({ to, body, kind: "buttons", rows: buttons.map((b) => b.id) });
   },
   sendCtaUrlIfConfigured:  async (to: string, body: string) => { sent.push({ to, body, kind: "cta" }); },
+  sendImageIfConfigured:   async (to: string, link: string) => { sent.push({ to, body: link, kind: "image" }); },
   sendListIfConfigured:    async (to: string, body: string, _btn: string, rows: { id: string }[]) => {
     sent.push({ to, body, kind: "list", rows: rows.map((r) => r.id) });
   },
@@ -1082,16 +1083,25 @@ describe("quiet batch mode", () => {
     expect(sent.some((m) => m.body.includes("Let's go"))).toBe(true);
   });
 
-  it("sets batchQuiet and sends the rule message when quiet mode is picked", async () => {
+  it("sets batchQuiet and sends the rule message, then a worked example, when quiet mode is picked", async () => {
     seedSession({ batch_size: 3, batch_seq: 1 });
     sent.length = 0;
 
     await handleLinkedMessage(USER, PHONE, "m1", { text: "batch_mode:quiet" });
 
     expect(session().batch_quiet).toBe(true);
-    const rule = sent.find((m) => m.body.includes("send product 1's photos"));
-    expect(rule).toBeDefined();
-    expect(rule!.body).toContain("*1*");
+    expect(sent.map((m) => m.kind)).toEqual(["text", "image"]);
+    expect(sent[0].body).toBe("Got it — send product 1's photos, then reply *1* once you're done with it. See example below.");
+    expect(sent[1].body).toMatch(/\/whatsapp\/quiet-mode-example\.jpg\?v=\d+$/);
+  });
+
+  it("sends no example image for 'guide me each step'", async () => {
+    seedSession({ batch_size: 3, batch_seq: 1 });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "batch_mode:interactive" });
+
+    expect(sent.some((m) => m.kind === "image")).toBe(false);
   });
 
   it("picking 'guide me each step' leaves the existing interactive flow untouched", async () => {

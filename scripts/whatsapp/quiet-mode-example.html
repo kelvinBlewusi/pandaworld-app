@@ -1,0 +1,77 @@
+<!doctype html>
+<!--
+  Source of public/whatsapp/quiet-mode-example.jpg, the worked example the
+  WhatsApp bot sends when a seller picks quiet batch mode (lib/whatsapp/
+  intake.ts). The product photos are cropped from the real chat
+  screenshots in public/marketing. To change it: edit this page, screenshot
+  it full-page in Chromium at 540px wide and device scale 2 as a JPEG, save
+  over the image and bump ?v= in quietModeExampleUrl (lib/whatsapp/batch.ts).
+-->
+<html><head><meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 540px; background: #efeae2; font-family: "Liberation Sans", Arial, sans-serif; color: #111b21; }
+  .wrap { padding: 18px 14px 20px; }
+  .pill { margin: 0 auto 16px; width: max-content; background: #fff; color: #54656f; font-size: 14px; font-weight: 700;
+          letter-spacing: .02em; padding: 7px 14px; border-radius: 8px; box-shadow: 0 1px 1px rgba(0,0,0,.08); }
+  .row { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+  .note { flex: 1; text-align: right; color: #c2410c; font-size: 16px; font-weight: 700; line-height: 1.3; }
+  .arrow { flex: none; width: 0; height: 0; border: 7px solid transparent; border-left: 10px solid #c2410c; border-right: 0; margin-left: -4px; }
+  .out { background: #d9fdd3; border-radius: 10px; box-shadow: 0 1px 1px rgba(0,0,0,.1); }
+  .media { width: 300px; padding: 3px; }
+  .photo { width: 294px; height: 161px; border-radius: 7px; background-repeat: no-repeat; background-size: 396.1px auto; }
+  .caption { font-size: 15px; padding: 6px 7px 2px; line-height: 1.3; }
+  .meta { font-size: 11px; color: #667781; text-align: right; padding: 0 7px 4px; }
+  .tick { color: #53bdeb; }
+  .num { padding: 6px 10px 5px; display: flex; align-items: flex-end; gap: 10px; font-size: 17px; }
+  .num .meta { padding: 0; }
+  .in { background: #fff; border-radius: 10px; box-shadow: 0 1px 1px rgba(0,0,0,.1); padding: 8px 10px 5px; font-size: 15px;
+        line-height: 1.35; width: 330px; margin-top: 14px; }
+  .gap { height: 10px; }
+</style></head>
+<body><div class="wrap">
+  <div class="pill">EXAMPLE: LISTING 3 PRODUCTS</div>
+
+  <div class="row">
+    <div class="note">Select all of product 1's photos, type its price as the caption and send</div><div class="arrow"></div>
+    <div class="out media">
+      <div class="photo" style="background-image:url(../../public/marketing/whatsapp-flow-2-capture.jpg); background-position:-83.7px -502.3px"></div>
+      <div class="caption">GHS 120. Capacity 1.8L</div>
+      <div class="meta">1:42 AM <span class="tick">✓✓</span></div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="note">Then send <b>1</b></div><div class="arrow"></div>
+    <div class="out num">1 <span class="meta">1:43 AM <span class="tick">✓✓</span></span></div>
+  </div>
+
+  <div class="gap"></div>
+  <div class="row">
+    <div class="note">Then product 2's photos, price as the caption</div><div class="arrow"></div>
+    <div class="out media">
+      <div class="photo" style="background-image:url(../../public/marketing/whatsapp-flow-3-capture.jpg); background-position:-83.7px -172.4px"></div>
+      <div class="caption">GHS 70. Sizes Medium Large Xtra Large</div>
+      <div class="meta">1:43 AM <span class="tick">✓✓</span></div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="note">Then send <b>2</b></div><div class="arrow"></div>
+    <div class="out num">2 <span class="meta">1:43 AM <span class="tick">✓✓</span></span></div>
+  </div>
+
+  <div class="gap"></div>
+  <div class="row">
+    <div class="note">Same for the last product</div><div class="arrow"></div>
+    <div class="out media">
+      <div class="photo" style="background-image:url(../../public/marketing/whatsapp-flow-3-capture.jpg); background-position:-83.7px -438.6px"></div>
+      <div class="caption">GHS 650. Cook meat fish vegetables</div>
+      <div class="meta">1:43 AM <span class="tick">✓✓</span></div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="note">Then send <b>3</b></div><div class="arrow"></div>
+    <div class="out num">3 <span class="meta">1:43 AM <span class="tick">✓✓</span></span></div>
+  </div>
+
+  <div class="in">🔎 Got everything for all 3 products — drafting them now.<div class="meta" style="padding:2px 0 0">1:43 AM</div></div>
+</div></body></html>

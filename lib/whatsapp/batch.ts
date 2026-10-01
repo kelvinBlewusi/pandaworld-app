@@ -440,6 +440,14 @@ export function focusedEditorUrl(listingId: string): string {
   return `${appUrl()}/extension/whatsapp-listings/${listingId}`;
 }
 
+/** The worked example sent when a seller picks quiet batch mode: three
+ *  products, each one's photo with its price as the caption, then its
+ *  number (public/whatsapp/quiet-mode-example.jpg). Bump ?v= when the image
+ *  changes, so Meta doesn't send a copy it fetched before. */
+export function quietModeExampleUrl(): string {
+  return `${appUrl()}/whatsapp/quiet-mode-example.jpg?v=1`;
+}
+
 /** The extension dashboard's Buy Credits modal — the same credit ledger a
  *  WhatsApp listing is charged from when it goes live (see
  *  LIVE_LISTING_CREDIT_COST in lib/billing/credit-packs.ts). */

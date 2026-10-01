@@ -1,5 +1,5 @@
 import { createServerClient } from "@/lib/supabase/server";
-import { sendTextIfConfigured, sendCtaUrlIfConfigured, sendButtonsIfConfigured, sendListIfConfigured, LIST_MAX_ROWS } from "@/lib/whatsapp/client";
+import { sendTextIfConfigured, sendCtaUrlIfConfigured, sendButtonsIfConfigured, sendListIfConfigured, sendImageIfConfigured, LIST_MAX_ROWS } from "@/lib/whatsapp/client";
 import { ingestWhatsAppImage } from "@/lib/whatsapp/media";
 import {
   getOrCreateSession,
@@ -60,6 +60,7 @@ import {
   extractStock,
   extractSalePrice,
   whatsappListingsUrl,
+  quietModeExampleUrl,
   focusedEditorUrl,
   buyCreditsUrl,
   COUNT_QUICK_PICKS,
@@ -1745,16 +1746,23 @@ async function handleAwaitingPhotos(
   if (content.text === "batch_mode:quiet" || content.text === "batch_mode:interactive") {
     const quiet = content.text === "batch_mode:quiet";
     await updateSession(phoneNumber, { batchQuiet: quiet });
-    await replyText(
-      phoneNumber,
-      quiet
-        // The mechanic was already spelled out in full in the choice
-        // message above — repeating it here would be exactly the kind of
-        // redundant instruction this whole mode exists to cut. Just
-        // confirms the pick and gets them moving on product 1.
-        ? `Got it — send product ${seq}'s photos, then reply *${seq}* once you're done with it.`
-        : `Let's go — product 1 of ${batchSize}.\n\nSend its photos, and tell me the price plus any other notes (variations, sizes, sale price etc.), then reply *done*.`,
-    );
+    if (!quiet) {
+      await replyText(
+        phoneNumber,
+        `Let's go — product 1 of ${batchSize}.\n\nSend its photos, and tell me the price plus any other notes (variations, sizes, sale price etc.), then reply *done*.`,
+      );
+      return;
+    }
+    // The mechanic was already spelled out in the choice message above, so
+    // this confirms the pick and SHOWS it: a worked example (photo, price
+    // as the caption, then the product's number) is clearer than another
+    // paragraph. The image is a bonus, so failing to send it costs nothing.
+    await replyText(phoneNumber, `Got it — send product ${seq}'s photos, then reply *${seq}* once you're done with it. See example below.`);
+    try {
+      await sendImageIfConfigured(phoneNumber, quietModeExampleUrl());
+    } catch (e) {
+      console.warn(`[whatsapp intake] quiet-mode example image failed for ${phoneNumber}: ${(e as Error).message}`);
+    }
     return;
   }
 

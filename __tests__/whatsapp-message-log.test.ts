@@ -74,6 +74,14 @@ describe("describeOutboundMessage — pure extraction from callGraphApi's body",
   // send — this is what keeps it out of the conversation log, since it
   // carries no message content of its own and isn't something a seller
   // experiences as a message.
+  it("extracts an image send, with the caption as the text and the link in payload", () => {
+    const body = { type: "image", image: { link: "https://pandaworldai.site/whatsapp/quiet-mode-example.jpg?v=1" } };
+    expect(describeOutboundMessage("233550607231", body)).toEqual({
+      phoneNumber: "233550607231", direction: "outbound", messageType: "image", bodyText: null,
+      payload: { link: "https://pandaworldai.site/whatsapp/quiet-mode-example.jpg?v=1" },
+    });
+  });
+
   it("returns null for the mark-read/typing-indicator call", () => {
     expect(describeOutboundMessage("233550607231", { status: "read", message_id: "wamid.abc", typing_indicator: { type: "text" } })).toBeNull();
   });

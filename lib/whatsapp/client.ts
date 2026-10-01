@@ -203,6 +203,27 @@ const LIST_MAX_ROW_TITLE_CHARS   = 24;
 const LIST_MAX_ROW_DESC_CHARS    = 72;
 
 /**
+ * A picture by public link (Meta's "image" message), with an optional
+ * caption under it. Meta fetches the link itself, so it has to be a public
+ * https URL to a JPEG or PNG of at most 5 MB.
+ */
+export async function sendImage(to: string, link: string, caption?: string): Promise<void> {
+  await callGraphApi({
+    to,
+    type: "image",
+    image: caption ? { link, caption } : { link },
+  });
+}
+
+export async function sendImageIfConfigured(to: string, link: string, caption?: string): Promise<void> {
+  if (!isWhatsAppConfigured()) {
+    console.warn(`[whatsapp] not configured — would have sent an image to ${to}: ${link}`);
+    return;
+  }
+  await sendImage(to, link, caption);
+}
+
+/**
  * Up to 10 tappable rows in ONE message (Meta's interactive "list" type),
  * against sendButtons' three.
  *

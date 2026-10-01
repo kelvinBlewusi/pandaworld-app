@@ -30,6 +30,7 @@ jest.mock("@/lib/whatsapp/client", () => ({
     sent.push({ to, body, kind: "buttons", buttons: buttons.map((b) => b.id), titles: buttons.map((b) => b.title) });
   },
   sendCtaUrlIfConfigured: async (to: string, body: string) => { sent.push({ to, body, kind: "cta" }); },
+  sendImageIfConfigured: async (to: string, body: string) => { sent.push({ to, body, kind: "image" }); },
   sendListIfConfigured: async (to: string, body: string, buttonText: string, rows: { id: string; title: string; description?: string }[]) => {
     sent.push({ to, body, kind: "list", buttons: rows.map((r) => r.id), titles: rows.map((r) => r.title), descriptions: rows.map((r) => r.description ?? "") });
   },
