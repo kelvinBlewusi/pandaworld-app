@@ -23,6 +23,7 @@ import {
   availableCredits,
   creditsDueForSubmission,
   chargeLiveListing,
+  refundLiveListing,
 } from "@/lib/billing/extension-credits";
 import { isBillingEnabled, setBillingEnabled, _resetBillingModeCache } from "@/lib/billing/mode";
 import { CREDIT_PACKS, FREE_SIGNUP_CREDITS, LISTING_CREDIT_COST, LIVE_LISTING_CREDIT_COST, packReach } from "@/lib/billing/credit-packs";
@@ -143,6 +144,29 @@ describe("pay when live", () => {
     expect(await chargeLiveListing("a")).toEqual({ charged: 0 });
     expect(balances()[0].balance).toBe(10 - COST);
     expect(await creditsDueForSubmission(SELLER, "a", COST)).toEqual({ ok: true, due: null });
+  });
+
+  it("refunds a QC rejection once, and charges the fixed resubmission when Jumia accepts it", async () => {
+    db.tables.extension_credits = [{ user_id: SELLER, balance: 10 }];
+    db.tables.listings = [pending("a", COST, "live")];
+    await chargeLiveListing("a");
+
+    // Jumia's quality check rejects it: refunded, once.
+    expect(await refundLiveListing("a")).toEqual({ refunded: COST });
+    expect(await refundLiveListing("a")).toEqual({ refunded: 0 });
+    expect(balances()[0].balance).toBe(10);
+
+    // The fixed resubmission costs a listing again, and is charged when live.
+    expect(await creditsDueForSubmission(SELLER, "a", COST)).toEqual({ ok: true, due: COST });
+    db.tables.listings[0].credits_due = COST;
+    expect(await chargeLiveListing("a")).toEqual({ charged: COST });
+    expect(await chargeLiveListing("a")).toEqual({ charged: 0 });
+    expect(balances()[0].balance).toBe(10 - COST);
+
+    // A second rejection refunds the second charge.
+    expect(await refundLiveListing("a")).toEqual({ refunded: COST });
+    expect(ledger().map((t) => t.reference)).toEqual(["live:a", "refund:live:a", "live:a:2", "refund:live:a:2"]);
+    expect(balances()[0].balance).toBe(10);
   });
 
   it("charges nothing for a listing submitted while billing was off", async () => {

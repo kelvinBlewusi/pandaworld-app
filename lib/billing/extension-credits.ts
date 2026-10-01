@@ -367,7 +367,27 @@ export async function topUpBalancesTo(target: number): Promise<{ toppedUp: numbe
 /** Statuses of a submitted listing still waiting on Jumia's verdict. */
 const AWAITING_JUMIA = ["processing", "pending_approval"];
 
-const liveReference = (listingId: string) => `live:${listingId}`;
+// A listing can go live more than once: Jumia's quality check can reject it
+// after acceptance (refunded, refundLiveListing) and the fixed resubmission
+// is charged again when Jumia accepts it. The first charge is
+// live:<listingId>, later ones live:<listingId>:2, :3…; each refund is
+// refund:<that charge's reference>.
+const liveReference = (listingId: string, nth: number) => (nth <= 1 ? `live:${listingId}` : `live:${listingId}:${nth}`);
+
+type LiveCharge = { reference: string; user_id: string; amount: number | string };
+
+/** How many times the listing has been charged, and the charge not yet refunded, if any. */
+async function liveCharges(listingId: string): Promise<{ count: number; standing: LiveCharge | null }> {
+  const db = createServerClient();
+  const { data } = await db
+    .from("extension_credit_transactions")
+    .select("reference, user_id, amount")
+    .like("reference", `%live:${listingId}%`);
+  const rows = (data ?? []) as LiveCharge[];
+  const refunded = new Set(rows.filter((r) => r.reference.startsWith("refund:")).map((r) => r.reference.slice("refund:".length)));
+  const charges = rows.filter((r) => r.reference.startsWith("live:"));
+  return { count: charges.length, standing: charges.find((c) => !refunded.has(c.reference)) ?? null };
+}
 
 /** Credits held for the seller's listings waiting on Jumia, optionally leaving one out. */
 async function creditsOnHold(userId: string, exceptListingId?: string): Promise<number> {
@@ -396,8 +416,9 @@ export async function availableCredits(userId: string, exceptListingId?: string)
 /**
  * What submitting this listing will cost once it's live: `amount`, or
  * null when nothing will be charged (admins, billing off, or a listing
- * already charged — a live listing resubmitted after an edit). Refused
- * when the seller's available credits don't cover it.
+ * whose charge still stands — a live listing resubmitted after an edit).
+ * A listing refunded after a QC rejection is charged again. Refused when
+ * the seller's available credits don't cover it.
  */
 export async function creditsDueForSubmission(
   userId:    string,
@@ -406,13 +427,7 @@ export async function creditsDueForSubmission(
 ): Promise<{ ok: true; due: number | null } | { ok: false; available: number }> {
   if (await isUnmetered(userId)) return { ok: true, due: null };
 
-  const db = createServerClient();
-  const { data: charged } = await db
-    .from("extension_credit_transactions")
-    .select("id")
-    .eq("reference", liveReference(listingId))
-    .maybeSingle();
-  if (charged) return { ok: true, due: null };
+  if ((await liveCharges(listingId)).standing) return { ok: true, due: null };
 
   const available = await availableCredits(userId, listingId);
   return available >= amount ? { ok: true, due: amount } : { ok: false, available };
@@ -420,8 +435,9 @@ export async function creditsDueForSubmission(
 
 /**
  * Charge a listing that just went live on Jumia the credits_due recorded
- * when it was submitted. At most once per listing (the ledger's unique
- * reference live:<listingId>). Nothing is charged for a listing submitted
+ * when it was submitted. At most once per acceptance: not while an earlier
+ * charge stands, and the ledger's unique reference stops two callers
+ * racing on the same one. Nothing is charged for a listing submitted
  * while billing was off, or if billing has been switched off since.
  *
  * Can take the balance below zero: the listing is already live, and the
@@ -446,7 +462,12 @@ export async function chargeLiveListing(listingId: string): Promise<{ charged: n
       return { charged: 0 };
     }
 
-    const reference = liveReference(listingId);
+    const { count, standing } = await liveCharges(listingId);
+    if (standing) {
+      await clearDue(); // already charged
+      return { charged: 0 };
+    }
+    const reference = liveReference(listingId, count + 1);
     const title = typeof listing.title === "string" && listing.title ? `: ${listing.title.slice(0, 60)}` : "";
     const { error: txError } = await db.from("extension_credit_transactions").insert({
       user_id:       userId,
@@ -490,16 +511,12 @@ export async function chargeLiveListing(listingId: string): Promise<{ charged: n
 export async function refundLiveListing(listingId: string): Promise<{ refunded: number }> {
   const db = createServerClient();
   try {
-    const { data: charge } = await db
-      .from("extension_credit_transactions")
-      .select("user_id, amount")
-      .eq("reference", liveReference(listingId))
-      .maybeSingle();
+    const { standing: charge } = await liveCharges(listingId);
     const amount = charge ? -Number(charge.amount) : 0;
     if (!charge || amount <= 0) return { refunded: 0 };
 
-    const userId = charge.user_id as string;
-    const reference = `refund:${liveReference(listingId)}`;
+    const userId = charge.user_id;
+    const reference = `refund:${charge.reference}`;
     const { error: txError } = await db.from("extension_credit_transactions").insert({
       user_id:       userId,
       type:          "refund",
