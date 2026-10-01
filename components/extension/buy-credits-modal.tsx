@@ -27,13 +27,14 @@ interface Tier {
 }
 
 const TIERS: Tier[] = CREDIT_PACKS.map((p) => {
-  const { autofills, listings } = packReach(p.credits);
+  const { listings } = packReach(p.credits);
   return {
     id: p.id,
     name: p.id.charAt(0).toUpperCase() + p.id.slice(1),
     credits: p.credits,
     price: `GHS ${p.amountGhs}`,
-    reach: `${listings} live listings or ${autofills} autofills`,
+    // Listings only, as "50+" (owner's call, 2026-10-01).
+    reach: `${listings}+ listings`,
     popular: p.id === POPULAR_PACK_ID,
     unlocks: packFeatures(p.id).filter((f) => !f.comingSoon).map((f) => f.short),
     soon:    packFeatures(p.id).filter((f) => f.comingSoon).map((f) => f.short),
