@@ -35,15 +35,37 @@ const SOCIAL_ICON_MAP: Record<string, (p: { className?: string }) => JSX.Element
 
 /**
  * Shared footer for public marketing pages (/, /pricing, /terms,
- * /privacy). Lives outside app/page.tsx because Next.js refuses to
- * tree-shake non-default exports from page files.
+ * /privacy, the guides and tools). Lives outside app/page.tsx because
+ * Next.js refuses to tree-shake non-default exports from page files.
  *
- * Skinny by design: wordmark + tagline + contact channels. Terms and
- * Privacy are placeholders for now — links render as visible but
- * non-responsive text so the seller sees we intend to ship them
- * (and a future legal review is acknowledged) without anyone being
- * able to navigate to drafts that haven't been lawyer-reviewed yet.
+ * Laid out as a brand column (wordmark, one-line tagline, community and
+ * social links) and three labelled link columns, over a bottom bar with
+ * the copyright and the legal links. Redesigned 2026-10-01: it was one
+ * row of eleven items whose tagline wrapped onto three lines.
+ *
+ * Terms and Privacy stay non-clickable for now: the pages exist but are
+ * waiting on a Ghana-qualified lawyer's review before sellers are sent to
+ * them. They're readable and marked "coming soon" rather than faint.
  */
+
+const linkClass = "text-sm text-zinc-600 transition-colors hover:text-zinc-900";
+
+function FooterColumn({
+  title,
+  className,
+  children,
+}: {
+  title: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={className}>
+      <p className="text-xs font-semibold uppercase tracking-wider text-zinc-900">{title}</p>
+      <ul className="mt-4 space-y-3">{children}</ul>
+    </div>
+  );
+}
 
 export function MarketingFooter({
   extensionPricing,
@@ -57,97 +79,94 @@ export function MarketingFooter({
   extensionPricing?: { signedIn: boolean; signInHref: string };
 } = {}) {
   return (
-    <footer className="border-t border-zinc-100 bg-zinc-50">
-      <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-6 px-6 py-10 sm:flex-row">
-        <div className="flex flex-col items-center gap-2 text-base text-zinc-500 sm:flex-row">
-          <Wordmark size={22} />
-          <span className="sm:before:content-['·_']">Built for Jumia sellers</span>
-        </div>
+    <footer className="border-t border-zinc-200 bg-zinc-50">
+      <div className="mx-auto max-w-6xl px-6 py-12">
+        {/* Phones: brand, then Product beside Tools, then Support on its
+            own row so the email address never breaks mid-word. Tablets:
+            brand above three columns. Desktop: all four in one row. */}
+        <div className="grid grid-cols-2 gap-x-8 gap-y-10 md:grid-cols-[0.8fr_1fr_1.2fr] lg:grid-cols-[1.4fr_0.8fr_1.1fr_1.3fr]">
+          {/* Brand */}
+          <div className="col-span-2 md:col-span-3 lg:col-span-1">
+            <Wordmark size={22} />
+            <p className="mt-3 max-w-xs text-sm leading-relaxed text-zinc-500">
+              Built for Jumia sellers. List products from WhatsApp or the Chrome extension.
+            </p>
+            <div className="mt-5 flex items-center gap-2">
+              <a
+                href={COMMUNITY_WHATSAPP_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-100"
+              >
+                <Users className="h-3.5 w-3.5" />
+                Join our community
+              </a>
+              {/* Social channels — driven by SOCIAL_LINKS in
+                  lib/constants/support.ts so JSON-LD `sameAs`, the footer
+                  and any other surface stay in sync from one source. The
+                  icon map above gates which glyph renders. */}
+              {SOCIAL_LINKS.map((s) => {
+                const Icon = SOCIAL_ICON_MAP[s.name];
+                if (!Icon) return null;
+                return (
+                  <a
+                    key={s.url}
+                    href={s.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={`Follow PandaWorld on ${s.name}`}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-full text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-900"
+                    title={`${s.name} — ${s.handle}`}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                  </a>
+                );
+              })}
+            </div>
+          </div>
 
-        <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-zinc-500">
-          {extensionPricing ? (
-            <FooterPricingTrigger signedIn={extensionPricing.signedIn} signInHref={extensionPricing.signInHref} />
-          ) : (
-            <Link href="/pricing" className="hover:text-zinc-900">
-              Pricing
-            </Link>
-          )}
+          <FooterColumn title="Product">
+            <li>
+              {extensionPricing ? (
+                <span className={linkClass}>
+                  <FooterPricingTrigger signedIn={extensionPricing.signedIn} signInHref={extensionPricing.signInHref} />
+                </span>
+              ) : (
+                <Link href="/pricing" className={linkClass}>Pricing</Link>
+              )}
+            </li>
+            <li><Link href="/how-to" className={linkClass}>Guides</Link></li>
+          </FooterColumn>
 
           {/* Crawlable links to the public guides and tools on every
               marketing page, so search engines reach them from anywhere. */}
-          <Link href="/how-to" className="hover:text-zinc-900">
-            Guides
-          </Link>
-          <Link href={CALCULATOR_HREF} className="hover:text-zinc-900">
-            Jumia price calculator
-          </Link>
-          <Link href={COMMISSION_RATES_HREF} className="hover:text-zinc-900">
-            Jumia commission rates
-          </Link>
-          <Link href="/sell-on-jumia" className="hover:text-zinc-900">
-            Sell on Jumia by country
-          </Link>
+          <FooterColumn title="Tools for sellers">
+            <li><Link href={CALCULATOR_HREF} className={linkClass}>Jumia price calculator</Link></li>
+            <li><Link href={COMMISSION_RATES_HREF} className={linkClass}>Jumia commission rates</Link></li>
+            <li><Link href="/sell-on-jumia" className={linkClass}>Sell on Jumia by country</Link></li>
+          </FooterColumn>
 
-          {/* Terms + Privacy — intentionally non-responsive for now.
-              Pages exist as drafts at /terms + /privacy but they need
-              a Ghana-qualified lawyer review before we send sellers
-              to them. Styled as disabled text so visitors see the
-              intent (and screen readers get a note), no click does
-              anything. */}
-          <span
-            className="cursor-not-allowed text-zinc-300"
-            aria-disabled="true"
-            title="Coming soon"
-          >
-            Terms
-          </span>
-          <span
-            className="cursor-not-allowed text-zinc-300"
-            aria-disabled="true"
-            title="Coming soon"
-          >
-            Privacy
-          </span>
-
-          <a
-            href={SUPPORT_MAILTO}
-            className="inline-flex items-center gap-1.5 hover:text-zinc-900"
-          >
-            <Mail className="h-3 w-3" />
-            {SUPPORT_EMAIL}
-          </a>
-
-          <a
-            href={COMMUNITY_WHATSAPP_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700 transition-colors hover:bg-emerald-100"
-          >
-            <Users className="h-3 w-3" />
-            Join our community
-          </a>
-
-          {/* Social channels — driven by SOCIAL_LINKS in lib/constants/support.ts
-              so JSON-LD `sameAs`, the footer, and any other surface stay in
-              sync from one source. Add new platforms by appending to that
-              array; the icon map above gates which glyph renders. */}
-          {SOCIAL_LINKS.map((s) => {
-            const Icon = SOCIAL_ICON_MAP[s.name];
-            if (!Icon) return null;
-            return (
-              <a
-                key={s.url}
-                href={s.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label={`Follow PandaWorld on ${s.name}`}
-                className="inline-flex items-center justify-center rounded-full p-1.5 text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-900"
-                title={`${s.name} — ${s.handle}`}
-              >
-                <Icon className="h-3.5 w-3.5" />
+          <FooterColumn title="Support" className="col-span-2 md:col-span-1">
+            <li>
+              <a href={SUPPORT_MAILTO} className={`${linkClass} inline-flex items-center gap-1.5 [overflow-wrap:anywhere]`}>
+                <Mail className="h-3.5 w-3.5 shrink-0" />
+                {SUPPORT_EMAIL}
               </a>
-            );
-          })}
+            </li>
+            <li>
+              <a href={COMMUNITY_WHATSAPP_URL} target="_blank" rel="noopener noreferrer" className={linkClass}>
+                WhatsApp community
+              </a>
+            </li>
+          </FooterColumn>
+        </div>
+
+        <div className="mt-10 flex flex-col-reverse items-center justify-between gap-3 border-t border-zinc-200 pt-6 text-xs text-zinc-500 sm:flex-row">
+          <p>© {new Date().getFullYear()} PandaWorld</p>
+          <div className="flex items-center gap-5">
+            <span aria-disabled="true" title="Coming soon" className="cursor-not-allowed">Terms (coming soon)</span>
+            <span aria-disabled="true" title="Coming soon" className="cursor-not-allowed">Privacy (coming soon)</span>
+          </div>
         </div>
       </div>
     </footer>
