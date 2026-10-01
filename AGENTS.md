@@ -630,6 +630,17 @@ only appear while billing is off.
   `whatsapp_sessions.awaiting_qc_answer` (`handleQcAnswer` in intake.ts).
   Jumia's own words are kept in `jumia_qc_reason` / `jumia_qc_comment`;
   its `rejectionReason` is often empty and the comment carries it.
+- **Every bot message costs money (2026-10-01)**: from 2026-10-01 Meta
+  charges per message the business sends, replies inside the 24-hour
+  window included (about $0.004 each in "Rest of Africa", Ghana included;
+  reportedly 1,000 free a month per WhatsApp number, shared by all
+  sellers). The bot averaged ~8 messages per listing. Trimmed: no reply per
+  photo burst ("done" reports the count), the last product's "saved" line
+  rides on "drafting now", a single product's draft is one message, a
+  batch's status lines + closing line + submit actions are one message
+  (buttons for ≤2 ready, a list for more), and submit results + the batch
+  sign-off are one. Before adding a message, fold it into one that's
+  already going out.
 - **Emoji in WhatsApp messages built by joining lines (2026-09-28)**: the
   production minifier folds `[...].join("\n")` of constants into one
   string; when one line was a `${}` template it printed a new template

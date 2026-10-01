@@ -265,14 +265,16 @@ describe("an album arriving as several webhook deliveries", () => {
   });
 
   // Six photos produced six near-identical confirmations, each with its
-  // own Done button, in about four seconds.
-  it("confirms the burst once, not once per photo", async () => {
+  // own Done button, in about four seconds. Cut to one per burst, then to
+  // none (2026-10-01): Meta charges per message the bot sends, and "done"
+  // reports the photo count anyway.
+  it("sends nothing per photo", async () => {
     await handleLinkedMessage(USER, PHONE, "m1", photo("a"));
     await handleLinkedMessage(USER, PHONE, "m2", photo("b"));
     await handleLinkedMessage(USER, PHONE, "m3", photo("c"));
 
-    const gotIt = sent.filter((m) => m.body.includes("got it"));
-    expect(gotIt).toHaveLength(1);
+    expect(sent).toHaveLength(0);
+    expect(listings()[0].images).toHaveLength(3);
   });
 
   // Live, 2026-09-27: seven photos, the first captioned "150", drew
@@ -281,10 +283,10 @@ describe("an album arriving as several webhook deliveries", () => {
   it.each([
     ["the captioned photo lands first", [{ imageMediaId: "a", text: "150" }, photo("b"), photo("c")]],
     ["a plain photo lands first", [photo("a"), { imageMediaId: "b", text: "150" }, photo("c")]],
-  ])("confirms an album with a price caption once when %s", async (_label, deliveries) => {
+  ])("saves an album's price caption without a reply when %s", async (_label, deliveries) => {
     for (let i = 0; i < deliveries.length; i++) await handleLinkedMessage(USER, PHONE, `m${i}`, deliveries[i]);
 
-    expect(sent.filter((m) => m.body.includes("got it"))).toHaveLength(1);
+    expect(sent).toHaveLength(0);
     expect(listings()[0].user_prompt).toContain("150");
   });
 
@@ -675,7 +677,7 @@ describe("noteWarningsFor — variant-claim vs drafted-label matching (finalizeB
     const { finalizeBatch } = await import("@/lib/whatsapp/intake");
     await finalizeBatch("batch-1", PHONE, 1);
 
-    const draftMsg = sent.find((m) => m.kind === "cta");
+    const draftMsg = sent.find((m) => m.body.includes("Product drafted"));
     expect(draftMsg?.body).toContain("Ready to submit");
     expect(draftMsg?.body).not.toContain("doesn't match what you typed exactly");
   });
@@ -694,7 +696,7 @@ describe("noteWarningsFor — variant-claim vs drafted-label matching (finalizeB
     const { finalizeBatch } = await import("@/lib/whatsapp/intake");
     await finalizeBatch("batch-1", PHONE, 1);
 
-    const draftMsg = sent.find((m) => m.kind === "cta");
+    const draftMsg = sent.find((m) => m.body.includes("Product drafted"));
     expect(draftMsg?.body).toContain("Ready to submit");
     expect(draftMsg?.body).not.toContain("doesn't match what you typed exactly");
   });
@@ -711,7 +713,7 @@ describe("noteWarningsFor — variant-claim vs drafted-label matching (finalizeB
     const { finalizeBatch } = await import("@/lib/whatsapp/intake");
     await finalizeBatch("batch-1", PHONE, 1);
 
-    const draftMsg = sent.find((m) => m.kind === "cta");
+    const draftMsg = sent.find((m) => m.body.includes("Product drafted"));
     expect(draftMsg?.body).not.toContain("Ready to submit");
     expect(draftMsg?.body).toContain("doesn't match what you typed exactly");
   });
@@ -728,7 +730,7 @@ describe("noteWarningsFor — variant-claim vs drafted-label matching (finalizeB
     const { finalizeBatch } = await import("@/lib/whatsapp/intake");
     await finalizeBatch("batch-1", PHONE, 1);
 
-    const draftMsg = sent.find((m) => m.kind === "cta");
+    const draftMsg = sent.find((m) => m.body.includes("Product drafted"));
     expect(draftMsg?.body).not.toContain("Ready to submit");
     expect(draftMsg?.body).toContain("so none were added");
   });
@@ -770,12 +772,13 @@ describe("a multi-product batch with one hard-failed product", () => {
     const bubble = sent.find((m) => m.kind === "cta" && m.body.includes("Product 2 couldn't be drafted after several tries"));
     expect(bubble).toBeDefined();
 
-    // The other two still get their normal Ready/Held status line, and it
-    // says nothing about product 2 — that's the per-seq bubble's job.
-    const statusMessage = sent.find((m) => m.kind === "text" && m.body.includes("Product 1"));
+    // The other two still get their normal Ready/Held status line, and
+    // there's none for product 2 — that's the per-seq bubble's job. (The
+    // closing line in the same message names it for a retry.)
+    const statusMessage = sent.find((m) => m.body.includes("Product 1:"));
     expect(statusMessage?.body).toContain("Product 1: ✅ Ready");
     expect(statusMessage?.body).toContain("Product 3: ✅ Ready");
-    expect(statusMessage?.body).not.toContain("Product 2");
+    expect(statusMessage?.body).not.toContain("Product 2:");
   });
 
   it("does not send a per-seq bubble for a title-less product whose job never reached 'failed'", async () => {
@@ -838,7 +841,7 @@ describe("finalizeBatch — Held-for-reconnect status messages carry a reconnect
     const { finalizeBatch } = await import("@/lib/whatsapp/intake");
     await finalizeBatch("batch-1", PHONE, 3);
 
-    const status = sent.find((m) => m.kind === "text" && m.body.includes("Product 1"));
+    const status = sent.find((m) => m.body.includes("Product 1:"));
     expect(status).toBeDefined();
     expect(status!.body).toContain("Product 1: ⚠️ Held — Jumia needs to be (re)connected");
     expect(status!.body).toContain("Product 3: ⚠️ Held — Jumia needs to be (re)connected");
@@ -860,7 +863,7 @@ describe("finalizeBatch — Held-for-reconnect status messages carry a reconnect
     const { finalizeBatch } = await import("@/lib/whatsapp/intake");
     await finalizeBatch("batch-1", PHONE, 2);
 
-    const status = sent.find((m) => m.kind === "text" && m.body.includes("Product 1"));
+    const status = sent.find((m) => m.body.includes("Product 1:"));
     expect(status!.body).not.toContain("/api/jumia/connect");
     expect(db.tables.jumia_connect_tokens ?? []).toHaveLength(0);
   });
@@ -874,7 +877,7 @@ describe("finalizeBatch — Held-for-reconnect status messages carry a reconnect
     const { finalizeBatch } = await import("@/lib/whatsapp/intake");
     await finalizeBatch("batch-1", PHONE, 1);
 
-    const draftMsg = sent.find((m) => m.kind === "cta");
+    const draftMsg = sent.find((m) => m.body.includes("Product drafted"));
     expect(draftMsg?.body).toContain("Jumia needs to be (re)connected");
     expect(db.tables.jumia_connect_tokens).toHaveLength(1);
   });
@@ -888,7 +891,7 @@ describe("finalizeBatch — Held-for-reconnect status messages carry a reconnect
     const { finalizeBatch } = await import("@/lib/whatsapp/intake");
     await finalizeBatch("batch-1", PHONE, 1);
 
-    const draftMsg = sent.find((m) => m.kind === "cta");
+    const draftMsg = sent.find((m) => m.body.includes("Product drafted"));
     expect(draftMsg?.body ?? "").not.toContain("re)connected");
     expect(db.tables.jumia_connect_tokens ?? []).toHaveLength(0);
   });
@@ -938,9 +941,25 @@ describe("message volume on a large batch", () => {
     expect(sent.some((m) => m.body.includes("Done drafting your 10 products"))).toBe(true);
   });
 
-  // Three or fewer render inline with no sheet to open, and there is no
-  // volume to save at that size.
-  it("keeps inline buttons for a small batch", async () => {
+  // The status lines, the closing line and the submit actions are ONE
+  // message (they were three until 2026-10-01, when Meta started charging
+  // per message the bot sends). Two ready products fit inline buttons.
+  it("sends a small batch's status, closing line and submit buttons as one message", async () => {
+    seedDrafted(2);
+    seedSession({ state: "awaiting_confirmation", batch_size: 2, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 2);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].kind).toBe("buttons");
+    expect(sent[0].rows).toEqual(["submit all", "submit 1", "submit 2"]);
+    expect(sent[0].body).toContain("Product 1: ✅ Ready");
+    expect(sent[0].body).toContain("Done drafting your 2 products");
+  });
+
+  it("uses one list from three ready products", async () => {
     seedDrafted(3);
     seedSession({ state: "awaiting_confirmation", batch_size: 3, batch_seq: null });
     sent.length = 0;
@@ -948,8 +967,10 @@ describe("message volume on a large batch", () => {
     const { finalizeBatch } = await import("@/lib/whatsapp/intake");
     await finalizeBatch("batch-1", PHONE, 3);
 
-    expect(sent.some((m) => m.kind === "list")).toBe(false);
-    expect(sent.some((m) => m.kind === "buttons" && m.body.includes("Submit a specific product"))).toBe(true);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].kind).toBe("list");
+    expect(sent[0].rows).toEqual(["submit all", "submit 1", "submit 2", "submit 3", "restart"]);
+    expect(sent[0].body).toContain("Product 3: ✅ Ready");
   });
 
   // A product that never drafted has no title and no submit row — but it
@@ -965,7 +986,7 @@ describe("message volume on a large batch", () => {
     await finalizeBatch("batch-1", PHONE, 5);
 
     const list = sent.find((m) => m.kind === "list")!;
-    expect(list.rows).toEqual(["submit 1", "submit 2", "submit 4", "submit 5"]);
+    expect(list.rows).toEqual(["submit all", "submit 1", "submit 2", "submit 4", "submit 5", "restart"]);
     expect(sent.some((m) => m.body.includes("retry 3"))).toBe(true);
   });
 
@@ -999,7 +1020,7 @@ describe("message volume on a large batch", () => {
     const { finalizeBatch } = await import("@/lib/whatsapp/intake");
     await finalizeBatch("batch-1", PHONE, 3);
 
-    const statusMessages = sent.filter((m) => m.kind === "text" && m.body.includes("Product 1"));
+    const statusMessages = sent.filter((m) => m.body.includes("Product 1:"));
     expect(statusMessages).toHaveLength(1);
     const body = statusMessages[0].body;
     expect(body).toContain("Product 1: ✅ Ready — Drafted product number 1.");
@@ -1016,7 +1037,7 @@ describe("message volume on a large batch", () => {
     const { finalizeBatch } = await import("@/lib/whatsapp/intake");
     await finalizeBatch("batch-1", PHONE, 2);
 
-    const body = sent.find((m) => m.kind === "text" && m.body.includes("Product 1"))!.body;
+    const body = sent.find((m) => m.body.includes("Product 1:"))!.body;
     expect(body).toContain("in GH, so nothing was sent.\n");
     expect(body).not.toContain("..");
   });

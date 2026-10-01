@@ -5,7 +5,6 @@ import {
   getOrCreateSession,
   updateSession,
   resetSession,
-  claimPhotoConfirmation,
   claimMessageId,
   type QcQuestion,
   type WhatsAppSession,
@@ -137,6 +136,22 @@ function replyButtons(to: string, bodyText: string, buttons: { id: string; title
 
 function replyCta(to: string, bodyText: string, buttonText: string, url: string): Promise<void> {
   return sendCtaUrlIfConfigured(to, bodyText, buttonText, url);
+}
+
+// Meta's caps on an interactive message's body: 1024 characters for reply
+// buttons and a link button, 4096 for a list. Over them the send fails
+// outright, so long text falls back to plain text plus a short message.
+const BUTTON_BODY_MAX = 1024;
+const LIST_BODY_MAX   = 4096;
+
+/** A link button carrying the whole text, or plain text then the button when it's too long. */
+async function replyCtaOrSplit(to: string, bodyText: string, buttonText: string, url: string): Promise<void> {
+  if (bodyText.length <= BUTTON_BODY_MAX) {
+    await replyCta(to, bodyText, buttonText, url);
+    return;
+  }
+  await replyText(to, bodyText);
+  await replyCta(to, "Tap below:", buttonText, url);
 }
 
 /** Up to 10 tappable rows in one message, where replyButtons holds three.
@@ -650,11 +665,12 @@ async function handleGlobalCommand(
  * batch, same canonical phrase the global command already recognises
  * (lib/whatsapp/commands.ts).
  */
-function sendBatchDoneMessage(phoneNumber: string): Promise<void> {
-  return replyText(
-    phoneNumber,
-    "🎉 That's the whole batch submitted! I'll message you here as each one goes live.\n\nOnce you've seen how these went, reply *restart* to list something else.",
-  );
+const BATCH_DONE_TEXT =
+  "🎉 That's the whole batch submitted! I'll message you here as each one goes live.\n\nOnce you've seen how these went, reply *restart* to list something else.";
+
+/** The sign-off, after the per-product lines in the same message when there are any. */
+function sendBatchDoneMessage(phoneNumber: string, resultLines: string[] = []): Promise<void> {
+  return replyText(phoneNumber, [...resultLines, ...(resultLines.length ? [""] : []), BATCH_DONE_TEXT].join("\n"));
 }
 
 async function handleGlobalRestart(userId: string, phoneNumber: string): Promise<void> {
@@ -1632,26 +1648,14 @@ async function handleAwaitingPhotos(
 
   if (!text) {
     if (content.imageMediaId) {
-      // One confirmation per burst, not one per photo.
-      //
-      // A six-photo album produced six of these, each with its own Done
-      // button, in the space of about four seconds — see
-      // 2026-09-15_session-last-image-at.sql for the transcript. Each is a
-      // billable send, and the repetition pushes the seller's own photos
-      // off screen at the exact moment they are deciding whether this
-      // thing works.
-      //
-      // The running count goes with it, deliberately. It was added so a
-      // seller could see nothing had been dropped, and it still does that
-      // — once, on "done", where it reports the real total instead of a
-      // number that was already stale by the time it was sent.
-      if (await claimPhotoConfirmation(phoneNumber)) {
-        await replyButtons(
-          phoneNumber,
-          `📸 Product ${seq}: got it. Send more photos, or reply *done* once you're finished with this one.`,
-          [{ id: "done", title: "Done ✅" }],
-        );
-      }
+      // No reply. A photo used to get "📸 Product N: got it. Send more
+      // photos, or reply done" once per burst, which was one of the
+      // commonest messages the bot sent: about one per product. From
+      // 2026-10-01 Meta charges for every message the bot sends, so it
+      // went. The seller already knows to reply *done* (the product's
+      // prompt says so), and "done" answers with the real photo count
+      // ("✅ Product N saved (3 photos)"), which is what the burst reply
+      // was there to reassure them about.
     } else {
       await replyText(phoneNumber, `Send a photo for product ${seq} (or reply *done* once you've sent its photos).`);
     }
@@ -1777,11 +1781,9 @@ async function handleAwaitingPhotos(
     // hears — and for a single-product batch, that is every listing they
     // make. It costs one short message and replaces the several
     // intermediate confirmations the burst debounce removed.
-    if (photoCount > 0) {
-      await replyText(phoneNumber, `✅ Product ${seq} saved${photoNote}.`);
-    }
-
-    await startBatchAnalysis(phoneNumber, userId, session);
+    //
+    // It leads the "drafting now" message rather than going on its own.
+    await startBatchAnalysis(phoneNumber, userId, session, photoCount > 0 ? `✅ Product ${seq} saved${photoNote}.\n` : "");
     return;
   }
 
@@ -1790,22 +1792,10 @@ async function handleAwaitingPhotos(
   // auto-analyze as "SELLER CONTEXT" (e.g. "this is a pack of 6", "the
   // colour is teal not blue").
   if (listingId && content.imageMediaId) {
-    // A captioned photo is part of the same album as the plain ones, so it
-    // shares their one-confirmation-per-burst claim. It used to reply on
-    // its own regardless, so an album with a price caption got "got it"
-    // AND "got it, notes saved" a second apart (live, 2026-09-27). Claimed
-    // before the note is saved so this, the more informative reply, gets a
-    // fair chance at being the one sent. If a plain photo already
-    // confirmed, the note is saved silently and "done" reports it.
-    const confirm = await claimPhotoConfirmation(phoneNumber);
+    // A captioned photo is part of the album like the plain ones: saved
+    // without a reply of its own, and "done" names the notes along with
+    // the photo count ("(3 photos, notes saved)").
     await applyNotes(listingId, text);
-    if (confirm) {
-      await replyButtons(
-        phoneNumber,
-        `📸 Product ${seq}: got it, notes saved. Send more photos, or reply *done* once you're finished with this one.`,
-        [{ id: "done", title: "Done ✅" }],
-      );
-    }
   } else if (listingId) {
     await applyNotes(listingId, text);
     await replyButtons(
@@ -1911,6 +1901,8 @@ async function startBatchAnalysis(
   phoneNumber: string,
   userId: string,
   session: WhatsAppSession,
+  /** A line to send first in the same message (the last product's photo count). */
+  lead = "",
 ): Promise<void> {
   const batchId = session.batchId;
   const batchSize = session.batchSize ?? 1;
@@ -1919,6 +1911,7 @@ async function startBatchAnalysis(
   await updateSession(phoneNumber, { state: "analyzing" });
   await replyText(
     phoneNumber,
+    lead +
     `🔎 Got everything for all ${batchSize} product${batchSize === 1 ? "" : "s"} — drafting them now. I'll update you as each one finishes…` +
     (batchSize >= BIG_BATCH_SIZE ? " This is a bigger batch, so it may take a little while." : ""),
   );
@@ -2243,34 +2236,40 @@ export async function finalizeBatch(
       // "Edit product" would send the seller to a form with nothing wrong
       // on it. Offer the reconnect link instead, same one-time-token
       // mechanism the SUBMIT flow already uses for the same condition.
+      // One message, not two: the draft, how to change it, and what to tap
+      // next used to arrive as a link message plus a buttons message.
+      // Meta charges per message the bot sends from 2026-10-01.
       if (assessment.needsReconnect) {
         const token = await createConnectToken(only.user_id as string);
-        await replyCta(
+        await replyCtaOrSplit(
           phoneNumber,
-          `✅ Product drafted: ${only.title}.${heldText}`,
+          `✅ Product drafted: ${only.title}.${heldText}\n\nReconnect Jumia, then reply *submit*.`,
           "Reconnect Jumia",
           jumiaConnectLink(token),
         );
+      } else if (ready) {
+        const body =
+          `✅ Product drafted: ${only.title}. Ready to submit!\n\n` +
+          `Edit it here: ${focusedEditorUrl(only.id)}\n\n` +
+          `Reply *submit*, or say something like "change the price to 150" to edit it first.`;
+        const buttons = [{ id: "submit all", title: "Submit ✅" }, { id: "restart", title: "Restart 🔄" }];
+        if (body.length <= BUTTON_BODY_MAX) {
+          await replyButtons(phoneNumber, body, buttons);
+        } else {
+          await replyCta(phoneNumber, `✅ Product drafted: ${only.title}. Ready to submit!`, "Edit product", focusedEditorUrl(only.id));
+          await replyButtons(phoneNumber, `Reply *submit*, or say something like "change the price to 150" to edit it first.`, buttons);
+        }
       } else {
-        await replyCta(
+        // Never offer Submit on a Held product — confidence over optimism:
+        // a seller should never be handed a button that would fail or ship
+        // something other than what they typed. The editor is the action.
+        await replyCtaOrSplit(
           phoneNumber,
-          (ready ? `✅ Product drafted: ${only.title}. Ready to submit!` : `✅ Product drafted: ${only.title}.`) + heldText,
+          `✅ Product drafted: ${only.title}.${heldText}\n\nFix it in the editor, then reply *submit*.`,
           "Edit product",
           focusedEditorUrl(only.id),
         );
       }
-      // Never offer Submit on a Held product — confidence over optimism:
-      // a seller should never be handed a button that would fail or ship
-      // something other than what they typed.
-      await replyButtons(
-        phoneNumber,
-        ready
-          ? `Reply *submit*, or say something like "change the price to 150" to edit it first.`
-          : `Fix the above in the editor, then reply *submit*.`,
-        ready
-          ? [{ id: "submit all", title: "Submit ✅" }, { id: "restart", title: "Restart 🔄" }]
-          : [{ id: "restart", title: "Restart 🔄" }],
-      );
       // A missing price is the one gap worth a follow-up question rather
       // than a warning: it is the commonest reason a draft never reaches
       // Jumia, and it is the only missing field a seller can supply in a
@@ -2378,15 +2377,12 @@ export async function finalizeBatch(
   }
 
   const readyListings = drafted.filter((_, i) => assessments[i].ready);
-  const readyToSubmitSeqs = readyListings.map((l) => l.whatsapp_seq as number);
 
   // ONE status line per drafted product — Ready, or Held with why —
   // replacing what used to be a separate live message the moment EACH one
   // finished (runQueuedAnalysis). Real 20-product batch, 2026-09-19: ~108
-  // bot messages total, and this was most of them. Plain text, not
-  // buttons: the same ~1024-char interactive-body cap that forces the
-  // submit summary (handleSubmit) to plain text applies here too, and a
-  // 20-line batch clears it easily.
+  // bot messages total, and this was most of them.
+  let statusText = "";
   if (drafted.length > 0) {
     const statusLines = drafted.map((l, i) => {
       const { ready, reasons } = assessments[i];
@@ -2407,52 +2403,7 @@ export async function finalizeBatch(
       const token = await createConnectToken(userId);
       reconnectFooter = `\n\n🔗 Reconnect Jumia: ${jumiaConnectLink(token)}`;
     }
-    await replyText(phoneNumber, statusLines.join("\n") + reconnectFooter);
-  }
-
-  // Now that the whole batch has settled, offer every READY product's
-  // "Submit product N" in ONE pass, so the status summary above and the
-  // submit actions below read as two separate blocks rather than
-  // alternating pairs. A Held product never gets a Submit affordance here
-  // — confidence over optimism: opening the editor (linked from its status
-  // line above) is the only action offered for one, never a button that
-  // would fail or ship something other than what the seller typed.
-  //
-  // A list holds ten rows; a button message holds three. That difference
-  // is the whole point here.
-  //
-  // This block used to chunk into button messages, so a 10-product batch
-  // spent FOUR sends on it — on top of ten per-product drafted messages
-  // and the closing summary, roughly 25 sends to one recipient in about 30
-  // seconds. Meta throttles per business/consumer pair, and live on
-  // 2026-09-15 that batch lost its tail: submit buttons arrived for
-  // products 1–6 and the closing message never arrived at all. One list is
-  // one send.
-  //
-  // Three or fewer still uses buttons: they render inline, with no extra
-  // tap to open a sheet, and at that size there is no volume to save.
-  if (readyToSubmitSeqs.length > 3) {
-    for (let i = 0; i < readyListings.length; i += LIST_MAX_ROWS) {
-      const chunk = readyListings.slice(i, i + LIST_MAX_ROWS);
-      await replyList(
-        phoneNumber,
-        i === 0 ? "Submit a specific product:" : "…and the rest:",
-        "Pick a product",
-        chunk.map((l) => ({
-          id:          `submit ${l.whatsapp_seq}`,
-          title:       `Submit product ${l.whatsapp_seq}`,
-          // The row's own subtitle — a product number alone tells a seller
-          // nothing about which product it is.
-          description: l.title as string,
-        })),
-      );
-    }
-  } else if (readyToSubmitSeqs.length > 0) {
-    await replyButtons(
-      phoneNumber,
-      "Submit a specific product:",
-      readyToSubmitSeqs.map((seq) => ({ id: `submit ${seq}`, title: `Submit product ${seq}` })),
-    );
+    statusText = statusLines.join("\n") + reconnectFooter;
   }
 
   // Report what actually drafted, not what was promised — and not
@@ -2485,14 +2436,49 @@ export async function finalizeBatch(
       `⚠️ ${missingSeqs.length === 1 ? "Product" : "Products"} ${missingSeqs.join(", ")} ` +
       `couldn't be drafted — ${retryHint} to try again on the photos you already sent.`;
 
-  await replyButtons(
-    phoneNumber,
-    `${headline} Check the messages above for each one, then reply *submit all* when ready — or tell me a product number (e.g. *submit 2*) to submit just one.`,
-    [
-      { id: "submit all", title: "Submit all ✅" },
-      { id: "restart",    title: "Restart 🔄" },
-    ],
-  );
+  // The status lines, the closing line and the submit actions go out as
+  // ONE message. They used to be three (the status lines, a "Submit a
+  // specific product" buttons or list message, and the closing buttons);
+  // Meta charges per message the bot sends from 2026-10-01. A Held product
+  // never gets a Submit action — confidence over optimism: its status line
+  // says what to fix, never a button that would fail or ship something
+  // other than what the seller typed.
+  //
+  // Up to two ready products fit reply buttons ("Submit all" + one each),
+  // which render inline. More go in a list, which holds ten rows in one
+  // message: "Submit all", the products, and Restart. A body too long for
+  // either (a big batch with long Held reasons) falls back to the status
+  // text on its own, then the closing buttons.
+  const closing = `${headline} Reply *submit all* when ready — or tell me a product number (e.g. *submit 2*) to submit just one.`;
+  const body = [statusText, closing].filter(Boolean).join("\n\n");
+  const submitAll = { id: "submit all", title: "Submit all ✅" };
+  const restart   = { id: "restart",    title: "Restart 🔄" };
+
+  if (readyListings.length <= 2 && body.length <= BUTTON_BODY_MAX) {
+    await replyButtons(
+      phoneNumber,
+      body,
+      readyListings.length === 2
+        ? [submitAll, ...readyListings.map((l) => ({ id: `submit ${l.whatsapp_seq}`, title: `Submit product ${l.whatsapp_seq}` }))]
+        : [submitAll, restart],
+    );
+  } else if (readyListings.length > 2 && body.length <= LIST_BODY_MAX) {
+    // Rows past the ninth would overflow the list: "submit N" still works typed.
+    await replyList(phoneNumber, body, "Submit", [
+      { id: "submit all", title: "Submit all ✅", description: `All ${readyListings.length} ready products` },
+      ...readyListings.slice(0, LIST_MAX_ROWS - 2).map((l) => ({
+        id:          `submit ${l.whatsapp_seq}`,
+        title:       `Submit product ${l.whatsapp_seq}`,
+        // The row's own subtitle — a product number alone tells a seller
+        // nothing about which product it is.
+        description: l.title as string,
+      })),
+      { id: "restart", title: "Restart 🔄", description: "Start a new batch" },
+    ]);
+  } else {
+    if (statusText) await replyText(phoneNumber, statusText);
+    await replyButtons(phoneNumber, closing, [submitAll, restart]);
+  }
 
   await askForNextMissingPrice(phoneNumber, batchId);
 }
@@ -2735,10 +2721,7 @@ async function handleSubmit(
       // Same split as the else-branch below: the per-product lines go as
       // plain text (a full batch's worth can exceed the interactive body
       // cap), then the short sign-off carries the button.
-      if (alreadySubmittedMessages.length > 0) {
-        await replyText(phoneNumber, alreadySubmittedMessages.join("\n"));
-      }
-      await sendBatchDoneMessage(phoneNumber);
+      await sendBatchDoneMessage(phoneNumber, alreadySubmittedMessages);
     } else {
       // Plain text first (a long list of "already submitted" lines can
       // exceed the interactive-message body cap), then a short, fixed-
@@ -2876,7 +2859,21 @@ async function handleSubmit(
     // body cap (a plain text message allows far more), and a rejected
     // send here would look like "submitting failed" even though every
     // product actually went through.
-    await replyText(phoneNumber, [...alreadySubmittedMessages, ...raceResult].join("\n"));
+    const resultLines = [...alreadySubmittedMessages, ...raceResult];
+
+    // Everything reached Jumia: the results and the sign-off go as one
+    // message, not two (Meta charges per message the bot sends from
+    // 2026-10-01).
+    if (!shortOfCredits && notSent.length === 0) {
+      const settled = await getBatchListings(batchId);
+      if (settled.every((l) => l.status !== "draft" && l.status !== "failed")) {
+        await resetSession(phoneNumber);
+        await sendBatchDoneMessage(phoneNumber, resultLines);
+        return;
+      }
+    }
+
+    await replyText(phoneNumber, resultLines.join("\n"));
 
     if (shortOfCredits) {
       await replyCta(
