@@ -3,10 +3,10 @@
  *
  * Every fee fact here is taken from that country's official Jumia
  * VendorHub page (commissionsUrl / feesUrl), read 2026-09-28, and each
- * page links its source. Only what those pages state plainly is repeated:
- * no per-category rate is published for a country unless it came from an
- * official table we hold (Ghana: lib/mock/categories). Jumia changes fees,
- * so re-check the sources before editing a number.
+ * page links its source. Only what those pages state plainly is repeated.
+ * The per-category rates and per-item fees are in
+ * lib/marketing/country-fees.ts, copied from the same pages' 2026 tables.
+ * Jumia changes fees, so re-check the sources before editing a number.
  */
 
 export type JumiaCountryCode = "GH" | "NG" | "KE" | "EG" | "MA" | "CI" | "SN" | "UG";
@@ -58,6 +58,7 @@ export const JUMIA_COUNTRIES: JumiaCountry[] = [
     storefront: "jumia.com.ng", vendorCenter: "vendorcenter.jumia.com.ng",
     vendorHub: "https://vendorhub.jumia.com.ng/",
     commissionsUrl: "https://vendorhub.jumia.com.ng/commissions-copy/",
+    feesUrl: "https://vendorhub.jumia.com.ng/fees-copy/",
     marketLanguage: "English",
     feeFacts: [
       "Commission is a percentage of the price and depends on the product's category.",
