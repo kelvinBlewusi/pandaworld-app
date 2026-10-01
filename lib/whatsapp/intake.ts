@@ -18,6 +18,7 @@ import { assessListingPushReadiness } from "@/lib/whatsapp/readiness";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
 import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames, isStaleCategoryError, type Remedy } from "@/lib/jumia/rejection-remedy";
 import { decideQcAction, type QcContext } from "@/lib/jumia/qc-remedy";
+import { featureMinPackName, hasFeature } from "@/lib/billing/features";
 import { removeAttributesFromCache, getCategoryByCode } from "@/lib/jumia/categories";
 import { isUnlistableCategoryError, sellerCountry } from "@/lib/jumia/unlistable-categories";
 import { provenCategoriesFor } from "@/lib/jumia/live-listings";
@@ -3509,6 +3510,20 @@ async function fixQcRejection(
   opts:          { noDetailsAsk?: boolean } = {},
 ): Promise<Remedy | null> {
   const listingId = row.id as string;
+
+  // Guided QC fixes come with the Standard pack and up
+  // (lib/billing/features.ts). Without it: the editor, and where to get it.
+  if (!(await hasFeature(userId, "qc_fix"))) {
+    await replyCtaOrSplit(
+      phoneNumber,
+      `⚠️ ${label}: Jumia's quality check rejected it. Guided QC fixes come with the ${featureMinPackName("qc_fix")} pack and up. ` +
+      `You can fix it yourself in the editor (${focusedEditorUrl(listingId)}), then tap Fix & resubmit.`,
+      "Buy credits",
+      buyCreditsUrl(),
+    );
+    return null;
+  }
+
   const ctx = await qcContextFor(row, rejectionText);
   const decided = await decideQcAction(ctx);
   // The seller already pasted Vendor Center's reason: never ask again.

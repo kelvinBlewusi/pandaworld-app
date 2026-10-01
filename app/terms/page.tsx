@@ -110,10 +110,19 @@ export default function TermsPage() {
           <p>
             A listing drafted and submitted for you (on WhatsApp or the web)
             uses credits only once Jumia accepts it. Drafts, redrafts and
-            fixes use none, and if Jumia rejects the listing, including in
-            its quality check after accepting it, the credits are returned.
-            An extension autofill uses credits each time it fills a form,
-            and an AI-generated or edited image each time one is produced.
+            fixes use none, and a listing Jumia rejects uses none. An
+            extension autofill uses credits each time it fills a form, and
+            an AI-generated or edited image each time one is produced.
+          </p>
+          <p>
+            Some features come with particular packs, as shown on the
+            pricing page, and stay available once you have bought that
+            pack or a larger one. With Jumia QC rejection alerts (the
+            Standard pack and up), we check Jumia&apos;s quality-check result
+            after a listing is accepted, and if Jumia rejects it there, the
+            credits are returned. Without that feature, the quality-check
+            result is shown in your Jumia Vendor Center only. Features
+            marked as coming soon are not yet available.
           </p>
           <p>
             Credits don&apos;t expire, have no cash value, can&apos;t be

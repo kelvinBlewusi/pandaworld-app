@@ -114,6 +114,14 @@ jest.mock("@/lib/jumia/push-listing", () => ({
 const needsReconnectFor = new Set<string>();
 // Settable per test — Held reasons to report verbatim for a listing.
 const heldReasonsFor = new Map<string, string[]>();
+// Pack features (lib/billing/features.ts): on by default, as while billing
+// is off; the QC-gate tests turn it off.
+let qcFeature = true;
+jest.mock("@/lib/billing/features", () => ({
+  hasFeature:         async () => qcFeature,
+  featureMinPackName: () => "Standard",
+}));
+
 jest.mock("@/lib/whatsapp/readiness", () => ({
   assessListingPushReadiness: async (_userId: string, listingId: string) => {
     if (heldReasonsFor.has(listingId)) {
@@ -1917,6 +1925,21 @@ describe("fixing a quality-check rejection", () => {
     expect(qcRow().selling_price).toBe(126);
     expect(question()).toBeNull();
     expect(pushCallCount).toBe(0);
+  });
+
+  it("needs the Standard pack or bigger for the guided fix", async () => {
+    seedQcRejected(null, "Kindly provide the product's FDA registration number");
+    qcFeature = false;
+    try {
+      await say(`fix:${QC_ID}`);
+    } finally {
+      qcFeature = true;
+    }
+
+    expect(lastBody()).toContain("Guided QC fixes come with the Standard pack and up");
+    expect(question()).toBeFalsy();
+    expect(pushCallCount).toBe(0);
+    expect(autoAnalyzeCalls).toHaveLength(0);
   });
 
   it("drops the question when the seller moves on", async () => {
