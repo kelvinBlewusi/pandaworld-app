@@ -728,6 +728,29 @@ only appear while billing is off.
   with the instruction, "…like in the example above" (the caption shows
   under the picture). If the send is refused the instruction goes as plain
   text. Meta fetches the link, so it only works where the app URL is public.
+- **Held for a field the category requires (2026-10-01)**: "this category
+  also needs Weight (kg)" used to leave the seller only the editor. Now
+  readiness returns the fields as `missingFields`; the batch summary (and a
+  WhatsApp category switch) first fills what the AI can
+  (`autoFillMissingFields`, lib/whatsapp/missing-value.ts, one
+  `extractAttributesForCategory(..., { only })` pass), then
+  `askForNextMissingValue` asks for the rest one at a time, after any price
+  question, pointer in `whatsapp_sessions.awaiting_value_for`
+  ({listingId, field}). Replies take "0.5", "500g", a tapped option
+  (`value:N`) or text; "skip value" moves on; anything else drops the
+  pointer. Weight and package sizes are always estimated now (rule 7 of the
+  attribute prompt): they are shipping values, not specs.
+- **A category switch keeps the draft's values (2026-10-01)**:
+  refillAttributesForCategory used to drop every AI value with the old
+  category and never mirror weight into `weight_kg`, so a switched shower
+  cream lost its weight. It now carries values the new category also has
+  (if allowed there) and fills empty weight/size columns.
+- **A category named in the notes (2026-10-01)**: "Category is wigs" in a
+  caption was only a hint, and two wigs landed in Hair Extensions and
+  Fascinators. `resolveStatedCategory` (lib/jumia/stated-category.ts)
+  matches it against Jumia's leaves: one match is kept as the seller's
+  (field_sources.category_code = "user"), several of the same name (seven
+  Wigs) become the whole shortlist; loose matches are ignored.
 - **Undelivered WhatsApp messages (2026-10-01)**: the send API answers
   200 for a message it later fails to deliver; the failure comes back as a
   webhook status update. The webhook records each one in app_errors

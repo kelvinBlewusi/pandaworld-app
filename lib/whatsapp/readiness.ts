@@ -27,6 +27,7 @@ import { previewListingPayload, missingFieldLabels } from "@/lib/jumia/push-list
 import { isFashionCategory } from "@/lib/jumia/fashion-category";
 import { getVariantAxes } from "@/lib/jumia/categories";
 import type { PreflightReason } from "@/lib/jumia/preflight";
+import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import type { ListingRow } from "@/lib/supabase/types";
 
 export interface ListingReadinessResult {
@@ -44,6 +45,9 @@ export interface ListingReadinessResult {
    *  flag rather than the reasons[] text keeps the two call sites from
    *  drifting if the wording here ever changes. */
   needsReconnect?: boolean;
+  /** Fields the category requires that have no value — the ones the bot
+   *  can fill itself or ask the seller for (lib/whatsapp/missing-value.ts). */
+  missingFields?: JumiaCategoryAttribute[];
 }
 
 /**
@@ -283,6 +287,7 @@ export async function assessListingPushReadiness(
   if (preview.missingRequired.length > 0) {
     reasons.push(`this category also needs ${preview.missingRequired.join(", ")}`);
   }
+  const missingFields = preview.missingRequiredAttributes ?? [];
 
   for (const note of preview.preflightNotes) {
     if (HOLD_WORTHY_PREFLIGHT_REASONS.has(note.reason)) {
@@ -335,5 +340,5 @@ export async function assessListingPushReadiness(
     reasons.push(`brand: this looks like a fashion item with no real brand set — open Edit to set one, or confirm "Fashion" as a placeholder`);
   }
 
-  return { ready: reasons.length === 0, reasons };
+  return { ready: reasons.length === 0, reasons, ...(missingFields.length > 0 ? { missingFields } : {}) };
 }

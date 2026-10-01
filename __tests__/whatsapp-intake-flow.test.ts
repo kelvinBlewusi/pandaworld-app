@@ -118,6 +118,11 @@ jest.mock("@/lib/jumia/push-listing", () => ({
 // should report as blocked on a disconnected Jumia account, mirroring
 // readiness.ts's own not_connected branch (needsReconnect: true).
 const needsReconnectFor = new Set<string>();
+// Settable per test — fields a listing's category requires, reported as
+// missing (readiness.ts's missingFields) until the listing has a value.
+type TestAttr = { name: string; label: string; type: string; allowed_values: string[]; required: boolean; is_variant: boolean };
+const requiredFieldsFor = new Map<string, TestAttr[]>();
+const WEIGHT: TestAttr = { name: "product_weight", label: "Weight (kg)", type: "string", allowed_values: [], required: true, is_variant: false };
 // Settable per test — Held reasons to report verbatim for a listing.
 const heldReasonsFor = new Map<string, string[]>();
 // Pack features (lib/billing/features.ts): on by default, as while billing
@@ -140,8 +145,15 @@ jest.mock("@/lib/whatsapp/readiness", () => ({
     const row = db.tables.listings.find((l) => l.id === listingId);
     if (!row) return { ready: false, reasons: ["listing not found"] };
     const missing = missingFieldLabels(row);
-    return missing.length > 0
-      ? { ready: false, reasons: missing.map((m: string) => `needs ${m}`) }
+    if (missing.length > 0) return { ready: false, reasons: missing.map((m: string) => `needs ${m}`) };
+    const { columnFor } = jest.requireActual("@/lib/jumia/attribute-mapping");
+    const missingFields = (requiredFieldsFor.get(listingId) ?? []).filter((a) => {
+      const col = columnFor(a.name);
+      const value = col ? row[col] : (row.dynamic_attributes as Record<string, unknown> | undefined)?.[a.name];
+      return value == null || String(value).trim() === "";
+    });
+    return missingFields.length > 0
+      ? { ready: false, reasons: [`this category also needs ${missingFields.map((a) => a.label).join(", ")}`], missingFields }
       : { ready: true, reasons: [] };
   },
 }));
@@ -164,8 +176,23 @@ const CATEGORY_ROWS = [
   name: c.path.split(" > ").pop()!,
   parent_code: null, level: 3, is_leaf: true, attribute_set_sid: `sid-${c.code}`, attribute_set_name: null,
 }));
+// What the AI fills for a held draft's missing fields (autoFillMissingFields).
+let autoFillValues: Record<string, string> = {};
+const autoFillCalls: (string[] | undefined)[] = [];
+jest.mock("@/lib/actions/ai", () => ({
+  ...jest.requireActual("@/lib/actions/ai"),
+  extractAttributesForCategory: async (_images: string[], _code: number, _ctx: string | null, opts?: { only?: string[] }) => {
+    autoFillCalls.push(opts?.only);
+    return { dynamic_attributes: autoFillValues, field_sources: {}, field_confidence: {} };
+  },
+}));
+
 jest.mock("@/lib/jumia/categories", () => ({
   ...jest.requireActual("@/lib/jumia/categories"),
+  getCategoryAttributes: async (code: number) => {
+    const fields = Array.from(requiredFieldsFor.values()).flat();
+    return fields.length > 0 && code === 1015907 ? fields : [];
+  },
   getListableCategories: async () => CATEGORY_ROWS,
   getCategoryByCode:     async (code: number) => CATEGORY_ROWS.find((c) => c.code === code) ?? null,
 }));
@@ -245,6 +272,9 @@ beforeEach(() => {
   sent.length = 0;
   enqueued.length = 0;
   needsReconnectFor.clear();
+  requiredFieldsFor.clear();
+  autoFillValues = {};
+  autoFillCalls.length = 0;
   heldReasonsFor.clear();
   pushResultFor.clear();
   pushResult = { ok: true };
@@ -613,6 +643,115 @@ describe("asking for a missing price in chat", () => {
     await finalizeBatch("batch-1", PHONE, 2);
 
     expect(session().awaiting_price_for).toBe("listing-2");
+  });
+});
+
+// Live, 2026-10-01: "Product 1: ⚠️ Held — this category also needs Weight
+// (kg)", and the only way on was the editor.
+describe("a field the category requires, filled or asked for in chat", () => {
+  const SHOWER = {
+    id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1,
+    title: "Olive & Milk Shower Cream", selling_price: 240, status: "draft",
+    description: "A long enough description to clear the fifty-character minimum check.",
+    category_code: "1015907", brand: "Palmolive", images: ["https://cdn.test/a.jpg"],
+    dynamic_attributes: {}, field_sources: {}, field_confidence: {}, weight_kg: null,
+  };
+
+  function heldForWeight(patch: Record<string, unknown> = {}) {
+    db.tables.listings = [{ ...SHOWER, ...patch }];
+    requiredFieldsFor.set("listing-1", [WEIGHT]);
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    sent.length = 0;
+  }
+
+  it("fills a weight itself when the AI can estimate it, and never asks", async () => {
+    heldForWeight();
+    autoFillValues = { product_weight: "0.3" };
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 1);
+
+    expect(autoFillCalls).toEqual([["product_weight"]]);
+    expect(listings()[0].weight_kg).toBe(0.3);
+    expect(listings()[0].field_sources).toMatchObject({ weight_kg: "ai" });
+    expect(sent.some((m) => m.body.includes("Ready to submit"))).toBe(true);
+    expect(sent.some((m) => m.body.includes("Jumia needs its"))).toBe(false);
+  });
+
+  it("asks for it when it can't be filled, and saves the seller's answer", async () => {
+    heldForWeight();
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 1);
+
+    const ask = sent.find((m) => m.body.includes("Jumia needs its *Weight (kg)*"));
+    expect(ask).toBeDefined();
+    expect(ask!.rows).toEqual(["skip value"]);
+    expect(sent.some((m) => m.body.includes("Answer the question below"))).toBe(true);
+    expect(session().awaiting_value_for).toEqual({ listingId: "listing-1", field: "product_weight" });
+
+    sent.length = 0;
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "500g" });
+
+    expect(listings()[0].weight_kg).toBe(0.5);
+    expect(listings()[0].field_sources).toMatchObject({ weight_kg: "user" });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body).toBe("✅ Weight (kg) set to 0.5 kg for Olive & Milk Shower Cream — ready to submit.");
+    expect(sent[0].rows).toEqual(["submit all"]);
+    expect(session().awaiting_value_for).toBeNull();
+  });
+
+  it("keeps the question open with a hint when the reply isn't a weight", async () => {
+    heldForWeight();
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null, awaiting_value_for: { listingId: "listing-1", field: "product_weight" } });
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "heavy" });
+
+    expect(sent[0].body).toContain("Reply with the weight in kg");
+    expect(listings()[0].weight_kg).toBeNull();
+    expect(session().awaiting_value_for).toEqual({ listingId: "listing-1", field: "product_weight" });
+  });
+
+  it("offers a field's allowed values to tap, and saves the one tapped", async () => {
+    const GENDER: TestAttr = { name: "gender", label: "Gender", type: "enum", allowed_values: ["Female", "Male", "Unisex"], required: true, is_variant: false };
+    db.tables.listings = [{ ...SHOWER, weight_kg: 0.3 }];
+    requiredFieldsFor.set("listing-1", [GENDER]);
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    sent.length = 0;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 1);
+
+    const ask = sent.find((m) => m.body.includes("Jumia needs its *Gender*"))!;
+    expect(ask.kind).toBe("list");
+    expect(ask.rows).toEqual(["value:0", "value:1", "value:2", "skip value"]);
+
+    sent.length = 0;
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "value:2" });
+
+    expect(listings()[0].dynamic_attributes).toMatchObject({ gender: "Unisex" });
+    expect(sent[0].body).toContain("Gender set to Unisex");
+  });
+
+  it("moves on when the seller skips", async () => {
+    heldForWeight();
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null, awaiting_value_for: { listingId: "listing-1", field: "product_weight" } });
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "skip value" });
+
+    expect(session().awaiting_value_for).toBeNull();
+    expect(sent.some((m) => m.body.includes("fill it in on the review page"))).toBe(true);
+  });
+
+  it("asks after the price, once every price is in", async () => {
+    heldForWeight({ selling_price: null });
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null, awaiting_price_for: "listing-1" });
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "240" });
+
+    const reply = sent.find((m) => m.body.includes("Price set to GHS 240"))!;
+    expect(reply.body).toContain("Jumia needs its *Weight (kg)*");
+    expect(session().awaiting_value_for).toEqual({ listingId: "listing-1", field: "product_weight" });
   });
 });
 
@@ -1263,8 +1402,7 @@ describe("quiet batch mode", () => {
     await handleLinkedMessage(USER, PHONE, "m3", { text: "2" });
 
     expect(sent).toHaveLength(1);
-    expect(sent[0].body).toContain("I'm still on product 1 of 4");
-    expect(sent[0].body).toContain("(2 so far)");
+    expect(sent[0].body).toContain("I'm still on product 1 of 4, which has 2 photos so far. Reply *1* to finish it, then send product 2's photos and *2*.");
     expect(sent[0].rows).toEqual(["restart"]);
     expect(session().batch_seq).toBe(1);
     expect(listings()[0].selling_price).toBe(240);

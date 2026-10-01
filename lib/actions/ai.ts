@@ -1581,7 +1581,9 @@ export async function extractAttributesForCategory(
   categoryCode: number,
   userContext?: string | null,
   // forceBestModel: no longer changes the model (see resolveModel).
-  opts: { forceBestModel?: boolean } = {},
+  // only: fill just these attributes (the ones a held draft is missing,
+  // lib/whatsapp/missing-value.ts), without the default padding.
+  opts: { forceBestModel?: boolean; only?: string[] } = {},
 ): Promise<{
   dynamic_attributes: Record<string, string>;
   field_sources:      Record<string, "ai">;
@@ -1604,7 +1606,11 @@ export async function extractAttributesForCategory(
   }
 
   // Filter out fields the AI must NEVER fill (price, stock, gtin, etc.)
-  const inferableAttrs = attrs.filter((a) => !SELLER_REQUIRED_ATTR_KEYS.has(a.name.toLowerCase()));
+  const only = opts.only ? new Set(opts.only) : null;
+  const inferableAttrs = attrs.filter((a) => !SELLER_REQUIRED_ATTR_KEYS.has(a.name.toLowerCase()) && (!only || only.has(a.name)));
+  if (inferableAttrs.length === 0) {
+    return { dynamic_attributes: {}, field_sources: {}, field_confidence: {} };
+  }
 
   const attrLines = inferableAttrs.map((a) => {
     const valStr = a.allowed_values.length
@@ -1643,6 +1649,7 @@ RULES:
 4. Return only attributes you could fill — omit ones you're not sure about.
 5. Any attribute value you produce MUST follow the JUMIA CONTENT POLICY above — strip restricted words, never write banned terms ("original", "imported", "brand new", etc.), never invent specs the images don't show.
 6. If an attribute below is about package/box contents (named something like "what's in the box", "package contents", "box contents") and the seller's context states what's included, use EXACTLY what they said — formatted as a multi-line list, one item per line, each starting with a count like "1x", "2x" (e.g. "1x Drone\\n1x Remote Controller\\n2x Batteries"). The seller's own answer always wins over guessing from the images.
+7. The one exception to rules 3 and 4: weight and package-size attributes (product_weight, weight, size_l, size_w, size_h and the like) are the PACKAGED item's shipping weight and size, not a spec the buyer relies on. Use a printed or stated value when there is one; otherwise give a realistic estimate for this kind of product at the size shown (a 250 ml bottle of shower cream is about 0.3 kg). Never omit one marked [REQUIRED]. A plain number only, no units (weight in kg, sizes in cm).
 ${ctxSection}
 Return ONLY valid JSON, no markdown:
 {
@@ -1665,6 +1672,7 @@ Return ONLY valid JSON, no markdown:
   const dynamic_attributes: Record<string, string> = {};
   for (const [k, v] of Object.entries(rawAttrs)) {
     if (SELLER_REQUIRED_ATTR_KEYS.has(k.toLowerCase())) continue;
+    if (only && !only.has(k)) continue;
     if (v == null || String(v).trim() === "" || String(v).toLowerCase() === "null") continue;
     dynamic_attributes[k] = String(v).trim();
   }
@@ -1676,7 +1684,7 @@ Return ONLY valid JSON, no markdown:
   // every listing has the customer-feedback note + manufacturer
   // placeholder. Categories that don't accept these attribute names
   // will silently drop them at push time.
-  for (const [k, defaultVal] of Object.entries(AI_DYNAMIC_ATTR_DEFAULTS)) {
+  for (const [k, defaultVal] of Object.entries(only ? {} : AI_DYNAMIC_ATTR_DEFAULTS)) {
     if (!dynamic_attributes[k] || dynamic_attributes[k].length === 0) {
       dynamic_attributes[k] = defaultVal;
     }
@@ -1868,7 +1876,7 @@ OUTPUT RULES:
 3. When a candidate is marked "[PARENT category — has more specific sub-categories on Jumia]" AND one of the OTHER candidates is a more specific match for the same product, prefer the more specific one — Jumia frequently rejects a listing filed directly under a parent category as too broad ("You can't list products in this category ... choose a different (more specific) category"), even though the parent has its own attribute set and looks selectable. Only choose a PARENT candidate when it is genuinely the best fit and no more specific candidate on the list covers this product.
 4. dynamic_attributes keys MUST be attribute names from your chosen category's list (the names shown after "- " on each schema line). NEVER include attributes from a different candidate.
 5. For attributes with an allowed list, pick exactly one value from that list. Otherwise omit.
-6. Skip any attribute you can't determine — null/omit is better than guessing. EXCEPT for required-by-Jumia fields where general online knowledge can give you a sensible answer (e.g. typical material for a known product line) — fill those with moderate confidence.
+6. Skip any attribute you can't determine — null/omit is better than guessing. EXCEPT for required-by-Jumia fields where general online knowledge can give you a sensible answer (e.g. typical material for a known product line) — fill those with moderate confidence. Weight and package-size attributes (product_weight, weight, size_l, size_w, size_h and the like) are the PACKAGED item's shipping weight and size: use a printed or stated value, otherwise a realistic estimate for this kind of product at the size shown (a 250 ml bottle of shower cream is about 0.3 kg). Never omit a required one. A plain number only, no units (weight in kg, sizes in cm).
 7. Disambiguate visually-similar candidates by PRIMARY USE CASE + ENVIRONMENT — a farm sprayer goes under Agriculture, not Home Cleaning.
 8. Confidence is 0..1, and it means "how well does this category actually fit this product" — NOT "how sure am I this is the best of the three offered". If the best candidate is only a loose fit, that's a LOW confidence even when it's clearly better than the other two. Be honest. Set needsConfirmation=true if your top pick is below 0.75 OR within 0.15 of your second choice.
 9. ALWAYS include these dynamic_attributes keys, even if the chosen category's schema doesn't list them (Jumia silently drops unknown keys; the cost of including is zero, the cost of omitting is a missed buyer-trust signal):

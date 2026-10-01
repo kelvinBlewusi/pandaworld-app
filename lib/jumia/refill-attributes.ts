@@ -25,6 +25,10 @@ import {
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { logCategoryCorrection } from "@/lib/jumia/category-corrections";
 import { withAiUsageContext } from "@/lib/ai/usage";
+import { columnFor } from "@/lib/jumia/attribute-mapping";
+
+/** Columns a weight or size attribute mirrors into (product_weight → weight_kg). */
+const PHYSICAL_COLUMNS = new Set(["weight_kg", "size_l", "size_w", "size_h"]);
 
 type FieldConfidence = { confidence: number; source: string; reasoning?: string };
 
@@ -71,7 +75,7 @@ async function refillUnmetered(
 
   const { data: listing } = await db
     .from("listings")
-    .select("id, user_id, images, dynamic_attributes, field_sources, field_confidence, category_code, category_path, category_alternates")
+    .select("id, user_id, images, dynamic_attributes, field_sources, field_confidence, category_code, category_path, category_alternates, weight_kg, size_l, size_w, size_h")
     .eq("id", listingId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -186,7 +190,39 @@ async function refillUnmetered(
     }
   }
 
+  // What the earlier draft had for a field the new category also has, when
+  // this fill left it out. Live, 2026-10-01: a shower cream switched from
+  // Body Sunscreens to Body Washes lost every AI value with the old
+  // category, the new fill skipped the weight, and the product was held
+  // for "Weight (kg)". The values describe the product, not the category,
+  // so they still hold, unless the new category only accepts other values.
+  const allowedValues = new Map(attrs.map((a) => [a.name, (a.allowed_values ?? []).map((x) => x.toLowerCase())]));
+  for (const [k, v] of Object.entries(previousDyn)) {
+    const value = String(v ?? "").trim();
+    if (!validKeys.has(k) || mergedDyn[k] || !value) continue;
+    const allowed = allowedValues.get(k) ?? [];
+    if (allowed.length > 0 && !allowed.includes(value.toLowerCase())) continue;
+    mergedDyn[k] = value;
+    carriedSources[`dynamic_attributes.${k}`] = previousSources[`dynamic_attributes.${k}`] ?? "ai";
+  }
+
+  // A weight or size the fill gave, copied into its empty column, which is
+  // what the editor shows and the push sends: the same mirror a first draft
+  // does (lib/actions/auto-analyze.ts), which a category switch skipped.
+  const columnUpdates: Record<string, number> = {};
+  for (const [k, v] of Object.entries(mergedDyn)) {
+    const col = columnFor(k);
+    if (!col || !PHYSICAL_COLUMNS.has(col) || col in columnUpdates) continue;
+    const current = (listing as Record<string, unknown>)[col];
+    if (current != null && String(current).trim() !== "") continue;
+    const n = parseFloat(String(v).replace(/[^\d.]/g, ""));
+    if (!Number.isFinite(n) || n <= 0) continue;
+    columnUpdates[col] = n;
+    carriedSources[col] = "ai";
+  }
+
   await db.from("listings").update({
+    ...columnUpdates,
     category_code:      String(categoryCode),
     category_path:      categoryPath,
     dynamic_attributes: mergedDyn,

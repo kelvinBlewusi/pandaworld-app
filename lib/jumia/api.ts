@@ -1502,7 +1502,7 @@ export function mapListingToJumiaProducts(
 function missingRequiredFor(
   products: ReturnType<typeof mapListingToJumiaProducts>,
   schema:   JumiaCategoryAttribute[],
-): string[] {
+): JumiaCategoryAttribute[] {
   if (schema.length === 0 || products.length === 0) return [];
 
   const carried = new Set(CARRIED_OUTSIDE_ATTRIBUTES.map((n) => n.toLowerCase()));
@@ -1513,11 +1513,9 @@ function missingRequiredFor(
     }
   }
 
-  return schema
-    .filter((f) => f.required
-      && !present.has(f.name.toLowerCase())
-      && !carried.has(f.name.toLowerCase()))
-    .map((f) => f.label || f.name);
+  return schema.filter((f) => f.required
+    && !present.has(f.name.toLowerCase())
+    && !carried.has(f.name.toLowerCase()));
 }
 
 /**
@@ -1593,6 +1591,9 @@ export interface JumiaPayloadBuild {
   adjustments:     string[];
   /** Schema-required attribute labels with no value, by their Jumia label. */
   missingRequired: string[];
+  /** The same fields as schema entries, for asking the seller for them
+   *  (askForNextMissingValue in lib/whatsapp/intake.ts). */
+  missingRequiredAttributes: JumiaCategoryAttribute[];
   /** Set when the payload could not be built at all (no valid category). */
   error?:          string;
   /** Every preflight note, RAW (with its .reason tag) rather than
@@ -1685,7 +1686,7 @@ export async function buildJumiaPayload(
   // itself is unreachable right now).
   if (categoryResolved && schema.length === 0) {
     return {
-      products: [], adjustments: [], missingRequired: [], preflightNotes: [],
+      products: [], adjustments: [], missingRequired: [], missingRequiredAttributes: [], preflightNotes: [],
       error: "JUMIA_NO_SCHEMA: This category's attribute list hasn't synced yet, so nothing can be validated before sending — try again in a moment, or open the category picker to re-select it and force a re-sync.",
     };
   }
@@ -1701,7 +1702,7 @@ export async function buildJumiaPayload(
     // content gate below since it's about the payload not being buildable
     // as typed at all, the same class of problem an empty schema is.
     if (blockers.length > 0) {
-      return { products: [], adjustments, missingRequired: [], preflightNotes, error: blockers.join(" ") };
+      return { products: [], adjustments, missingRequired: [], missingRequiredAttributes: [], preflightNotes, error: blockers.join(" ") };
     }
 
     // Last-mile content gate — restricted words plus the prohibited-
@@ -1711,13 +1712,14 @@ export async function buildJumiaPayload(
     const ready = assertListingReady(listing, countryCode, products);
     adjustments.push(...ready.warnings);
     if (!ready.ok) {
-      return { products: [], adjustments, missingRequired: [], preflightNotes, error: ready.blockers.join(" ") };
+      return { products: [], adjustments, missingRequired: [], missingRequiredAttributes: [], preflightNotes, error: ready.blockers.join(" ") };
     }
 
-    return { products, adjustments, missingRequired: missingRequiredFor(products, schema), preflightNotes };
+    const missing = missingRequiredFor(products, schema);
+    return { products, adjustments, missingRequired: missing.map((f) => f.label || f.name), missingRequiredAttributes: missing, preflightNotes };
   } catch (e) {
     return {
-      products: [], adjustments, missingRequired: [], preflightNotes,
+      products: [], adjustments, missingRequired: [], missingRequiredAttributes: [], preflightNotes,
       error: (e as Error).message ?? "Failed to build payload",
     };
   }

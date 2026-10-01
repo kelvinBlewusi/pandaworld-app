@@ -15,20 +15,23 @@ jest.mock("@/lib/supabase/server", () => ({
   createServerClient: () => db,
 }));
 
+let extracted: Record<string, string> = { color: "Black" };
 jest.mock("@/lib/actions/ai", () => ({
   extractAttributesForCategory: async () => ({
-    dynamic_attributes: { color: "Black" },
-    field_sources:      { "dynamic_attributes.color": "ai" },
+    dynamic_attributes: extracted,
+    field_sources:      Object.fromEntries(Object.keys(extracted).map((k) => [`dynamic_attributes.${k}`, "ai"])),
     field_confidence:   {},
   }),
 }));
+
+let schema: { name: string; allowed_values?: string[] }[] = [{ name: "color" }];
 
 jest.mock("@/lib/jumia/categories", () => ({
   getCategoryByCode: async (code: number) => ({
     code, name: `Category ${code}`, path: `A > Category ${code}`, parent_code: null, level: 2,
     is_leaf: true, attribute_set_sid: `sid-${code}`, attribute_set_name: null,
   }),
-  getCategoryAttributes:    async () => [{ name: "color" }],
+  getCategoryAttributes:    async () => schema,
   fetchAttributesFromJumia: async () => [],
   upsertAttributes:         async () => {},
 }));
@@ -42,6 +45,11 @@ jest.mock("@/lib/jumia/category-corrections", () => ({
 }));
 
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
+
+beforeEach(() => {
+  extracted = { color: "Black" };
+  schema = [{ name: "color" }];
+});
 
 function seedListing(patch: Record<string, unknown> = {}) {
   db.tables.listings = [{
@@ -77,5 +85,51 @@ describe("refillAttributesForCategory — who chose the category", () => {
     await refillAttributesForCategory("user_1", "listing-1", 100);
 
     expect(db.tables.listings[0].field_sources).toMatchObject({ category_code: "user" });
+  });
+});
+
+// Live, 2026-10-01: a shower cream switched from Body Sunscreens to Body
+// Washes lost every AI value with the old category, the new fill skipped
+// the weight, and the product was held for "Weight (kg)".
+describe("refillAttributesForCategory — what carries over a category switch", () => {
+  it("keeps an earlier value the new fill left out, and copies a weight into its column", async () => {
+    schema = [{ name: "color" }, { name: "product_weight" }];
+    seedListing({ dynamic_attributes: { product_weight: "0.3", old_only: "x" }, field_sources: { "dynamic_attributes.product_weight": "ai" } });
+
+    await refillAttributesForCategory("user_1", "listing-1", 200);
+
+    const row = db.tables.listings[0];
+    expect(row.dynamic_attributes).toEqual({ color: "Black", product_weight: "0.3" });
+    expect(row.weight_kg).toBe(0.3);
+    expect(row.field_sources).toMatchObject({ weight_kg: "ai" });
+  });
+
+  it("copies a weight the new fill gave into an empty column", async () => {
+    schema = [{ name: "product_weight" }];
+    extracted = { product_weight: "0.45 kg" };
+    seedListing();
+
+    await refillAttributesForCategory("user_1", "listing-1", 200);
+
+    expect(db.tables.listings[0].weight_kg).toBe(0.45);
+  });
+
+  it("never replaces a weight already set", async () => {
+    schema = [{ name: "product_weight" }];
+    extracted = { product_weight: "2" };
+    seedListing({ weight_kg: 0.5 });
+
+    await refillAttributesForCategory("user_1", "listing-1", 200);
+
+    expect(db.tables.listings[0].weight_kg).toBe(0.5);
+  });
+
+  it("drops an earlier value the new category doesn't accept", async () => {
+    schema = [{ name: "color" }, { name: "skin_type", allowed_values: ["Dry", "Oily", "All skin types"] }];
+    seedListing({ dynamic_attributes: { skin_type: "Sensitive" } });
+
+    await refillAttributesForCategory("user_1", "listing-1", 200);
+
+    expect(db.tables.listings[0].dynamic_attributes).not.toHaveProperty("skin_type");
   });
 });

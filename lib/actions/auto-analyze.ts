@@ -36,6 +36,7 @@ import {
   CONTENT_LENGTH_FLOORS,
 } from "@/lib/ai/content-style-rules";
 import { canonicalKey, columnFor } from "@/lib/jumia/attribute-mapping";
+import { resolveStatedCategory } from "@/lib/jumia/stated-category";
 import { isFashionCategory } from "@/lib/jumia/fashion-category";
 import { aiReadNoteIntent } from "@/lib/actions/ai";
 import { verifyNoteIntent, type NoteIntent } from "@/lib/whatsapp/note-intent";
@@ -510,8 +511,26 @@ async function runAutoAnalyzeUnmetered(
   let ranked: Awaited<ReturnType<typeof aiPassB_rankCategory>>;
   let filled: Awaited<ReturnType<typeof extractAttributesForCategory>>;
 
+  // A category the seller named in their notes ("Category is wigs", see
+  // lib/jumia/stated-category.ts) counts the same: one match is kept like
+  // a picked one, and several (Jumia has Wigs under hair care, costumes and
+  // toys) become the whole shortlist, for the model to choose from the
+  // photos.
   const sellerCode = sellerChosenCategoryCode(listing);
-  const kept = sellerCode != null ? await keepSellerCategory(userId, sellerCode, images, userContext) : null;
+  const stated = sellerCode == null
+    ? await resolveStatedCategory(userId, userContext, description.title).catch((e) => {
+        console.warn(`[auto-analyze] stated category lookup failed: ${(e as Error).message}`);
+        return null;
+      })
+    : null;
+  const keepCode = sellerCode ?? (stated?.kind === "match" ? stated.category.code : null);
+  const kept = keepCode != null ? await keepSellerCategory(userId, keepCode, images, userContext) : null;
+  if (stated) {
+    console.info(
+      `[auto-analyze] listing=${listingId} notes name a category: ` +
+        (stated.kind === "match" ? `${stated.category.code} ${stated.category.path}` : stated.options.map((o) => o.code).join(", ")),
+    );
+  }
   if (kept) {
     ({ ranked, filled, candidatesWithSchemas } = kept);
   } else {
@@ -539,68 +558,80 @@ async function runAutoAnalyzeUnmetered(
       };
     }
 
-    const departments = getTopLevelDepartments(allCategories);
+    // The categories the seller's notes named, as the whole shortlist.
+    const statedCandidates: CategoryCandidate[] = (stated?.kind === "options" ? stated.options : []).flatMap((o) => {
+      const row = listableCategories.find((c) => Number(c.code) === o.code);
+      return row
+        ? [{ code: Number(row.code), name: row.name, path: row.path, attribute_set_sid: row.attribute_set_sid, retrievalScore: 1, source: "seller" as const }]
+        : [];
+    });
 
-    try {
-      const deptPick = await aiPassB0_pickDepartment(
-        images,
-        departments,
-        userContext,
-        description.intended_use_case,
-        description.environment,
-        { forceBestModel: true },
-      );
+    if (statedCandidates.length > 0) {
+      candidates = statedCandidates;
+    } else {
+      const departments = getTopLevelDepartments(allCategories);
 
-      // Search the primary department AND its alternates, then pool.
-      //
-      // This used to stop at the first department that returned ANYTHING
-      // (`if (candidates.length > 0) continue`), which made the alternates
-      // a fallback for an EMPTY department rather than a wrong one. A
-      // confidently-wrong pick is never empty: it returns eight plausible
-      // candidates from the wrong subtree, the loop stops, and the vision
-      // model is handed a shortlist with no correct answer anywhere in it.
-      // That is how a safety helmet was filed under "Automobile > Car Care
-      // > Cleaning Kits" — the department pick was wrong, and nothing
-      // downstream could recover from it, because the right department was
-      // never searched.
-      //
-      // Pooling instead of short-circuiting means a wrong primary is
-      // survivable: the correct department's candidates are in the
-      // shortlist too, and picking between them is exactly what the vision
-      // model is good at. It also fits the catalog, which lists the same
-      // leaf under several departments (Hard Hats exists under both
-      // Industrial & Scientific and Home & Office), so "the" right
-      // department is often not even unique.
-      const deptsToSearch = [deptPick.primary, ...deptPick.alternates]
-        .filter((d): d is NonNullable<typeof d> => Boolean(d))
-        .filter((d, i, all) => all.findIndex((o) => o.path === d.path) === i)
-        .filter((d) => getSubtreeCategories(listableCategories, d.path).length > 0)
-        .slice(0, 3);
-
-      if (deptsToSearch.length > 0) {
-        // One embedding, N scoped matches, all inside one timeout budget.
-        const semanticPerDept = await searchCategoriesByEmbeddingMulti(
-          retrievalQuery,
-          8,
-          deptsToSearch.map((d) => d.path),
+      try {
+        const deptPick = await aiPassB0_pickDepartment(
+          images,
+          departments,
+          userContext,
+          description.intended_use_case,
+          description.environment,
+          { forceBestModel: true },
         );
 
-        const perDept = deptsToSearch.map((dept, i) => {
-          const subtree = getSubtreeCategories(listableCategories, dept.path);
-          const fuzzyHits = searchCategoriesByText(retrievalQuery, subtree, 8);
-          const semanticHits = withoutBlocked(semanticPerDept[i] ?? [], blocked);
-          return semanticHits.length > 0 ? mergeCandidates(fuzzyHits, semanticHits, 8) : fuzzyHits;
-        });
+        // Search the primary department AND its alternates, then pool.
+        //
+        // This used to stop at the first department that returned ANYTHING
+        // (`if (candidates.length > 0) continue`), which made the alternates
+        // a fallback for an EMPTY department rather than a wrong one. A
+        // confidently-wrong pick is never empty: it returns eight plausible
+        // candidates from the wrong subtree, the loop stops, and the vision
+        // model is handed a shortlist with no correct answer anywhere in it.
+        // That is how a safety helmet was filed under "Automobile > Car Care
+        // > Cleaning Kits" — the department pick was wrong, and nothing
+        // downstream could recover from it, because the right department was
+        // never searched.
+        //
+        // Pooling instead of short-circuiting means a wrong primary is
+        // survivable: the correct department's candidates are in the
+        // shortlist too, and picking between them is exactly what the vision
+        // model is good at. It also fits the catalog, which lists the same
+        // leaf under several departments (Hard Hats exists under both
+        // Industrial & Scientific and Home & Office), so "the" right
+        // department is often not even unique.
+        const deptsToSearch = [deptPick.primary, ...deptPick.alternates]
+          .filter((d): d is NonNullable<typeof d> => Boolean(d))
+          .filter((d, i, all) => all.findIndex((o) => o.path === d.path) === i)
+          .filter((d) => getSubtreeCategories(listableCategories, d.path).length > 0)
+          .slice(0, 3);
 
-        candidates = poolByRank(perDept, 8);
+        if (deptsToSearch.length > 0) {
+          // One embedding, N scoped matches, all inside one timeout budget.
+          const semanticPerDept = await searchCategoriesByEmbeddingMulti(
+            retrievalQuery,
+            8,
+            deptsToSearch.map((d) => d.path),
+          );
 
-        console.info(
-          `[auto-analyze] searched ${deptsToSearch.length} department(s): ` +
-            deptsToSearch.map((d, i) => `"${d.name}"→${perDept[i].length}`).join(", "),
-        );
+          const perDept = deptsToSearch.map((dept, i) => {
+            const subtree = getSubtreeCategories(listableCategories, dept.path);
+            const fuzzyHits = searchCategoriesByText(retrievalQuery, subtree, 8);
+            const semanticHits = withoutBlocked(semanticPerDept[i] ?? [], blocked);
+            return semanticHits.length > 0 ? mergeCandidates(fuzzyHits, semanticHits, 8) : fuzzyHits;
+          });
+
+          candidates = poolByRank(perDept, 8);
+
+          console.info(
+            `[auto-analyze] searched ${deptsToSearch.length} department(s): ` +
+              deptsToSearch.map((d, i) => `"${d.name}"→${perDept[i].length}`).join(", "),
+          );
+        }
+      } catch (e) {
+        console.warn(`[auto-analyze] department pick failed, falling back to full-catalog fuzzy search: ${(e as Error).message}`);
       }
-    } catch (e) {
-      console.warn(`[auto-analyze] department pick failed, falling back to full-catalog fuzzy search: ${(e as Error).message}`);
     }
 
     // Last resort: full-catalog fuzzy search (still real retrieval, never a
@@ -615,7 +646,7 @@ async function runAutoAnalyzeUnmetered(
     // as accepted by Jumia. They're offered, not applied: a live listing
     // can itself be in the wrong category, so the model still judges fit.
     // Drawn from `listableCategories`, so never one Jumia has refused here.
-    const proven = await provenCategoriesFor(
+    const proven = statedCandidates.length > 0 ? [] : await provenCategoriesFor(
       country,
       { title: description.title, keywords: description.keywords },
       listableCategories,
@@ -690,7 +721,8 @@ async function runAutoAnalyzeUnmetered(
     // Live-listing categories sit in front and don't count against the
     // retrieval top N, so the model still sees retrieval's best three, no
     // more than two of them siblings (diverseTop).
-    const topNCandidates   = [
+    // The categories the seller named are the shortlist as they are.
+    const topNCandidates   = statedCandidates.length > 0 ? candidates : [
       ...candidates.slice(0, provenCount),
       ...diverseTop(candidates.slice(provenCount), TOP_N_FOR_COMBINED),
     ];
@@ -1162,6 +1194,8 @@ async function runAutoAnalyzeUnmetered(
   // The AI picked the category this time (the seller's is no longer
   // listable), so it isn't the seller's any more.
   if (!kept) delete mergedSources.category_code;
+  // One the seller named in their notes is theirs, as if they'd picked it.
+  if (kept && stated?.kind === "match") mergedSources.category_code = "user";
   for (const [k, v] of Object.entries(filled.field_sources ?? {})) {
     if (mergedSources[k] !== "user") mergedSources[k] = v;
   }
