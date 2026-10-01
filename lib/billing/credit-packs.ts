@@ -12,31 +12,43 @@ export interface CreditPack {
 }
 
 /**
- * 1 credit = GHS 0.25 in every pack, so a live WhatsApp / web listing
- * (LIVE_LISTING_CREDIT_COST = 2) is GHS 0.50 however much a seller buys.
- * Smallest purchase GHS 30, largest GHS 100 (set 2026-09-28).
+ * Launch pricing, set 2026-10-01: 1 credit = GHS 0.35 at the Starter
+ * price, so a live WhatsApp / web listing (LIVE_LISTING_CREDIT_COST = 2)
+ * is GHS 0.70, an extension autofill (1 credit) GHS 0.35 and an AI image
+ * (4 credits) GHS 1.40. Bigger packs carry up to 15% extra credits; at the
+ * Business rate a listing is about GHS 0.60. Costs it was set against
+ * (per live WhatsApp listing, measured): AI drafting ~GHS 0.05, WhatsApp
+ * messages ~GHS 0.18 (Meta charges per bot message from 2026-10-01),
+ * Paystack 1.95%; plus ~GHS 530 a month fixed (Vercel Pro, Supabase Pro).
+ * Break-even is about 1,200 listings a month.
+ *
+ * Was GHS 0.25 a credit in every pack (120 / 200 / 400 credits for GHS
+ * 30 / 50 / 100), 2026-09-28 to 2026-10-01.
  */
 export const CREDIT_PACKS: CreditPack[] = [
-  { id: "starter", credits: 120, amountGhs: 30 },
-  { id: "small",   credits: 200, amountGhs: 50 },
-  { id: "medium",  credits: 400, amountGhs: 100 },
+  { id: "starter",  credits: 100, amountGhs: 35 },
+  { id: "standard", credits: 210, amountGhs: 70 },
+  { id: "pro",      credits: 440, amountGhs: 140 },
+  { id: "business", credits: 940, amountGhs: 280 },
 ];
 
 /** Pack id shown with the "Popular" badge in the Buy Credits modal. */
-export const POPULAR_PACK_ID = "small";
+export const POPULAR_PACK_ID = "standard";
 
 export function getCreditPack(id: string): CreditPack | undefined {
   return CREDIT_PACKS.find((p) => p.id === id);
 }
 
 /**
- * Credit amounts of earlier packs (100/280/600 until 2026-09-13, then
- * 150/330/650 until 2026-09-28) — kept so a purchase transaction recorded
- * back then still resolves to its pack instead of showing no "Plan" pill.
+ * Credit amounts of earlier packs (100/280/600 until 2026-09-13, 150/330/650
+ * until 2026-09-28, 120/200/400 until 2026-10-01) — kept so a purchase
+ * transaction recorded back then still resolves to the nearest pack today
+ * instead of showing no "Plan" pill. (100 is today's Starter as well.)
  */
 const LEGACY_CREDIT_AMOUNTS: Record<number, string> = {
-  100: "starter", 280: "small", 600: "medium",
-  150: "starter", 330: "small", 650: "medium",
+  280: "standard", 600: "pro",
+  150: "starter", 330: "standard", 650: "pro",
+  120: "starter", 200: "standard", 400: "pro",
 };
 
 /**
@@ -55,13 +67,14 @@ export function getCreditPackByCredits(credits: number): CreditPack | undefined 
 
 /**
  * Every sign-up starts with this many free credits, spendable on the
- * extension and WhatsApp alike (lib/billing/extension-credits.ts). 25 as
- * of 2026-09-28 (was 10).
+ * extension and WhatsApp alike (lib/billing/extension-credits.ts): 10 free
+ * WhatsApp listings, or 20 autofills. 20 as of 2026-10-01 (25 from
+ * 2026-09-28, 10 before).
  */
-export const FREE_SIGNUP_CREDITS = 25;
+export const FREE_SIGNUP_CREDITS = 20;
 
-/** One extension autofill costs this many credits. 1.5 as of 2026-09-28 (was 2.5). */
-export const LISTING_CREDIT_COST = 1.5;
+/** One extension autofill costs this many credits: GHS 0.35. 1 as of 2026-10-01 (1.5 from 2026-09-28, 2.5 before). */
+export const LISTING_CREDIT_COST = 1;
 
 /**
  * A WhatsApp or web listing costs this many credits, charged once, when

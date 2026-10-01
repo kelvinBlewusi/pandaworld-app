@@ -19,7 +19,7 @@ import { Wordmark } from "@/components/marketing/wordmark";
 
 export const metadata: import("next").Metadata = {
   title:       "Terms of Service",
-  description: "Terms of Service for using PandaWorld — the AI-powered Jumia listing assistant for sellers across Africa. Subscription terms, refunds, intellectual property, governing law (Ghana).",
+  description: "Terms of Service for using PandaWorld — the AI-powered Jumia listing assistant for sellers across Africa. Credits and billing, refunds, intellectual property, governing law (Ghana).",
   alternates: {
     canonical: "/terms",
   },
@@ -31,7 +31,7 @@ export const metadata: import("next").Metadata = {
   },
 };
 
-const LAST_UPDATED = "2026-05-20";
+const LAST_UPDATED = "2026-10-01";
 const COMPANY_NAME = "PandaWorld"; // Update once a legal entity is registered
 
 export default function TermsPage() {
@@ -98,26 +98,37 @@ export default function TermsPage() {
             commercial loss arising from AI errors.
           </p>
 
-          <h2>4. Plans, billing and refunds</h2>
+          <h2>4. Credits, billing and refunds</h2>
           <p>
-            The Free plan allows up to 5 product listings. The Pro plan
-            (GHS 50 / month) is billed monthly in advance via Paystack
-            and grants unlimited listings, image rebuild, and priority
-            support. You may cancel from your billing settings at any
-            time; cancellation takes effect at the end of the current
-            billing period.
+            PandaWorld is paid for with prepaid credits, bought in packs
+            through Paystack (Mobile Money or card). There is no
+            subscription. What each pack costs and how many credits each
+            action uses are shown on the{" "}
+            <Link href="/pricing">pricing page</Link>. New accounts receive
+            a one-time allowance of free credits.
           </p>
           <p>
-            All sales are <strong>final</strong>. We do not offer pro-rated
-            refunds for unused time within a billing period. If you
-            believe you were charged in error, contact support within 7
-            days of the charge and we will investigate; refunds are
-            granted at our discretion.
+            A listing drafted and submitted for you (on WhatsApp or the web)
+            uses credits only once Jumia accepts it. Drafts, redrafts and
+            fixes use none, and if Jumia rejects the listing, including in
+            its quality check after accepting it, the credits are returned.
+            An extension autofill uses credits each time it fills a form,
+            and an AI-generated or edited image each time one is produced.
+          </p>
+          <p>
+            Credits don&apos;t expire, have no cash value, can&apos;t be
+            transferred to another account, and can&apos;t be exchanged
+            back for money. Credit purchases are <strong>final</strong>:
+            unused credits are not refunded. If you believe you were
+            charged in error, contact support within 7 days of the charge
+            and we will investigate; refunds are granted at our discretion.
           </p>
           <p>
             Pricing may change with 30 days&apos; notice via email or
-            in-app notification. Continued use of the Service after a
-            price change constitutes acceptance of the new price.
+            in-app notification. A change applies to purchases and
+            actions made after it takes effect. Continued use of the
+            Service after a price change constitutes acceptance of the new
+            price.
           </p>
 
           <h2>5. Your content</h2>
@@ -183,8 +194,8 @@ export default function TermsPage() {
             breach these Terms, if your payment fails after reasonable
             notice, or if Jumia revokes your Vendor Center access. You
             may delete your account at any time from Settings; on
-            deletion we revoke Jumia tokens, cancel any active
-            subscription, and permanently remove your listings and
+            deletion we revoke Jumia tokens, any unused credits are
+            forfeited, and we permanently remove your listings and
             uploaded images after a 30-day grace period.
           </p>
 
