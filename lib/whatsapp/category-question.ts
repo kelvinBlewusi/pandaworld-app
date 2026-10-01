@@ -369,3 +369,43 @@ export function categoryListRow(listingId: string, c: CategoryChoice): { id: str
     ...(description ? { description } : {}),
   };
 }
+
+const NUMBER_WORDS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17,
+  eighteen: 18, nineteen: 19, twenty: 20, first: 1, second: 2, third: 3, fourth: 4, fifth: 5,
+};
+const NUMBER_WORD = Object.keys(NUMBER_WORDS).join("|");
+const PRODUCT_NUMBER_RE = new RegExp(`\\b(?:product|item|no\\.?|number|#)\\s*#?(\\d{1,2}|${NUMBER_WORD})\\b`, "i");
+const LEADING_NUMBER_RE = new RegExp(`^#?(\\d{1,2}|${NUMBER_WORD})\\b(?!\\s*(?:gb|tb|mb|ml|l|kg|g|cm|mm|m|inch|in)\\b)`, "i");
+
+const toNumber = (s: string): number | null => (/^\d+$/.test(s) ? parseInt(s, 10) : NUMBER_WORDS[s.toLowerCase()] ?? null);
+
+/**
+ * A seller naming a draft's category in chat, after the bot said it wasn't
+ * sure of it: "1 category: Educational Tablets", "Product one category is
+ * “Educational Tablets”", "change the category of product 2 to Lotions",
+ * "category is Educational Tablets". Only text that says "category" counts:
+ * anything else is an edit, a note or a command, and stays theirs. The
+ * product number is null when the text doesn't give one.
+ */
+export function parseCategoryInstruction(text: string): { seq: number | null; category: string } | null {
+  const t = text.trim();
+  const word = /\bcategor(?:y|ies)\b/i.exec(t);
+  if (!word) return null;
+
+  const numbered = PRODUCT_NUMBER_RE.exec(t) ?? LEADING_NUMBER_RE.exec(t);
+  const seq = numbered ? toNumber(numbered[1]) : null;
+
+  const quoted = /["“”‘’']([^"“”‘’']{2,}?)["“”‘’']/.exec(t.slice(word.index));
+  let category = quoted ? quoted[1] : t.slice(word.index + word[0].length);
+  if (!quoted) {
+    category = category
+      .replace(new RegExp(`^\\s*(?:(?:for|of)\\s+(?:product\\s*|item\\s*)?#?(?:\\d{1,2}|${NUMBER_WORD})\\b)?`, "i"), "")
+      .replace(/^\s*(?:should\s+be|must\s+be|needs\s+to\s+be|is|was|=|:|-|–|to|as|into)\s*/i, "")
+      .replace(/^\s*(?:should\s+be|is|=|:|-|–|to)\s*/i, "");
+  }
+  category = category.trim().replace(/[.!?]+$/, "").trim();
+  if (category.length < 2) return null;
+  return { seq, category };
+}

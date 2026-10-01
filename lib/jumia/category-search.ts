@@ -607,3 +607,35 @@ export function poolByRank(
   }
   return out;
 }
+
+/**
+ * The first `n` candidates, at most `perParent` of them from any one parent
+ * category; siblings past the cap fill in only when nothing else is left.
+ *
+ * Retrieval ranks siblings together, and the model only sees the top few.
+ * On 2026-10-01 a kids' tablet's top three were Tablet Accessories > Bags,
+ * Cases & Sleeves > Cases, Bags and Sleeves: the model picked the best of
+ * three accessories ("Cases") and never saw Tablets > Educational Tablets.
+ */
+export function diverseTop<T extends { path: string }>(candidates: T[], n: number, perParent = 2): T[] {
+  const parentOf = (path: string) => path.split(">").map((s) => s.trim()).slice(0, -1).join(" > ");
+  const picked: T[] = [];
+  const passedOver: T[] = [];
+  const perParentCount = new Map<string, number>();
+  for (const c of candidates) {
+    if (picked.length >= n) break;
+    const parent = parentOf(c.path);
+    const taken = perParentCount.get(parent) ?? 0;
+    if (taken < perParent) {
+      picked.push(c);
+      perParentCount.set(parent, taken + 1);
+    } else {
+      passedOver.push(c);
+    }
+  }
+  for (const c of passedOver) {
+    if (picked.length >= n) break;
+    picked.push(c);
+  }
+  return picked;
+}

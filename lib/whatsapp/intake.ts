@@ -32,6 +32,7 @@ import {
   CATEGORY_SKIP_RE,
   findOnJumiaTip,
   jumiaStorefront,
+  parseCategoryInstruction,
   type CategoryChoice,
 } from "@/lib/whatsapp/category-question";
 import { getValidJumiaCredentials, COUNTRY_CURRENCY, DEFAULT_JUMIA_COUNTRY, currencySymbol, currencyNameWord } from "@/lib/jumia/api";
@@ -528,6 +529,17 @@ export async function handleLinkedMessage(
     return;
   }
 
+  // A category tapped on the drafting-time "not sure of product N's
+  // category" message — id is `category:<listingId>:<code>`. Global so it
+  // works while the rest of the batch is still drafting: in "analyzing"
+  // every message used to get "hang tight", taps included, and the message
+  // usually lands before the batch is done.
+  const draftCategoryTap = content.text?.trim().match(/^category:([0-9a-f-]{36}):(\d+)$/i);
+  if (draftCategoryTap) {
+    await handleCategoryCorrection(userId, phoneNumber, draftCategoryTap[1], parseInt(draftCategoryTap[2], 10));
+    return;
+  }
+
   const globalCmd = content.text ? parseGlobalCommand(content.text) : null;
 
   // A typed answer to askSellerForCategory's question. Only read between
@@ -549,6 +561,12 @@ export async function handleLinkedMessage(
   // batches only, like the category question.
   if (!globalCmd && session.awaitingQcAnswer) {
     if (await handleQcAnswer(userId, phoneNumber, session, content)) return;
+  }
+
+  // A typed category for a draft the bot wasn't sure of, while the batch is
+  // drafting or waiting to be submitted.
+  if (!globalCmd && content.text && (session.state === "analyzing" || session.state === "awaiting_confirmation")) {
+    if (await handleDraftCategoryAnswer(userId, phoneNumber, session, content.text)) return;
   }
 
   if (globalCmd) {
@@ -2020,16 +2038,31 @@ export async function runQueuedAnalysis(job: AnalysisJob): Promise<void> {
   // Low-confidence category pick — surfaced right here in chat (for every
   // batch size) instead of only on a web confidence banner most
   // WhatsApp-only sellers never open.
-  if (result.needsUserConfirmation && result.alternates.length > 0) {
-    const pct = Math.round(result.category.confidence * 100);
-    await replyButtons(
-      phoneNumber,
-      `🤔 Not fully sure about product ${seq}'s category — picked "${result.category.path}" (${pct}% confident). Tap the right one below if this isn't it:`,
-      result.alternates.slice(0, 3).map((alt) => ({
-        id:    `category:${job.listing_id}:${alt.code}`,
-        title: alt.name.slice(0, 20),
-      })),
-    );
+  //
+  // No percentage: the model's confidence is in its pick among the few
+  // candidates it was shown, not in the category being right, so a
+  // "100% confident" next to "not sure" (2026-10-01, a kids' tablet filed
+  // under tablet cases) only confused. The seller can also type a category
+  // that isn't on the buttons; category_unsure tells
+  // handleDraftCategoryAnswer which draft a typed name is for.
+  if (result.needsUserConfirmation) {
+    await createServerClient().from("listings").update({ category_unsure: true }).eq("id", job.listing_id);
+    const body =
+      `🤔 Product ${seq}: I filed it under "${result.category.path}" but I'm not sure that's right. ` +
+      (result.alternates.length > 0 ? "Tap the right category below. If it isn't there, send " : "If it's wrong, send ") +
+      `"${seq} category:" and the category's name.`;
+    if (result.alternates.length > 0) {
+      await replyButtons(
+        phoneNumber,
+        body,
+        result.alternates.slice(0, 3).map((alt) => ({
+          id:    `category:${job.listing_id}:${alt.code}`,
+          title: alt.name.slice(0, 20),
+        })),
+      );
+    } else {
+      await replyText(phoneNumber, body);
+    }
   }
 
   // No charge here: the listing is charged when it goes live on Jumia
@@ -2529,17 +2562,6 @@ async function handleAwaitingBatchConfirmation(
   const editButtonMatch = text.match(/^edit:(.+)$/);
   if (editButtonMatch) {
     await replyCta(phoneNumber, "Here's the form for this product:", "Open editor", focusedEditorUrl(editButtonMatch[1]));
-    return;
-  }
-
-  // Alternate-category button tap from startBatchAnalysis's low-confidence
-  // prompt — id is `category:<listingId>:<code>`. Runs the same refill
-  // pipeline the web editor's category drawer uses
-  // (lib/jumia/refill-attributes.ts) so the correction and re-fill happen
-  // in one action, right here in chat.
-  const categoryMatch = text.match(/^category:([^:]+):(\d+)$/);
-  if (categoryMatch) {
-    await handleCategoryCorrection(userId, phoneNumber, categoryMatch[1], parseInt(categoryMatch[2], 10));
     return;
   }
 
@@ -4006,6 +4028,110 @@ async function applySellerCategory(
   await pushAndReport(userId, phoneNumber, listingId, label);
 }
 
+/**
+ * A typed answer to the drafting-time "🤔 not sure of product N's
+ * category" message: switch that draft to the category named and refill
+ * its fields, without submitting it. Read while the rest of the batch is
+ * still drafting as well as after it. The message's buttons carry the
+ * listing id, but a seller whose category isn't on them can only type it
+ * (2026-10-01: "Product one category is “Educational Tablets”" got the
+ * generic help back).
+ *
+ * Text that says "category" is an answer ("1 category: Educational
+ * Tablets"). A bare name ("Educational Tablets") counts only while exactly
+ * one draft's category is in question (listings.category_unsure) and the
+ * name matches one Jumia category outright; anything else is left to the
+ * batch's own handling, so an edit or a note is never taken for a category.
+ * Returns false when the text isn't an answer.
+ */
+async function handleDraftCategoryAnswer(
+  userId:      string,
+  phoneNumber: string,
+  session:     WhatsAppSession,
+  text:        string,
+): Promise<boolean> {
+  const batchId = session.batchId;
+  if (!batchId) return false;
+  const instruction = parseCategoryInstruction(text);
+  if (!instruction && (!looksLikeCategoryAnswer(text) || looksActionable(text) || parseSubmitCommand(text))) return false;
+
+  const db = createServerClient();
+  const { data } = await db
+    .from("listings")
+    .select("id, whatsapp_seq, title, category_code, status, category_unsure")
+    .eq("whatsapp_batch_id", batchId)
+    .eq("user_id", userId);
+  const drafts = (data ?? []) as { id: string; whatsapp_seq: number | null; title: string | null; category_code: string | null; status: string; category_unsure: boolean | null }[];
+  const unsure = drafts.filter((r) => r.category_unsure && r.status === "draft");
+  if (!instruction && unsure.length !== 1) return false;
+
+  const target = instruction?.seq != null
+    ? drafts.find((r) => r.whatsapp_seq === instruction.seq)
+    : unsure.length === 1 ? unsure[0] : drafts.length === 1 ? drafts[0] : undefined;
+  const named = instruction?.category ?? text.trim();
+  if (!target) {
+    await replyText(phoneNumber, `Which product is that category for? Send it like "2 category: ${named}".`);
+    return true;
+  }
+  const label = `Product ${target.whatsapp_seq ?? "?"}`;
+  if (target.status !== "draft") {
+    if (!instruction) return false;
+    await replyText(phoneNumber, `${label} has already been submitted, so its category can't change here. If Jumia rejects it, tap Fix & resubmit.`);
+    return true;
+  }
+
+  // Still being drafted: its own analysis would overwrite the switch.
+  const { data: drafting } = await db
+    .from("analysis_jobs")
+    .select("id")
+    .eq("listing_id", target.id)
+    .in("status", ["queued", "running"])
+    .limit(1);
+  if ((drafting ?? []).length > 0) {
+    await replyText(phoneNumber, `⏳ ${label} is still being drafted. Send its category again once it's done.`);
+    return true;
+  }
+
+  const [leaves, refused] = await Promise.all([
+    listableLeafCategories(),
+    refusedCategoryCodes(userId, target.category_code),
+  ]);
+  const answer = matchCategoryAnswer(named, leaves, refused, { title: target.title });
+
+  if (answer.kind === "match") {
+    await handleCategoryCorrection(userId, phoneNumber, target.id, answer.category.code);
+    return true;
+  }
+  if (!instruction) return false;
+
+  const country = await sellerCountry(userId).catch(() => null);
+  if (answer.kind === "choose") {
+    const body = answer.exact
+      ? `${label}: Jumia has more than one category by that name. Which one is it?`
+      : answer.under
+        ? `${label}: Which of these under "${answer.under}" is it?`
+        : `${label}: I couldn't find that exact category. Is it one of these? If not, copy the category path from a similar product on ${jumiaStorefront(country)} and send it as "${target.whatsapp_seq} category:" and the path.`;
+    // `category:` ids, not the rejection question's `recat:`: a draft is
+    // switched and refilled, not resubmitted.
+    await replyList(phoneNumber, body, "Pick a category", answer.options.map((c) => ({
+      ...categoryListRow(target.id, c),
+      id: `category:${target.id}:${c.code}`,
+    })));
+    return true;
+  }
+  if (answer.kind === "product_link") {
+    await replyText(phoneNumber, `${label}: That's a link to a product, and the link doesn't say its category. Open it and copy the category path shown at the top of the page instead.`);
+    return true;
+  }
+  await replyText(
+    phoneNumber,
+    answer.kind === "refused"
+      ? `${label}: Jumia has already refused "${answer.name}" in your country, so I can't use it. ${findOnJumiaTip(country)}`
+      : `${label}: I couldn't find "${named}" among Jumia's categories. ${findOnJumiaTip(country)}`,
+  );
+  return true;
+}
+
 async function handleCategoryCorrection(
   userId: string,
   phoneNumber: string,
@@ -4046,6 +4172,7 @@ async function handleCategoryCorrection(
     return;
   }
 
+  await db.from("listings").update({ category_unsure: false }).eq("id", listingId);
   const missing = await describeMissingFields(listingId);
   await replyButtons(
     phoneNumber,
