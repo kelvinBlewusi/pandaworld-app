@@ -10,7 +10,7 @@
  */
 
 import { useState } from "react";
-import { X, Check, Clock, Loader2, Lock } from "lucide-react";
+import { X, Check, Loader2, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CREDIT_PACKS, POPULAR_PACK_ID, packFeatures, packReach } from "@/lib/billing/credit-packs";
 
@@ -40,7 +40,7 @@ const TIERS: Tier[] = CREDIT_PACKS.map((p) => {
   };
 });
 
-/** The packs the coming-soon tools come with, e.g. "Pro and Business". */
+/** The packs the not-yet-built tools come with, e.g. "Pro and Business". */
 const SOON_PACKS = TIERS.filter((t) => t.soon.length > 0).map((t) => t.name).join(" and ");
 
 export function BuyCreditsModal({
@@ -153,8 +153,8 @@ export function BuyCreditsModal({
                       </span>
                     ))}
                     {t.soon.length > 0 && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-500">
-                        <Clock className="h-3 w-3" /> {t.soon.length} tools coming soon
+                      <span className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-400">
+                        {t.soon.length} more tools
                       </span>
                     )}
                   </span>
@@ -165,8 +165,8 @@ export function BuyCreditsModal({
         </div>
 
         {tier.soon.length > 0 && (
-          <p className="mt-3 rounded-lg bg-zinc-50 px-3 py-2 text-[11px] leading-relaxed text-zinc-500">
-            <span className="font-medium text-zinc-600">Coming soon with {SOON_PACKS}:</span> {tier.soon.join(" · ")}
+          <p className="mt-3 rounded-lg bg-zinc-50 px-3 py-2 text-[11px] leading-relaxed text-zinc-400">
+            With {SOON_PACKS}: {tier.soon.join(" · ")}
           </p>
         )}
 

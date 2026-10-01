@@ -545,10 +545,11 @@ off. QC follow-up and guided fixes (`qc_fix`) need Standard and up, gated
 completely: below it the feeds cron doesn't check QC at all (no alert, no
 refund), acceptance messages don't promise a QC alert, and Fix & resubmit
 on a QC rejection points to the editor and the packs. Pro and Business
-also list five greyed "coming soon" features (order alerts and shipping
-labels on WhatsApp, the fee calculator on WhatsApp and the extension
-panel, image polish on the extension), shown on /pricing and in the buy
-modal.
+also list five features not built yet (order alerts and shipping labels on
+WhatsApp, the fee calculator on WhatsApp and the extension panel, image
+polish on the extension), greyed out with no "soon" label (owner's call),
+as "5 more tools" on the buy modal's cards. The pricing FAQ and Terms §4
+say greyed-out features aren't available yet; keep that while any are.
 
 **Pay when live** (WhatsApp and web listings). Drafts are free; a seller
 only needs enough available credits to draft. `pushListingToJumia` checks
@@ -690,6 +691,18 @@ only appear while billing is off.
   (buttons for ≤2 ready, a list for more), and submit results + the batch
   sign-off are one. Before adding a message, fold it into one that's
   already going out.
+- **A category the AI wasn't sure of (2026-10-01)**: when a draft's pick
+  needs confirmation, the bot sends "🤔 Product N: I filed it under … but
+  I'm not sure" with the alternates as buttons, and sets
+  `listings.category_unsure`. The seller can tap, or type "N category:
+  <name or path>" (a bare name works while only one draft is unsure);
+  `handleDraftCategoryAnswer` matches it with matchCategoryAnswer and
+  switches + refills the draft without submitting. Taps (`category:` ids)
+  and typed answers work in "analyzing" too: the message usually lands
+  before the batch is done, and every message there used to get "hang
+  tight". The model sees at most two siblings in its top three
+  (`diverseTop`): a kids' tablet was offered only Tablet Accessories >
+  Bags, Cases & Sleeves > Cases/Bags/Sleeves and picked Cases.
 - **Undelivered WhatsApp messages (2026-10-01)**: the send API answers
   200 for a message it later fails to deliver; the failure comes back as a
   webhook status update. The webhook records each one in app_errors

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { auth } from "@clerk/nextjs/server";
-import { ArrowRight, Check, Clock, Coins } from "lucide-react";
+import { ArrowRight, Check, Coins } from "lucide-react";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { HomeFloatingNav } from "@/components/marketing/home-floating-nav";
 import { BuyCreditsButton } from "@/components/billing/buy-credits-button";
@@ -189,17 +189,13 @@ export default async function PricingPage() {
                       Never expires
                     </li>
                     {/* What the pack unlocks, kept for good (lib/billing/features.ts).
-                        Coming-soon features are shown greyed out. */}
+                        Features not built yet are greyed out, unlabelled (owner's
+                        call, 2026-10-01); the FAQ says they aren't available yet. */}
                     {packFeatures(p.id).map((f) =>
                       f.comingSoon ? (
                         <li key={f.id} className="flex items-start gap-2 text-zinc-400">
-                          <Clock className="mt-0.5 h-4 w-4 shrink-0" />
-                          <span>
-                            {f.label}{" "}
-                            <span className="whitespace-nowrap rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-                              Soon
-                            </span>
-                          </span>
+                          <Check className="mt-0.5 h-4 w-4 shrink-0 text-zinc-300" />
+                          {f.label}
                         </li>
                       ) : (
                         <li key={f.id} className="flex items-start gap-2 font-medium">
@@ -248,7 +244,7 @@ export default async function PricingPage() {
             />
             <FAQ
               q="What do the bigger packs unlock?"
-              a="Buying the Standard pack or bigger once unlocks Jumia QC rejection alerts and guided fixes for good: when Jumia's quality check rejects a listing after accepting it, we tell you why, return its credits, and help you fix and resubmit it. Features marked Soon are on the way for Pro and Business."
+              a="Buying the Standard pack or bigger once unlocks Jumia QC rejection alerts and guided fixes for good: when Jumia's quality check rejects a listing after accepting it, we tell you why, return its credits, and help you fix and resubmit it. The greyed-out tools listed with Pro and Business aren't available yet."
             />
             <FAQ
               q="Why is the Chrome extension charged per autofill?"
