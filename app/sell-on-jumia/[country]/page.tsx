@@ -5,9 +5,10 @@ import { ArrowRight, ExternalLink } from "lucide-react";
 import { HomeFloatingNav } from "@/components/marketing/home-floating-nav";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { BreadcrumbLd } from "@/components/marketing/breadcrumb-ld";
-import { FeeCalculator } from "@/components/tools/fee-calculator";
+import { CountryPriceCalculator } from "@/components/tools/country-price-calculator";
 import { isBillingEnabled } from "@/lib/billing/mode";
 import { JUMIA_COUNTRIES, getJumiaCountry } from "@/lib/marketing/countries";
+import { COUNTRY_FEES, commissionSpan } from "@/lib/marketing/country-fees";
 import { CALCULATOR_HREF, COMMISSION_RATES_HREF, SIGN_IN_HREF, SIGN_UP_HREF } from "@/lib/marketing/links";
 
 // ─── /sell-on-jumia/<country> — one page per Jumia market ─────────────────────
@@ -23,7 +24,7 @@ export function generateMetadata({ params }: { params: { country: string } }): i
   const c = getJumiaCountry(params.country);
   if (!c) return {};
   const title = `Sell on Jumia ${c.name}: Seller Fees, Price Calculator & AI Listings`;
-  const description = `How Jumia ${c.name} seller fees work, a free price calculator in ${c.currencyName}, and AI that writes your Jumia ${c.name} listings from WhatsApp or right inside Vendor Center.`;
+  const description = `Jumia ${c.name} commission rates for every category, a free price calculator in ${c.currencyName}, and AI that writes your Jumia ${c.name} listings from WhatsApp or right inside Vendor Center.`;
   return {
     title,
     description,
@@ -32,6 +33,7 @@ export function generateMetadata({ params }: { params: { country: string } }): i
       `Jumia ${c.name} seller fees`,
       `Jumia ${c.name} commission`,
       `Jumia ${c.name} price calculator`,
+      `Jumia ${c.name} commission rates`,
       `Jumia ${c.name} vendor`,
       `Jumia Vendor Center ${c.name}`,
     ],
@@ -47,6 +49,14 @@ export default async function SellOnJumiaCountryPage({ params }: { params: { cou
   const { userId } = await auth();
   const billingOn = await isBillingEnabled();
   const others = JUMIA_COUNTRIES.filter((o) => o.slug !== c.slug);
+  const fees = COUNTRY_FEES[c.code];
+  const span = commissionSpan(fees);
+  const money = new Intl.NumberFormat("en", {
+    style: "currency",
+    currency: c.currency,
+    minimumFractionDigits: c.wholeUnits ? 0 : 2,
+    maximumFractionDigits: c.wholeUnits ? 0 : 2,
+  });
   const startHref = userId ? "/extension/dashboard" : SIGN_UP_HREF;
 
   return (
@@ -112,19 +122,92 @@ export default async function SellOnJumiaCountryPage({ params }: { params: { cou
         <section className="mt-12">
           <h2 className="text-2xl font-bold">Jumia {c.name} price calculator</h2>
           <p className="mt-3 text-base text-zinc-600">
-            Work out what to list at so you receive the amount you want, or what you&apos;ll be paid at a price, in{" "}
-            {c.currencyName}.
-            {c.code === "GH" && (
-              <>
-                {" "}Selling in Ghana? The{" "}
-                <Link href={CALCULATOR_HREF} className="font-semibold text-orange-600 hover:underline">Ghana calculator</Link>{" "}
-                fills in each category&apos;s rates for you.
-              </>
-            )}
+            Pick your category and the calculator fills in Jumia {c.name}&apos;s commission
+            {fees.itemFee.by === "manual" ? "" : ` and ${fees.feeName}`}, then works out what to list at so you receive
+            the amount you want, or what you&apos;ll be paid at a price, in {c.currencyName}.
           </p>
           <div className="mt-5">
-            <FeeCalculator currency={c.currency} wholeUnits={c.wholeUnits} samplePrice={c.samplePrice} />
+            <CountryPriceCalculator fees={fees} currency={c.currency} wholeUnits={c.wholeUnits} samplePrice={c.samplePrice} />
           </div>
+        </section>
+
+        <section className="mt-12">
+          <h2 className="text-2xl font-bold">Jumia {c.name} commission rates by category</h2>
+          <p className="mt-3 text-base text-zinc-600">
+            From {span.min}% to {span.max}% of the price, VAT included, effective {fees.effective}.
+            {fees.itemFee.by === "category" && ` The ${fees.feeName} per item is shown for drop shipping and Jumia Express.`}
+          </p>
+          <details className="group mt-5 rounded-2xl border border-zinc-200">
+            <summary className="cursor-pointer list-none px-5 py-4 text-sm font-semibold text-zinc-900 [&::-webkit-details-marker]:hidden">
+              <span className="group-open:hidden">Show all {fees.categories.length} categories</span>
+              <span className="hidden group-open:inline">Hide the categories</span>
+            </summary>
+            <div className="overflow-x-auto border-t border-zinc-200">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
+                  <tr>
+                    <th scope="col" className="px-5 py-2.5 font-semibold">Category</th>
+                    <th scope="col" className="px-3 py-2.5 text-right font-semibold">Commission</th>
+                    {fees.itemFee.by === "category" && (
+                      <>
+                        <th scope="col" className="px-3 py-2.5 text-right font-semibold">Drop shipping</th>
+                        <th scope="col" className="px-5 py-2.5 text-right font-semibold">Jumia Express</th>
+                      </>
+                    )}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-100">
+                  {fees.categories.map((cat) => (
+                    <tr key={cat.name}>
+                      <td className="px-5 py-2.5 text-zinc-700">{cat.name}</td>
+                      <td className="px-3 py-2.5 text-right font-medium text-zinc-900">{cat.commission}%</td>
+                      {fees.itemFee.by === "category" && (
+                        <>
+                          <td className="px-3 py-2.5 text-right text-zinc-600">{cat.fee ? money.format(cat.fee.ds) : "–"}</td>
+                          <td className="px-5 py-2.5 text-right text-zinc-600">{cat.fee ? money.format(cat.fee.je) : "–"}</td>
+                        </>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
+          {fees.itemFee.by === "size" && (
+            <div className="mt-5 overflow-x-auto rounded-2xl border border-zinc-200">
+              <table className="w-full text-left text-sm">
+                <caption className="px-5 pt-4 text-left text-sm font-semibold text-zinc-900">
+                  {fees.feeName.charAt(0).toUpperCase() + fees.feeName.slice(1)} per item, by size
+                </caption>
+                <thead className="text-xs uppercase tracking-wide text-zinc-500">
+                  <tr>
+                    <th scope="col" className="px-5 py-2.5 font-semibold">Size</th>
+                    <th scope="col" className="px-3 py-2.5 text-right font-semibold">Drop shipping</th>
+                    <th scope="col" className="px-5 py-2.5 text-right font-semibold">Jumia Express</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-100">
+                  {fees.itemFee.sizes.map((s) => (
+                    <tr key={s.id}>
+                      <td className="px-5 py-2.5 text-zinc-700">{s.label}</td>
+                      <td className="px-3 py-2.5 text-right text-zinc-600">{s.ds != null ? money.format(s.ds) : "–"}</td>
+                      <td className="px-5 py-2.5 text-right text-zinc-600">{s.je != null ? money.format(s.je) : "–"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="mt-3 text-sm text-zinc-500">
+            Copied from{" "}
+            <a href={c.commissionsUrl} target="_blank" rel="noopener noreferrer" className="font-medium text-orange-600 hover:underline">Jumia VendorHub {c.name}</a>
+            {c.code === "GH" && (
+              <>
+                . Also as a <Link href={COMMISSION_RATES_HREF} className="font-medium text-orange-600 hover:underline">full Ghana rates page</Link>
+              </>
+            )}
+            . Jumia changes these from time to time; Vendor Center shows the rate it will charge you.
+          </p>
         </section>
 
         <section className="mt-12">

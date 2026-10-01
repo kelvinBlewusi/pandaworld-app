@@ -138,7 +138,7 @@ export const mockCategories: JumiaCategory[] = [
   {
     id: "cat-video-games",
     name: "Video Games",
-    commissionRate: 10,
+    commissionRate: 13,
     shippingDS: 15,
     shippingJE: 10,
     path: "Gaming / Video Games",
@@ -148,7 +148,7 @@ export const mockCategories: JumiaCategory[] = [
   {
     id: "cat-large-app",
     name: "Large Appliances",
-    commissionRate: 11,
+    commissionRate: 12,
     shippingDS: 45,
     shippingJE: 35,
     path: "Home Appliances / Large Appliances / All",
