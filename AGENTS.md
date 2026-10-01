@@ -508,15 +508,27 @@ read). It replaced the `FREE_FOR_ALL_MODE` constant.
   the footer offers Donate, and no Buy Credits button shows.
 - On: WhatsApp/web listings cost credits when they go live, extension
   autofills (and the unused AI photo tools) cost credits each, new sellers
-  get 25 on first use, the dashboard / `/settings/billing` / `/pricing` show
+  get 20 on first use (10 free WhatsApp listings), the dashboard /
+  `/settings/billing` / `/pricing` show
   Buy credits, and the homepage banner, nav and footer switch to pricing.
 - Purchases always land in the stored balance, whatever the switch
   (`creditPurchase` → `storedBalance`).
 - The admin page won't switch on while a readiness check fails
   (`lib/billing/readiness.ts`: Paystack key set and accepted, live vs test,
   `NEXT_PUBLIC_APP_URL`), shows measured AI cost per run from `ai_usage`
-  against what each run earns, and can top up old balances (the 10-credit
-  welcome) to 25.
+  against what each run earns, and can top up low balances to the current
+  welcome amount.
+
+**Prices (launch pricing, 2026-10-01; `lib/billing/credit-packs.ts`).** 1
+credit = GHS 0.35 at the Starter price: a live WhatsApp/web listing 2
+credits (GHS 0.70), an extension autofill 1 (GHS 0.35), an AI image 4 (GHS
+1.40). Packs: Starter GHS 35 = 100 credits, Standard GHS 70 = 210, Pro GHS
+140 = 440, Business GHS 280 = 940 (up to 15% extra; a listing ~GHS 0.60 at
+Business). Set against measured costs of ~GHS 0.25 per live WhatsApp
+listing (AI ~0.05, WhatsApp messages ~0.18, Paystack 1.95%) and ~GHS 530 a
+month fixed once charging (Vercel Pro, Supabase Pro): break-even ~1,200
+listings a month. The Terms (`app/terms/page.tsx` §4) describe credits
+without numbers, pointing to /pricing.
 
 **Pay when live** (WhatsApp and web listings). Drafts are free; a seller
 only needs enough available credits to draft. `pushListingToJumia` checks

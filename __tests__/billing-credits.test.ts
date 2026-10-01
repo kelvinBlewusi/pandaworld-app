@@ -81,9 +81,9 @@ describe("billing on", () => {
   });
 
   it("refuses when the balance is too low", async () => {
-    db.tables.extension_credits = [{ user_id: SELLER, balance: 1 }];
+    db.tables.extension_credits = [{ user_id: SELLER, balance: 0.5 }];
     expect(await deductCredits(SELLER, LISTING_CREDIT_COST, "Extension autofill")).toMatchObject({ ok: false, error: "insufficient_credits" });
-    expect(balances()[0].balance).toBe(1);
+    expect(balances()[0].balance).toBe(0.5);
   });
 
   it("never charges an admin", async () => {
@@ -224,13 +224,17 @@ describe("costs", () => {
     expect(searchOverageUsd(5_100)).toBeCloseTo(1.4, 10);
   });
 
-  it("prices a live listing at GHS 0.50 in every pack", () => {
-    for (const p of CREDIT_PACKS) expect((p.amountGhs / p.credits) * LIVE_LISTING_CREDIT_COST).toBeCloseTo(0.5, 10);
-    expect(Math.min(...CREDIT_PACKS.map((p) => p.amountGhs))).toBe(30);
-    expect(Math.max(...CREDIT_PACKS.map((p) => p.amountGhs))).toBe(100);
+  // Launch pricing, 2026-10-01: GHS 0.70 a live listing in the Starter
+  // pack, at most 15% less in bigger ones (costs are ~GHS 0.25 a listing).
+  it("prices a live listing at GHS 0.70, and no more than 15% less in bigger packs", () => {
+    const perListing = CREDIT_PACKS.map((p) => (p.amountGhs / p.credits) * LIVE_LISTING_CREDIT_COST);
+    expect(perListing[0]).toBeCloseTo(0.7, 10);
+    for (let i = 1; i < perListing.length; i++) expect(perListing[i]).toBeLessThan(perListing[i - 1]);
+    expect(Math.min(...perListing)).toBeGreaterThanOrEqual(0.7 * 0.85);
+    expect(CREDIT_PACKS.map((p) => p.amountGhs)).toEqual([35, 70, 140, 280]);
   });
 
   it("says how far a pack goes", () => {
-    expect(packReach(200)).toEqual({ autofills: 133, listings: 100 });
+    expect(packReach(210)).toEqual({ autofills: 210, listings: 105 });
   });
 });

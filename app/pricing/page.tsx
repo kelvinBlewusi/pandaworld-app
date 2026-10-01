@@ -156,9 +156,9 @@ export default async function PricingPage() {
 
       {/* Packs */}
       <section className="bg-zinc-50">
-        <div className="mx-auto max-w-5xl px-6 py-16">
+        <div className="mx-auto max-w-6xl px-6 py-16">
           <h2 className="text-2xl font-bold sm:text-3xl">Credit packs</h2>
-          <div className="mt-8 grid grid-cols-1 gap-6 md:grid-cols-3">
+          <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
             {CREDIT_PACKS.map((p) => {
               const { autofills, listings } = packReach(p.credits);
               const perCredit = p.amountGhs / p.credits;
