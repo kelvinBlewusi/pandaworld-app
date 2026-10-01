@@ -350,15 +350,6 @@ export default function PrivacyPage() {
             </a>
             .
           </p>
-
-          <hr />
-          <p className="text-xs text-zinc-500">
-            <strong>Notice:</strong> This document is a draft template.
-            Before launching publicly, have it reviewed by a Ghana-qualified
-            lawyer to confirm compliance with the Data Protection Act, 2012
-            (Act 843) and to nominate a Data Protection Officer if your
-            processing volume requires one.
-          </p>
         </div>
       </main>
 
