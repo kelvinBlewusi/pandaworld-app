@@ -9,6 +9,8 @@
  * Jumia changes fees, so re-check the sources before editing a number.
  */
 
+import { GHANA_CALCULATOR_HREF } from "@/lib/marketing/links";
+
 export type JumiaCountryCode = "GH" | "NG" | "KE" | "EG" | "MA" | "CI" | "SN" | "UG";
 
 export interface JumiaCountry {
@@ -160,4 +162,22 @@ export const JUMIA_COUNTRIES: JumiaCountry[] = [
 
 export function getJumiaCountry(slug: string): JumiaCountry | undefined {
   return JUMIA_COUNTRIES.find((c) => c.slug === slug);
+}
+
+/** By ISO code ("NG", "ng"), as jumia_connections.country and Vercel's
+ *  x-vercel-ip-country header give it. Undefined outside Jumia's markets. */
+export function jumiaCountryByCode(code: string | null | undefined): JumiaCountry | undefined {
+  const upper = code?.trim().toUpperCase();
+  return upper ? JUMIA_COUNTRIES.find((c) => c.code === upper) : undefined;
+}
+
+/**
+ * The calculator for a seller in `code`: Ghana's own calculator page, or
+ * the calculator on that country's /sell-on-jumia page. Ghana is also the
+ * answer when the country is unknown or Jumia doesn't sell there.
+ */
+export function calculatorPathFor(code: string | null | undefined): string {
+  const country = jumiaCountryByCode(code);
+  if (!country || country.code === "GH") return GHANA_CALCULATOR_HREF;
+  return `/sell-on-jumia/${country.slug}#calculator`;
 }

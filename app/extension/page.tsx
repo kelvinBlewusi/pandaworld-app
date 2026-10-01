@@ -211,7 +211,7 @@ export async function ExtensionPage() {
   const ctaHref  = userId ? DASHBOARD_REDIRECT : `/sign-up?redirect_url=${DASHBOARD_REDIRECT}`;
   const ctaLabel = userId ? "Open dashboard" : "Get Started";
   const signInHref = `/sign-in?redirect_url=${DASHBOARD_REDIRECT}`;
-  // The public calculator page: usable signed in or not, and indexable.
+  // The visitor's own country's calculator (app/calculator redirects).
   const calculatorHref = CALCULATOR_HREF;
   const billingOn = await isBillingEnabled();
 

@@ -29,6 +29,20 @@ const inter = Inter_Tight({ subsets: ["latin"], weight: ["800"], display: "swap"
 // keep this nav a standalone component; it's one hex value.
 const ACCENT_FILL = "#f97316";
 
+type NavItem = { href: string; label: string; disabled?: boolean; fullLoad?: boolean };
+
+/**
+ * A plain <a> for links that answer with a redirect (the calculator's
+ * /calculator picks the visitor's country): next/link would fetch them
+ * client-side, prefetch them on every page view, and drop the redirect's
+ * #calculator fragment. Everything else is a client-side next/link.
+ */
+function NavLink({ item, className, onClick }: { item: NavItem; className: string; onClick?: () => void }) {
+  return item.fullLoad
+    ? <a href={item.href} onClick={onClick} className={className}>{item.label}</a>
+    : <Link href={item.href} onClick={onClick} className={className}>{item.label}</Link>;
+}
+
 interface HomeFloatingNavProps {
   signInHref: string;
   signUpHref: string;
@@ -40,7 +54,7 @@ interface HomeFloatingNavProps {
 export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref, pricingLive = false }: HomeFloatingNavProps) {
   const [open, setOpen] = useState(false);
 
-  const links: { href: string; label: string; disabled?: boolean }[] = [
+  const links: NavItem[] = [
     // Absolute path (not a bare "#how-it-works" fragment) — this nav is no
     // longer only rendered on the homepage (see app/how-to/page.tsx), and a
     // bare fragment resolves against whatever page it's clicked from.
@@ -50,7 +64,7 @@ export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref, pricin
     // free, so there's nothing to price yet) — visible but disabled
     // signals "coming later". Live once billing is switched on.
     { href: "/pricing", label: "Pricing", disabled: !pricingLive },
-    { href: calculatorHref, label: "Jumia Pricing Calculator" },
+    { href: calculatorHref, label: "Jumia Pricing Calculator", fullLoad: true },
   ];
 
   return (
@@ -82,13 +96,11 @@ export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref, pricin
                 {link.label}
               </span>
             ) : (
-              <Link
+              <NavLink
                 key={link.label}
-                href={link.href}
+                item={link}
                 className="whitespace-nowrap transition-colors hover:text-zinc-900"
-              >
-                {link.label}
-              </Link>
+              />
             )
           )}
         </nav>
@@ -134,14 +146,12 @@ export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref, pricin
                   {link.label}
                 </span>
               ) : (
-                <Link
+                <NavLink
                   key={link.label}
-                  href={link.href}
+                  item={link}
                   onClick={() => setOpen(false)}
                   className="rounded-lg px-3 py-2.5 transition-colors hover:bg-zinc-50"
-                >
-                  {link.label}
-                </Link>
+                />
               )
             )}
           </nav>

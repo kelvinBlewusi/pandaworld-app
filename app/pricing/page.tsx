@@ -73,7 +73,7 @@ export default async function PricingPage() {
 
   const signInHref = `/sign-in?redirect_url=${DASHBOARD_REDIRECT}`;
   const signUpHref = `/sign-up?redirect_url=${DASHBOARD_REDIRECT}`;
-  // The public calculator page: usable signed in or not, and indexable.
+  // The visitor's own country's calculator (app/calculator redirects).
   const calculatorHref = CALCULATOR_HREF;
 
   // Offers for search engines: the packs only while they're actually for sale.

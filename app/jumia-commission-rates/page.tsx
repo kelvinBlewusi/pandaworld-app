@@ -5,7 +5,7 @@ import { MarketingFooter } from "@/components/marketing/footer";
 import { BreadcrumbLd } from "@/components/marketing/breadcrumb-ld";
 import { isBillingEnabled } from "@/lib/billing/mode";
 import { JUMIA_GH_CATEGORIES, commissionRange, listingPriceFor } from "@/lib/marketing/jumia-fees";
-import { CALCULATOR_HREF, COMMISSION_RATES_HREF, SIGN_IN_HREF, SIGN_UP_HREF } from "@/lib/marketing/links";
+import { CALCULATOR_HREF, COMMISSION_RATES_HREF, GHANA_CALCULATOR_HREF, SIGN_IN_HREF, SIGN_UP_HREF } from "@/lib/marketing/links";
 import { formatGHS } from "@/lib/utils";
 
 // ─── /jumia-commission-rates — public, indexable ──────────────────────────────
@@ -58,7 +58,7 @@ export default async function JumiaCommissionRatesPage() {
         </p>
         <p className="mt-3 text-base text-zinc-600">
           For any other price, use the{" "}
-          <Link href={CALCULATOR_HREF} className="font-semibold text-orange-600 hover:underline">
+          <Link href={GHANA_CALCULATOR_HREF} className="font-semibold text-orange-600 hover:underline">
             Jumia price calculator
           </Link>
           .

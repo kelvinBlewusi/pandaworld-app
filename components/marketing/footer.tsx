@@ -140,7 +140,10 @@ export function MarketingFooter({
           {/* Crawlable links to the public guides and tools on every
               marketing page, so search engines reach them from anywhere. */}
           <FooterColumn title="Tools for sellers">
-            <li><Link href={CALCULATOR_HREF} className={linkClass}>Jumia price calculator</Link></li>
+            {/* A plain <a>: /calculator redirects to the visitor's own
+                country's calculator, which next/link would prefetch and
+                lose the #calculator fragment of. */}
+            <li><a href={CALCULATOR_HREF} className={linkClass}>Jumia price calculator</a></li>
             <li><Link href={COMMISSION_RATES_HREF} className={linkClass}>Jumia commission rates</Link></li>
             <li><Link href="/sell-on-jumia" className={linkClass}>Sell on Jumia by country</Link></li>
           </FooterColumn>

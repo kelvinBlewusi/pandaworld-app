@@ -496,6 +496,14 @@ from every marketing footer:
   no published table). Ghana's rows come from lib/mock/categories. The
   VendorHub sites block plain fetches (Cloudflare); Chromium through the
   proxy works once the proxy CA is in /root/.pki/nssdb.
+- The nav and footer calculator link is `/calculator` (CALCULATOR_HREF, a
+  redirect, so not in the sitemap): app/calculator/route.ts redirects to
+  the seller's own country, from their Jumia connection, else Vercel's
+  `x-vercel-ip-country`, else Ghana (calculatorPathFor). It's a plain `<a>`
+  because next/link would prefetch it and drop the `#calculator` fragment.
+  Ghana's page is GHANA_CALCULATOR_HREF. The in-app calculators
+  (/price-calculator, /extension/calculator) pick the same country and
+  switch with `?country=`. Every calculator lists the other countries under it.
 
 ## Billing (2026-09-28)
 

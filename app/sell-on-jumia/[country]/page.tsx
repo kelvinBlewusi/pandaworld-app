@@ -6,6 +6,7 @@ import { HomeFloatingNav } from "@/components/marketing/home-floating-nav";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { BreadcrumbLd } from "@/components/marketing/breadcrumb-ld";
 import { CountryPriceCalculator } from "@/components/tools/country-price-calculator";
+import { CalculatorCountrySwitch } from "@/components/tools/calculator-country-switch";
 import { isBillingEnabled } from "@/lib/billing/mode";
 import { JUMIA_COUNTRIES, getJumiaCountry } from "@/lib/marketing/countries";
 import { COUNTRY_FEES, commissionSpan } from "@/lib/marketing/country-fees";
@@ -119,7 +120,8 @@ export default async function SellOnJumiaCountryPage({ params }: { params: { cou
           </p>
         </section>
 
-        <section className="mt-12">
+        {/* The nav's calculator link lands here (app/calculator), below the sticky nav. */}
+        <section id="calculator" className="mt-12 scroll-mt-24">
           <h2 className="text-2xl font-bold">Jumia {c.name} price calculator</h2>
           <p className="mt-3 text-base text-zinc-600">
             Pick your category and the calculator fills in Jumia {c.name}&apos;s commission
@@ -128,6 +130,9 @@ export default async function SellOnJumiaCountryPage({ params }: { params: { cou
           </p>
           <div className="mt-5">
             <CountryPriceCalculator fees={fees} currency={c.currency} wholeUnits={c.wholeUnits} samplePrice={c.samplePrice} />
+          </div>
+          <div className="mt-4">
+            <CalculatorCountrySwitch current={c.code} />
           </div>
         </section>
 
