@@ -30,6 +30,7 @@ import {
   describeQcRejection,
   followUpQc,
   jumiaSuggestedCategoryPath,
+  qcAlertPromised,
   qcVerdict,
   type QcCandidate,
 } from "@/lib/jumia/qc-followup";
@@ -208,5 +209,21 @@ describe("followUpQc", () => {
 
     expect(fetched[0]).toContain("sellerSku=PA-MUO503EV");
     expect(listing().jumia_qc_status).toBe("approved");
+  });
+});
+
+// QC follow-up became a pack feature on 2026-10-01. Listings Jumia accepted
+// before that were told "Will alert you if it passes Jumia QC", so they keep
+// their follow-up whatever the seller's pack.
+describe("qcAlertPromised", () => {
+  it("keeps the promise for listings accepted before the gate", () => {
+    expect(qcAlertPromised({ live_at: "2026-10-01T14:46:04Z" })).toBe(true);
+    expect(qcAlertPromised({ live_at: "2026-09-30T09:00:00+00:00" })).toBe(true);
+  });
+
+  it("makes no promise for listings accepted after it, or with no acceptance time", () => {
+    expect(qcAlertPromised({ live_at: "2026-10-01T15:20:00Z" })).toBe(false);
+    expect(qcAlertPromised({ live_at: null })).toBe(false);
+    expect(qcAlertPromised({})).toBe(false);
   });
 });
