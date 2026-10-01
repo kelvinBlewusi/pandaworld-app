@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { createHmac } from "crypto";
 import { creditPurchase } from "@/lib/billing/extension-credits";
 import { recordDonation } from "@/lib/billing/donations";
+import { creditsPaidFor, verifyPaystackSignature } from "@/lib/billing/paystack-purchase";
+import { logAppError } from "@/lib/observability/errors";
 
 // ─── POST /api/paystack/webhook ───────────────────────────────────────────────
 // Paystack calls this URL for every event on the account. Two kinds of
@@ -17,14 +18,9 @@ export async function POST(request: Request) {
   }
 
   // ── Verify the request came from Paystack (HMAC SHA-512) ─────────────────
-  const signature = request.headers.get("x-paystack-signature");
   const rawBody = await request.text();
 
-  const hash = createHmac("sha512", secretKey)
-    .update(rawBody)
-    .digest("hex");
-
-  if (hash !== signature) {
+  if (!verifyPaystackSignature(rawBody, request.headers.get("x-paystack-signature"), secretKey)) {
     console.warn("[Paystack webhook] Invalid signature — rejected");
     return new NextResponse("Invalid signature", { status: 401 });
   }
@@ -68,19 +64,21 @@ export async function POST(request: Request) {
       // Page).
       if (tx.metadata?.type === "extension_credits") {
         const creditUserId = tx.metadata?.user_id as string | undefined;
-        const credits = Number(tx.metadata?.credits) || 0;
-        if (!creditUserId || credits <= 0) {
-          console.error(
-            "[Paystack webhook] extension_credits charge.success missing user_id/credits",
-            { reference: tx.reference, metadata: tx.metadata },
-          );
+        const paidFor = creditsPaidFor(tx);
+        if (!creditUserId || !paidFor.ok) {
+          // Answered 200: a retry can't change what was paid. Logged for an
+          // admin to look at (a repriced pack, or a forged transaction).
+          const why = !creditUserId ? "no user_id" : paidFor.ok ? "" : paidFor.error;
+          console.error(`[Paystack webhook] extension_credits ${tx.reference} not credited: ${why}`);
+          logAppError("paystack-webhook", `credit pack not credited: ${why}`, { reference: tx.reference, metadata: tx.metadata, amount: tx.amount, currency: tx.currency });
           break;
         }
+        const credits = paidFor.credits;
         const result = await creditPurchase({
           userId: creditUserId,
           credits,
           reference: tx.reference,
-          description: `Purchased ${credits} credits (${tx.metadata?.pack ?? "custom"} pack)`,
+          description: `Purchased ${credits} credits (${paidFor.packId} pack)`,
         });
         if (!result.ok) {
           // A paid pack that didn't land: answer non-2xx so Paystack
