@@ -93,12 +93,12 @@ export const metadata: Metadata = {
     url:         APP_URL,
     siteName:    "PandaWorld",
     title:       "PandaWorld — AI Listing Assistant for Jumia Africa Sellers",
-    description: "Snap a photo, get a complete Jumia listing in seconds. AI picks the category, fills attributes, polishes images, and pushes to Vendor Center. Works across Africa. Free for 5 listings every month.",
+    description: `Snap a photo, get a complete Jumia listing in seconds. AI picks the category, fills attributes, polishes images, and pushes to Vendor Center. Works across Africa. ${FREE_SIGNUP_CREDITS} free credits to start.`,
   },
   twitter: {
     card:        "summary_large_image",
     title:       "PandaWorld — AI Listing Assistant for Jumia Africa",
-    description: "Snap a photo, get a complete Jumia listing in seconds. Free for 5 listings every month.",
+    description: `Snap a photo, get a complete Jumia listing in seconds. ${FREE_SIGNUP_CREDITS} free credits to start.`,
   },
   // Google Search Console domain ownership.
   // To rotate this tag, swap the content string here — no other
