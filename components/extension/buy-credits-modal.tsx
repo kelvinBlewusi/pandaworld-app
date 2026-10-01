@@ -10,17 +10,18 @@
  */
 
 import { useState } from "react";
-import { X, Check, Loader2, Lock } from "lucide-react";
+import { X, Check, Clock, Loader2, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CREDIT_PACKS, POPULAR_PACK_ID, packFeatures, packReach } from "@/lib/billing/credit-packs";
 
 interface Tier {
   id: string;
+  name: string;
   credits: number;
   price: string;
   reach: string;
   popular?: boolean;
-  /** What the pack unlocks now, and what it will (shown greyed out). */
+  /** What the pack unlocks now (short labels), and what it will. */
   unlocks: string[];
   soon: string[];
 }
@@ -29,14 +30,18 @@ const TIERS: Tier[] = CREDIT_PACKS.map((p) => {
   const { autofills, listings } = packReach(p.credits);
   return {
     id: p.id,
+    name: p.id.charAt(0).toUpperCase() + p.id.slice(1),
     credits: p.credits,
     price: `GHS ${p.amountGhs}`,
-    reach: `${autofills} autofills or ${listings} live WhatsApp listings`,
+    reach: `${listings} live listings or ${autofills} autofills`,
     popular: p.id === POPULAR_PACK_ID,
-    unlocks: packFeatures(p.id).filter((f) => !f.comingSoon).map((f) => f.label),
-    soon:    packFeatures(p.id).filter((f) => f.comingSoon).map((f) => f.label),
+    unlocks: packFeatures(p.id).filter((f) => !f.comingSoon).map((f) => f.short),
+    soon:    packFeatures(p.id).filter((f) => f.comingSoon).map((f) => f.short),
   };
 });
+
+/** The packs the coming-soon tools come with, e.g. "Pro and Business". */
+const SOON_PACKS = TIERS.filter((t) => t.soon.length > 0).map((t) => t.name).join(" and ");
 
 export function BuyCreditsModal({
   open,
@@ -94,7 +99,7 @@ export function BuyCreditsModal({
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={onClose}>
       <div
-        className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
+        className="max-h-[calc(100vh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between">
@@ -107,44 +112,63 @@ export function BuyCreditsModal({
           </button>
         </div>
 
-        <div className="mt-5 space-y-2.5">
+        <div className="mt-5 space-y-2" role="radiogroup" aria-label="Credit packs">
           {TIERS.map((t) => (
             <button
               key={t.id}
+              role="radio"
+              aria-checked={selected === t.id}
               onClick={() => setSelected(t.id)}
               className={cn(
-                "flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left transition-colors",
+                "flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left transition-colors",
                 selected === t.id ? "border-zinc-900 bg-zinc-50" : "border-zinc-200 hover:border-zinc-300",
               )}
             >
-              <div>
-                <span className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
-                  {t.credits} credits
-                  {t.popular && (
-                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700">
-                      Popular
-                    </span>
-                  )}
-                </span>
-                <p className="mt-0.5 text-xs text-zinc-500">{t.price} · about {t.reach}</p>
-                {t.unlocks.length > 0 && (
-                  <p className="mt-1 text-xs font-medium text-emerald-700">+ {t.unlocks.join(", ")}</p>
-                )}
-                {t.soon.length > 0 && (
-                  <p className="mt-0.5 text-[11px] text-zinc-400">Soon: {t.soon.join(" · ")}</p>
-                )}
-              </div>
               <span
                 className={cn(
-                  "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2",
+                  "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2",
                   selected === t.id ? "border-zinc-900 bg-zinc-900" : "border-zinc-300",
                 )}
               >
                 {selected === t.id && <Check className="h-3 w-3 text-white" />}
               </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-baseline justify-between gap-3">
+                  <span className="flex items-center gap-2 text-sm font-semibold text-zinc-900">
+                    {t.credits} credits
+                    {t.popular && (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700">
+                        Popular
+                      </span>
+                    )}
+                  </span>
+                  <span className="shrink-0 text-sm font-semibold text-zinc-900">{t.price}</span>
+                </span>
+                <span className="mt-0.5 block text-xs text-zinc-500">About {t.reach}</span>
+                {(t.unlocks.length > 0 || t.soon.length > 0) && (
+                  <span className="mt-2 flex flex-wrap gap-1.5">
+                    {t.unlocks.map((u) => (
+                      <span key={u} className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                        <Check className="h-3 w-3" /> {u}
+                      </span>
+                    ))}
+                    {t.soon.length > 0 && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-500">
+                        <Clock className="h-3 w-3" /> {t.soon.length} tools coming soon
+                      </span>
+                    )}
+                  </span>
+                )}
+              </span>
             </button>
           ))}
         </div>
+
+        {tier.soon.length > 0 && (
+          <p className="mt-3 rounded-lg bg-zinc-50 px-3 py-2 text-[11px] leading-relaxed text-zinc-500">
+            <span className="font-medium text-zinc-600">Coming soon with {SOON_PACKS}:</span> {tier.soon.join(" · ")}
+          </p>
+        )}
 
         {error && <p className="mt-3 text-xs text-red-600">{error}</p>}
 
