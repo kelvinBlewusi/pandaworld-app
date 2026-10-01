@@ -6,6 +6,7 @@ export const dynamic = "force-dynamic";
 import { refreshJumiaConnection } from "@/lib/jumia/api";
 import { refreshPendingFeedStatus, notifyResolvedListings, toResolvedNotice, type ResolvedListingNotice } from "@/lib/jumia/push-listing";
 import { followUpQc, type QcCandidate } from "@/lib/jumia/qc-followup";
+import { hasFeature } from "@/lib/billing/features";
 
 // ─── GET /api/cron/jumia-feeds ────────────────────────────────────────────────
 // Checks all pending_approval listings across all users and updates statuses,
@@ -107,6 +108,16 @@ export async function GET(req: NextRequest) {
   let updated = 0;
 
   for (const [userId, listings] of Array.from(byUser)) {
+    // QC follow-up comes with the Standard pack and up (lib/billing/
+    // features.ts). Without it nothing is checked: the listings are paced
+    // like a check that found nothing, so pg_cron doesn't call back for
+    // them every minute.
+    if (qcByUser.has(userId) && !(await hasFeature(userId, "qc_fix"))) {
+      await markQcChecked(db, qcByUser.get(userId));
+      qcByUser.delete(userId);
+      if (listings.length === 0) continue;
+    }
+
     // Get a valid access token for this user
     let accessToken: string;
     let country: string | null = null;

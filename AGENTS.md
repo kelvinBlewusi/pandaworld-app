@@ -530,6 +530,19 @@ month fixed once charging (Vercel Pro, Supabase Pro): break-even ~1,200
 listings a month. The Terms (`app/terms/page.tsx` §4) describe credits
 without numbers, pointing to /pricing.
 
+**Pack features (2026-10-01).** `PACK_FEATURES` in `credit-packs.ts` lists
+what each pack unlocks from its `minPack` up; `lib/billing/features.ts`
+`hasFeature(userId, id)` grants it from the highest pack the seller has
+ever bought (purchase ledger), and to admins and everyone while billing is
+off. QC follow-up and guided fixes (`qc_fix`) need Standard and up, gated
+completely: below it the feeds cron doesn't check QC at all (no alert, no
+refund), acceptance messages don't promise a QC alert, and Fix & resubmit
+on a QC rejection points to the editor and the packs. Pro and Business
+also list five greyed "coming soon" features (order alerts and shipping
+labels on WhatsApp, the fee calculator on WhatsApp and the extension
+panel, image polish on the extension), shown on /pricing and in the buy
+modal.
+
 **Pay when live** (WhatsApp and web listings). Drafts are free; a seller
 only needs enough available credits to draft. `pushListingToJumia` checks
 `creditsDueForSubmission` before anything reaches Jumia and records the

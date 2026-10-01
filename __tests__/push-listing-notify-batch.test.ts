@@ -161,6 +161,18 @@ describe("notifyBatchResolved", () => {
     expect(sent[0].body).toContain("Since your last update: Jumia accepted 2 products — Will alert you as they pass Jumia QC");
   });
 
+  // Without QC alerts (below the Standard pack) nothing will report the
+  // quality-check verdict, so acceptance doesn't promise one.
+  it("doesn't promise a QC alert to a seller whose pack doesn't include them", async () => {
+    await notifyBatchResolved(PHONE, "batch-1", [notice()], { qcAlerts: false });
+    expect(sent[0].body).toBe(`✅ "Electric Kettle": Jumia accepted it. Jumia's quality check comes next; Vendor Center shows the result`);
+
+    sent.length = 0;
+    await notifyBatchResolved(PHONE, "batch-1", [notice({ listingId: "a" }), notice({ listingId: "b" })], { qcAlerts: false });
+    expect(sent[0].body).toContain("Since your last update: Jumia accepted 2 products.");
+    expect(sent[0].body).not.toContain("Will alert you");
+  });
+
   it("announces a product live once it passes Jumia QC, with nothing to fix", async () => {
     await notifyBatchResolved(PHONE, "batch-1", [notice({ newStatus: QC_APPROVED })]);
 

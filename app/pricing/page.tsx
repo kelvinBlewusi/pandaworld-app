@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { auth } from "@clerk/nextjs/server";
-import { ArrowRight, Check, Coins } from "lucide-react";
+import { ArrowRight, Check, Clock, Coins } from "lucide-react";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { HomeFloatingNav } from "@/components/marketing/home-floating-nav";
 import { BuyCreditsButton } from "@/components/billing/buy-credits-button";
@@ -12,6 +12,7 @@ import {
   LISTING_CREDIT_COST,
   LIVE_LISTING_CREDIT_COST,
   POPULAR_PACK_ID,
+  packFeatures,
   packReach,
 } from "@/lib/billing/credit-packs";
 
@@ -187,6 +188,26 @@ export default async function PricingPage() {
                       <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
                       Never expires
                     </li>
+                    {/* What the pack unlocks, kept for good (lib/billing/features.ts).
+                        Coming-soon features are shown greyed out. */}
+                    {packFeatures(p.id).map((f) =>
+                      f.comingSoon ? (
+                        <li key={f.id} className="flex items-start gap-2 text-zinc-400">
+                          <Clock className="mt-0.5 h-4 w-4 shrink-0" />
+                          <span>
+                            {f.label}{" "}
+                            <span className="whitespace-nowrap rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                              Soon
+                            </span>
+                          </span>
+                        </li>
+                      ) : (
+                        <li key={f.id} className="flex items-start gap-2 font-medium">
+                          <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+                          {f.label}
+                        </li>
+                      ),
+                    )}
                   </ul>
                   <div className="mt-6">
                     {billingOn && userId ? (
@@ -223,7 +244,11 @@ export default async function PricingPage() {
             />
             <FAQ
               q="When is a WhatsApp listing charged?"
-              a={`When Jumia confirms it live. Drafting, redrafting and fixing are free, and a listing Jumia rejects costs nothing. While a listing waits for Jumia's review, its ${LIVE_LISTING_CREDIT_COST} credits are set aside so you can't submit more than your balance covers.`}
+              a={`When Jumia accepts it. Drafting, redrafting and fixing are free, and a listing Jumia rejects costs nothing. While a listing waits for Jumia's review, its ${LIVE_LISTING_CREDIT_COST} credits are set aside so you can't submit more than your balance covers.`}
+            />
+            <FAQ
+              q="What do the bigger packs unlock?"
+              a="Buying the Standard pack or bigger once unlocks Jumia QC rejection alerts and guided fixes for good: when Jumia's quality check rejects a listing after accepting it, we tell you why, return its credits, and help you fix and resubmit it. Features marked Soon are on the way for Pro and Business."
             />
             <FAQ
               q="Why is the Chrome extension charged per autofill?"

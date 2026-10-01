@@ -35,6 +35,42 @@ export const CREDIT_PACKS: CreditPack[] = [
 /** Pack id shown with the "Popular" badge in the Buy Credits modal. */
 export const POPULAR_PACK_ID = "standard";
 
+/** A pack's place in CREDIT_PACKS, smallest first; -1 for none or an unknown id. */
+export function packRank(id: string | null | undefined): number {
+  return CREDIT_PACKS.findIndex((p) => p.id === id);
+}
+
+/**
+ * Features that come with a pack, from `minPack` up. A seller has a
+ * feature once they've bought that pack or a bigger one, ever: the
+ * highest pack bought counts, a smaller top-up later doesn't take it away
+ * (lib/billing/features.ts). Set by the owner, 2026-10-01.
+ *
+ * `comingSoon` features are only advertised: shown greyed out on the
+ * packs that will include them, not built yet.
+ */
+export interface PackFeature {
+  id:          string;
+  label:       string;
+  minPack:     string;
+  comingSoon?: boolean;
+}
+
+export const PACK_FEATURES: PackFeature[] = [
+  { id: "qc_fix",               label: "Jumia QC rejection alerts and guided fixes", minPack: "standard" },
+  { id: "order_alerts",         label: "Order alerts on WhatsApp",                   minPack: "pro", comingSoon: true },
+  { id: "shipping_labels",      label: "Shipping labels on WhatsApp",                minPack: "pro", comingSoon: true },
+  { id: "fee_calc_whatsapp",    label: "Jumia fee calculator on WhatsApp",           minPack: "pro", comingSoon: true },
+  { id: "fee_calc_extension",   label: "Jumia fee calculator on the extension panel", minPack: "pro", comingSoon: true },
+  { id: "image_polish_extension", label: "Jumia image polish on the Chrome extension", minPack: "pro", comingSoon: true },
+];
+
+/** What a pack includes, in PACK_FEATURES order. */
+export function packFeatures(packId: string): PackFeature[] {
+  const rank = packRank(packId);
+  return PACK_FEATURES.filter((f) => packRank(f.minPack) <= rank);
+}
+
 export function getCreditPack(id: string): CreditPack | undefined {
   return CREDIT_PACKS.find((p) => p.id === id);
 }

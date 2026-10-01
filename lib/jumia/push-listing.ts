@@ -25,6 +25,7 @@ import type { PreflightNote } from "@/lib/jumia/preflight";
 import type { ListingRow, ListingStatus, VariantRow } from "@/lib/supabase/types";
 import { chargeLiveListing, creditsDueForSubmission } from "@/lib/billing/extension-credits";
 import { LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
+import { hasFeature } from "@/lib/billing/features";
 
 export interface PushListingVariantInput {
   variation:      string;
@@ -667,14 +668,21 @@ export const QC_APPROVED = "qc_approved";
 /** Not a rejection: nothing to fix. */
 const isGoodNews = (status: string) => status === "live" || status === QC_APPROVED;
 
-function resolutionLine(name: string, newStatus: string, errorMsg: string | null, counts: ResolutionCounts): string {
+//
+// `qcAlerts` is whether the seller has QC follow-up (the Standard pack and
+// up, lib/billing/features.ts). Without it nothing will report the QC
+// verdict, so acceptance doesn't promise one.
+function resolutionLine(name: string, newStatus: string, errorMsg: string | null, counts: ResolutionCounts, qcAlerts = true): string {
   if (newStatus === QC_APPROVED) return `🎉 "${name}" passed Jumia QC and is now live on Jumia!`;
   const partial = newStatus === "live" && counts.totalCount > counts.liveCount && counts.liveCount > 0;
+  const promise = (they: boolean) => qcAlerts
+    ? ` — Will alert you if ${they ? "they pass" : "it passes"} Jumia QC`
+    : ". Jumia's quality check comes next; Vendor Center shows the result";
   return newStatus !== "live"
     ? `⚠️ "${name}" was rejected by Jumia: ${errorMsg ?? "see the app for details"}`
     : partial
-      ? `✅ "${name}": Jumia accepted ${counts.liveCount} of ${counts.totalCount} variants — Will alert you if they pass Jumia QC\n\n⚠️ Jumia rejected ${counts.rejectedSkus.length ? counts.rejectedSkus.join(", ") : "the rest"}. You can fix and resubmit just those from your listings.`
-      : `✅ "${name}": Jumia accepted it — Will alert you if it passes Jumia QC`;
+      ? `✅ "${name}": Jumia accepted ${counts.liveCount} of ${counts.totalCount} variants${promise(true)}\n\n⚠️ Jumia rejected ${counts.rejectedSkus.length ? counts.rejectedSkus.join(", ") : "the rest"}. You can fix and resubmit just those from your listings.`
+      : `✅ "${name}": Jumia accepted it${promise(false)}`;
 }
 
 /**
@@ -708,7 +716,7 @@ async function notifyListingResolved(
     if (!wa.connected || !wa.phoneNumber) return;
 
     const name = (row.title as string | null) ?? "Your product";
-    const text = resolutionLine(name, newStatus, errorMsg, counts);
+    const text = resolutionLine(name, newStatus, errorMsg, counts, await hasFeature(row.user_id as string, "qc_fix"));
 
     // A rejection gets a way out of it. Without this the message is a dead
     // end: Jumia's own wording ("The column [product_weight] is missing
@@ -822,7 +830,9 @@ export async function notifyBatchResolved(
   phoneNumber: string,
   batchId:     string,
   items:       ResolvedListingNotice[],
+  opts:        { qcAlerts?: boolean } = {},
 ): Promise<void> {
+  const qcAlerts = opts.qcAlerts ?? true;
   if (items.length === 0) return;
   try {
     const { sendTextIfConfigured, sendButtonsIfConfigured, sendListIfConfigured, LIST_MAX_ROWS } = await import("@/lib/whatsapp/client");
@@ -830,7 +840,7 @@ export async function notifyBatchResolved(
     if (items.length === 1) {
       const item = items[0];
       const name = item.title ?? "Your product";
-      const text = resolutionLine(name, item.newStatus, item.errorMsg, item.counts);
+      const text = resolutionLine(name, item.newStatus, item.errorMsg, item.counts, qcAlerts);
       if (!isGoodNews(item.newStatus)) {
         await sendButtonsIfConfigured(phoneNumber, text, [{ id: `fix:${item.listingId}`, title: "Fix & resubmit" }]);
         return;
@@ -842,13 +852,13 @@ export async function notifyBatchResolved(
     const rejected = items.filter((i) => !isGoodNews(i.newStatus));
     const accepted = items.filter((i) => i.newStatus === "live").length;
     const passed   = items.filter((i) => i.newStatus === QC_APPROVED).length;
-    const lines = items.map((i) => resolutionLine(i.title ?? "Your product", i.newStatus, i.errorMsg, i.counts));
+    const lines = items.map((i) => resolutionLine(i.title ?? "Your product", i.newStatus, i.errorMsg, i.counts, qcAlerts));
     const products = (n: number) => `${n} product${n === 1 ? "" : "s"}`;
     const header =
       passed === items.length
         ? `🎉 Since your last update: ${products(passed)} passed Jumia QC and ${passed === 1 ? "is" : "are"} now live on Jumia!`
         : accepted === items.length
-          ? `✅ Since your last update: Jumia accepted ${products(accepted)} — Will alert you as they pass Jumia QC`
+          ? `✅ Since your last update: Jumia accepted ${products(accepted)}${qcAlerts ? " — Will alert you as they pass Jumia QC" : "."}`
           : rejected.length === items.length
             ? `⚠️ Since your last update: ${products(rejected.length)} ${rejected.length === 1 ? "was" : "were"} rejected by Jumia.`
             : `Since your last update: ${[
@@ -923,8 +933,9 @@ export async function notifyResolvedListings(userId: string, resolved: ResolvedL
       if (!byBatch.has(item.batchId)) byBatch.set(item.batchId, []);
       byBatch.get(item.batchId)!.push(item);
     }
+    const qcAlerts = await hasFeature(userId, "qc_fix");
     for (const [batchId, items] of Array.from(byBatch)) {
-      await notifyBatchResolved(wa.phoneNumber, batchId, items);
+      await notifyBatchResolved(wa.phoneNumber, batchId, items, { qcAlerts });
     }
   } catch (e) {
     console.warn(`[push-listing] notifyResolvedListings failed for user ${userId}: ${(e as Error).message}`);

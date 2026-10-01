@@ -12,7 +12,7 @@
 import { useState } from "react";
 import { X, Check, Loader2, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CREDIT_PACKS, POPULAR_PACK_ID, packReach } from "@/lib/billing/credit-packs";
+import { CREDIT_PACKS, POPULAR_PACK_ID, packFeatures, packReach } from "@/lib/billing/credit-packs";
 
 interface Tier {
   id: string;
@@ -20,6 +20,9 @@ interface Tier {
   price: string;
   reach: string;
   popular?: boolean;
+  /** What the pack unlocks now, and what it will (shown greyed out). */
+  unlocks: string[];
+  soon: string[];
 }
 
 const TIERS: Tier[] = CREDIT_PACKS.map((p) => {
@@ -30,6 +33,8 @@ const TIERS: Tier[] = CREDIT_PACKS.map((p) => {
     price: `GHS ${p.amountGhs}`,
     reach: `${autofills} autofills or ${listings} live WhatsApp listings`,
     popular: p.id === POPULAR_PACK_ID,
+    unlocks: packFeatures(p.id).filter((f) => !f.comingSoon).map((f) => f.label),
+    soon:    packFeatures(p.id).filter((f) => f.comingSoon).map((f) => f.label),
   };
 });
 
@@ -122,6 +127,12 @@ export function BuyCreditsModal({
                   )}
                 </span>
                 <p className="mt-0.5 text-xs text-zinc-500">{t.price} · about {t.reach}</p>
+                {t.unlocks.length > 0 && (
+                  <p className="mt-1 text-xs font-medium text-emerald-700">+ {t.unlocks.join(", ")}</p>
+                )}
+                {t.soon.length > 0 && (
+                  <p className="mt-0.5 text-[11px] text-zinc-400">Soon: {t.soon.join(" · ")}</p>
+                )}
               </div>
               <span
                 className={cn(
