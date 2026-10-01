@@ -617,6 +617,19 @@ only appear while billing is off.
   wording): on acceptance "✅ Jumia accepted it — Will alert you if it
   passes Jumia QC", on approval "🎉 … passed Jumia QC and is now live on
   Jumia!" (`QC_APPROVED` in `lib/jumia/push-listing.ts`).
+- **Fixing QC rejections (2026-10-01)**: the upload-error classifier
+  (`lib/jumia/rejection-remedy.ts`) reads every QC reason as "unknown" and
+  can only redraft. QC rejections go to `lib/jumia/qc-remedy.ts` instead:
+  a table of Jumia's known reasons, then the AI (gemini-2.5-flash) for the
+  rest, then one redraft. Actions: switch to Jumia's suggested category,
+  ask for the category, ask the seller for a value (FDA number etc., into
+  the category's own field, else the description), the brand, a price, new
+  photos (`qc_new_images`, swapped in on "done"), or Vendor Center's
+  reason when Jumia gave none; redraft; or explain what can't be fixed
+  (banned brand, prohibited, counterfeit, duplicate). Questions wait in
+  `whatsapp_sessions.awaiting_qc_answer` (`handleQcAnswer` in intake.ts).
+  Jumia's own words are kept in `jumia_qc_reason` / `jumia_qc_comment`;
+  its `rejectionReason` is often empty and the comment carries it.
 - **Emoji in WhatsApp messages built by joining lines (2026-09-28)**: the
   production minifier folds `[...].join("\n")` of constants into one
   string; when one line was a `${}` template it printed a new template

@@ -505,6 +505,8 @@ export async function pushListingToJumia(
         // inherit the last one's verdict (lib/jumia/qc-followup.ts).
         jumia_qc_status:           null,
         jumia_qc_checked_at:       null,
+        jumia_qc_reason:           null,
+        jumia_qc_comment:          null,
         updated_at:                new Date().toISOString(),
       })
       .eq("id", listingId);
