@@ -12,6 +12,7 @@ import { promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
 import { appUrl } from "@/lib/whatsapp/app-url";
 import { logInboundMessage } from "@/lib/whatsapp/message-log";
 import { logAppError } from "@/lib/observability/errors";
+import { failedDeliveries, recordFailedDeliveries } from "@/lib/whatsapp/delivery-status";
 
 /**
  * WhatsApp Business Cloud API webhook.
@@ -81,6 +82,7 @@ export async function POST(req: NextRequest) {
   }
 
   const { messages, contactName } = extractMessages(body);
+  await recordFailedDeliveries(failedDeliveries(body));
 
   for (const msg of messages) {
     const content = contentOf(msg);
