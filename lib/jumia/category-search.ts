@@ -58,7 +58,7 @@ export interface CategoryCandidate {
   /** 0–1 retrieval relevance — NOT vision confidence */
   retrievalScore:     number;
   /** Where this candidate came from — useful for debugging the pipeline */
-  source:             "fuzzy" | "jumia" | "merged" | "embedding" | "live";
+  source:             "fuzzy" | "jumia" | "merged" | "embedding" | "live" | "seller";
   /**
    * Set when a similar product already went live on Jumia in this
    * category, in the seller's country: that listing's title. Surfaced to

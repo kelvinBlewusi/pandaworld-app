@@ -14,12 +14,14 @@ import { runAutoAnalyze } from "@/lib/actions/auto-analyze";
 import { availableCredits } from "@/lib/billing/extension-credits";
 import { LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
 import { pushListingToJumia, missingFieldLabels, refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
-import { assessListingPushReadiness } from "@/lib/whatsapp/readiness";
+import { assessListingPushReadiness, type ListingReadinessResult } from "@/lib/whatsapp/readiness";
+import { autoFillMissingFields, missingValueQuestion, parseMissingValue, saveMissingValue } from "@/lib/whatsapp/missing-value";
+import { columnFor, readAttributeValue } from "@/lib/jumia/attribute-mapping";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
 import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames, isStaleCategoryError, type Remedy } from "@/lib/jumia/rejection-remedy";
 import { decideQcAction, type QcContext } from "@/lib/jumia/qc-remedy";
 import { featureMinPackName, hasFeature } from "@/lib/billing/features";
-import { removeAttributesFromCache, getCategoryByCode } from "@/lib/jumia/categories";
+import { removeAttributesFromCache, getCategoryByCode, getCategoryAttributes, type JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import { isUnlistableCategoryError, sellerCountry } from "@/lib/jumia/unlistable-categories";
 import { provenCategoriesFor } from "@/lib/jumia/live-listings";
 import {
@@ -1720,10 +1722,14 @@ async function sayStillOnProduct(
     );
     return;
   }
+  // Usually a skipped number (live: product 3's photos, then "4"), so the
+  // way on is closing this product; Restart is for photos that landed on
+  // the wrong one.
   await replyButtons(
     phoneNumber,
-    `⚠️ I'm still on product ${seq} of ${batchSize}: I didn't get *${seq}*, so the photos you sent after it went onto product ${seq} too (${photos} so far).\n\n` +
-      `Tap *Restart* to send this batch again. If they're all product ${seq}'s photos, reply *${seq}* instead.`,
+    `⚠️ I'm still on product ${seq} of ${batchSize}, which has ${photos} photo${photos === 1 ? "" : "s"} so far. ` +
+      `Reply *${seq}* to finish it, then send product ${seq + 1}'s photos and *${seq + 1}*.\n\n` +
+      `If some of those photos belong to another product, tap *Restart* to send the batch again.`,
     [{ id: "restart", title: "Restart 🔄" }],
   );
 }
@@ -2257,6 +2263,145 @@ async function askForNextMissingPrice(
 /** The "Skip for now" button's id, and the word a seller would type. */
 const PRICE_SKIP_RE = /^skip( price)?[.!]?$/i;
 
+/** The missing-value question's "Skip for now", and the words a seller would type. */
+const VALUE_SKIP_RE = /^skip( value| for now| it)?[.!]?$/i;
+
+/**
+ * Ready vs Held, after filling what the bot can of any field the category
+ * requires and the draft lacks (lib/whatsapp/missing-value.ts): a weight is
+ * estimated, the rest only where the photos or notes show it. Whatever is
+ * still missing is asked for by askForNextMissingValue.
+ */
+async function assessFillingMissing(userId: string, listingId: string): Promise<ListingReadinessResult> {
+  const first = await assessListingPushReadiness(userId, listingId);
+  if (first.ready || !first.missingFields?.length) return first;
+  const filled = await autoFillMissingFields(userId, listingId, first.missingFields);
+  return filled.length > 0 ? assessListingPushReadiness(userId, listingId) : first;
+}
+
+/**
+ * Ask, in chat, for the next field a drafted product is held without —
+ * live, 2026-10-01: "Product 1: ⚠️ Held — this category also needs Weight
+ * (kg)" left the seller nothing to do in WhatsApp. One field at a time,
+ * chained like the price question: the answer carries the next one.
+ * Products still missing a price are left to askForNextMissingPrice.
+ *
+ * `known` holds missing fields already worked out (the batch summary has
+ * them), so only products it doesn't cover are checked again. `from`
+ * starts the walk at a product, `after` just past one (a skipped product).
+ * Returns false (and clears the pointer) when nothing is left to ask.
+ */
+async function askForNextMissingValue(
+  phoneNumber: string,
+  batchId:     string,
+  opts: { from?: string; after?: string; prefix?: string; known?: Map<string, JumiaCategoryAttribute[]> } = {},
+): Promise<boolean> {
+  const listings = await getBatchListings(batchId);
+  const startAt = opts.from
+    ? Math.max(0, listings.findIndex((l) => l.id === opts.from))
+    : opts.after ? listings.findIndex((l) => l.id === opts.after) + 1 : 0;
+
+  for (const l of listings.slice(startAt)) {
+    if (!l.title || !l.selling_price || l.status !== "draft") continue;
+    // The full check reaches Jumia, so it only runs for a product whose
+    // category has a required field it looks empty in.
+    const known = opts.known?.get(l.id);
+    const mayLack = known ? null : (await getCategoryAttributes(Number(l.category_code)))
+      .some((a) => a.required && !readAttributeValue(l, a.name).trim());
+    const fields = known
+      ?? (mayLack ? (await assessListingPushReadiness(l.user_id as string, l.id).catch(() => null))?.missingFields : null)
+      ?? [];
+    const attr = fields[0];
+    if (!attr) continue;
+
+    await updateSession(phoneNumber, { awaitingValueFor: { listingId: l.id, field: attr.name } });
+    const who = listings.length > 1 && l.whatsapp_seq != null ? `Product ${l.whatsapp_seq} — ${l.title}` : (l.title as string);
+    const question = missingValueQuestion(attr, who);
+    const body = `${opts.prefix ? `${opts.prefix}\n\n` : ""}${question.body}`;
+    if (question.options.length <= 3) {
+      await replyButtons(phoneNumber, body, question.options);
+    } else {
+      await replyList(phoneNumber, body, "Choose", question.options);
+    }
+    return true;
+  }
+
+  await updateSession(phoneNumber, { awaitingValueFor: null });
+  return false;
+}
+
+/**
+ * The seller's reply to askForNextMissingValue: saved as that field, then
+ * the next question (or Submit when nothing is left). False when the reply
+ * isn't an answer at all, so the caller drops the pointer and handles it
+ * as usual, the same rule the price question follows.
+ */
+async function answerMissingValue(
+  userId:      string,
+  phoneNumber: string,
+  batchId:     string,
+  batchSize:   number,
+  question:    { listingId: string; field: string },
+  text:        string,
+): Promise<boolean> {
+  const submitAll = { id: "submit all", title: "Submit all ✅" };
+  const restart   = { id: "restart",    title: "Restart 🔄" };
+
+  if (VALUE_SKIP_RE.test(text)) {
+    const asked = await askForNextMissingValue(phoneNumber, batchId, { after: question.listingId });
+    if (!asked) {
+      await replyButtons(phoneNumber, "No problem — you can fill it in on the review page any time. Jumia won't accept the product without it.", [submitAll, restart]);
+    }
+    return true;
+  }
+  // An edit to a product ("2: change the price to 150") isn't an answer.
+  if (/^\s*\d{1,2}\s*:\s*\S/.test(text)) return false;
+
+  const db = createServerClient();
+  const { data: row } = await db
+    .from("listings")
+    .select("id, user_id, whatsapp_seq, title, category_code")
+    .eq("id", question.listingId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  const attr = row?.category_code
+    ? (await getCategoryAttributes(Number(row.category_code))).find((a) => a.name === question.field)
+    : undefined;
+  if (!row || !attr) return false;
+
+  const parsed = parseMissingValue(attr, text);
+  if (!parsed.ok) {
+    await replyButtons(phoneNumber, `⚠️ ${parsed.hint}`, [{ id: "skip value", title: "Skip for now" }]);
+    return true;
+  }
+  if (!(await saveMissingValue(question.listingId, attr, parsed.value, "user"))) {
+    await replyError(phoneNumber, "⚠️ I couldn't save that just now — send it again in a moment.");
+    return true;
+  }
+
+  const label = batchSize > 1 && row.whatsapp_seq != null ? `product ${row.whatsapp_seq}` : ((row.title as string | null) ?? "your product");
+  const unit = columnFor(attr.name) === "weight_kg" ? " kg" : "";
+  const assessment = await assessListingPushReadiness(userId, question.listingId);
+  const otherReasons = assessment.missingFields?.length ? [] : assessment.reasons;
+  const confirmation = assessment.ready
+    ? `✅ ${attr.label || attr.name} set to ${parsed.value}${unit} for ${label} — ready to submit.`
+    : `✅ ${attr.label || attr.name} set to ${parsed.value}${unit} for ${label}.` +
+      (otherReasons.length > 0 ? `\n⚠️ Still held: ${heldReasonsText(otherReasons)}` : "");
+
+  const asked = await askForNextMissingValue(phoneNumber, batchId, {
+    from:   question.listingId,
+    prefix: confirmation,
+    known:  new Map([[question.listingId, assessment.missingFields ?? []]]),
+  });
+  if (!asked) {
+    const submit = batchSize > 1 && row.whatsapp_seq != null
+      ? [{ id: `submit ${row.whatsapp_seq}`, title: `Submit product ${row.whatsapp_seq}` }, submitAll]
+      : [{ id: "submit all", title: "Submit ✅" }];
+    await replyButtons(phoneNumber, confirmation, assessment.ready ? submit : [submitAll, restart]);
+  }
+  return true;
+}
+
 /**
  * Save a price the seller sent in answer to askForNextMissingPrice, then
  * move the walk on to the next product missing one.
@@ -2304,7 +2449,8 @@ async function applyChatPrice(
 
   // The confirmation rides along with the next question rather than going
   // out as its own message — one send per answer, not two.
-  const asked = await askForNextMissingPrice(phoneNumber, batchId, { prefix: confirmation });
+  const asked = await askForNextMissingPrice(phoneNumber, batchId, { prefix: confirmation })
+    || await askForNextMissingValue(phoneNumber, batchId, { prefix: `${confirmation}\n\nThat's every price filled in.` });
   if (!asked) {
     await replyButtons(phoneNumber, `${confirmation}\n\nThat's every price filled in.`, [
       { id: "submit all", title: "Submit all ✅" },
@@ -2383,7 +2529,7 @@ export async function finalizeBatch(
       // Large" against a drafted "XL") only count once the push itself
       // would NOT otherwise succeed — see NoteWarnings' doc comment.
       const [assessment, noteResult] = await Promise.all([
-        assessListingPushReadiness(only.user_id as string, only.id),
+        assessFillingMissing(only.user_id as string, only.id),
         noteWarningsFor(only.id),
       ]);
       const reasons = [
@@ -2424,18 +2570,21 @@ export async function finalizeBatch(
         // Never offer Submit on a Held product — confidence over optimism:
         // a seller should never be handed a button that would fail or ship
         // something other than what they typed. The editor is the action.
+        const askable = (assessment.missingFields?.length ?? 0) > 0 || !only.selling_price;
         await replyCtaOrSplit(
           phoneNumber,
-          `✅ Product drafted: ${only.title}.${heldText}\n\nFix it in the editor, then reply *submit*.`,
+          `✅ Product drafted: ${only.title}.${heldText}\n\n` +
+            (askable ? "Answer the question below, or fix it in the editor, then reply *submit*." : "Fix it in the editor, then reply *submit*."),
           "Edit product",
           focusedEditorUrl(only.id),
         );
       }
-      // A missing price is the one gap worth a follow-up question rather
-      // than a warning: it is the commonest reason a draft never reaches
-      // Jumia, and it is the only missing field a seller can supply in a
-      // single word without opening the editor.
-      await askForNextMissingPrice(phoneNumber, batchId);
+      // A missing price, then any other field the category requires, is
+      // asked for right here rather than left as a warning: each is one
+      // word the seller knows, and the editor was the only other way on.
+      if (!(await askForNextMissingPrice(phoneNumber, batchId))) {
+        await askForNextMissingValue(phoneNumber, batchId, { known: new Map([[only.id, assessment.missingFields ?? []]]) });
+      }
       return;
     }
     // No title: runQueuedAnalysis's own graceful failure reply already
@@ -2495,7 +2644,7 @@ export async function finalizeBatch(
   // and most of a batch is typically still missing basic fields anyway —
   // assessListingPushReadiness only reaches Jumia once those are filled.
   const ASSESS_CONCURRENCY = 3;
-  const assessments: { ready: boolean; reasons: string[]; needsReconnect?: boolean }[] = new Array(drafted.length);
+  const assessments: { ready: boolean; reasons: string[]; needsReconnect?: boolean; missingFields?: JumiaCategoryAttribute[] }[] = new Array(drafted.length);
   {
     let cursor = 0;
     const assessWorker = async (): Promise<void> => {
@@ -2505,7 +2654,7 @@ export async function finalizeBatch(
         let noteResult: NoteWarnings;
         try {
           [assessment, noteResult] = await Promise.all([
-            assessListingPushReadiness(l.user_id as string, l.id),
+            assessFillingMissing(l.user_id as string, l.id),
             noteWarningsFor(l.id),
           ]);
         } catch (e) {
@@ -2529,6 +2678,7 @@ export async function finalizeBatch(
           ready:   assessment.ready && noteResult.warnings.length === 0 && applicableSoft.length === 0,
           reasons: [...assessment.reasons, ...noteResult.warnings, ...applicableSoft],
           needsReconnect: assessment.needsReconnect,
+          missingFields:  assessment.missingFields,
         };
       }
     };
@@ -2641,7 +2791,11 @@ export async function finalizeBatch(
     await replyButtons(phoneNumber, closing, [submitAll, restart]);
   }
 
-  await askForNextMissingPrice(phoneNumber, batchId);
+  if (!(await askForNextMissingPrice(phoneNumber, batchId))) {
+    await askForNextMissingValue(phoneNumber, batchId, {
+      known: new Map(drafted.map((l, i) => [l.id, assessments[i].missingFields ?? []])),
+    });
+  }
 }
 
 async function handleAwaitingBatchConfirmation(
@@ -2709,7 +2863,8 @@ async function handleAwaitingBatchConfirmation(
       return;
     }
     if (PRICE_SKIP_RE.test(text)) {
-      const asked = await askForNextMissingPrice(phoneNumber, batchId, { after: priceFor });
+      const asked = await askForNextMissingPrice(phoneNumber, batchId, { after: priceFor })
+        || await askForNextMissingValue(phoneNumber, batchId);
       if (!asked) {
         await replyButtons(
           phoneNumber,
@@ -2723,6 +2878,14 @@ async function handleAwaitingBatchConfirmation(
       return;
     }
     await updateSession(phoneNumber, { awaitingPriceFor: null });
+  }
+
+  // An answer to askForNextMissingValue's question (a weight, or another
+  // field the category requires). Same rule as the price: anything that
+  // isn't an answer drops the pointer and is handled as usual.
+  if (session.awaitingValueFor) {
+    if (await answerMissingValue(userId, phoneNumber, batchId, batchSize, session.awaitingValueFor, text)) return;
+    await updateSession(phoneNumber, { awaitingValueFor: null });
   }
 
   const editCmd = parseEditCommand(text, batchSize);
@@ -4308,10 +4471,32 @@ async function handleCategoryCorrection(
   }
 
   await db.from("listings").update({ category_unsure: false }).eq("id", listingId);
+  const head = `✅ Product ${seq} switched to "${result.category.path}" and refilled (${result.aiFilled}/${result.attributesSchema} fields).`;
+
+  // The full Ready check, not just the basic fields: live, 2026-10-01, this
+  // said "Ready to submit" for a product the batch summary then held for
+  // "Weight (kg)", which the new category requires. A missing field is
+  // filled where the photos allow, and asked for while the batch is
+  // waiting on the seller; while it's still drafting, the summary asks.
   const missing = await describeMissingFields(listingId);
-  await replyButtons(
+  const assessment = missing ? null : await assessFillingMissing(userId, listingId);
+  if (assessment?.ready) {
+    await replyButtons(phoneNumber, `${head} Ready to submit.`, [{ id: `submit ${seq}`, title: `Submit product ${seq}` }]);
+    return;
+  }
+  const session = await getOrCreateSession(userId, phoneNumber);
+  if (assessment?.missingFields?.length && session.state === "awaiting_confirmation" && session.batchId) {
+    const asked = await askForNextMissingValue(phoneNumber, session.batchId, {
+      from:   listingId,
+      prefix: head,
+      known:  new Map([[listingId, assessment.missingFields]]),
+    });
+    if (asked) return;
+  }
+  await replyCtaOrSplit(
     phoneNumber,
-    `✅ Product ${seq} switched to "${result.category.path}" and refilled (${result.aiFilled}/${result.attributesSchema} fields). ${missing || "Ready to submit."}`,
-    [{ id: `submit ${seq}`, title: `Submit product ${seq}` }],
+    `${head}\n⚠️ ${missing || heldReasonsText(assessment?.reasons ?? [])}`,
+    `Fix product ${seq}`,
+    focusedEditorUrl(listingId),
   );
 }

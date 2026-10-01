@@ -22,6 +22,7 @@ import {
 } from "@/lib/jumia/api";
 import { fingerprintListingContent, logFeedOutcome, type FeedOutcomeKind } from "@/lib/jumia/feed-outcomes";
 import type { PreflightNote } from "@/lib/jumia/preflight";
+import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import type { ListingRow, ListingStatus, VariantRow } from "@/lib/supabase/types";
 import { chargeLiveListing, creditsDueForSubmission } from "@/lib/billing/extension-credits";
 import { LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
@@ -179,6 +180,8 @@ export type PreviewPayloadResult =
       adjustments: string[];
       /** Schema-required attributes with no value — a push would refuse. */
       missingRequired: string[];
+      /** The same, as schema entries (name, type, allowed values). */
+      missingRequiredAttributes: JumiaCategoryAttribute[];
       /** Everything validateListingForPush would reject on first. */
       blockers: string[];
       /** Raw preflight notes (with .reason) — see JumiaPayloadBuild.preflightNotes.
@@ -255,6 +258,7 @@ export async function previewListingPayload(
     products:        built.products,
     adjustments:     built.adjustments,
     missingRequired: built.missingRequired,
+    missingRequiredAttributes: built.missingRequiredAttributes,
     blockers,
     preflightNotes:  built.preflightNotes,
   };
