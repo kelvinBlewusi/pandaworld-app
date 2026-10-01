@@ -201,11 +201,11 @@ export async function GET(req: NextRequest) {
       if (notice) resolved.push(notice);
     }
 
-    // Quality check on listings that went live: rejections are told in the
-    // same message as this run's feed resolutions.
-    const qcRejected = await followUpQc(accessToken, country, qcByUser.get(userId) ?? []);
-    updated += qcRejected.length;
-    resolved.push(...qcRejected);
+    // Quality check on listings Jumia accepted: approvals and rejections are
+    // told in the same message as this run's feed resolutions.
+    const qcResolved = await followUpQc(accessToken, country, qcByUser.get(userId) ?? []);
+    updated += qcResolved.length;
+    resolved.push(...qcResolved);
 
     await notifyResolvedListings(userId, resolved);
   }
