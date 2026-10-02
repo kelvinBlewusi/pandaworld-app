@@ -561,8 +561,10 @@ $("polishBtn").addEventListener("click", async () => {
     });
     const missed = data.images.length - shots.length;
     const missedNote = missed ? ` (${missed} couldn't be made)` : "";
-    if (placed?.ok && placed.placed > 0) {
+    if (placed?.ok && placed.placed >= images.length) {
       setPolishStatus(`Done — ${placed.placed} image${placed.placed === 1 ? "" : "s"} added to the listing${missedNote}. Check them on Jumia before you submit.`, "ok");
+    } else if (placed?.ok && placed.placed > 0) {
+      setPolishStatus(`${placed.placed} of ${images.length} images added to the listing${missedNote}. Save the rest below and add them on Jumia.`, "ok");
     } else {
       setPolishStatus(`Your ${images.length} images are ready${missedNote}, but I couldn't put them in the slots (${placed?.error || "no image slots found"}). Save them below and add them on Jumia.`, "err");
     }
