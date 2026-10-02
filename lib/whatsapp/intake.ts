@@ -1,5 +1,6 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { sendTextIfConfigured, sendCtaUrlIfConfigured, sendButtonsIfConfigured, sendListIfConfigured, sendImageIfConfigured, LIST_MAX_ROWS } from "@/lib/whatsapp/client";
+import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { ingestWhatsAppImage } from "@/lib/whatsapp/media";
 import {
   getOrCreateSession,
@@ -143,25 +144,12 @@ function replyCta(to: string, bodyText: string, buttonText: string, url: string)
   return sendCtaUrlIfConfigured(to, bodyText, buttonText, url);
 }
 
-// Meta's caps on a message's text: 1024 characters for an interactive
-// body (reply buttons, a link button and a list alike) and 4096 for plain
-// text. Over them the send fails outright, so long text goes as plain text
-// plus a short interactive message. A list's cap was taken to be 4096
-// until a 20-product batch summary of 1,731 was refused (live, 2026-10-02).
-const INTERACTIVE_BODY_MAX = 1024;
-const TEXT_MAX             = 4096;
+// Over Meta's caps (lib/whatsapp/text-limits.ts) a send fails outright, so
+// long text goes as plain text plus a short interactive message.
 
 /** Plain text, split at line breaks into as many messages as it needs. */
 async function replyLongText(to: string, text: string): Promise<void> {
-  let chunk = "";
-  for (const line of text.split("\n")) {
-    if (chunk && chunk.length + 1 + line.length > TEXT_MAX) {
-      await replyText(to, chunk);
-      chunk = "";
-    }
-    chunk = chunk ? `${chunk}\n${line}` : line.slice(0, TEXT_MAX);
-  }
-  if (chunk) await replyText(to, chunk);
+  for (const part of splitForText(text)) await replyText(to, part);
 }
 
 /**
@@ -3120,7 +3108,7 @@ async function handleSubmit(
     // the right product on the site is the step where they give up. reason
     // is carried alongside so the compiled follow-up message below can say
     // WHY each one needs a look, not just that it does.
-    const notSent: { seq: number | null; listingId: string; reason: string }[] = [];
+    const notSent: { seq: number | null; listingId: string; title: string | null; reason: string }[] = [];
     // Held back for lack of credits: nothing to edit, so these get a Buy
     // credits button after the results instead of an editor link.
     let shortOfCredits = false;
@@ -3154,7 +3142,7 @@ async function handleSubmit(
             // prevented.
             messages[i] = `Product ${seq}: ℹ️ ${result.message}`;
           } else if (result.code === "validation") {
-            notSent.push({ seq, listingId: listing.id, reason: result.message });
+            notSent.push({ seq, listingId: listing.id, title: listing.title ?? null, reason: result.message });
             messages[i] = `Product ${seq}: ⚠️ Not submitted — ${result.message}`;
           } else if (result.code === "insufficient_credits") {
             shortOfCredits = true;
@@ -3169,7 +3157,7 @@ async function handleSubmit(
             const token = await createConnectToken(userId);
             messages[i] = `Product ${seq}: ⚠️ Jumia needs to be reconnected — tap here: ${jumiaConnectLink(token)}, then reply submit again.`;
           } else {
-            notSent.push({ seq, listingId: listing.id, reason: result.message });
+            notSent.push({ seq, listingId: listing.id, title: listing.title ?? null, reason: result.message });
             messages[i] = `Product ${seq}: ❌ Not submitted — ${result.message}`;
           }
         } catch (e) {
@@ -3178,7 +3166,7 @@ async function handleSubmit(
           // seller gets zero reply and no way to tell what happened (this
           // had no per-listing catch at all before).
           console.error(`[whatsapp intake] product ${seq} submit threw: ${(e as Error).message}`);
-          notSent.push({ seq, listingId: listing.id, reason: "something went wrong on our side" });
+          notSent.push({ seq, listingId: listing.id, title: listing.title ?? null, reason: "something went wrong on our side" });
           messages[i] = `Product ${seq}: ❌ Not submitted — something went wrong on our side.`;
         }
       }
@@ -3250,11 +3238,15 @@ async function handleSubmit(
     // edit flow already use.
     if (notSent.length > 0) {
       const shortReason = (r: string) => r.length > 60 ? `${r.slice(0, 59)}…` : r;
+      // Named, not just numbered: "Edit product 4" alone left the seller
+      // working out which product 4 was.
+      const named = (item: (typeof notSent)[number]) =>
+        `Product ${item.seq}${item.title ? ` (${item.title.length > 50 ? `${item.title.slice(0, 49)}…` : item.title})` : ""}`;
       const body = notSent.length === 1
-        ? `Product ${notSent[0].seq} wasn't sent to Jumia: ${shortReason(notSent[0].reason)}`
+        ? `${named(notSent[0])} wasn't sent to Jumia: ${shortReason(notSent[0].reason)}`
         : [
             `${notSent.length} products weren't sent to Jumia:`,
-            ...notSent.map((item) => `Product ${item.seq}: ${shortReason(item.reason)}`),
+            ...notSent.map((item) => `${named(item)}: ${shortReason(item.reason)}`),
           ].join("\n");
 
       if (notSent.length <= 3) {
@@ -3274,7 +3266,7 @@ async function handleSubmit(
             chunk.map((item) => ({
               id:    `edit:${item.listingId}`,
               title: `Edit product ${item.seq}`,
-              description: shortReason(item.reason),
+              description: item.title ?? shortReason(item.reason),
             })),
           );
         }

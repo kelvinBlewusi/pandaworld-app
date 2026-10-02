@@ -218,8 +218,37 @@ describe("notifyBatchResolved", () => {
     const lists = sent.filter((m) => m.kind === "list");
     expect(lists).toHaveLength(1);
     expect(lists[0].buttons).toEqual(["fix:listing-2", "fix:listing-4", "fix:listing-5", "fix:listing-6"]);
-    expect(lists[0].descriptions?.[0]).toMatch(/Rejected — Attribute \[variation\]/);
-    expect(lists[0].descriptions?.[1]).toMatch(/Rejected — You can't list products/);
+    // Each row names its product; why it was rejected is in the numbered
+    // summary above.
+    expect(lists[0].descriptions).toEqual(["Baby Carrier", "Toaster", "Helmet", "Backpack"]);
+    expect(sent[0].body).toContain('Product 2: ⚠️ "Baby Carrier" was rejected by Jumia: Attribute [variation]');
+  });
+
+  // Live, 2026-10-02: "Fix product 3" on a button, with nothing saying
+  // which product 3 was.
+  it("names each product its Fix button is for, and numbers the summary to match", async () => {
+    await notifyBatchResolved(PHONE, "batch-1", [
+      notice({ listingId: "listing-1", title: "Floral Petal Statement Earrings", whatsappSeq: 1, newStatus: QC_APPROVED }),
+      notice({ listingId: "listing-3", title: "Plain T-Shirt - Crew Neck", whatsappSeq: 3, newStatus: "failed", errorMsg: "Wrong Category (quality check)." }),
+      notice({ listingId: "listing-7", title: "Leather Safety Shoes", whatsappSeq: 7, newStatus: "failed", errorMsg: "Poor image quality (quality check)." }),
+    ]);
+
+    expect(sent[0].body).toContain('Product 3: ⚠️ "Plain T-Shirt - Crew Neck" was rejected by Jumia');
+    expect(sent[0].body).toContain('Product 1: 🎉 "Floral Petal Statement Earrings" passed Jumia QC');
+    const fix = sent.find((m) => m.kind === "buttons")!;
+    expect(fix.body).toBe("Fix what didn't go through:\nProduct 3 — Plain T-Shirt - Crew Neck\nProduct 7 — Leather Safety Shoes");
+    expect(fix.buttons).toEqual(["fix:listing-3", "fix:listing-7"]);
+  });
+
+  it("splits a summary too long for one message instead of losing it", async () => {
+    const long = "x".repeat(400);
+    await notifyBatchResolved(PHONE, "batch-1", Array.from({ length: 20 }, (_, i) =>
+      notice({ listingId: `listing-${i + 1}`, title: `Product name ${i + 1}`, whatsappSeq: i + 1, newStatus: "failed", errorMsg: long })));
+
+    const texts = sent.filter((m) => m.kind === "text");
+    expect(texts.length).toBeGreaterThan(1);
+    expect(texts.every((t) => t.body.length <= 4096)).toBe(true);
+    expect(texts.map((t) => t.body).join("\n")).toContain("Product 20:");
   });
 
   it("still uses reply-buttons (not a list) when 4+ items resolve but 3 or fewer are rejected", async () => {

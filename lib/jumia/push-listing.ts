@@ -840,23 +840,37 @@ export async function notifyBatchResolved(
   if (items.length === 0) return;
   try {
     const { sendTextIfConfigured, sendButtonsIfConfigured, sendListIfConfigured, LIST_MAX_ROWS } = await import("@/lib/whatsapp/client");
+    const { INTERACTIVE_BODY_MAX, splitForText } = await import("@/lib/whatsapp/text-limits");
+    // Rejection reasons are Jumia's own and can run long: a summary past
+    // what one message holds goes as several, never refused whole.
+    const sendText = async (text: string) => {
+      for (const part of splitForText(text)) await sendTextIfConfigured(phoneNumber, part);
+    };
 
     if (items.length === 1) {
       const item = items[0];
       const name = item.title ?? "Your product";
       const text = resolutionLine(name, item.newStatus, item.errorMsg, item.counts, qcAlerts);
       if (!isGoodNews(item.newStatus)) {
-        await sendButtonsIfConfigured(phoneNumber, text, [{ id: `fix:${item.listingId}`, title: "Fix & resubmit" }]);
+        const fix = [{ id: `fix:${item.listingId}`, title: "Fix & resubmit" }];
+        if (text.length <= INTERACTIVE_BODY_MAX) {
+          await sendButtonsIfConfigured(phoneNumber, text, fix);
+        } else {
+          await sendText(text);
+          await sendButtonsIfConfigured(phoneNumber, `Fix "${name.slice(0, 80)}":`, fix);
+        }
         return;
       }
-      await sendTextIfConfigured(phoneNumber, text);
+      await sendText(text);
       return;
     }
 
     const rejected = items.filter((i) => !isGoodNews(i.newStatus));
     const accepted = items.filter((i) => i.newStatus === "live").length;
     const passed   = items.filter((i) => i.newStatus === QC_APPROVED).length;
-    const lines = items.map((i) => resolutionLine(i.title ?? "Your product", i.newStatus, i.errorMsg, i.counts, qcAlerts));
+    // Numbered, so each "Fix product N" tap below matches a line here.
+    const number = (i: ResolvedListingNotice) => (i.whatsappSeq != null ? `Product ${i.whatsappSeq}: ` : "");
+    const lines = items.map((i) => number(i) + resolutionLine(i.title ?? "Your product", i.newStatus, i.errorMsg, i.counts, qcAlerts));
     const products = (n: number) => `${n} product${n === 1 ? "" : "s"}`;
     const header =
       passed === items.length
@@ -871,7 +885,7 @@ export async function notifyBatchResolved(
                 rejected.length > 0 ? `${rejected.length} rejected` : null,
               ].filter(Boolean).join(", ")}.`;
 
-    await sendTextIfConfigured(phoneNumber, [header, "", ...lines].join("\n"));
+    await sendText([header, "", ...lines].join("\n"));
 
     if (rejected.length === 0) return;
 
@@ -885,19 +899,27 @@ export async function notifyBatchResolved(
     // counts are still in the summary text above; this is only the
     // follow-up affordance, sized to how many actually need fixing rather
     // than to the batch's total size.
+    // A button holds 20 characters, room for "Fix product 12" and not the
+    // name, so the message names each one: "Fix product 3" alone left the
+    // seller guessing which product that was (live, 2026-10-02).
     if (rejected.length <= 3) {
+      const named = rejected
+        .filter((i) => i.whatsappSeq != null && i.title)
+        .map((i) => `${label(i)} — ${(i.title as string).slice(0, 80)}`);
       await sendButtonsIfConfigured(
         phoneNumber,
-        "Fix what didn't go through:",
+        ["Fix what didn't go through:", ...named].join("\n"),
         rejected.map((i) => ({ id: `fix:${i.listingId}`, title: `Fix ${label(i)}`.slice(0, 20) })),
       );
       return;
     }
 
+    // A row's subtitle names the product; why it was rejected is in the
+    // numbered summary above.
     const rows = rejected.map((i) => ({
       id:          `fix:${i.listingId}`,
       title:       label(i),
-      description: `⚠️ Rejected — ${i.errorMsg ?? "see details"}`,
+      description: i.whatsappSeq != null && i.title ? i.title : `⚠️ Rejected — ${i.errorMsg ?? "see details"}`,
     }));
     for (let idx = 0; idx < rows.length; idx += LIST_MAX_ROWS) {
       const chunk = rows.slice(idx, idx + LIST_MAX_ROWS);

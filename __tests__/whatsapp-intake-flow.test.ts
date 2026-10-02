@@ -1584,8 +1584,9 @@ describe("handleSubmit — products that fail to push get ONE compiled follow-up
 
     const followUp = sent.find((m) => m.kind === "buttons" && m.body.includes("weren't sent to Jumia"));
     expect(followUp).toBeDefined();
-    expect(followUp!.body).toContain("Product 2:");
-    expect(followUp!.body).toContain("Product 4:");
+    // Named, so "Edit product 2" says which product that is.
+    expect(followUp!.body).toContain("Product 2 (Drafted product number 2): This category requires Weight (kg).");
+    expect(followUp!.body).toContain("Product 4 (Drafted product number 4):");
     expect(followUp!.rows).toEqual(["edit:listing-2", "edit:listing-4"]);
   });
 
