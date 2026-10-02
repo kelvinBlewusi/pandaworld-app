@@ -28,6 +28,7 @@ import { isFashionCategory } from "@/lib/jumia/fashion-category";
 import { getVariantAxes } from "@/lib/jumia/categories";
 import type { PreflightReason } from "@/lib/jumia/preflight";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
+import { columnFor } from "@/lib/jumia/attribute-mapping";
 import type { ListingRow } from "@/lib/supabase/types";
 
 export interface ListingReadinessResult {
@@ -246,7 +247,7 @@ export async function assessListingPushReadiness(
   const db = createServerClient();
   const { data } = await db
     .from("listings")
-    .select("title, description, selling_price, category_code, category_path, brand, images, user_prompt, highlights, dynamic_attributes")
+    .select("title, description, selling_price, category_code, category_path, brand, images, user_prompt, highlights, dynamic_attributes, field_sources")
     .eq("id", listingId)
     .maybeSingle();
 
@@ -289,10 +290,29 @@ export async function assessListingPushReadiness(
   }
   const missingFields = preview.missingRequiredAttributes ?? [];
 
+  const categoryCode = row.category_code ? parseInt(row.category_code as string, 10) : NaN;
+  const variantAxes = categoryCode && !isNaN(categoryCode) ? await getVariantAxes(categoryCode) : [];
+  const variantAxisNames = new Set(variantAxes.map((a) => a.name.toLowerCase()));
+
+  // A value the category doesn't take is dropped on the way out. Held over
+  // when it's the seller's: typed by them, a variant option, or something
+  // their notes say (live, 2026-09-21: "Sizes Medium Large Xtra Large" lost
+  // its Xtra Large). Not when it's purely the AI's guess (live, 2026-10-02:
+  // Age Group "Female" held a pair of earrings): an optional field is just
+  // not sent, and a required one is now missing, which missingFields
+  // covers and the bot fills or asks for.
+  const sources = ((row as ListingRow & { field_sources?: Record<string, string> | null }).field_sources ?? {}) as Record<string, string>;
+  const notesText = String(row.user_prompt ?? "").toLowerCase();
+  const sellersValue = (note: { attribute: string; detail: string }) => {
+    if (sources[columnFor(note.attribute) ?? `dynamic_attributes.${note.attribute}`] === "user") return true;
+    if (variantAxisNames.has(note.attribute.toLowerCase())) return true;
+    const value = /^"([^"]+)"/.exec(note.detail)?.[1]?.trim().toLowerCase();
+    return Boolean(value && notesText.includes(value));
+  };
   for (const note of preview.preflightNotes) {
-    if (HOLD_WORTHY_PREFLIGHT_REASONS.has(note.reason)) {
-      reasons.push(`${note.label}: ${note.detail}`);
-    }
+    if (!HOLD_WORTHY_PREFLIGHT_REASONS.has(note.reason)) continue;
+    if (note.reason === "invalid_enum" && !sellersValue(note)) continue;
+    reasons.push(`${note.label}: ${note.detail}`);
   }
 
   const products = preview.products as { variation?: string; attributes?: { name: string; value: unknown }[]; brand?: { name?: string } }[];
@@ -312,10 +332,6 @@ export async function assessListingPushReadiness(
   // user_prompt is the WhatsApp caption; highlights/dyn often echo capacity/size
   // claims the AI parked outside title/description.
   const freeText = `${row.title ?? ""} ${row.description ?? ""} ${row.user_prompt ?? ""} ${highlights} ${dynText}`;
-
-  const categoryCode = row.category_code ? parseInt(row.category_code as string, 10) : NaN;
-  const variantAxes = categoryCode && !isNaN(categoryCode) ? await getVariantAxes(categoryCode) : [];
-  const variantAxisNames = new Set(variantAxes.map((a) => a.name.toLowerCase()));
 
   const staleAttr = staleDuplicateVariantAttribute(products, variantAxisNames);
   if (staleAttr) {
