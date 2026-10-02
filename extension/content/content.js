@@ -20,18 +20,40 @@
   // the same slot replaces its entry instead of accumulating duplicates;
   // Map preserves insertion order, which keeps the seller's own upload order
   // (main photo first) when harvestImages() reads it back.
+  //
+  // What's kept is the current product's own photos only. Vendor Center is
+  // a single-page app, so this script outlives each form: the record is
+  // cleared when the page moves to another path, and harvestImages() skips
+  // a slot that's no longer on the page. And only the seller's uploads
+  // count, not the images Polish places (placeImages, below), so polishing
+  // again starts from the seller's photos. Without all three, starting a
+  // new product in the same tab polished the previous product again, from
+  // its photos and its polished images (live, 2026-10-02).
   const capturedFiles = new Map();
+  let placingImages = false;
   document.addEventListener(
     "change",
     (e) => {
       const t = e.target;
+      if (placingImages) return;
       if (t && t.tagName === "INPUT" && t.type === "file" && t.files && t.files[0]) {
+        forgetOtherProducts();
         capturedFiles.set(t, t.files[0]);
         console.debug(LOG, "captured file:", t.files[0].name, t.files[0].type, t.files[0].size);
       }
     },
     true, // capture phase — catches inputs added after load
   );
+  let capturedOnPath = location.pathname;
+  function forgetOtherProducts() {
+    if (location.pathname !== capturedOnPath) {
+      capturedOnPath = location.pathname;
+      capturedFiles.clear();
+    }
+    for (const input of Array.from(capturedFiles.keys())) {
+      if (!input.isConnected) capturedFiles.delete(input);
+    }
+  }
 
   // Every message handler below responds via sendResponse — if the promise
   // it's chained to ever rejects uncaught, sendResponse is never called and
@@ -95,8 +117,15 @@
         const dt = new DataTransfer();
         dt.items.add(file);
         input.files = dt.files;
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        input.dispatchEvent(new Event("change", { bubbles: true }));
+        // Dispatch runs the listeners before it returns, so the capture
+        // above sees the flag and leaves this file out.
+        placingImages = true;
+        try {
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        } finally {
+          placingImages = false;
+        }
         placed++;
         await sleep(900); // let the page start this upload before the next slot
       } catch (e) {
@@ -235,6 +264,7 @@
   async function harvestImages() {
     // Tier 1: files captured straight from the upload <input>s — the most
     // reliable source, and the only one that can't be a same-origin decoy.
+    forgetOtherProducts();
     if (capturedFiles.size) {
       const out = [];
       for (const file of capturedFiles.values()) {
