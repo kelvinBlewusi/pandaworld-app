@@ -581,6 +581,18 @@ Paystack accepts transactions started in a browser with the public key, so
 metadata alone is never trusted. A refused one is logged to app_errors
 (source `paystack-webhook`).
 
+**First live purchase (2026-10-02, the owner's admin account, Starter).**
+The webhook credited it within a second of payment and /verify, 4 s later,
+found it already processed: one purchase row, balance 20 + 100. The
+account had no ledger row (admins never touch it), so the welcome grant
+was written after the purchase; `creditPurchase` now provisions the
+balance first. `__tests__/credit-purchase-flow.test.ts` replays that
+purchase through both real routes for a non-admin: on top of the welcome
+or a part-spent balance, either order, Paystack retries, another account's
+/verify refused. After paying, the seller sees the new balance and a bell
+notification, but no "payment received" message
+(`CreditsPurchaseHandler` renders nothing).
+
 **QC follow-up promised before the gate.** Listings Jumia accepted before
 2026-10-01 15:00 UTC were told "Will alert you if it passes Jumia QC", so
 `qcAlertPromised()` keeps their follow-up whatever the pack. It does

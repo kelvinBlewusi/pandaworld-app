@@ -22,7 +22,7 @@
 
 export interface FakeRow { [k: string]: unknown }
 
-type Filter = { col: string; val: unknown; op: "eq" | "not-is-null" | "in" | "lt" | "gt" | "like" };
+type Filter = { col: string; val: unknown; op: "eq" | "is" | "not-is-null" | "in" | "lt" | "gt" | "like" };
 
 /** Postgres LIKE: % is any run, _ is any one character. */
 function likeToRegExp(pattern: string): RegExp {
@@ -46,6 +46,7 @@ export class FakeDb {
   private match(row: FakeRow, filters: Filter[]): boolean {
     return filters.every((f) => {
       if (f.op === "not-is-null") return row[f.col] != null;
+      if (f.op === "is") return (row[f.col] ?? null) === f.val;
       if (f.op === "in") return (f.val as unknown[]).includes(row[f.col]);
       if (f.op === "like") return typeof row[f.col] === "string" && likeToRegExp(f.val as string).test(row[f.col] as string);
       if (f.op === "lt" || f.op === "gt") {
@@ -64,6 +65,7 @@ export class FakeDb {
 
     const selectBuilder = (filters: Filter[]) => ({
       eq(col: string, val: unknown) { return selectBuilder([...filters, { col, val, op: "eq" }]); },
+      is(col: string, val: unknown) { return selectBuilder([...filters, { col, val, op: "is" }]); },
       in(col: string, val: unknown[]) { return selectBuilder([...filters, { col, val, op: "in" }]); },
       lt(col: string, val: unknown) { return selectBuilder([...filters, { col, val, op: "lt" }]); },
       gt(col: string, val: unknown) { return selectBuilder([...filters, { col, val, op: "gt" }]); },
