@@ -761,6 +761,13 @@ only appear while billing is off.
   put the 4th image over the 3rd live. The Save links are the fallback.
   One build serves everyone: the section only shows for admins. No credits charged. The request goes from the panel, not the
   worker, because generation takes ~30s.
+  content.js's record of uploaded files (`capturedFiles`, the first
+  harvest tier for both Polish and autofill) holds the current product's
+  own uploads only: images placed by PLACE_IMAGES are left out
+  (`placingImages` flag around the dispatch), and `forgetOtherProducts`
+  clears it on a path change and drops slots no longer on the page. Before
+  0.2.52 it lived as long as the tab, oldest first, so a new product in the
+  same tab polished the previous one's images again (live, 2026-10-02).
 - **FAQ (2026-10-02)**: public at `/faq` (app/faq/page.tsx, content in
   lib/marketing/faq.tsx with a plain-text copy of each answer for its
   FAQPage structured data), linked from the extension sidebar and the
