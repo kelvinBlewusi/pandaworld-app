@@ -22,7 +22,7 @@ export default function EmbeddedCalculatorPage({ searchParams }: { searchParams:
   const code = typeof searchParams.country === "string" ? searchParams.country : null;
   const country = (jumiaCountryByCode(code) ?? jumiaCountryByCode("GH")) as JumiaCountry;
   return (
-    <main className="bg-white px-3 py-3">
+    <main className="bg-white p-1">
       {country.code === "GH" ? (
         <PriceCalculator showHeader={false} />
       ) : (
