@@ -756,8 +756,10 @@ only appear while billing is off.
   URLs. The panel squares each (pad for white shots, crop for scenes),
   converts to JPEG, shows a grid with Save links, then sends PLACE_IMAGES:
   content.js sets each File on the slot's `<input type=file>` and fires
-  change. Not yet tried against live Vendor Center; the Save links are the
-  fallback. No credits charged. The request goes from the panel, not the
+  change, waiting (up to 20s) for slot i to exist, since Jumia only adds
+  the next empty slot once an upload is in; falling back to the last slot
+  put the 4th image over the 3rd live. The Save links are the fallback.
+  One build serves everyone: the section only shows for admins. No credits charged. The request goes from the panel, not the
   worker, because generation takes ~30s.
 - **FAQ (2026-10-02)**: public at `/faq` (app/faq/page.tsx, content in
   lib/marketing/faq.tsx with a plain-text copy of each answer for its

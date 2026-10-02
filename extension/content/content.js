@@ -64,9 +64,13 @@
   // Puts generated images into the form's image slots the way a file picker
   // would: a File set on each slot's own <input type=file>, then the change
   // event the page listens for. Image i goes in slot i, so the polished
-  // main image takes the rough photo's place in the first slot. The inputs
-  // are looked up again before each image, because the page re-renders its
-  // slots as uploads land.
+  // main image takes the rough photo's place in the first slot.
+  //
+  // Jumia only adds the next empty slot once the previous upload is in, so
+  // each image waits for its slot to appear. It used to fall back to the
+  // last slot there was, which put the 4th image over the 3rd (live,
+  // 2026-10-02). Slots are found by position, looked up again each time,
+  // because the page re-renders them as uploads land.
 
   function imageFileInputs() {
     return [...document.querySelectorAll('input[type="file"]')]
@@ -80,11 +84,11 @@
     let placed = 0;
     const errors = [];
     for (let i = 0; i < images.length; i++) {
-      const inputs = imageFileInputs();
-      // Fewer slots than images: the last one, which on a full form is
-      // usually the "add another photo" input.
-      const input = inputs[i] || inputs[inputs.length - 1];
-      if (!input) break;
+      const input = await waitForSlot(i, 20000);
+      if (!input) {
+        errors.push(`slot ${i + 1} didn't appear`);
+        break;
+      }
       try {
         const blob = await (await fetch(images[i].dataUrl)).blob();
         const file = new File([blob], images[i].name || `pandaworld-${i + 1}.jpg`, { type: "image/jpeg" });
@@ -101,6 +105,17 @@
       }
     }
     return { ok: placed > 0, placed, error: errors[0] };
+  }
+
+  /** The image input at position `index`, once the page has rendered it. */
+  async function waitForSlot(index, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const input = imageFileInputs()[index];
+      if (input) return input;
+      if (Date.now() > deadline) return null;
+      await sleep(300);
+    }
   }
 
   // ── Harvest ────────────────────────────────────────────────────────────────
