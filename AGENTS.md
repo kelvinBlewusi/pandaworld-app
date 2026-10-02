@@ -745,6 +745,14 @@ only appear while billing is off.
   category and never mirror weight into `weight_kg`, so a switched shower
   cream lost its weight. It now carries values the new category also has
   (if allowed there) and fills empty weight/size columns.
+- **Dashboard FAQ (2026-10-02)**: `/extension/faq`
+  (app/extension/(app)/faq/page.tsx), linked from the extension sidebar.
+  Its Credits section only renders while billing is on, and every number
+  comes from lib/billing/credit-packs.ts; keep answers in step with the bot.
+  The WhatsApp guide shows both ways of sending a batch with the example
+  image (components/marketing/whatsapp-sending-modes.tsx, `sendingModes`
+  in lib/marketing/guides.ts). The landing page's "List from WhatsApp"
+  goes to /extension/whatsapp-listings (through sign-up when signed out).
 - **Option values after a category switch (2026-10-02)**: the switch now
   runs the same check a first draft does (`allowedValueFor` in
   lib/jumia/preflight.ts): AI values snapped to the allowed spelling or

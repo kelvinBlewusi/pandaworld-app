@@ -31,11 +31,7 @@ const primaryNav = [
   { href: "/how-to",               label: "Guides",       icon: BookOpen },
 ];
 
-// Content for this doesn't exist yet — shown so the shell reads complete,
-// but deliberately inert (no href, no click) rather than a broken link.
-const comingSoonNav = [
-  { label: "FAQ", icon: HelpCircle },
-];
+const faqItem = { href: "/extension/faq", label: "FAQ", icon: HelpCircle };
 
 const settingsItem = { href: "/extension/settings", label: "Settings", icon: Settings };
 
@@ -88,22 +84,6 @@ function SupportNavItem() {
   );
 }
 
-function ComingSoonItem({ label, icon: Icon }: { label: string; icon: React.ElementType }) {
-  return (
-    <div
-      className="flex cursor-not-allowed items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-zinc-300"
-      aria-disabled="true"
-      title="Coming soon"
-    >
-      <Icon className="h-4 w-4 shrink-0" />
-      <span className="flex-1">{label}</span>
-      <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-zinc-400">
-        Soon
-      </span>
-    </div>
-  );
-}
-
 export function ExtensionSidebar({ onClose, isAdmin = false }: { onClose?: () => void; isAdmin?: boolean }) {
   const { user } = useUser();
 
@@ -149,9 +129,7 @@ export function ExtensionSidebar({ onClose, isAdmin = false }: { onClose?: () =>
           <div className="mb-3 h-px bg-zinc-100" />
         </div>
 
-        {comingSoonNav.map((item) => (
-          <ComingSoonItem key={item.label} {...item} />
-        ))}
+        <NavItem {...faqItem} />
         <SupportNavItem />
 
         {isAdmin && (

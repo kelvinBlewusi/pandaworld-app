@@ -42,13 +42,16 @@ const JUMIA_COLOR = "#c2660a";
 interface ExtensionHeroBackdropProps {
   signInHref: string;
   signUpHref: string;
+  /** "List from WhatsApp": the dashboard page of that name, through sign-up
+   *  for a visitor who isn't signed in. */
+  whatsappHref: string;
   ctaHref: string;
   ctaLabel: string;
   calculatorHref: string;
   pricingLive?: boolean;
 }
 
-export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabel, calculatorHref, pricingLive }: ExtensionHeroBackdropProps) {
+export function ExtensionHeroBackdrop({ signInHref, signUpHref, whatsappHref, ctaHref, ctaLabel, calculatorHref, pricingLive }: ExtensionHeroBackdropProps) {
   return (
     <section className="relative w-full bg-white" style={{ color: "#1c1917" }}>
       <HomeFloatingNav signInHref={signInHref} signUpHref={signUpHref} calculatorHref={calculatorHref} pricingLive={pricingLive} />
@@ -81,7 +84,7 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
               tool works in two ways; the first is automating listings by uploading products
               on{" "}
               <Link
-                href={signUpHref}
+                href={whatsappHref}
                 className="font-medium transition-colors hover:text-orange-700"
                 style={{ color: ACCENT_TEXT }}
               >
@@ -109,7 +112,7 @@ export function ExtensionHeroBackdrop({ signInHref, signUpHref, ctaHref, ctaLabe
                 <ArrowRight className="h-4 w-4" />
               </Link>
               <Link
-                href={signUpHref}
+                href={whatsappHref}
                 className="inline-flex items-center justify-center gap-2 rounded-full border px-7 py-4 text-base text-zinc-700 transition-colors hover:border-zinc-400 hover:bg-zinc-50"
                 style={{ borderColor: "#e7e5e4" }}
               >

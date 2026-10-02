@@ -38,6 +38,7 @@ const PAGE_TITLES: Record<string, string> = {
   "/extension/calculator": "Calculator",
   "/extension/listings": "Autofill Activity",
   "/extension/settings": "Settings",
+  "/extension/faq": "FAQ",
 };
 
 const TYPE_DOT: Record<CreditTransaction["type"], string> = {

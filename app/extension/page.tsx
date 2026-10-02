@@ -7,7 +7,7 @@ import { ExtensionHeroBackdrop } from "@/components/marketing/extension-hero-bac
 import { LoopingVideo } from "@/components/marketing/looping-video";
 import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 import { isBillingEnabled } from "@/lib/billing/mode";
-import { CALCULATOR_HREF } from "@/lib/marketing/links";
+import { CALCULATOR_HREF, WHATSAPP_LISTINGS_HREF, WHATSAPP_SIGN_UP_HREF } from "@/lib/marketing/links";
 import { FREE_SIGNUP_CREDITS } from "@/lib/billing/credit-packs";
 
 // ─── /extension — public page for the Chrome extension + WhatsApp flows ──────
@@ -245,6 +245,7 @@ export async function ExtensionPage() {
       <ExtensionHeroBackdrop
         signInHref={signInHref}
         signUpHref={`/sign-up?redirect_url=${DASHBOARD_REDIRECT}`}
+        whatsappHref={userId ? WHATSAPP_LISTINGS_HREF : WHATSAPP_SIGN_UP_HREF}
         ctaHref={ctaHref}
         ctaLabel={ctaLabel}
         calculatorHref={calculatorHref}
