@@ -96,8 +96,12 @@ export interface Remedy {
  * message and redrafted, which can't help, instead of dropping the fields.
  */
 function isEntirelyNotVisibleAttributeComplaints(msg: string): boolean {
+  // The " | " between them is ours (refreshPendingFeedStatus joining
+  // Jumia's error lists), not another complaint: left in, a rejection that
+  // was nothing but these read as mixed and Fix redrafted the listing.
   const stripped = msg
     .replace(/attribute\s*\[\s*[^\]]+?\s*\]\s+is not visible for category\s*\[\s*[^\]]*\]\.?/gi, "")
+    .replace(/\s*\|\s*/g, " ")
     .trim();
   return stripped === "" || isCutOffNotVisibleComplaint(stripped);
 }
@@ -492,7 +496,8 @@ export function extractNotVisibleAttributeNames(raw: string | null | undefined):
   const names: string[] = [];
   let match: RegExpExecArray | null;
   while ((match = re.exec(msg)) !== null) {
-    names.push(match[1]);
+    // Once each: a stored rejection can repeat its complaints (" | ").
+    if (!names.includes(match[1])) names.push(match[1]);
   }
   // A last complaint cut off when the message was stored, once its clause
   // has begun ("Attribute [warranty_duration] is not visi"): its name counts

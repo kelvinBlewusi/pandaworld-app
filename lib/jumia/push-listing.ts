@@ -650,7 +650,10 @@ function allErrorTexts(rejected: FeedProductInfo[], feedErrors: unknown[]): stri
     if (typeof e === "string") add(e);
     else if (e && typeof e === "object") add(JSON.stringify(e));
   }
-  return out;
+  // Jumia gives the feed's error and each product's own errors, and the
+  // first often already holds the others word for word: every complaint
+  // reached the seller twice (live, 2026-10-02). Kept once, in the longer.
+  return out.filter((t) => !out.some((other) => other !== t && other.includes(t)));
 }
 
 type ResolutionCounts = { liveCount: number; totalCount: number; rejectedSkus: string[] };

@@ -55,6 +55,18 @@ describe("classifyJumiaRejection", () => {
     expect(classifyJumiaRejection(stored.replace(/ is not visi$/, " is not visible for category [Educational Tablets]. The column [x")).kind).toBe("rerun");
   });
 
+  // The freezer's rejection as stored on 2026-10-02: Jumia's feed error,
+  // then each product error again, joined with " | ". Read as mixed, Fix
+  // redrafted the listing instead of resubmitting it.
+  it("classifies a not-visible rejection repeated with \" | \" as a cache correction", () => {
+    const one = (a: string) => `Attribute [${a}] is not visible for category [Refrigerators].`;
+    const names = ["warranty_type", "product_line", "storage_features", "capacity_litres"];
+    const stored = [names.map(one).join(" "), ...names.map(one)].join(" | ");
+    expect(classifyJumiaRejection(stored).kind).toBe("not_visible_attributes");
+    expect(extractNotVisibleAttributeNames(stored)).toEqual(names);
+    expect(classifyJumiaRejection(`${stored} | The column [product_weight] is missing from the file.`).kind).toBe("rerun");
+  });
+
   // A mixed rejection — a not-visible attribute alongside a different kind
   // of problem — means more than a stale cache is wrong, so it should
   // still fall through to a full rerun rather than only clearing the
