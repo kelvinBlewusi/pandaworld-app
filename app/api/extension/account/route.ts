@@ -10,8 +10,7 @@
 import { NextResponse } from "next/server";
 import { authenticateExtensionKey } from "@/lib/security/extension-keys";
 import { getOrCreateCreditBalance, getMostRecentCreditPack } from "@/lib/billing/extension-credits";
-import { IMAGE_CREDIT_COST, serializeCredits } from "@/lib/billing/credit-packs";
-import { PRODUCT_SHOTS } from "@/lib/gemini-image";
+import { serializeCredits } from "@/lib/billing/credit-packs";
 import { isAdmin } from "@/lib/auth/is-admin";
 import { hasFeature } from "@/lib/billing/features";
 import { visitorJumiaCountry } from "@/lib/marketing/visitor-country";
@@ -59,8 +58,6 @@ export async function GET(req: Request) {
       // The panel's pack tools (Pro and up, lib/billing/features.ts). Panels
       // before 0.2.53 show Polish images from isAdmin instead.
       features:         { imagePolish, feeCalculator },
-      // What one Polish images run costs at most (app/api/extension/polish-images).
-      polishCredits:    PRODUCT_SHOTS.length * IMAGE_CREDIT_COST,
       country:          { code: country?.code ?? "GH", name: country?.name ?? "Ghana" },
       isAdmin:          isAdmin(userId),
     },

@@ -556,7 +556,7 @@ on a QC rejection points to the editor and the packs. Pro and Business
 add the extension's image polish (`image_polish_extension`, IMAGE_CREDIT_COST
 per image that comes back) and its price calculator for the seller's own
 country (`fee_calc_extension`), both live 2026-10-02: GET
-/api/extension/account returns `features`, `polishCredits` and `country`
+/api/extension/account returns `features` and `country`
 for the panel, and the polish route checks `hasFeature` itself. They also
 list three features not built yet (order alerts, shipping labels and the
 fee calculator on WhatsApp), greyed out with no "soon" label (owner's call).
@@ -798,8 +798,8 @@ only appear while billing is off.
 - **Polish images in the extension (2026-10-02; Pro and Business since
   0.2.53, admins only before)**: the side panel shows a "Polish images"
   section when GET /api/extension/account returns
-  `features.imagePolish` (panels before 0.2.53 read `isAdmin`), with the
-  most a run costs on the button (`polishCredits`). It harvests the uploaded photos
+  `features.imagePolish` (panels before 0.2.53 read `isAdmin`). The button
+  doesn't show the price (owner's call); the credits are deducted after. It harvests the uploaded photos
   (same HARVEST as autofill), shrinks them to ≤1536px JPEG, and POSTs up to
   3 to /api/extension/polish-images (API key auth, `isAdmin` enforced
   there too, public in middleware). That calls `generateProductShots`

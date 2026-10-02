@@ -187,9 +187,6 @@ async function refreshAccount(apiKey) {
   // that doesn't send `features` yet still shows Polish to admins.
   const features = resp.data.features;
   $("polishSection").hidden = !(features ? features.imagePolish : resp.data.isAdmin);
-  $("polishBtn").textContent = resp.data.polishCredits && !resp.data.unlimitedCredits
-    ? `🪄 Polish images · ${resp.data.polishCredits} credits`
-    : "🪄 Polish images";
   setUpCalculator(features?.feeCalculator ? resp.data.country : null);
   return true;
 }

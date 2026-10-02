@@ -120,10 +120,9 @@ it("returns the four shots from up to three photos, with the seller's notes as c
 });
 
 describe("the panel's account", () => {
-  it("shows a Pro buyer both tools, the polish price, and their own country's calculator", async () => {
+  it("shows a Pro buyer both tools and their own country's calculator", async () => {
     const body = await accountFor("user_pro");
     expect(body.features).toEqual({ imagePolish: true, feeCalculator: true });
-    expect(body.polishCredits).toBe(4 * IMAGE_CREDIT_COST);
     expect(body.country).toEqual({ code: "NG", name: "Nigeria" });
   });
 
