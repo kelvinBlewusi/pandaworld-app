@@ -33,6 +33,9 @@ export interface Guide {
   videoId: string | null;
   /** A recording we host ourselves, shown instead of the YouTube slot. */
   recording?: "whatsapp-flow";
+  /** Show the two ways to send a batch, with the worked example image
+   *  (components/marketing/whatsapp-sending-modes.tsx). */
+  sendingModes?: boolean;
 }
 
 export const GUIDES: Guide[] = [
@@ -97,12 +100,13 @@ export const GUIDES: Guide[] = [
     intro: "List products by sending photos in a chat — no laptop needed. Requires both guides above done first.",
     steps: [
       "Message +233548534323 and tell the bot how many products you're listing — reply with a number, like 3.",
-      "For each product, send its photos together with a note about anything that matters: price, colour, what's in the box.",
+      "Pick how you'll send them: I, all at once, each product followed by its number, or II, with the bot guiding you through each one. Both are explained below. Either way, give each product's price and anything the photos don't show: colour, sizes, what's in the box.",
       "The AI drafts every listing and messages you back once they're ready — usually within a couple of minutes.",
       "Review each draft, then reply submit for one product, or submit all to push everything to Jumia at once.",
     ],
     videoId: null,
     recording: "whatsapp-flow",
+    sendingModes: true,
   },
 ];
 

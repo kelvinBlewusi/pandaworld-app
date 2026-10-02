@@ -6,6 +6,7 @@ import { HomeFloatingNav } from "@/components/marketing/home-floating-nav";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { GuideMedia } from "@/components/marketing/guide-media";
 import { GuideSteps } from "@/components/marketing/guide-steps";
+import { WhatsAppSendingModes } from "@/components/marketing/whatsapp-sending-modes";
 import { BreadcrumbLd } from "@/components/marketing/breadcrumb-ld";
 import { isBillingEnabled } from "@/lib/billing/mode";
 import { GUIDES, getGuide } from "@/lib/marketing/guides";
@@ -65,6 +66,12 @@ export default async function GuidePage({ params }: { params: { slug: string } }
         <div className="mt-4">
           <GuideSteps steps={guide.steps} />
         </div>
+
+        {guide.sendingModes && (
+          <div className="mt-10">
+            <WhatsAppSendingModes />
+          </div>
+        )}
 
         <div className="mt-10">
           <GuideMedia guide={guide} />
