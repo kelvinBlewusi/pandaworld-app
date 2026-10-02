@@ -143,19 +143,44 @@ function replyCta(to: string, bodyText: string, buttonText: string, url: string)
   return sendCtaUrlIfConfigured(to, bodyText, buttonText, url);
 }
 
-// Meta's caps on an interactive message's body: 1024 characters for reply
-// buttons and a link button, 4096 for a list. Over them the send fails
-// outright, so long text falls back to plain text plus a short message.
-const BUTTON_BODY_MAX = 1024;
-const LIST_BODY_MAX   = 4096;
+// Meta's caps on a message's text: 1024 characters for an interactive
+// body (reply buttons, a link button and a list alike) and 4096 for plain
+// text. Over them the send fails outright, so long text goes as plain text
+// plus a short interactive message. A list's cap was taken to be 4096
+// until a 20-product batch summary of 1,731 was refused (live, 2026-10-02).
+const INTERACTIVE_BODY_MAX = 1024;
+const TEXT_MAX             = 4096;
+
+/** Plain text, split at line breaks into as many messages as it needs. */
+async function replyLongText(to: string, text: string): Promise<void> {
+  let chunk = "";
+  for (const line of text.split("\n")) {
+    if (chunk && chunk.length + 1 + line.length > TEXT_MAX) {
+      await replyText(to, chunk);
+      chunk = "";
+    }
+    chunk = chunk ? `${chunk}\n${line}` : line.slice(0, TEXT_MAX);
+  }
+  if (chunk) await replyText(to, chunk);
+}
+
+/**
+ * The body an interactive message can carry: `text` itself when it fits,
+ * otherwise `text` goes first as plain text and the message gets `short`.
+ */
+async function fitInteractiveBody(to: string, text: string, short: string): Promise<string> {
+  if (text.length <= INTERACTIVE_BODY_MAX) return text;
+  await replyLongText(to, text);
+  return short;
+}
 
 /** A link button carrying the whole text, or plain text then the button when it's too long. */
 async function replyCtaOrSplit(to: string, bodyText: string, buttonText: string, url: string): Promise<void> {
-  if (bodyText.length <= BUTTON_BODY_MAX) {
+  if (bodyText.length <= INTERACTIVE_BODY_MAX) {
     await replyCta(to, bodyText, buttonText, url);
     return;
   }
-  await replyText(to, bodyText);
+  await replyLongText(to, bodyText);
   await replyCta(to, "Tap below:", buttonText, url);
 }
 
@@ -692,7 +717,7 @@ const BATCH_DONE_TEXT =
 
 /** The sign-off, after the per-product lines in the same message when there are any. */
 function sendBatchDoneMessage(phoneNumber: string, resultLines: string[] = []): Promise<void> {
-  return replyText(phoneNumber, [...resultLines, ...(resultLines.length ? [""] : []), BATCH_DONE_TEXT].join("\n"));
+  return replyLongText(phoneNumber, [...resultLines, ...(resultLines.length ? [""] : []), BATCH_DONE_TEXT].join("\n"));
 }
 
 async function handleGlobalRestart(userId: string, phoneNumber: string): Promise<void> {
@@ -935,13 +960,15 @@ async function sendStatusReply(
   phoneNumber: string,
   status: { text: string; cta?: { label: string; url: string }; buttons?: { id: string; title: string }[] },
 ): Promise<void> {
+  // A big batch's status runs one line per product, past what a button
+  // message holds: the text then goes on its own.
   if (status.cta) {
-    await replyCta(phoneNumber, status.text, status.cta.label, status.cta.url);
+    await replyCtaOrSplit(phoneNumber, status.text, status.cta.label, status.cta.url);
     if (status.buttons) await replyButtons(phoneNumber, "Quick actions:", status.buttons);
   } else if (status.buttons) {
-    await replyButtons(phoneNumber, status.text, status.buttons);
+    await replyButtons(phoneNumber, await fitInteractiveBody(phoneNumber, status.text, "Quick actions:"), status.buttons);
   } else {
-    await replyText(phoneNumber, status.text);
+    await replyLongText(phoneNumber, status.text);
   }
 }
 
@@ -2560,7 +2587,7 @@ export async function finalizeBatch(
           `Edit it here: ${focusedEditorUrl(only.id)}\n\n` +
           `Reply *submit*, or say something like "change the price to 150" to edit it first.`;
         const buttons = [{ id: "submit all", title: "Submit ✅" }, { id: "restart", title: "Restart 🔄" }];
-        if (body.length <= BUTTON_BODY_MAX) {
+        if (body.length <= INTERACTIVE_BODY_MAX) {
           await replyButtons(phoneNumber, body, buttons);
         } else {
           await replyCta(phoneNumber, `✅ Product drafted: ${only.title}. Ready to submit!`, "Edit product", focusedEditorUrl(only.id));
@@ -2757,38 +2784,51 @@ export async function finalizeBatch(
   //
   // Up to two ready products fit reply buttons ("Submit all" + one each),
   // which render inline. More go in a list, which holds ten rows in one
-  // message: "Submit all", the products, and Restart. A body too long for
-  // either (a big batch with long Held reasons) falls back to the status
-  // text on its own, then the closing buttons.
+  // message: "Submit all", the products, and Restart. Status lines too long
+  // for an interactive body (about a dozen products) go first as plain
+  // text, and the buttons or list carry just the closing line.
   const closing = `${headline} Reply *submit all* when ready — or tell me a product number (e.g. *submit 2*) to submit just one.`;
   const body = [statusText, closing].filter(Boolean).join("\n\n");
   const submitAll = { id: "submit all", title: "Submit all ✅" };
   const restart   = { id: "restart",    title: "Restart 🔄" };
 
-  if (readyListings.length <= 2 && body.length <= BUTTON_BODY_MAX) {
-    await replyButtons(
-      phoneNumber,
-      body,
-      readyListings.length === 2
-        ? [submitAll, ...readyListings.map((l) => ({ id: `submit ${l.whatsapp_seq}`, title: `Submit product ${l.whatsapp_seq}` }))]
-        : [submitAll, restart],
-    );
-  } else if (readyListings.length > 2 && body.length <= LIST_BODY_MAX) {
-    // Rows past the ninth would overflow the list: "submit N" still works typed.
-    await replyList(phoneNumber, body, "Submit", [
-      { id: "submit all", title: "Submit all ✅", description: `All ${readyListings.length} ready products` },
-      ...readyListings.slice(0, LIST_MAX_ROWS - 2).map((l) => ({
-        id:          `submit ${l.whatsapp_seq}`,
-        title:       `Submit product ${l.whatsapp_seq}`,
-        // The row's own subtitle — a product number alone tells a seller
-        // nothing about which product it is.
-        description: l.title as string,
-      })),
-      { id: "restart", title: "Restart 🔄", description: "Start a new batch" },
-    ]);
-  } else {
-    if (statusText) await replyText(phoneNumber, statusText);
-    await replyButtons(phoneNumber, closing, [submitAll, restart]);
+  let statusSent = false;
+  try {
+    let actionBody = body;
+    if (body.length > INTERACTIVE_BODY_MAX) {
+      if (statusText) await replyLongText(phoneNumber, statusText);
+      statusSent = true;
+      actionBody = closing;
+    }
+    if (readyListings.length <= 2) {
+      await replyButtons(
+        phoneNumber,
+        actionBody,
+        readyListings.length === 2
+          ? [submitAll, ...readyListings.map((l) => ({ id: `submit ${l.whatsapp_seq}`, title: `Submit product ${l.whatsapp_seq}` }))]
+          : [submitAll, restart],
+      );
+    } else {
+      // Rows past the ninth would overflow the list: "submit N" still works typed.
+      await replyList(phoneNumber, actionBody, "Submit", [
+        { id: "submit all", title: "Submit all ✅", description: `All ${readyListings.length} ready products` },
+        ...readyListings.slice(0, LIST_MAX_ROWS - 2).map((l) => ({
+          id:          `submit ${l.whatsapp_seq}`,
+          title:       `Submit product ${l.whatsapp_seq}`,
+          // The row's own subtitle — a product number alone tells a seller
+          // nothing about which product it is.
+          description: l.title as string,
+        })),
+        { id: "restart", title: "Restart 🔄", description: "Start a new batch" },
+      ]);
+    }
+  } catch (e) {
+    // The seller must hear the batch is done whatever Meta makes of the
+    // buttons: the closing line spells out every command as text. A failed
+    // send here used to end the batch in silence, already marked finished
+    // so nothing retried it (live, 2026-10-02).
+    console.error(`[whatsapp intake] batch ${batchId} summary didn't send, sending it as text: ${(e as Error).message}`);
+    await replyLongText(phoneNumber, statusSent ? closing : body);
   }
 
   if (!(await askForNextMissingPrice(phoneNumber, batchId))) {
@@ -3039,7 +3079,7 @@ async function handleSubmit(
       // Plain text first (a long list of "already submitted" lines can
       // exceed the interactive-message body cap), then a short, fixed-
       // length CTA so this never dead-ends either.
-      await replyText(phoneNumber, alreadySubmittedMessages.join("\n"));
+      await replyLongText(phoneNumber, alreadySubmittedMessages.join("\n"));
       await replyCta(phoneNumber, "Check what's left:", "Review listings", whatsappListingsUrl(batchId));
     }
     return;
@@ -3186,7 +3226,7 @@ async function handleSubmit(
       }
     }
 
-    await replyText(phoneNumber, resultLines.join("\n"));
+    await replyLongText(phoneNumber, resultLines.join("\n"));
 
     if (shortOfCredits) {
       await replyCta(
@@ -3224,11 +3264,12 @@ async function handleSubmit(
           notSent.map((item) => ({ id: `edit:${item.listingId}`, title: `Edit product ${item.seq}`.slice(0, 20) })),
         );
       } else {
+        const firstBody = await fitInteractiveBody(phoneNumber, body, "Tap a product to fix it:");
         for (let idx = 0; idx < notSent.length; idx += LIST_MAX_ROWS) {
           const chunk = notSent.slice(idx, idx + LIST_MAX_ROWS);
           await replyList(
             phoneNumber,
-            idx === 0 ? body : "…and the rest:",
+            idx === 0 ? firstBody : "…and the rest:",
             "Pick a product",
             chunk.map((item) => ({
               id:    `edit:${item.listingId}`,
