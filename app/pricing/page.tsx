@@ -9,6 +9,7 @@ import { CALCULATOR_HREF } from "@/lib/marketing/links";
 import {
   CREDIT_PACKS,
   FREE_SIGNUP_CREDITS,
+  IMAGE_CREDIT_COST,
   LISTING_CREDIT_COST,
   LIVE_LISTING_CREDIT_COST,
   POPULAR_PACK_ID,
@@ -244,7 +245,7 @@ export default async function PricingPage() {
             />
             <FAQ
               q="What do the bigger packs unlock?"
-              a="Buying the Standard pack or bigger once unlocks Jumia QC rejection alerts and guided fixes for good: when Jumia's quality check rejects a listing after accepting it, we tell you why, return its credits, and help you fix and resubmit it. The greyed-out tools listed with Pro and Business aren't available yet."
+              a={`Buying the Standard pack or bigger once unlocks Jumia QC rejection alerts and guided fixes for good: when Jumia's quality check rejects a listing after accepting it, we tell you why, return its credits, and help you fix and resubmit it. Pro and Business add two tools to the Chrome extension: image polish, which turns your rough photos into four product images (${IMAGE_CREDIT_COST} credits per image), and the Jumia fee calculator for your country. The greyed-out tools aren't available yet.`}
             />
             <FAQ
               q="Why is the Chrome extension charged per autofill?"

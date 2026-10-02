@@ -119,10 +119,10 @@
       <ul id="results" class="results"></ul>
       <div id="warnings" class="warnings"></div>
 
-      <!-- Polish images — admin-only prototype, shown when the account
-           says isAdmin (GET /api/extension/account). Turns the rough photos
-           uploaded on the form into 4 product images and puts them in
-           Jumia's image slots. -->
+      <!-- Polish images — Pro and Business packs, shown when the account
+           says features.imagePolish (GET /api/extension/account). Turns the
+           rough photos uploaded on the form into 4 product images and puts
+           them in Jumia's image slots. -->
       <section class="polish" id="polishSection" hidden>
         <div class="polishHead">
           <span class="polishTitle">Polish images</span>
@@ -136,6 +136,15 @@
         <div id="polishGrid" class="polishGrid" hidden></div>
       </section>
     </div>
+
+    <!-- Jumia price calculator — Pro and Business packs (account
+         features.feeCalculator), for the seller's own country only: the
+         site's calculator for that country, loaded when opened. Outside the
+         main form so it works on any tab. -->
+    <details class="calc" id="calcSection" hidden>
+      <summary><span class="calcTitle">🧮 Price calculator</span><span class="calcCountry" id="calcCountry"></span></summary>
+      <iframe id="calcFrame" title="Jumia price calculator"></iframe>
+    </details>
 
     <footer class="linksFooter">
       <a href="#" id="footerDashboard">Dashboard</a>

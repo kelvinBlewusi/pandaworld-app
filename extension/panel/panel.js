@@ -143,6 +143,7 @@ function setPlanText(plan) {
 // ── View state ───────────────────────────────────────────────────────────────
 function showConnectScreen(errorText) {
   $("statusRow").hidden = true;
+  $("calcSection").hidden = true;
   $("connectScreen").hidden = false;
   $("mainForm").hidden = true;
   const err = $("connectError");
@@ -182,10 +183,47 @@ async function refreshAccount(apiKey) {
   }
   setPlanText(resp.data.plan);
   setCreditsText(resp.data.credits, resp.data.unlimitedCredits);
-  // Admin-only tools (Polish images) — the server checks again on use.
-  $("polishSection").hidden = !resp.data.isAdmin;
+  // The Pro and Business tools; the server checks again on use. A server
+  // that doesn't send `features` yet still shows Polish to admins.
+  const features = resp.data.features;
+  $("polishSection").hidden = !(features ? features.imagePolish : resp.data.isAdmin);
+  $("polishBtn").textContent = resp.data.polishCredits && !resp.data.unlimitedCredits
+    ? `🪄 Polish images · ${resp.data.polishCredits} credits`
+    : "🪄 Polish images";
+  setUpCalculator(features?.feeCalculator ? resp.data.country : null);
   return true;
 }
+
+// ── Price calculator (Pro and Business) ─────────────────────────────────────
+//
+// The site's calculator for the seller's own country (/embed/calculator),
+// in a frame, with no way to switch country. Loaded the first time it's
+// opened; the page reports its height so the frame fits it.
+
+let calcCountry = null;
+function setUpCalculator(country) {
+  $("calcSection").hidden = !country;
+  if (!country) return;
+  $("calcCountry").textContent = `Jumia ${country.name}`;
+  if (calcCountry === country.code) return;
+  calcCountry = country.code;
+  $("calcFrame").removeAttribute("src");
+  if ($("calcSection").open) loadCalculator();
+}
+function loadCalculator() {
+  const frame = $("calcFrame");
+  if (calcCountry && !frame.getAttribute("src")) {
+    frame.src = `${apiBase}/embed/calculator?country=${encodeURIComponent(calcCountry)}`;
+  }
+}
+$("calcSection").addEventListener("toggle", () => {
+  if ($("calcSection").open) loadCalculator();
+});
+window.addEventListener("message", (e) => {
+  if (e.origin !== new URL(apiBase).origin || e.data?.type !== "pandaworld:embed-height") return;
+  const height = Number(e.data.height);
+  if (height > 0) $("calcFrame").style.height = `${Math.min(height, 2400)}px`;
+});
 
 // ── Jumia tab detection ──────────────────────────────────────────────────────
 /**
@@ -543,6 +581,10 @@ $("polishBtn").addEventListener("click", async () => {
     if (!res.ok || !data?.images) {
       setPolishStatus(data?.error || `Something went wrong (HTTP ${res.status}) — please try again.`, "err");
       return;
+    }
+
+    if (data.creditsRemaining != null || data.unlimitedCredits) {
+      setCreditsText(data.creditsRemaining, data.unlimitedCredits);
     }
 
     // As JPEG, which Jumia takes, whatever format the model returned.

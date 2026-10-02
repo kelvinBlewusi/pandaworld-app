@@ -553,11 +553,15 @@ off. QC follow-up and guided fixes (`qc_fix`) need Standard and up, gated
 completely: below it the feeds cron doesn't check QC at all (no alert, no
 refund), acceptance messages don't promise a QC alert, and Fix & resubmit
 on a QC rejection points to the editor and the packs. Pro and Business
-also list five features not built yet (order alerts and shipping labels on
-WhatsApp, the fee calculator on WhatsApp and the extension panel, image
-polish on the extension), greyed out with no "soon" label (owner's call),
-as "5 more tools" on the buy modal's cards. The pricing FAQ and Terms §4
-say greyed-out features aren't available yet; keep that while any are.
+add the extension's image polish (`image_polish_extension`, IMAGE_CREDIT_COST
+per image that comes back) and its price calculator for the seller's own
+country (`fee_calc_extension`), both live 2026-10-02: GET
+/api/extension/account returns `features`, `polishCredits` and `country`
+for the panel, and the polish route checks `hasFeature` itself. They also
+list three features not built yet (order alerts, shipping labels and the
+fee calculator on WhatsApp), greyed out with no "soon" label (owner's call).
+The pricing FAQ and Terms §4 say greyed-out features aren't available yet;
+keep that while any are.
 
 **Pay when live** (WhatsApp and web listings). Drafts are free; a seller
 only needs enough available credits to draft. `pushListingToJumia` checks
@@ -784,9 +788,18 @@ only appear while billing is off.
   joined with " | " (allErrorTexts now keeps a text once), and that " | "
   made the classifier read it as mixed, so Fix redrafted the listing
   instead of resubmitting.
-- **Polish images, extension prototype (2026-10-02, admins only)**: the
-  side panel shows a "Polish images" section when GET
-  /api/extension/account returns `isAdmin`. It harvests the uploaded photos
+- **Price calculator in the extension (2026-10-02, Pro and Business)**:
+  the panel's "Price calculator" section frames /embed/calculator?country=,
+  the site's calculator for one country with nothing around it and no
+  country switch (app/embed/calculator, public, noindex). The country is
+  `country` from GET /api/extension/account: the seller's Jumia connection,
+  else where the request comes from, else Ghana. The page posts its height
+  (`pandaworld:embed-height`) so the frame fits it; loaded when opened.
+- **Polish images in the extension (2026-10-02; Pro and Business since
+  0.2.53, admins only before)**: the side panel shows a "Polish images"
+  section when GET /api/extension/account returns
+  `features.imagePolish` (panels before 0.2.53 read `isAdmin`), with the
+  most a run costs on the button (`polishCredits`). It harvests the uploaded photos
   (same HARVEST as autofill), shrinks them to ≤1536px JPEG, and POSTs up to
   3 to /api/extension/polish-images (API key auth, `isAdmin` enforced
   there too, public in middleware). That calls `generateProductShots`

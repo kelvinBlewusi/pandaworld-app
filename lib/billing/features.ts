@@ -13,7 +13,7 @@ import { isAdmin } from "@/lib/auth/is-admin";
 import { isBillingEnabled } from "@/lib/billing/mode";
 import { PACK_FEATURES, getCreditPackByCredits, packRank, type CreditPack } from "@/lib/billing/credit-packs";
 
-export type FeatureId = "qc_fix";
+export type FeatureId = "qc_fix" | "image_polish_extension" | "fee_calc_extension";
 
 /** The biggest pack the seller has bought, from their purchase ledger. Null if none. */
 export async function highestPackBought(userId: string): Promise<CreditPack | null> {
