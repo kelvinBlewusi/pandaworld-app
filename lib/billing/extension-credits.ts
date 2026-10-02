@@ -279,6 +279,12 @@ export async function creditPurchase(args: {
 }): Promise<{ ok: true; balance: number; alreadyProcessed?: boolean } | { ok: false; error: string }> {
   const db = createServerClient();
 
+  // A buyer with no balance yet (signed up while billing was off) gets the
+  // welcome credits first, so the ledger reads grant, then purchase. Done
+  // later, inside addToBalance, the grant landed after the purchase it was
+  // added under (live, 2026-10-02).
+  await storedBalance(args.userId);
+
   // Dedupe guard FIRST — the unique index on `reference` makes a second
   // attempt at the same transaction fail here rather than double-crediting.
   const { error: txError } = await db.from("extension_credit_transactions").insert({
