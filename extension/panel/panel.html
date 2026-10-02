@@ -117,6 +117,24 @@
       <div id="status" class="status" aria-live="polite"></div>
       <ul id="results" class="results"></ul>
       <div id="warnings" class="warnings"></div>
+
+      <!-- Polish images — admin-only prototype, shown when the account
+           says isAdmin (GET /api/extension/account). Turns the rough photos
+           uploaded on the form into 4 product images and puts them in
+           Jumia's image slots. -->
+      <section class="polish" id="polishSection" hidden>
+        <div class="polishHead">
+          <span class="polishTitle">Polish images</span>
+          <span class="betaPill">Beta</span>
+        </div>
+        <p class="polishSub">Turns the photos you uploaded into 4 product images (main, angle, lifestyle, detail) and puts them in Jumia's image slots.</p>
+        <button id="polishBtn" class="secondary">🪄 Polish images</button>
+        <div class="progressTrack" id="polishProgress" hidden>
+          <div class="progressBar pulse" style="width: 60%"></div>
+        </div>
+        <div id="polishStatus" class="status" aria-live="polite" hidden></div>
+        <div id="polishGrid" class="polishGrid" hidden></div>
+      </section>
     </div>
 
     <footer class="linksFooter">

@@ -52,8 +52,56 @@
         .catch(onReject(sendResponse));
       return true;
     }
+    if (msg?.type === "PLACE_IMAGES") {
+      placeImages(msg.images || []).then(sendResponse).catch(onReject(sendResponse));
+      return true;
+    }
     return false;
   });
+
+  // ── Place images (the panel's Polish images, admin-only prototype) ─────────
+  //
+  // Puts generated images into the form's image slots the way a file picker
+  // would: a File set on each slot's own <input type=file>, then the change
+  // event the page listens for. Image i goes in slot i, so the polished
+  // main image takes the rough photo's place in the first slot. The inputs
+  // are looked up again before each image, because the page re-renders its
+  // slots as uploads land.
+
+  function imageFileInputs() {
+    return [...document.querySelectorAll('input[type="file"]')]
+      .filter((el) => !el.disabled && (!el.accept || /image|jpe?g|png/i.test(el.accept)));
+  }
+
+  async function placeImages(images) {
+    if (!imageFileInputs().length) {
+      return { ok: false, placed: 0, error: "no image upload slots found on this page" };
+    }
+    let placed = 0;
+    const errors = [];
+    for (let i = 0; i < images.length; i++) {
+      const inputs = imageFileInputs();
+      // Fewer slots than images: the last one, which on a full form is
+      // usually the "add another photo" input.
+      const input = inputs[i] || inputs[inputs.length - 1];
+      if (!input) break;
+      try {
+        const blob = await (await fetch(images[i].dataUrl)).blob();
+        const file = new File([blob], images[i].name || `pandaworld-${i + 1}.jpg`, { type: "image/jpeg" });
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        input.files = dt.files;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        placed++;
+        await sleep(900); // let the page start this upload before the next slot
+      } catch (e) {
+        errors.push(e?.message || String(e));
+        console.warn(LOG, "place image failed:", e);
+      }
+    }
+    return { ok: placed > 0, placed, error: errors[0] };
+  }
 
   // ── Harvest ────────────────────────────────────────────────────────────────
 

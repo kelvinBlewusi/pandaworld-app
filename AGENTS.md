@@ -745,6 +745,20 @@ only appear while billing is off.
   category and never mirror weight into `weight_kg`, so a switched shower
   cream lost its weight. It now carries values the new category also has
   (if allowed there) and fills empty weight/size columns.
+- **Polish images, extension prototype (2026-10-02, admins only)**: the
+  side panel shows a "Polish images" section when GET
+  /api/extension/account returns `isAdmin`. It harvests the uploaded photos
+  (same HARVEST as autofill), shrinks them to ≤1536px JPEG, and POSTs up to
+  3 to /api/extension/polish-images (API key auth, `isAdmin` enforced
+  there too, public in middleware). That calls `generateProductShots`
+  (lib/gemini-image.ts, Gemini 2.5 Flash Image, one call per shot in
+  parallel: main on white, angle, lifestyle, detail) and returns public
+  URLs. The panel squares each (pad for white shots, crop for scenes),
+  converts to JPEG, shows a grid with Save links, then sends PLACE_IMAGES:
+  content.js sets each File on the slot's `<input type=file>` and fires
+  change. Not yet tried against live Vendor Center; the Save links are the
+  fallback. No credits charged. The request goes from the panel, not the
+  worker, because generation takes ~30s.
 - **Dashboard FAQ (2026-10-02)**: `/extension/faq`
   (app/extension/(app)/faq/page.tsx), linked from the extension sidebar.
   Its Credits section only renders while billing is on, and every number

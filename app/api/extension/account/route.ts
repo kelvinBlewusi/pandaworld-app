@@ -11,6 +11,7 @@ import { NextResponse } from "next/server";
 import { authenticateExtensionKey } from "@/lib/security/extension-keys";
 import { getOrCreateCreditBalance, getMostRecentCreditPack } from "@/lib/billing/extension-credits";
 import { serializeCredits } from "@/lib/billing/credit-packs";
+import { isAdmin } from "@/lib/auth/is-admin";
 
 export const runtime = "nodejs";
 
@@ -42,7 +43,8 @@ export async function GET(req: Request) {
 
   const credits = serializeCredits(balance);
   return NextResponse.json(
-    { plan, credits: credits.value, unlimitedCredits: credits.unlimited },
+    // isAdmin turns on the panel's admin-only tools (Polish images).
+    { plan, credits: credits.value, unlimitedCredits: credits.unlimited, isAdmin: isAdmin(authResult.userId) },
     { status: 200, headers: CORS },
   );
 }
