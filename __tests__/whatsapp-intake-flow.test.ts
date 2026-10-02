@@ -19,17 +19,35 @@ jest.mock("@/lib/supabase/server", () => ({
   createServerClient: () => db,
 }));
 
+// Meta's caps on a message's text, refused the way the Graph API refuses
+// them (a 400, nothing sent): 4096 for plain text, 1024 for any
+// interactive body. A 20-product summary of 1,731 in a list was refused
+// live (2026-10-02), so every test here holds the bot to them.
+function metaAccepts(body: string, max: number): void {
+  if (body.length < 1 || body.length > max) {
+    throw new Error(`WhatsApp send failed (400): Body text length invalid. Min length: 1, Max length: ${max} (got ${body.length})`);
+  }
+}
+// Settable per test: the next list send fails as Meta would refuse it.
+let failNextList = false;
+
 jest.mock("@/lib/whatsapp/client", () => ({
-  sendTextIfConfigured:    async (to: string, body: string) => { sent.push({ to, body, kind: "text" }); },
+  sendTextIfConfigured:    async (to: string, body: string) => { metaAccepts(body, 4096); sent.push({ to, body, kind: "text" }); },
   sendButtonsIfConfigured: async (to: string, body: string, buttons: { id: string }[]) => {
+    metaAccepts(body, 1024);
     sent.push({ to, body, kind: "buttons", rows: buttons.map((b) => b.id) });
   },
-  sendCtaUrlIfConfigured:  async (to: string, body: string) => { sent.push({ to, body, kind: "cta" }); },
+  sendCtaUrlIfConfigured:  async (to: string, body: string) => { metaAccepts(body, 1024); sent.push({ to, body, kind: "cta" }); },
   sendImageIfConfigured:   async (to: string, link: string, caption?: string) => {
     if (failImageSends) throw new Error("WhatsApp send failed (400): media download error");
     sent.push({ to, body: caption ?? "", kind: "image", link });
   },
   sendListIfConfigured:    async (to: string, body: string, _btn: string, rows: { id: string }[]) => {
+    if (failNextList) {
+      failNextList = false;
+      throw new Error("WhatsApp send failed (400): (#131009) Parameter value is not valid");
+    }
+    metaAccepts(body, 1024);
     sent.push({ to, body, kind: "list", rows: rows.map((r) => r.id) });
   },
   LIST_MAX_ROWS: 10,
@@ -279,6 +297,7 @@ beforeEach(() => {
   pushResultFor.clear();
   pushResult = { ok: true };
   pushCallCount = 0;
+  failNextList = false;
   seedSession();
 });
 
@@ -1184,6 +1203,53 @@ describe("message volume on a large batch", () => {
     expect(body).toContain("Product 3: ✅ Ready — Drafted product number 3.");
   });
 
+  // Live, 2026-10-02: a 20-product batch's summary (1,731 characters) went
+  // in one list, Meta refused it, and the batch ended in silence: no
+  // summary, no Submit, no price questions.
+  function seedTwentyLong() {
+    seedDrafted(20);
+    for (const l of db.tables.listings) l.title = `${l.title} - Long Descriptive Name, Extra Words, Adjustable`;
+    db.tables.listings[5].selling_price = null;
+    seedSession({ state: "awaiting_confirmation", batch_size: 20, batch_seq: null });
+    sent.length = 0;
+  }
+
+  it("sends a 20-product summary as text, then the list with just the closing line", async () => {
+    seedTwentyLong();
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 20);
+
+    const status = sent.find((m) => m.kind === "text" && m.body.includes("Product 1: ✅ Ready"))!;
+    expect(status.body).toContain("Product 20: ✅ Ready");
+    const list = sent.find((m) => m.kind === "list")!;
+    expect(list.body).toMatch(/^🎉 Done drafting your 20 products! Reply \*submit all\*/);
+    expect(list.body).not.toContain("Product 1:");
+    expect(list.rows).toHaveLength(10);
+    expect(sent.indexOf(status)).toBeLessThan(sent.indexOf(list));
+    expect(sent.some((m) => m.body.includes("What price are you selling it at?"))).toBe(true);
+  });
+
+  it("still tells the seller the batch is done when Meta refuses the list", async () => {
+    seedTwentyLong();
+    failNextList = true;
+
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 20);
+
+    expect(sent.filter((m) => m.body.includes("Product 1: ✅ Ready"))).toHaveLength(1);
+    expect(sent.some((m) => m.kind === "text" && m.body.includes("Reply *submit all* when ready"))).toBe(true);
+    expect(sent.some((m) => m.body.includes("What price are you selling it at?"))).toBe(true);
+  });
+
+  it("answers status on a 20-product batch", async () => {
+    seedTwentyLong();
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "status" });
+
+    expect(sent.some((m) => m.body.includes("20. Drafted product number 20"))).toBe(true);
+  });
+
   it("ends a Held line with one full stop even when the reason already has one", async () => {
     seedDrafted(2);
     heldReasonsFor.set("listing-1", ['This looks like "Meat" — Jumia blocks that product type in GH, so nothing was sent.']);
@@ -1521,6 +1587,22 @@ describe("handleSubmit — products that fail to push get ONE compiled follow-up
     expect(followUp!.body).toContain("Product 2:");
     expect(followUp!.body).toContain("Product 4:");
     expect(followUp!.rows).toEqual(["edit:listing-2", "edit:listing-4"]);
+  });
+
+  it("lists 20 products that failed to push, their reasons as text first", async () => {
+    seedBatch(20);
+    for (let i = 1; i <= 20; i++) {
+      pushResultFor.set(`listing-${i}`, { ok: false, code: "validation", message: "This category requires Weight (kg). Jumia rejects the whole listing without it." });
+    }
+    seedSession({ state: "awaiting_confirmation", batch_size: 20, batch_seq: null });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "submit all" });
+
+    expect(sent.some((m) => m.kind === "text" && m.body.startsWith("20 products weren't sent to Jumia:"))).toBe(true);
+    const lists = sent.filter((m) => m.kind === "list");
+    expect(lists[0].body).toBe("Tap a product to fix it:");
+    expect(lists.flatMap((l) => l.rows)).toHaveLength(20);
   });
 
   it("uses a list, not buttons, when more than 3 products fail to push", async () => {

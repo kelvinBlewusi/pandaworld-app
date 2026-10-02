@@ -757,6 +757,16 @@ only appear while billing is off.
   category and never mirror weight into `weight_kg`, so a switched shower
   cream lost its weight. It now carries values the new category also has
   (if allowed there) and fills empty weight/size columns.
+- **WhatsApp text caps (2026-10-02)**: Meta refuses (400, nothing sent)
+  any interactive body over 1,024 characters, a list's included, and plain
+  text over 4,096. A 20-product batch summary of 1,731 went in a list and
+  was refused, after the batch was already marked finished, so the seller
+  heard nothing. In lib/whatsapp/intake.ts: `INTERACTIVE_BODY_MAX`,
+  `replyLongText` (splits at line breaks), `fitInteractiveBody` (long text
+  first as plain text, a short body on the buttons/list). Used by the batch
+  summary (which also falls back to plain text if the send fails), the
+  "weren't sent to Jumia" list, the status reply and the submit results.
+  The intake-flow tests' client mock enforces both caps.
 - **Polish images, extension prototype (2026-10-02, admins only)**: the
   side panel shows a "Polish images" section when GET
   /api/extension/account returns `isAdmin`. It harvests the uploaded photos
