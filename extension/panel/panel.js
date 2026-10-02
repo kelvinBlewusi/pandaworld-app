@@ -182,6 +182,8 @@ async function refreshAccount(apiKey) {
   }
   setPlanText(resp.data.plan);
   setCreditsText(resp.data.credits, resp.data.unlimitedCredits);
+  // Admin-only tools (Polish images) — the server checks again on use.
+  $("polishSection").hidden = !resp.data.isAdmin;
   return true;
 }
 
@@ -430,6 +432,145 @@ $("autofill").addEventListener("click", async () => {
     setStatus("Something went wrong — please try again.", "err");
     hideProgress();
   } finally {
+    btn.disabled = false;
+  }
+});
+
+// ── Polish images (admin-only prototype) ────────────────────────────────────
+//
+// Reads the rough photos uploaded on the form (the same HARVEST the
+// autofill uses), sends up to 3 to /api/extension/polish-images, which
+// returns 4 generated product shots, shows them here, and asks the content
+// script to put them in Jumia's image slots (PLACE_IMAGES). Every image can
+// also be saved from the grid, in case the slots can't be filled.
+//
+// The request goes straight from the panel, not through the background
+// worker like FILL: generating four images takes around half a minute,
+// and Chrome may stop an idle worker after 30 seconds.
+
+function setPolishStatus(text, kind = "") {
+  const s = $("polishStatus");
+  s.hidden = !text;
+  s.textContent = text || "";
+  s.className = `status ${kind}`;
+}
+
+/** Load an image (data: or https) into a canvas-ready bitmap. */
+async function loadBitmap(src) {
+  const blob = await (await fetch(src)).blob();
+  return createImageBitmap(blob);
+}
+
+/**
+ * A JPEG data URL of the image, longest side at most `maxSide`, on white
+ * (no transparency). `square` makes it 1:1, as Jumia wants: "pad" centres
+ * it on white (a product shot on white), "crop" takes the centre (a
+ * scene). The model doesn't reliably return squares.
+ */
+async function toJpegDataUrl(src, maxSide, quality, square) {
+  const bmp = await loadBitmap(src);
+  let sx = 0, sy = 0, sw = bmp.width, sh = bmp.height;
+  if (square === "crop") {
+    const side = Math.min(bmp.width, bmp.height);
+    sx = (bmp.width - side) / 2; sy = (bmp.height - side) / 2; sw = side; sh = side;
+  }
+  const scale = Math.min(1, maxSide / Math.max(sw, sh));
+  const w = Math.round(sw * scale), h = Math.round(sh * scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = square === "pad" ? Math.max(w, h) : w;
+  canvas.height = square === "pad" ? Math.max(w, h) : h;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bmp, sx, sy, sw, sh, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+function renderPolishGrid(images) {
+  const grid = $("polishGrid");
+  grid.innerHTML = "";
+  for (const img of images) {
+    const fig = document.createElement("figure");
+    const el = document.createElement("img");
+    el.src = img.dataUrl;
+    el.alt = img.label;
+    const cap = document.createElement("figcaption");
+    const label = document.createElement("span");
+    label.textContent = img.label;
+    const save = document.createElement("a");
+    save.href = img.dataUrl;
+    save.download = img.name;
+    save.textContent = "Save";
+    cap.append(label, save);
+    fig.append(el, cap);
+    grid.appendChild(fig);
+  }
+  grid.hidden = images.length === 0;
+}
+
+$("polishBtn").addEventListener("click", async () => {
+  const btn = $("polishBtn");
+  btn.disabled = true;
+  $("polishGrid").hidden = true;
+  try {
+    const { apiKey } = await chrome.storage.local.get(["apiKey"]);
+    const tab = await activeJumiaTab();
+    if (!apiKey || !tab) {
+      setPolishStatus("Open the Add Products page on Jumia first.", "err");
+      return;
+    }
+
+    setPolishStatus("Reading your photos…");
+    const harvest = await sendToTab(tab.id, { type: "HARVEST" });
+    if (!harvest?.images?.length) {
+      setPolishStatus("No product photo found — upload at least one on Jumia, then try again.", "err");
+      return;
+    }
+    // Shrunk before sending: phone photos are several MB each, past what
+    // one request can carry, and the model needs nowhere near that much.
+    const sources = await Promise.all(harvest.images.slice(0, 3).map(async (i) =>
+      i.dataUrl ? { dataUrl: await toJpegDataUrl(i.dataUrl, 1536, 0.85) } : { httpUrl: i.httpUrl },
+    ));
+
+    setPolishStatus(`Creating 4 product images from ${sources.length} photo${sources.length === 1 ? "" : "s"}… about 30 seconds.`);
+    $("polishProgress").hidden = false;
+    const res = await fetch(`${apiBase}/api/extension/polish-images`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ images: sources, notes: $("notes").value.trim() }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.images) {
+      setPolishStatus(data?.error || `Something went wrong (HTTP ${res.status}) — please try again.`, "err");
+      return;
+    }
+
+    // As JPEG, which Jumia takes, whatever format the model returned.
+    const shots = data.images.filter((s) => s.url);
+    const images = await Promise.all(shots.map(async (s) => ({
+      label:   s.label,
+      name:    `pandaworld-${s.id}.jpg`,
+      dataUrl: await toJpegDataUrl(s.url, 2000, 0.92, s.id === "main" || s.id === "angle" ? "pad" : "crop"),
+    })));
+    renderPolishGrid(images);
+
+    setPolishStatus("Putting them in Jumia's image slots…");
+    const placed = await sendToTab(tab.id, {
+      type:   "PLACE_IMAGES",
+      images: images.map((i) => ({ dataUrl: i.dataUrl, name: i.name })),
+    });
+    const missed = data.images.length - shots.length;
+    const missedNote = missed ? ` (${missed} couldn't be made)` : "";
+    if (placed?.ok && placed.placed > 0) {
+      setPolishStatus(`Done — ${placed.placed} image${placed.placed === 1 ? "" : "s"} added to the listing${missedNote}. Check them on Jumia before you submit.`, "ok");
+    } else {
+      setPolishStatus(`Your ${images.length} images are ready${missedNote}, but I couldn't put them in the slots (${placed?.error || "no image slots found"}). Save them below and add them on Jumia.`, "err");
+    }
+  } catch (e) {
+    console.error("[PandaWorld] polish failed:", e);
+    setPolishStatus("Something went wrong — please try again.", "err");
+  } finally {
+    $("polishProgress").hidden = true;
     btn.disabled = false;
   }
 });

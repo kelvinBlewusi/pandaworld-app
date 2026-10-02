@@ -73,6 +73,8 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 //                            lib/security/extension-keys.ts), not Clerk.
 //   /api/extension/account   — same story: the panel's status row (plan +
 //                            credits), authed by the same API key.
+//   /api/extension/polish-images — the panel's Polish images (admin-only,
+//                            checked inside the route), same API key.
 //   /api/whatsapp/webhook    — incoming WhatsApp Business Cloud API webhook,
 //                            called directly by Meta's servers with no Clerk
 //                            session. Verifies its own X-Hub-Signature-256
@@ -119,6 +121,7 @@ const isPublicRoute = createRouteMatcher([
   '/sell-on-jumia/(.*)',
   '/api/extension/fill',
   '/api/extension/account',
+  '/api/extension/polish-images',
   '/api/whatsapp/webhook',
   // SEO + crawler routes — keep these PUBLIC or Google rejects the
   // sitemap and the OG link previews render as broken images.

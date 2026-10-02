@@ -195,9 +195,10 @@ async function fetchAsInlineImage(
  * Returns the raw image bytes from the first image part in the response.
  */
 async function callGeminiImage(
-  inline: { mimeType: string; data: string },
+  inline: { mimeType: string; data: string } | { mimeType: string; data: string }[],
   prompt: string,
-): Promise<Buffer> {
+  timeoutMs = PER_IMAGE_TIMEOUT_MS,
+): Promise<{ buffer: Buffer; mimeType: string }> {
   const apiKey = process.env.GOOGLE_API_KEY;
   if (!apiKey) throw new Error("GOOGLE_API_KEY is not set");
 
@@ -207,13 +208,14 @@ async function callGeminiImage(
   for (const modelName of PREFERRED_MODELS) {
     try {
       const model = genAI.getGenerativeModel({ model: modelName });
+      const inlines = Array.isArray(inline) ? inline : [inline];
       const result = await Promise.race([
         model.generateContent([
-          { inlineData: inline },
+          ...inlines.map((i) => ({ inlineData: i })),
           { text: prompt },
         ]),
         new Promise<never>((_, rej) =>
-          setTimeout(() => rej(new Error(`Gemini timed out after ${PER_IMAGE_TIMEOUT_MS}ms`)), PER_IMAGE_TIMEOUT_MS),
+          setTimeout(() => rej(new Error(`Gemini timed out after ${timeoutMs}ms`)), timeoutMs),
         ),
       ]);
 
@@ -223,7 +225,7 @@ async function callGeminiImage(
         // emits an image. Text-only responses don't have this shape.
         const inlinePart = (part as { inlineData?: { data: string; mimeType: string } }).inlineData;
         if (inlinePart?.data) {
-          return Buffer.from(inlinePart.data, "base64");
+          return { buffer: Buffer.from(inlinePart.data, "base64"), mimeType: inlinePart.mimeType || "image/png" };
         }
       }
       throw new Error("Gemini returned no image in response");
@@ -262,7 +264,7 @@ export async function enhanceImage(
   const prompt = buildPrompt(opts.mode, opts.productContext);
 
   const t0 = Date.now();
-  const buffer = await callGeminiImage(inline, prompt);
+  const { buffer } = await callGeminiImage(inline, prompt);
   const elapsed = Date.now() - t0;
 
   if (buffer.length < 1024) {
@@ -339,6 +341,93 @@ export async function enhanceImages(
   }
 
   return { enhanced: out };
+}
+
+// ─── Product shots from rough photos (extension "Polish images") ─────────────
+
+/**
+ * The four images the extension's Polish images button makes from a
+ * seller's rough phone photos: Jumia's white-background main image, then
+ * the extra angles a good listing carries. An admin-only prototype for now
+ * (app/api/extension/polish-images/route.ts).
+ */
+export const PRODUCT_SHOTS = [
+  {
+    id:    "main",
+    label: "Main image",
+    brief: "MAIN LISTING IMAGE: the product alone, front view, centred with about 10% margin on every side, on a pure white (#FFFFFF) background, soft even studio lighting and one subtle shadow beneath it. Nothing else in the frame. This is the first image shoppers see on Jumia.",
+  },
+  {
+    id:    "angle",
+    label: "Angle",
+    brief: "ANGLE SHOT: the product alone, turned about 30 to 45 degrees so its side and depth show, on a pure white (#FFFFFF) background, soft studio lighting and a subtle shadow beneath it. Nothing else in the frame.",
+  },
+  {
+    id:    "lifestyle",
+    label: "Lifestyle",
+    brief: "LIFESTYLE SHOT: the product in a realistic, tasteful setting where it is naturally used (a kitchen counter for a kettle, a bathroom shelf for a shower cream, a dressing table for jewellery), natural daylight, a softly blurred background, the product sharp and prominent. If a person helps show it in use, show only hands or crop the face out.",
+  },
+  {
+    id:    "detail",
+    label: "Detail",
+    brief: "DETAIL SHOT: a close-up of the product's most important feature, material or texture (the controls, the fabric, the label), on a clean light background, sharp and well lit, so a shopper can see its quality up close.",
+  },
+] as const;
+
+function productShotPrompt(brief: string, photoCount: number, productContext?: string): string {
+  return (
+    (productContext ? `What the seller says about it (use it, don't invent beyond it): ${productContext}\n\n` : "") +
+    `You are given ${photoCount === 1 ? "a photo" : `${photoCount} photos`} of ONE product, taken by a seller on a phone. ` +
+    `Create a professional e-commerce photo of exactly this product.
+
+PRESERVE THE PRODUCT EXACTLY: the same shape, proportions, colours, materials, patterns, printed text, labels, logos, buttons and parts. Do not add, remove or redesign anything on the product, and never invent a brand or model.${photoCount > 1 ? " The photos show the same product from different sides; use them together to get it right." : ""}
+
+${brief}
+
+Output ONE square (1:1) photorealistic image in sharp focus, with the product as the clear subject. No text, captions, watermarks, price tags, badges, stickers or borders.`
+  );
+}
+
+export interface ProductShot {
+  id:     string;
+  label:  string;
+  /** Public URL of the generated image; absent when this shot failed. */
+  url?:   string;
+  error?: string;
+}
+
+/**
+ * Generate the four PRODUCT_SHOTS from a seller's rough photos, in
+ * parallel (one Gemini call each, every source photo as a reference), and
+ * store each in Supabase Storage. A shot that fails comes back with its
+ * error rather than failing the others.
+ */
+export async function generateProductShots(
+  sources: { mimeType: string; data: string }[],
+  userId:  string,
+  opts: { productContext?: string; timeoutMs?: number } = {},
+): Promise<ProductShot[]> {
+  const db = createServerClient();
+  const stamp = Date.now();
+  return Promise.all(PRODUCT_SHOTS.map(async (shot): Promise<ProductShot> => {
+    try {
+      const t0 = Date.now();
+      const { buffer, mimeType } = await callGeminiImage(
+        sources, productShotPrompt(shot.brief, sources.length, opts.productContext), opts.timeoutMs ?? 50_000,
+      );
+      if (buffer.length < 1024) throw new Error("Gemini returned an empty image");
+      const ext = mimeType.includes("png") ? "png" : mimeType.includes("webp") ? "webp" : "jpg";
+      const storagePath = `${userId}/polished/${stamp}-${shot.id}.${ext}`;
+      const { error } = await db.storage.from(BUCKET).upload(storagePath, buffer, { contentType: mimeType, upsert: false });
+      if (error) throw new Error(`upload failed: ${error.message}`);
+      const { data } = db.storage.from(BUCKET).getPublicUrl(storagePath);
+      console.info(`[gemini-image] shot ${shot.id} ok size=${buffer.length}B elapsed=${Date.now() - t0}ms`);
+      return { id: shot.id, label: shot.label, url: data.publicUrl };
+    } catch (e) {
+      console.warn(`[gemini-image] shot ${shot.id} failed: ${(e as Error).message}`);
+      return { id: shot.id, label: shot.label, error: (e as Error).message };
+    }
+  }));
 }
 
 /**
