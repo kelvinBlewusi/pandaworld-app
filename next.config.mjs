@@ -10,6 +10,11 @@ const nextConfig = {
       },
     ],
   },
+  // Before middleware, so a signed-out visitor isn't asked to sign in
+  // first: the FAQ was briefly at /extension/faq, now public at /faq.
+  async redirects() {
+    return [{ source: "/extension/faq", destination: "/faq", permanent: true }];
+  },
 };
 
 // Sentry wraps the Next.js config to enable source-map upload (so

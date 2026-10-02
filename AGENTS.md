@@ -759,10 +759,13 @@ only appear while billing is off.
   change. Not yet tried against live Vendor Center; the Save links are the
   fallback. No credits charged. The request goes from the panel, not the
   worker, because generation takes ~30s.
-- **Dashboard FAQ (2026-10-02)**: `/extension/faq`
-  (app/extension/(app)/faq/page.tsx), linked from the extension sidebar.
-  Its Credits section only renders while billing is on, and every number
-  comes from lib/billing/credit-packs.ts; keep answers in step with the bot.
+- **FAQ (2026-10-02)**: public at `/faq` (app/faq/page.tsx, content in
+  lib/marketing/faq.tsx with a plain-text copy of each answer for its
+  FAQPage structured data), linked from the extension sidebar and the
+  footer, in the sitemap. The owner wanted it open to everyone; the
+  briefly signed-in /extension/faq redirects there (next.config.mjs). The
+  Credits section only renders while billing is on, every number from
+  lib/billing/credit-packs.ts; keep answers in step with the bot.
   The WhatsApp guide shows both ways of sending a batch with the example
   image (components/marketing/whatsapp-sending-modes.tsx, `sendingModes`
   in lib/marketing/guides.ts). The landing page's "List from WhatsApp"
