@@ -1,6 +1,6 @@
 /**
  * POST /api/extension/polish-images — the extension panel's "Polish images"
- * button (admin-only prototype, 2026-10-02).
+ * button.
  *
  * Takes the rough photos the seller uploaded on Vendor Center's Add
  * Products form (harvested by content.js, up to 3 used) and returns four
@@ -8,16 +8,21 @@
  * PRODUCT_SHOTS: main image on white, angle, lifestyle, detail) as public
  * URLs; the panel puts them into the form's image slots.
  *
- * Auth: a PandaWorld API key, like /api/extension/fill. Admins only
- * (lib/auth/is-admin.ts) until it's priced: four image generations cost
- * far more than a text draft. No credits are charged.
+ * Auth: a PandaWorld API key, like /api/extension/fill. Comes with the Pro
+ * and Business packs (PACK_FEATURES image_polish_extension, from
+ * 2026-10-02; admins only before), and costs IMAGE_CREDIT_COST per image
+ * that comes back, like the review page's photo tools: checked for all
+ * four up front, charged after for those that came back. Admins and
+ * everyone while billing is off pay nothing (lib/billing/mode.ts).
  */
 
 import { NextResponse } from "next/server";
 import { authenticateExtensionKey } from "@/lib/security/extension-keys";
-import { isAdmin } from "@/lib/auth/is-admin";
 import { resolveOneImage } from "@/lib/extension/harvested-images";
-import { generateProductShots, isGeminiImageEnabled } from "@/lib/gemini-image";
+import { generateProductShots, isGeminiImageEnabled, PRODUCT_SHOTS } from "@/lib/gemini-image";
+import { hasFeature, featureMinPackName } from "@/lib/billing/features";
+import { deductCredits, getOrCreateCreditBalance } from "@/lib/billing/extension-credits";
+import { IMAGE_CREDIT_COST, serializeCredits } from "@/lib/billing/credit-packs";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -40,11 +45,24 @@ export async function POST(req: Request) {
   if (!authResult.ok) {
     return NextResponse.json({ error: authResult.error }, { status: 401, headers: CORS });
   }
-  if (!isAdmin(authResult.userId)) {
-    return NextResponse.json({ error: "Image polish isn't available on your account yet." }, { status: 403, headers: CORS });
+  const userId = authResult.userId;
+  if (!(await hasFeature(userId, "image_polish_extension"))) {
+    return NextResponse.json(
+      { error: `Image polish comes with the ${featureMinPackName("image_polish_extension")} and Business credit packs.` },
+      { status: 403, headers: CORS },
+    );
   }
   if (!isGeminiImageEnabled()) {
     return NextResponse.json({ error: "Image generation isn't configured on the server." }, { status: 503, headers: CORS });
+  }
+
+  const needed = PRODUCT_SHOTS.length * IMAGE_CREDIT_COST;
+  const balance = await getOrCreateCreditBalance(userId);
+  if (balance < needed) {
+    return NextResponse.json(
+      { error: `Polishing makes ${PRODUCT_SHOTS.length} images at ${IMAGE_CREDIT_COST} credits each (${needed}), and you have ${balance}. Buy credits from your dashboard to continue.`, needed, balance },
+      { status: 402, headers: CORS },
+    );
   }
 
   let body: { images?: { dataUrl?: string; httpUrl?: string }[]; notes?: string };
@@ -64,14 +82,24 @@ export async function POST(req: Request) {
 
   const shots = await generateProductShots(
     sources.map((s) => ({ mimeType: s.mimeType, data: s.base64 })),
-    authResult.userId,
+    userId,
     { productContext: body.notes?.trim().slice(0, 500) || undefined },
   );
-  if (!shots.some((s) => s.url)) {
+  const made = shots.filter((s) => s.url).length;
+  if (made === 0) {
     return NextResponse.json(
       { error: `Couldn't generate the images: ${shots[0]?.error ?? "unknown error"}` },
       { status: 502, headers: CORS },
     );
   }
-  return NextResponse.json({ images: shots }, { status: 200, headers: CORS });
+
+  // Images that didn't come back are free.
+  const charged = await deductCredits(userId, made * IMAGE_CREDIT_COST, `Polished ${made} product image${made === 1 ? "" : "s"} in the extension`);
+  if (!charged.ok) console.error(`[polish-images] credit deduction failed for ${userId}: ${charged.error}`);
+  const credits = serializeCredits(charged.balance);
+
+  return NextResponse.json(
+    { images: shots, creditsRemaining: credits.value, unlimitedCredits: credits.unlimited },
+    { status: 200, headers: CORS },
+  );
 }

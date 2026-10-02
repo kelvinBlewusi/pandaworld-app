@@ -67,16 +67,16 @@ describe("QC fixes (Standard and up)", () => {
 });
 
 describe("what each pack lists", () => {
-  it("adds QC fixes from Standard and the coming-soon five from Pro", () => {
+  // The extension's two went live 2026-10-02; the WhatsApp three are still to come.
+  it("adds QC fixes from Standard, and from Pro the extension's two tools and three to come", () => {
     expect(packFeatures("starter")).toEqual([]);
     expect(packFeatures("standard").map((f) => f.id)).toEqual(["qc_fix"]);
     const pro = packFeatures("pro");
+    expect(pro.filter((f) => !f.comingSoon).map((f) => f.id)).toEqual(["qc_fix", "fee_calc_extension", "image_polish_extension"]);
     expect(pro.filter((f) => f.comingSoon).map((f) => f.label)).toEqual([
       "Order alerts on WhatsApp",
       "Shipping labels on WhatsApp",
       "Jumia fee calculator on WhatsApp",
-      "Jumia fee calculator on the extension panel",
-      "Jumia image polish on the Chrome extension",
     ]);
     expect(packFeatures("business")).toEqual(pro);
   });

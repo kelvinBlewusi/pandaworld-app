@@ -117,6 +117,7 @@ const isPublicRoute = createRouteMatcher([
   '/how-to/(.*)',
   '/faq',
   '/jumia-price-calculator',
+  '/embed/(.*)',
   '/calculator',
   '/jumia-commission-rates',
   '/sell-on-jumia',
