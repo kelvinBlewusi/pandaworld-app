@@ -761,12 +761,18 @@ only appear while billing is off.
   any interactive body over 1,024 characters, a list's included, and plain
   text over 4,096. A 20-product batch summary of 1,731 went in a list and
   was refused, after the batch was already marked finished, so the seller
-  heard nothing. In lib/whatsapp/intake.ts: `INTERACTIVE_BODY_MAX`,
-  `replyLongText` (splits at line breaks), `fitInteractiveBody` (long text
-  first as plain text, a short body on the buttons/list). Used by the batch
-  summary (which also falls back to plain text if the send fails), the
-  "weren't sent to Jumia" list, the status reply and the submit results.
-  The intake-flow tests' client mock enforces both caps.
+  heard nothing. The caps and `splitForText` live in
+  lib/whatsapp/text-limits.ts; intake.ts adds `replyLongText` and
+  `fitInteractiveBody` (long text first as plain text, a short body on the
+  buttons/list). Used by the batch summary (which also falls back to plain
+  text if the send fails), the "weren't sent to Jumia" list, the status
+  reply, the submit results and the QC/acceptance update
+  (notifyBatchResolved). The intake-flow tests' client mock enforces both.
+- **Fix/Edit taps name the product (2026-10-02)**: a button holds 20
+  characters, so "Fix product 3" can't carry the name. The QC update
+  numbers its lines ("Product 3: ⚠️ …") and the Fix message lists
+  "Product 3 — <title>"; list rows show the title as their subtitle. The
+  "weren't sent to Jumia" follow-up names them the same way.
 - **Polish images, extension prototype (2026-10-02, admins only)**: the
   side panel shows a "Polish images" section when GET
   /api/extension/account returns `isAdmin`. It harvests the uploaded photos
