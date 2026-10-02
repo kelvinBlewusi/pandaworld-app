@@ -31,7 +31,8 @@ const primaryNav = [
   { href: "/how-to",               label: "Guides",       icon: BookOpen },
 ];
 
-const faqItem = { href: "/extension/faq", label: "FAQ", icon: HelpCircle };
+// Public, like Guides, so the same answers reach sellers before they sign up.
+const faqItem = { href: "/faq", label: "FAQ", icon: HelpCircle };
 
 const settingsItem = { href: "/extension/settings", label: "Settings", icon: Settings };
 

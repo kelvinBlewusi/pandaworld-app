@@ -57,6 +57,7 @@ import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 //                            leaving it off this list meant Googlebot and
 //                            every logged-out visitor got bounced to /sign-in.
 //   /how-to/(.*)            — one page per guide (app/how-to/[slug]), same reason.
+//   /faq                    — the FAQ (app/faq/page.tsx), public on purpose.
 //   /jumia-price-calculator — the public price calculator and
 //   /jumia-commission-rates   Jumia Ghana rate table, both written to be found
 //                            by sellers searching for Jumia fees.
@@ -114,6 +115,7 @@ const isPublicRoute = createRouteMatcher([
   '/extension',
   '/how-to',
   '/how-to/(.*)',
+  '/faq',
   '/jumia-price-calculator',
   '/calculator',
   '/jumia-commission-rates',

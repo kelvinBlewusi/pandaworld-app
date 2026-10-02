@@ -135,6 +135,7 @@ export function MarketingFooter({
               )}
             </li>
             <li><Link href="/how-to" className={linkClass}>Guides</Link></li>
+            <li><Link href="/faq" className={linkClass}>FAQ</Link></li>
           </FooterColumn>
 
           {/* Crawlable links to the public guides and tools on every

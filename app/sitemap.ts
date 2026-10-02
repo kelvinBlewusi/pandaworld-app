@@ -48,6 +48,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: "monthly",
       priority:        0.8,                   // setup guides — targets "how to" searches
     },
+    {
+      url:            `${APP_URL}/faq`,
+      lastModified,
+      changeFrequency: "monthly",
+      priority:        0.7,                   // FAQ — answers sellers search for
+    },
     // One page per guide (app/how-to/[slug]), each aimed at its own search.
     ...GUIDES.map((g) => ({
       url:             `${APP_URL}/how-to/${g.slug}`,
