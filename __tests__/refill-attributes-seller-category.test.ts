@@ -24,7 +24,7 @@ jest.mock("@/lib/actions/ai", () => ({
   }),
 }));
 
-let schema: { name: string; allowed_values?: string[] }[] = [{ name: "color" }];
+let schema: { name: string; type?: string; allowed_values?: string[] }[] = [{ name: "color" }];
 
 jest.mock("@/lib/jumia/categories", () => ({
   getCategoryByCode: async (code: number) => ({
@@ -131,5 +131,53 @@ describe("refillAttributesForCategory — what carries over a category switch", 
     await refillAttributesForCategory("user_1", "listing-1", 200);
 
     expect(db.tables.listings[0].dynamic_attributes).not.toHaveProperty("skin_type");
+  });
+});
+
+// Live, 2026-10-02: switching a pair of earrings to Drop & Dangle filled
+// Age Group with "Female", and the product was held over it.
+describe("refillAttributesForCategory — only values the new category accepts", () => {
+  const AGE = { name: "age_group", type: "enum", allowed_values: ["25-64  Years", "15-24 Years", "0-14 Years", "65 Years +"] };
+
+  it("clears an AI value that isn't one of the field's options", async () => {
+    schema = [{ name: "color" }, AGE];
+    extracted = { color: "Black", age_group: "Female" };
+    seedListing();
+
+    await refillAttributesForCategory("user_1", "listing-1", 200);
+
+    const row = db.tables.listings[0];
+    expect(row.dynamic_attributes).toEqual({ color: "Black" });
+    expect(row.field_sources).not.toHaveProperty("dynamic_attributes.age_group");
+  });
+
+  it("corrects an AI value that's only spelt differently", async () => {
+    schema = [{ name: "gender", type: "enum", allowed_values: ["Female", "Male", "Unisex"] }];
+    extracted = { gender: "female" };
+    seedListing();
+
+    await refillAttributesForCategory("user_1", "listing-1", 200);
+
+    expect(db.tables.listings[0].dynamic_attributes).toEqual({ gender: "Female" });
+  });
+
+  it("leaves the seller's own value as they wrote it", async () => {
+    schema = [AGE];
+    extracted = {};
+    seedListing({ dynamic_attributes: { age_group: "Adults" }, field_sources: { "dynamic_attributes.age_group": "user" } });
+
+    await refillAttributesForCategory("user_1", "listing-1", 200);
+
+    expect(db.tables.listings[0].dynamic_attributes).toEqual({ age_group: "Adults" });
+  });
+
+  it("clears a column-held value the new category refuses", async () => {
+    schema = [{ name: "color_family", type: "enum", allowed_values: ["Black", "White"] }];
+    extracted = {};
+    seedListing({ color_family: "Gold" });
+
+    await refillAttributesForCategory("user_1", "listing-1", 200);
+
+    expect(db.tables.listings[0].color_family).toBeNull();
   });
 });

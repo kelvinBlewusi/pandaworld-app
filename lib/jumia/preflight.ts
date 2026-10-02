@@ -191,6 +191,26 @@ function splitMulti(value: string): string[] {
   return value.split(",").map((v) => v.trim()).filter(Boolean);
 }
 
+/**
+ * A value as the field accepts it: snapped to the allowed spelling (each
+ * part of a multi-select), or null when none of it is allowed. A field
+ * with no allowed list takes the value as it is. The same rule the push
+ * applies below, for callers that clean a draft before it gets that far.
+ */
+export function allowedValueFor(
+  value: string,
+  field: { type: string; allowed_values: string[] },
+): string | null {
+  const raw = value.trim();
+  if (!raw) return null;
+  if (field.allowed_values.length === 0) return raw;
+  const parts = field.type === "multi" ? splitMulti(raw) : [raw];
+  const kept = parts
+    .map((part) => snapToAllowedWithSynonyms(part, field.allowed_values))
+    .filter((v): v is string => v !== null);
+  return kept.length > 0 ? kept.join(",") : null;
+}
+
 export interface NumericCheckResult {
   /** The value as it should actually be sent, or null when it must be
    *  dropped outright (no safe repair to guess at). */

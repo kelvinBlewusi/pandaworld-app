@@ -26,6 +26,7 @@ import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { logCategoryCorrection } from "@/lib/jumia/category-corrections";
 import { withAiUsageContext } from "@/lib/ai/usage";
 import { columnFor } from "@/lib/jumia/attribute-mapping";
+import { allowedValueFor } from "@/lib/jumia/preflight";
 
 /** Columns a weight or size attribute mirrors into (product_weight → weight_kg). */
 const PHYSICAL_COLUMNS = new Set(["weight_kg", "size_l", "size_w", "size_h"]);
@@ -75,7 +76,7 @@ async function refillUnmetered(
 
   const { data: listing } = await db
     .from("listings")
-    .select("id, user_id, images, dynamic_attributes, field_sources, field_confidence, category_code, category_path, category_alternates, weight_kg, size_l, size_w, size_h")
+    .select("*")
     .eq("id", listingId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -195,21 +196,47 @@ async function refillUnmetered(
   // Body Sunscreens to Body Washes lost every AI value with the old
   // category, the new fill skipped the weight, and the product was held
   // for "Weight (kg)". The values describe the product, not the category,
-  // so they still hold, unless the new category only accepts other values.
-  const allowedValues = new Map(attrs.map((a) => [a.name, (a.allowed_values ?? []).map((x) => x.toLowerCase())]));
+  // so they still hold (the check below drops any the category refuses).
   for (const [k, v] of Object.entries(previousDyn)) {
     const value = String(v ?? "").trim();
     if (!validKeys.has(k) || mergedDyn[k] || !value) continue;
-    const allowed = allowedValues.get(k) ?? [];
-    if (allowed.length > 0 && !allowed.includes(value.toLowerCase())) continue;
     mergedDyn[k] = value;
     carriedSources[`dynamic_attributes.${k}`] = previousSources[`dynamic_attributes.${k}`] ?? "ai";
+  }
+
+  // Only values the new category accepts, the check a first draft already
+  // runs (lib/actions/auto-analyze.ts): close spellings snapped, anything
+  // else cleared, since a wrong value looks done until Jumia drops it.
+  // Live, 2026-10-02: a switch to Drop & Dangle earrings filled Age Group
+  // with "Female" and the product was held over it. The seller's own
+  // values are left as they wrote them.
+  const fieldByName = new Map(attrs.map((a) => [a.name.toLowerCase(), a]));
+  for (const [k, v] of Object.entries(mergedDyn)) {
+    const field = fieldByName.get(k.toLowerCase());
+    if (!field?.allowed_values?.length || carriedSources[`dynamic_attributes.${k}`] === "user") continue;
+    const allowed = allowedValueFor(String(v ?? ""), field);
+    if (allowed === null) {
+      delete mergedDyn[k];
+      delete carriedSources[`dynamic_attributes.${k}`];
+      delete carriedConfidence[`dynamic_attributes.${k}`];
+      console.info(`[refill-attributes] listing=${listingId} dropped ${k}="${v}": not a value category ${categoryCode} accepts`);
+    } else if (allowed !== v) {
+      mergedDyn[k] = allowed;
+    }
+  }
+  const columnUpdates: Record<string, unknown> = {};
+  for (const field of attrs) {
+    const col = columnFor(field.name);
+    if (!col || !field.allowed_values?.length || col in columnUpdates || carriedSources[col] === "user") continue;
+    const current = (listing as Record<string, unknown>)[col];
+    if (current == null || String(current).trim() === "" || Array.isArray(current)) continue;
+    const allowed = allowedValueFor(String(current), field);
+    if (allowed !== String(current)) columnUpdates[col] = allowed;
   }
 
   // A weight or size the fill gave, copied into its empty column, which is
   // what the editor shows and the push sends: the same mirror a first draft
   // does (lib/actions/auto-analyze.ts), which a category switch skipped.
-  const columnUpdates: Record<string, number> = {};
   for (const [k, v] of Object.entries(mergedDyn)) {
     const col = columnFor(k);
     if (!col || !PHYSICAL_COLUMNS.has(col) || col in columnUpdates) continue;

@@ -454,7 +454,7 @@ describe("assessListingPushReadiness — canary 2: variant value outside the cat
   });
 
   it("holds when the size/enum value was dropped as invalid_enum rather than hard-blocked", async () => {
-    seedListing({ title: "Navy Blue Cotton Tee", category_path: "Fashion > Men's Wear > Shirts" });
+    seedListing({ title: "Navy Blue Cotton Tee", category_path: "Fashion > Men's Wear > Shirts", user_prompt: "GHS 70. Sizes Medium Large Xtra Large" });
     previewResult = {
       ok: true, products: [{ brand: { code: 1, name: "Fashion" } }],
       adjustments: [], missingRequired: [], blockers: [],
@@ -466,6 +466,39 @@ describe("assessListingPushReadiness — canary 2: variant value outside the cat
     const result = await assessListingPushReadiness("user_1", "listing-1");
     expect(result.ready).toBe(false);
     expect(result.reasons.join(" ")).toContain("Size");
+  });
+});
+
+// Live, 2026-10-02: a switch to Drop & Dangle earrings left the AI's Age
+// Group "Female" in place, and the product was held over a value the push
+// would simply have left out.
+describe("assessListingPushReadiness — a refused value that's only the AI's guess", () => {
+  const ageGroupDropped = () => {
+    previewResult = {
+      ok: true, products: [{ brand: { code: 1, name: "Fashion" } }],
+      adjustments: [], missingRequired: [], blockers: [],
+      preflightNotes: [{ attribute: "age_group", label: "Age Group", reason: "invalid_enum", detail: `"Female" isn't a value this category accepts` }],
+    };
+  };
+
+  it("doesn't hold over it", async () => {
+    seedListing({ title: "Floral Petal Earrings", user_prompt: "GHS 70", field_sources: { "dynamic_attributes.age_group": "ai" } });
+    ageGroupDropped();
+    expect(await assessListingPushReadiness("user_1", "listing-1")).toEqual({ ready: true, reasons: [] });
+  });
+
+  it("still holds over a value the seller typed", async () => {
+    seedListing({ title: "Floral Petal Earrings", field_sources: { "dynamic_attributes.age_group": "user" } });
+    ageGroupDropped();
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(false);
+    expect(result.reasons).toEqual([`Age Group: "Female" isn't a value this category accepts`]);
+  });
+
+  it("still holds over a value the seller's notes give", async () => {
+    seedListing({ title: "Floral Petal Earrings", user_prompt: "GHS 70, for female" });
+    ageGroupDropped();
+    expect((await assessListingPushReadiness("user_1", "listing-1")).ready).toBe(false);
   });
 });
 

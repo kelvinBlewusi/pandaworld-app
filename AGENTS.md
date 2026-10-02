@@ -745,6 +745,13 @@ only appear while billing is off.
   category and never mirror weight into `weight_kg`, so a switched shower
   cream lost its weight. It now carries values the new category also has
   (if allowed there) and fills empty weight/size columns.
+- **Option values after a category switch (2026-10-02)**: the switch now
+  runs the same check a first draft does (`allowedValueFor` in
+  lib/jumia/preflight.ts): AI values snapped to the allowed spelling or
+  cleared, the seller's own left alone. Live: Age Group "Female" held a
+  pair of earrings. Readiness also no longer holds over a refused value
+  that's only the AI's guess; it still does when the seller typed it, it's
+  a variant option, or their notes say it.
 - **A category named in the notes (2026-10-01)**: "Category is wigs" in a
   caption was only a hint, and two wigs landed in Hair Extensions and
   Fascinators. `resolveStatedCategory` (lib/jumia/stated-category.ts)
