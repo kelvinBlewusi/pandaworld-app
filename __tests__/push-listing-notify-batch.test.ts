@@ -93,6 +93,22 @@ describe("refreshPendingFeedStatus — skipNotify", () => {
     expect(sent[0].body).toBe('✅ "Kettle": Jumia accepted it — Will alert you if it passes Jumia QC');
   });
 
+  // Live, 2026-10-02: Jumia's feed error held every product error word
+  // for word, and the seller read each complaint twice.
+  it("keeps a rejection once when Jumia repeats it per product", async () => {
+    seedListing();
+    const one = (a: string) => `Attribute [${a}] is not visible for category [Refrigerators].`;
+    feedStatusResult = { status: "DONE", total: 1, success: 0, failed: 1, errors: [], raw: null };
+    feedProductDetailsResult = [{
+      sellerSku: "SKU-1", productSid: null, qcStatus: null,
+      errors: [`${one("warranty_type")} ${one("product_line")}`, one("warranty_type"), one("product_line")],
+    }];
+
+    const result = await refreshPendingFeedStatus("tok", { id: "listing-1", status: "pending_approval", jumia_ref: "feed-1" }, { skipNotify: true });
+
+    expect(result.error).toBe(`${one("warranty_type")} ${one("product_line")}`);
+  });
+
   // An approval in the feed is left for lib/jumia/qc-followup.ts to
   // confirm, so the seller gets its "🎉 passed Jumia QC" message.
   it("leaves a QC approval reported by the feed for the QC follow-up to confirm", async () => {

@@ -6,6 +6,7 @@ export const dynamic = "force-dynamic";
 import { refreshJumiaConnection } from "@/lib/jumia/api";
 import { refreshPendingFeedStatus, notifyResolvedListings, toResolvedNotice, type ResolvedListingNotice } from "@/lib/jumia/push-listing";
 import { followUpQc, qcAlertPromised, type QcCandidate } from "@/lib/jumia/qc-followup";
+import { resubmitWithoutHiddenFields } from "@/lib/jumia/auto-resubmit";
 import { hasFeature } from "@/lib/billing/features";
 
 // ─── GET /api/cron/jumia-feeds ────────────────────────────────────────────────
@@ -202,6 +203,13 @@ export async function GET(req: NextRequest) {
           `[Cron] ${listing.id} → ${result.status}` +
           (result.totalCount > 1 ? ` (${result.liveCount}/${result.totalCount} variants live)` : ""),
         );
+      }
+      // Refused only for fields its category doesn't show: our mistake,
+      // corrected as the rejection was logged, so it goes straight back to
+      // Jumia rather than asking the seller to tap Fix.
+      if (result.status === "failed" && (await resubmitWithoutHiddenFields(userId, listing.id as string, result.error))) {
+        console.info(`[Cron] ${listing.id} resubmitted without the fields Jumia doesn't show in its category`);
+        continue;
       }
       const notice = toResolvedNotice(
         {

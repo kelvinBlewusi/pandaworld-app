@@ -773,6 +773,17 @@ only appear while billing is off.
   numbers its lines ("Product 3: ⚠️ …") and the Fix message lists
   "Product 3 — <title>"; list rows show the title as their subtitle. The
   "weren't sent to Jumia" follow-up names them the same way.
+- **"Not visible for category" goes back by itself (2026-10-02)**: Jumia
+  refuses fields our cached schema lists but the category doesn't show,
+  naming them a few at a time (a freezer in Refrigerators: 7, then 4 more).
+  logFeedOutcome already excluded the named fields on arrival
+  (jumia_excluded_attributes); now the feeds cron also resubmits the
+  listing (lib/jumia/auto-resubmit.ts) instead of sending the seller a Fix
+  button, up to 3 rejections a day per listing. Two bugs fixed with it: the
+  stored reason held Jumia's feed error plus each product error again,
+  joined with " | " (allErrorTexts now keeps a text once), and that " | "
+  made the classifier read it as mixed, so Fix redrafted the listing
+  instead of resubmitting.
 - **Polish images, extension prototype (2026-10-02, admins only)**: the
   side panel shows a "Polish images" section when GET
   /api/extension/account returns `isAdmin`. It harvests the uploaded photos
