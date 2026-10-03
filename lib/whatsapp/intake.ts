@@ -2338,14 +2338,15 @@ async function askForNextMissingPrice(
     ? `Product ${next.whatsapp_seq} — ${next.title}`
     : next.title;
 
-  // The owner's format: what's missing, then the one question, both bold,
-  // and the editor as the other way to answer. No currency or example
-  // price: the seller's own number is the answer, whatever their country.
-  // Typing "skip" still moves on (PRICE_SKIP_RE).
+  // The owner's format (2026-10-03): what's missing, then the one
+  // question with an example amount, both bold, and the editor as the
+  // other way to answer. No currency: the seller's own number is the
+  // answer, whatever their country. Typing "skip" still moves on
+  // (PRICE_SKIP_RE).
   const lead = opts.drafted ?? `💰 *${who}*\n⚠️ *needs price.*`;
   await replyCtaOrSplit(
     phoneNumber,
-    `${opts.prefix ? `${opts.prefix}\n\n` : ""}${lead}\n\n*What price are you selling it at? Reply with just the number.*`,
+    `${opts.prefix ? `${opts.prefix}\n\n` : ""}${lead}\n\n*What price are you selling it at? Reply with just the amount (Eg. 1500)*`,
     "Or enter it here",
     focusedEditorUrl(next.id),
   );
