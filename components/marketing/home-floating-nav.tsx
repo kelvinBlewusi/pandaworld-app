@@ -14,6 +14,11 @@
  * breakpoint collapses everything but the logo behind a hamburger button,
  * which needs open/close state — same pattern as
  * components/extension/shell.tsx's mobile drawer toggle.
+ *
+ * A signed-in visitor gets one "Dashboard" button in place of Login and
+ * Get started (2026-10-03), read from Clerk here rather than passed by each
+ * of the pages that show this nav. Signed-out buttons show until Clerk has
+ * loaded, so a visitor who isn't signed in never sees them move.
  */
 
 import { useState } from "react";
@@ -21,6 +26,8 @@ import Link from "next/link";
 import Image from "next/image";
 import { Inter_Tight } from "next/font/google";
 import { Menu, X } from "lucide-react";
+import { useAuth } from "@clerk/nextjs";
+import { DASHBOARD_REDIRECT } from "@/lib/marketing/links";
 
 const inter = Inter_Tight({ subsets: ["latin"], weight: ["800"], display: "swap" });
 
@@ -53,6 +60,8 @@ interface HomeFloatingNavProps {
 
 export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref, pricingLive = false }: HomeFloatingNavProps) {
   const [open, setOpen] = useState(false);
+  const { isLoaded, isSignedIn } = useAuth();
+  const signedIn = isLoaded && !!isSignedIn;
 
   const links: NavItem[] = [
     // Absolute path (not a bare "#how-it-works" fragment) — this nav is no
@@ -106,19 +115,31 @@ export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref, pricin
         </nav>
 
         <div className="hidden items-center gap-1 lg:flex">
-          <Link
-            href={signInHref}
-            className="whitespace-nowrap rounded-full px-4 py-2 text-base font-medium text-zinc-600 transition-colors hover:bg-zinc-100"
-          >
-            Login
-          </Link>
-          <Link
-            href={signUpHref}
-            className="whitespace-nowrap rounded-full px-4 py-2 text-base font-semibold text-white transition-colors hover:bg-orange-600"
-            style={{ background: ACCENT_FILL }}
-          >
-            Get started
-          </Link>
+          {signedIn ? (
+            <Link
+              href={DASHBOARD_REDIRECT}
+              className="whitespace-nowrap rounded-full px-4 py-2 text-base font-semibold text-white transition-colors hover:bg-orange-600"
+              style={{ background: ACCENT_FILL }}
+            >
+              Dashboard
+            </Link>
+          ) : (
+            <>
+              <Link
+                href={signInHref}
+                className="whitespace-nowrap rounded-full px-4 py-2 text-base font-medium text-zinc-600 transition-colors hover:bg-zinc-100"
+              >
+                Login
+              </Link>
+              <Link
+                href={signUpHref}
+                className="whitespace-nowrap rounded-full px-4 py-2 text-base font-semibold text-white transition-colors hover:bg-orange-600"
+                style={{ background: ACCENT_FILL }}
+              >
+                Get started
+              </Link>
+            </>
+          )}
         </div>
 
         <button
@@ -156,21 +177,34 @@ export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref, pricin
             )}
           </nav>
           <div className="mt-2 flex flex-col gap-2 border-t border-zinc-100 pt-3">
-            <Link
-              href={signInHref}
-              onClick={() => setOpen(false)}
-              className="rounded-full border border-zinc-200 px-4 py-2.5 text-center text-base font-medium text-zinc-700 transition-colors hover:bg-zinc-50"
-            >
-              Login
-            </Link>
-            <Link
-              href={signUpHref}
-              onClick={() => setOpen(false)}
-              className="rounded-full px-4 py-2.5 text-center text-base font-semibold text-white transition-colors hover:bg-orange-600"
-              style={{ background: ACCENT_FILL }}
-            >
-              Get started
-            </Link>
+            {signedIn ? (
+              <Link
+                href={DASHBOARD_REDIRECT}
+                onClick={() => setOpen(false)}
+                className="rounded-full px-4 py-2.5 text-center text-base font-semibold text-white transition-colors hover:bg-orange-600"
+                style={{ background: ACCENT_FILL }}
+              >
+                Dashboard
+              </Link>
+            ) : (
+              <>
+                <Link
+                  href={signInHref}
+                  onClick={() => setOpen(false)}
+                  className="rounded-full border border-zinc-200 px-4 py-2.5 text-center text-base font-medium text-zinc-700 transition-colors hover:bg-zinc-50"
+                >
+                  Login
+                </Link>
+                <Link
+                  href={signUpHref}
+                  onClick={() => setOpen(false)}
+                  className="rounded-full px-4 py-2.5 text-center text-base font-semibold text-white transition-colors hover:bg-orange-600"
+                  style={{ background: ACCENT_FILL }}
+                >
+                  Get started
+                </Link>
+              </>
+            )}
           </div>
         </div>
       )}
