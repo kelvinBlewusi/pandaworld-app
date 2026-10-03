@@ -172,7 +172,10 @@ export function ExtensionShell({
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Mobile top bar */}
         <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b bg-white px-4 lg:hidden">
-          <Wordmark size={20} />
+          {/* Home, like the sidebar's logo: it was the only logo that went nowhere. */}
+          <Link href="/extension" aria-label="pandaworld home">
+            <Wordmark size={20} />
+          </Link>
           {/* On the right, matching the drawer it opens. 44px square — the
               minimum tap target, where this was 36. */}
           <button
