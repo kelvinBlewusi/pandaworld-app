@@ -74,6 +74,15 @@
         .catch(onReject(sendResponse));
       return true;
     }
+    // Polish images needs the photos only. The full HARVEST also reads every
+    // field and opens each dropdown to list its options, which showed on
+    // the form whenever a category was already open (2026-10-03).
+    if (msg?.type === "HARVEST_IMAGES") {
+      harvestImages()
+        .then((got) => sendResponse({ ok: true, images: got.images, source: got.source }))
+        .catch(onReject(sendResponse));
+      return true;
+    }
     if (msg?.type === "PLACE_IMAGES") {
       placeImages(msg.images || []).then(sendResponse).catch(onReject(sendResponse));
       return true;
