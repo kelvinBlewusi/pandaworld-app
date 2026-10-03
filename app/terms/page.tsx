@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { Wordmark } from "@/components/marketing/wordmark";
+import { comingSoonLabels } from "@/lib/billing/credit-packs";
 
 // ─── Public Terms of Service ─────────────────────────────────────────────────
 //
@@ -32,7 +33,7 @@ export const metadata: import("next").Metadata = {
   },
 };
 
-const LAST_UPDATED = "2026-10-01";
+const LAST_UPDATED = "2026-10-03";
 const COMPANY_NAME = "PandaWorld"; // Update once a legal entity is registered
 
 export default function TermsPage() {
@@ -122,8 +123,9 @@ export default function TermsPage() {
             Standard pack and up), we check Jumia&apos;s quality-check result
             after a listing is accepted, and if Jumia rejects it there, the
             credits are returned. Without that feature, the quality-check
-            result is shown in your Jumia Vendor Center only. Features
-            shown greyed out on the pricing page are not yet available.
+            result is shown in your Jumia Vendor Center only. These features
+            listed on the pricing page are not yet available:{" "}
+            {comingSoonLabels().join(", ")}.
           </p>
           <p>
             Credits don&apos;t expire, have no cash value, can&apos;t be

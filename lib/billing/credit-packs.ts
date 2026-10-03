@@ -46,8 +46,10 @@ export function packRank(id: string | null | undefined): number {
  * highest pack bought counts, a smaller top-up later doesn't take it away
  * (lib/billing/features.ts). Set by the owner, 2026-10-01.
  *
- * `comingSoon` features are only advertised: shown greyed out on the
- * packs that will include them, not built yet.
+ * `comingSoon` features are not built yet. They are listed with the packs
+ * like the others (owner's call, 2026-10-03; they were greyed out before),
+ * so the pricing FAQ and the Terms name them as not available yet
+ * (comingSoonLabels).
  */
 export interface PackFeature {
   id:          string;
@@ -66,6 +68,11 @@ export const PACK_FEATURES: PackFeature[] = [
   { id: "fee_calc_extension",     label: "Jumia fee calculator on the extension panel", short: "Fee calculator in the extension", minPack: "pro" },
   { id: "image_polish_extension", label: "Jumia image polish on the Chrome extension",  short: "Image polish in the extension",   minPack: "pro" },
 ];
+
+/** The pack features not built yet, by label, for the pages that must say so. */
+export function comingSoonLabels(): string[] {
+  return PACK_FEATURES.filter((f) => f.comingSoon).map((f) => f.label);
+}
 
 /** What a pack includes, in PACK_FEATURES order. */
 export function packFeatures(packId: string): PackFeature[] {

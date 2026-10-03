@@ -559,9 +559,10 @@ country (`fee_calc_extension`), both live 2026-10-02: GET
 /api/extension/account returns `features` and `country`
 for the panel, and the polish route checks `hasFeature` itself. They also
 list three features not built yet (order alerts, shipping labels and the
-fee calculator on WhatsApp), greyed out with no "soon" label (owner's call).
-The pricing FAQ and Terms §4 say greyed-out features aren't available yet;
-keep that while any are.
+fee calculator on WhatsApp), shown like the others with no "soon" label
+(owner's call, 2026-10-03; greyed out before). So the pricing FAQ and
+Terms §4 name them as not available yet (`comingSoonLabels()`); keep that
+while any are.
 
 **Pay when live** (WhatsApp and web listings). Drafts are free; a seller
 only needs enough available credits to draft. `pushListingToJumia` checks
