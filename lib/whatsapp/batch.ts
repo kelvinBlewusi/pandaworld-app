@@ -8,9 +8,10 @@ import { appUrl } from "@/lib/whatsapp/app-url";
  */
 
 /**
- * How many products one chat batch may hold.
+ * How many products one chat batch may hold: 10 for sellers (owner's call,
+ * 2026-10-03), ADMIN_MAX_BATCH_SIZE for admins.
  *
- * Briefly 5, now 20 again — but for a different reason than the original
+ * Briefly 5, then 20 again — but for a different reason than the original
  * 20, which was simply untested. Analysis used to run CONCURRENTLY inside
  * the WhatsApp webhook, racing Vercel's 60s kill; one product measured
  * 22.7s in production, so a large batch meant products silently reporting
@@ -30,12 +31,15 @@ import { appUrl } from "@/lib/whatsapp/app-url";
  *     50 would be a ~7-minute wait — long enough to read as broken even
  *     though nothing is.
  */
-export const MAX_BATCH_SIZE = 20;
+export const MAX_BATCH_SIZE = 10;
+
+/** Admins keep 20, the size the queue was proven at. */
+export const ADMIN_MAX_BATCH_SIZE = 20;
 
 /** "3", "3.", "three products" (digits only — no word-number parsing, kept
- *  deliberately simple) → 3. Rejects 0, negatives, and anything above the cap. */
-export function parseProductCount(text: string): number | null {
-  const result = readProductCount(text);
+ *  deliberately simple) → 3. Rejects 0, negatives, and anything above `max`. */
+export function parseProductCount(text: string, max = MAX_BATCH_SIZE): number | null {
+  const result = readProductCount(text, max);
   return result.ok ? result.count : null;
 }
 
@@ -55,7 +59,7 @@ export type CountRejection =
  * given one. The cap is real and worth stating plainly; pretending not to
  * understand is the wrong way to state it.
  */
-export function readProductCount(text: string): CountRejection {
+export function readProductCount(text: string, max = MAX_BATCH_SIZE): CountRejection {
   const trimmed = text.trim();
   const match = trimmed.match(/\d+/);
   if (!match || match.index == null) return { ok: false, reason: "no_number" };
@@ -65,7 +69,7 @@ export function readProductCount(text: string): CountRejection {
   const n = parseInt(match[0], 10);
   if (!Number.isFinite(n)) return { ok: false, reason: "no_number" };
   if (n < 1) return { ok: false, reason: "too_few",  value: n };
-  if (n > MAX_BATCH_SIZE) return { ok: false, reason: "too_many", value: n };
+  if (n > max) return { ok: false, reason: "too_many", value: n };
   return { ok: true, count: n };
 }
 
