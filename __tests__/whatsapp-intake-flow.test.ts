@@ -624,12 +624,30 @@ describe("asking for a missing price in chat", () => {
     await handleLinkedMessage(USER, PHONE, "m1", { text: "150" });
 
     expect(listings()[0].selling_price).toBe(150);
-    const reply = sent.find((m) => m.body.includes("Price set to GHS 150"));
+    // No shop country on file: the bare number, never someone else's currency.
+    const reply = sent.find((m) => m.body.includes("Price set to 150 for product 1"));
     expect(reply).toBeDefined();
     // Confirmation and the next question share one send — message volume
     // right after drafting is already the busiest point in the flow.
     expect(reply!.body).toContain("Product 2 — Sony Wireless Over-Ear Headphones");
     expect(session().awaiting_price_for).toBe("listing-2");
+  });
+
+  // Owner's request, 2026-10-03: the seller's own currency, not "GHS 150".
+  it("shows the price in the shop's own currency", async () => {
+    seedBatch([
+      { seq: 1, title: "Panasonic Electric Kettle 1.7L" },
+      { seq: 2, title: "Sony Wireless Over-Ear Headphones" },
+    ]);
+    db.tables.jumia_connections = [{ user_id: USER, country: "NG" }];
+    confirming({ awaiting_price_for: "listing-1" });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "15000" });
+    db.tables.jumia_connections = [];
+
+    expect(sent.some((m) => m.body.includes("Price set to ₦15,000 for product 1"))).toBe(true);
+    expect(sent.some((m) => m.body.includes("GHS"))).toBe(false);
   });
 
   it("closes the loop with the submit buttons after the last price", async () => {
@@ -806,7 +824,7 @@ describe("a field the category requires, filled or asked for in chat", () => {
 
     await handleLinkedMessage(USER, PHONE, "m1", { text: "240" });
 
-    const reply = sent.find((m) => m.body.includes("Price set to GHS 240"))!;
+    const reply = sent.find((m) => m.body.includes("Price set to 240"))!;
     expect(reply.body).toContain("Jumia needs its *Weight (kg)*");
     expect(session().awaiting_value_for).toEqual({ listingId: "listing-1", field: "product_weight" });
   });
