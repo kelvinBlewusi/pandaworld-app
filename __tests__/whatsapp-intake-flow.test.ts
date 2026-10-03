@@ -2103,6 +2103,8 @@ describe("connecting Jumia from the chat", () => {
     expect(selfAuthCalls).toEqual([{ clientId: CLIENT_ID, token: TOKEN, country: "GH" }]);
     expect(webCredentialChecks).toHaveLength(0);
     expect(session().state).toBe("awaiting_count");
+    // One message, the count buttons on it, as after a restart.
+    expect(sent.at(-1)).toEqual(expect.objectContaining({ kind: "buttons", rows: ["1", "2", "3"] }));
     expect(sent.at(-1)?.body).toContain("Jumia connected — Kelvin's Store");
   });
 

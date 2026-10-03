@@ -12,7 +12,8 @@
 
 import { createServerClient } from "@/lib/supabase/server";
 import { getWhatsAppConnection } from "@/lib/whatsapp/link";
-import { sendTextIfConfigured } from "@/lib/whatsapp/client";
+import { sendButtonsIfConfigured } from "@/lib/whatsapp/client";
+import { COUNT_QUICK_PICKS } from "@/lib/whatsapp/batch";
 import { updateSession } from "@/lib/whatsapp/session";
 
 export async function notifyWhatsAppJumiaConnected(userId: string, storeName: string | null): Promise<void> {
@@ -29,9 +30,11 @@ export async function notifyWhatsAppJumiaConnected(userId: string, storeName: st
     await updateSession(wa.phoneNumber, {
       state: "awaiting_count", listingId: null, batchId: null, batchSize: null, batchSeq: null, pendingAppId: null,
     });
-    await sendTextIfConfigured(
+    // With the count buttons attached, as after a restart.
+    await sendButtonsIfConfigured(
       wa.phoneNumber,
-      `🎉 Jumia connected${storeName ? ` — ${storeName}` : ""}! How many products are you listing today? Reply with a number to get started.`,
+      `🎉 Jumia connected${storeName ? ` — ${storeName}` : ""}!\n\nHow many products are you listing today? Reply with a number to get started.`,
+      COUNT_QUICK_PICKS,
     );
   } catch (e) {
     console.warn(`[jumia connected] WhatsApp notify failed for user=${userId}: ${(e as Error).message}`);
