@@ -2246,7 +2246,10 @@ export async function runQueuedAnalysis(job: AnalysisJob): Promise<void> {
 async function askForNextMissingPrice(
   phoneNumber: string,
   batchId:     string,
-  opts: { after?: string; prefix?: string } = {},
+  /** `drafted`: the product's own "✅ Product drafted" lines, standing in
+   *  for its name, so a single product's draft and its price question are
+   *  one message (2026-10-03). */
+  opts: { after?: string; prefix?: string; drafted?: string } = {},
 ): Promise<boolean> {
   const listings = await getBatchListings(batchId);
   // findIndex returning -1 lands on 0 — an id that isn't in this batch
@@ -2266,14 +2269,17 @@ async function askForNextMissingPrice(
   const who = listings.length > 1 && next.whatsapp_seq != null
     ? `Product ${next.whatsapp_seq} — ${next.title}`
     : next.title;
-  const currency = await shopCurrencyForUser(next.user_id);
 
-  await replyButtons(
+  // The owner's format: what's missing, then the one question, both bold,
+  // and the editor as the other way to answer. No currency or example
+  // price: the seller's own number is the answer, whatever their country.
+  // Typing "skip" still moves on (PRICE_SKIP_RE).
+  const lead = opts.drafted ?? `💰 *${who}*\n⚠️ *needs price.*`;
+  await replyCtaOrSplit(
     phoneNumber,
-    `${opts.prefix ? `${opts.prefix}\n\n` : ""}💰 *${who}*\n\n` +
-    `What price are you selling it at? Reply with just the number in ${currencyNameWord(currency)} — e.g. *150*.\n\n` +
-    `Jumia won't accept a product without one.`,
-    [{ id: "skip price", title: "Skip for now" }],
+    `${opts.prefix ? `${opts.prefix}\n\n` : ""}${lead}\n\n*What price are you selling it at? Reply with just the number.*`,
+    "Or enter it here",
+    focusedEditorUrl(next.id),
   );
   return true;
 }
@@ -2584,6 +2590,14 @@ export async function finalizeBatch(
           await replyCta(phoneNumber, `✅ Product drafted: ${only.title}. Ready to submit!`, "Edit product", focusedEditorUrl(only.id));
           await replyButtons(phoneNumber, `Reply *submit*, or say something like "change the price to 150" to edit it first.`, buttons);
         }
+      } else if (!only.selling_price) {
+        // The draft and its price question as one message: "✅ Product
+        // drafted… ⚠️ needs price… What price…?" Anything else it's held
+        // for is asked once the price is in (applyChatPrice).
+        await askForNextMissingPrice(phoneNumber, batchId, {
+          drafted: `✅ Product drafted: ${only.title}.\n⚠️ *${heldReasonsText(reasons)}*`,
+        });
+        return;
       } else {
         // Never offer Submit on a Held product — confidence over optimism:
         // a seller should never be handed a button that would fail or ship
