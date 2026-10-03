@@ -174,6 +174,21 @@ export function reconcileVariants(
   return { kind: "restrict", keep: matched, source: claim.source };
 }
 
+/**
+ * Whether the seller's notes say anything about options at all: a claim
+ * extractVariantClaim reads, or "comes in red and blue", "colours: …",
+ * "3 sizes", "variations: …". Without one a draft is one variant, however
+ * many the photos show (owner's request, 2026-10-03: two unlabelled
+ * variants on a single product stopped its submit with "Variant 2 has no
+ * Variation label").
+ */
+export function notesNameVariants(notes: string | null | undefined): boolean {
+  const text = (notes ?? "").trim();
+  if (!text) return false;
+  if (extractVariantClaim(text)) return true;
+  return /\b(?:comes?\s+in|available\s+in|in\s+(?:different|various|\d+|two|three|four|five|six)\s+(?:colou?rs|sizes|types|flavou?rs|scents|designs|styles)|(?:colou?rs?|variants?|variations?|options?|flavou?rs?|scents?|designs?|styles?|types?)\s*[:\-]|variants\b|variations\b|(?:\d+|two|three|four|five|six|seven|eight|nine|ten)\s+(?:colou?rs|sizes|variants|variations|types|options|flavou?rs|scents|designs|styles))/i.test(text);
+}
+
 /** The seller-facing sentence for a claim that couldn't be resolved.
  *  Quotes them verbatim: a seller who wrote a typo recognises it far
  *  faster than they recognise our paraphrase of it. */
