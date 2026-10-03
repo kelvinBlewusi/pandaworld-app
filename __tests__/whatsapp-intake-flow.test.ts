@@ -151,8 +151,16 @@ jest.mock("@/lib/billing/features", () => ({
   featureMinPackName: () => "Standard",
 }));
 
+// Settable per test — listings held over their variation until they have a variant row.
+const variationHeld = new Set<string>();
+const VARIATION_OPTIONS = ["100ml", "105ml", "10ml", "50ml"];
+const VARIATION_BLOCK = `This category needs a variation picked from its own stocked options (${VARIATION_OPTIONS.join(", ")}) — mention it in your listing notes, or pick one in the editor.`;
+
 jest.mock("@/lib/whatsapp/readiness", () => ({
   assessListingPushReadiness: async (_userId: string, listingId: string) => {
+    if (variationHeld.has(listingId) && !(db.tables.variants ?? []).some((v) => v.listing_id === listingId)) {
+      return { ready: false, reasons: [VARIATION_BLOCK] };
+    }
     if (heldReasonsFor.has(listingId)) {
       return { ready: false, reasons: heldReasonsFor.get(listingId) };
     }
@@ -209,7 +217,11 @@ jest.mock("@/lib/jumia/categories", () => ({
   ...jest.requireActual("@/lib/jumia/categories"),
   getCategoryAttributes: async (code: number) => {
     const fields = Array.from(requiredFieldsFor.values()).flat();
-    return fields.length > 0 && code === 1015907 ? fields : [];
+    // A closed variation list, for the variation tests.
+    const axis = variationHeld.size > 0
+      ? [{ name: "variation", label: "Variation", type: "enum", allowed_values: VARIATION_OPTIONS, required: false, is_variant: true }]
+      : [];
+    return [...(fields.length > 0 && code === 1015907 ? fields : []), ...axis];
   },
   getListableCategories: async () => CATEGORY_ROWS,
   getCategoryByCode:     async (code: number) => CATEGORY_ROWS.find((c) => c.code === code) ?? null,
@@ -298,6 +310,8 @@ beforeEach(() => {
   pushResult = { ok: true };
   pushCallCount = 0;
   failNextList = false;
+  variationHeld.clear();
+  db.tables.variants = [];
   seedSession();
 });
 
@@ -1281,6 +1295,103 @@ describe("message volume on a large batch", () => {
     const body = sent.find((m) => m.body.includes("Product 1:"))!.body;
     expect(body).toContain("in GH, so nothing was sent.\n");
     expect(body).not.toContain("..");
+  });
+});
+
+describe("asking for the variation when it's what Jumia won't take", () => {
+  // Owner's request, 2026-10-03: "This category needs a variation picked
+  // from its own stocked options … pick one in the editor" at draft time,
+  // at submit and after Fix & resubmit. Asked for in chat instead, like
+  // the price; after a stopped submit the answer sends it straight back.
+  const FULL = {
+    description: "A long enough description to clear the fifty-character minimum check.",
+    category_code: "1234",
+    brand: "Monark",
+    images: ["https://cdn.test/a.jpg"],
+    status: "draft",
+    selling_price: 550,
+    sku: "PA-TEST01",
+    quantity: 3,
+  };
+  const TITLE = "Vintage Radio Eau de Parfum - 100ml, Natural Spray";
+
+  beforeEach(() => {
+    db.tables.listings = [{ id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: TITLE, ...FULL }];
+    variationHeld.add("listing-1");
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    sent.length = 0;
+  });
+
+  it("asks for it when a submit is stopped over it, and sends the product back with the answer", async () => {
+    pushResultFor.set("listing-1", { ok: false, code: "validation", message: VARIATION_BLOCK });
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "submit" });
+
+    const ask = sent.find((m) => m.body.includes("*What variation(s) do you have?*"))!;
+    expect(ask.kind).toBe("cta");
+    expect(ask.body).toContain(`*${TITLE}*`);
+    expect(ask.body).toContain("Reply with one or more of the stocked options (100ml, 105ml, 10ml, 50ml)");
+    expect(session().awaiting_value_for).toEqual({ listingId: "listing-1", field: "__variation", resubmit: true });
+    expect(sent.some((m) => m.body.startsWith("What's next?"))).toBe(false);
+
+    pushResultFor.set("listing-1", { ok: true });
+    sent.length = 0;
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "100 ml" });
+
+    expect(db.tables.variants).toEqual([expect.objectContaining({
+      listing_id: "listing-1", variation: "100ml", seller_sku: "PA-TEST01-100ML", global_price: 550, quantity: 3,
+    })]);
+    expect(sent.at(-1)?.body).toBe(`✅ Variation set to 100ml for ${TITLE}.\n✅ Product 1: resubmitted — pending Jumia review.`);
+  });
+
+  it("asks for it at draft time, and offers Submit once it's set", async () => {
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 1);
+    expect(sent.at(-1)?.body).toContain("*What variation(s) do you have?*");
+    expect(session().awaiting_value_for).toEqual({ listingId: "listing-1", field: "__variation" });
+
+    sent.length = 0;
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "50ml and 10ml" });
+    expect(db.tables.variants.map((v) => v.variation)).toEqual(["50ml", "10ml"]);
+    expect(sent.at(-1)).toEqual(expect.objectContaining({ kind: "buttons", rows: ["submit all"] }));
+    expect(sent.at(-1)?.body).toBe(`✅ Variations set to 50ml, 10ml for ${TITLE} — ready to submit.`);
+  });
+
+  it("says which options there are when the reply names none of them", async () => {
+    const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+    await finalizeBatch("batch-1", PHONE, 1);
+    sent.length = 0;
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "200ml" });
+    expect(sent.at(-1)?.body).toBe(`⚠️ "200ml" isn't one of this category's options. Reply with one or more of: 100ml, 105ml, 10ml, 50ml.`);
+    expect(db.tables.variants).toEqual([]);
+  });
+
+  // A rejected product's Fix: its listing id is a real uuid, as the fix:<id> tap needs.
+  const FIX_ID = "11111111-1111-4111-8111-111111111111";
+  function rejected(error: string) {
+    db.tables.listings = [{ id: FIX_ID, user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: TITLE, ...FULL, status: "failed", jumia_error: error }];
+    variationHeld.clear();
+    variationHeld.add(FIX_ID);
+  }
+
+  it("asks for it when Jumia refused the variation itself", async () => {
+    rejected("Attribute [variation] with invalid value [Large]");
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${FIX_ID}` });
+
+    const ask = sent.at(-1)!;
+    expect(ask.body).toContain("⚠️ Product 1: Jumia won't take its variation.");
+    expect(ask.body).toContain("*What variation(s) do you have?*");
+    expect(session().awaiting_value_for).toEqual({ listingId: FIX_ID, field: "__variation", resubmit: true });
+  });
+
+  it("asks for it when the resubmit after a redraft is stopped over it", async () => {
+    rejected("The column [product_weight] is missing from the file.");
+    pushResultFor.set(FIX_ID, { ok: false, code: "validation", message: VARIATION_BLOCK });
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${FIX_ID}` });
+
+    expect(sent.some((m) => m.body.includes("Jumia still isn't happy"))).toBe(false);
+    expect(sent.at(-1)?.body).toContain("⚠️ Product 1 wasn't sent yet.");
+    expect(sent.at(-1)?.body).toContain("*What variation(s) do you have?*");
+    expect(session().awaiting_value_for).toEqual({ listingId: FIX_ID, field: "__variation", resubmit: true });
   });
 });
 

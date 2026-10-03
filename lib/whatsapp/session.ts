@@ -8,6 +8,10 @@ import { createServerClient } from "@/lib/supabase/server";
  * schema and the state machine's shape.
  */
 
+
+/** A missing-value question the bot is waiting on (WhatsAppSession.awaitingValueFor). */
+export type ValueQuestion = { listingId: string; field: string; resubmit?: boolean };
+
 export type WhatsAppSessionState =
   | "awaiting_jumia_credentials"
   | "awaiting_jumia_oauth"
@@ -88,9 +92,11 @@ export interface WhatsAppSession {
    * The held product's missing field the bot just asked the seller for
    * ("Jumia needs its Weight (kg)"), so their reply can be saved as it.
    * Null when none is outstanding; anything that isn't an answer drops it.
-   * See askForNextMissingValue in lib/whatsapp/intake.ts.
+   * See askForNextMissingValue in lib/whatsapp/intake.ts. `resubmit`: the
+   * question came from a submit Jumia's rules stopped (or Fix & resubmit),
+   * so the answer sends the product straight back.
    */
-  awaitingValueFor: { listingId: string; field: string } | null;
+  awaitingValueFor: ValueQuestion | null;
   /**
    * True when the seller picked "just send it all" at the how-many-
    * products step instead of the default step-by-step flow. Nothing sent
@@ -125,7 +131,7 @@ function fromRow(row: Record<string, unknown>): WhatsAppSession {
     awaitingPriceFor: (row.awaiting_price_for as string | null) ?? null,
     awaitingCategoryFor: (row.awaiting_category_for as string | null) ?? null,
     awaitingQcAnswer: (row.awaiting_qc_answer as QcQuestion | null) ?? null,
-    awaitingValueFor: (row.awaiting_value_for as { listingId: string; field: string } | null) ?? null,
+    awaitingValueFor: (row.awaiting_value_for as ValueQuestion | null) ?? null,
     batchQuiet: (row.batch_quiet as boolean | null) ?? false,
   };
 }
@@ -254,7 +260,7 @@ export async function updateSession(
     awaitingPriceFor: string | null;
     awaitingCategoryFor: string | null;
     awaitingQcAnswer: QcQuestion | null;
-    awaitingValueFor: { listingId: string; field: string } | null;
+    awaitingValueFor: ValueQuestion | null;
     batchQuiet: boolean;
   }>,
 ): Promise<void> {

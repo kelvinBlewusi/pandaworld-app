@@ -1,6 +1,7 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { sendTextIfConfigured, sendCtaUrlIfConfigured, sendButtonsIfConfigured, sendListIfConfigured, sendImageIfConfigured, LIST_MAX_ROWS } from "@/lib/whatsapp/client";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
+import { VARIATION_FIELD, isVariationBlock, variationOptions, variationMayBlock, variationQuestion, parseVariations, saveVariations } from "@/lib/whatsapp/variation-question";
 import { ingestWhatsAppImage } from "@/lib/whatsapp/media";
 import {
   getOrCreateSession,
@@ -8,6 +9,7 @@ import {
   resetSession,
   claimMessageId,
   type QcQuestion,
+  type ValueQuestion,
   type WhatsAppSession,
 } from "@/lib/whatsapp/session";
 import { createListingForUser } from "@/lib/listings/create";
@@ -2318,7 +2320,16 @@ async function assessFillingMissing(userId: string, listingId: string): Promise<
 async function askForNextMissingValue(
   phoneNumber: string,
   batchId:     string,
-  opts: { from?: string; after?: string; prefix?: string; known?: Map<string, JumiaCategoryAttribute[]> } = {},
+  opts: {
+    from?: string; after?: string; prefix?: string;
+    known?: Map<string, JumiaCategoryAttribute[]>;
+    /** Readiness reasons already worked out, to spot a variation block without asking Jumia again. */
+    reasons?: Map<string, string[]>;
+    /** Products whose submit Jumia's rules just stopped over their variation. */
+    variationBlocked?: Set<string>;
+    /** The answer sends the product straight back to Jumia (a stopped submit). */
+    resubmit?: boolean;
+  } = {},
 ): Promise<boolean> {
   const listings = await getBatchListings(batchId);
   const startAt = opts.from
@@ -2327,21 +2338,60 @@ async function askForNextMissingValue(
 
   for (const l of listings.slice(startAt)) {
     if (!l.title || !l.selling_price || l.status !== "draft") continue;
-    // The full check reaches Jumia, so it only runs for a product whose
-    // category has a required field it looks empty in.
-    const known = opts.known?.get(l.id);
-    const mayLack = known ? null : (await getCategoryAttributes(Number(l.category_code)))
-      .some((a) => a.required && !readAttributeValue(l, a.name).trim());
-    const fields = known
-      ?? (mayLack ? (await assessListingPushReadiness(l.user_id as string, l.id).catch(() => null))?.missingFields : null)
-      ?? [];
-    const attr = fields[0];
-    if (!attr) continue;
-
-    await updateSession(phoneNumber, { awaitingValueFor: { listingId: l.id, field: attr.name } });
     const who = listings.length > 1 && l.whatsapp_seq != null ? `Product ${l.whatsapp_seq} — ${l.title}` : (l.title as string);
+    const asked = await askBlockingValue(phoneNumber, l, who, {
+      prefix:           opts.prefix,
+      known:            opts.known?.get(l.id),
+      reasons:          opts.reasons?.get(l.id),
+      variationBlocked: opts.variationBlocked?.has(l.id),
+      resubmit:         opts.resubmit,
+    });
+    if (asked) return true;
+  }
+
+  await updateSession(phoneNumber, { awaitingValueFor: null });
+  return false;
+}
+
+/** `prefix` then `body` as one interactive body, or the prefix first as text when together they're too long. */
+async function prefixedBody(to: string, prefix: string | undefined, body: string): Promise<string> {
+  const full = prefix ? `${prefix}\n\n${body}` : body;
+  if (full.length <= INTERACTIVE_BODY_MAX) return full;
+  if (prefix) await replyLongText(to, prefix);
+  return body;
+}
+
+/**
+ * Ask for the first value one product can't go to Jumia without: a field
+ * its category requires, else its variation (lib/whatsapp/variation-
+ * question.ts). False when it lacks neither. The full readiness check
+ * reaches Jumia, so it only runs when a quick look says something may be
+ * missing, unless the caller already knows.
+ */
+async function askBlockingValue(
+  phoneNumber: string,
+  l:           ListingRow,
+  who:         string,
+  opts: { prefix?: string; known?: JumiaCategoryAttribute[]; reasons?: string[]; variationBlocked?: boolean; resubmit?: boolean } = {},
+): Promise<boolean> {
+  const code = Number(l.category_code);
+  const resubmit = opts.resubmit ? { resubmit: true } : {};
+  let reasons = opts.reasons;
+  let fields = opts.known;
+  if (!fields) {
+    const mayLack = (await getCategoryAttributes(code)).some((a) => a.required && !readAttributeValue(l, a.name).trim());
+    if (mayLack) {
+      const assessment = await assessListingPushReadiness(l.user_id as string, l.id).catch(() => null);
+      fields = assessment?.missingFields ?? [];
+      reasons ??= assessment?.reasons;
+    }
+  }
+
+  const attr = fields?.[0];
+  if (attr) {
+    await updateSession(phoneNumber, { awaitingValueFor: { listingId: l.id, field: attr.name, ...resubmit } });
     const question = missingValueQuestion(attr, who);
-    const body = `${opts.prefix ? `${opts.prefix}\n\n` : ""}${question.body}`;
+    const body = await prefixedBody(phoneNumber, opts.prefix, question.body);
     if (question.options.length <= 3) {
       await replyButtons(phoneNumber, body, question.options);
     } else {
@@ -2350,8 +2400,17 @@ async function askForNextMissingValue(
     return true;
   }
 
-  await updateSession(phoneNumber, { awaitingValueFor: null });
-  return false;
+  const variationBlocked = opts.variationBlocked
+    ?? (reasons
+      ? reasons.some(isVariationBlock)
+      : (await variationMayBlock(l.id, code))
+        && ((await assessListingPushReadiness(l.user_id as string, l.id).catch(() => null))?.reasons ?? []).some(isVariationBlock));
+  if (!variationBlocked) return false;
+
+  await updateSession(phoneNumber, { awaitingValueFor: { listingId: l.id, field: VARIATION_FIELD, ...resubmit } });
+  const body = await prefixedBody(phoneNumber, opts.prefix, variationQuestion(who, await variationOptions(code)));
+  await replyCta(phoneNumber, body, "Pick in the editor", focusedEditorUrl(l.id));
+  return true;
 }
 
 /**
@@ -2365,14 +2424,14 @@ async function answerMissingValue(
   phoneNumber: string,
   batchId:     string,
   batchSize:   number,
-  question:    { listingId: string; field: string },
+  question:    ValueQuestion,
   text:        string,
 ): Promise<boolean> {
   const submitAll = { id: "submit all", title: "Submit all ✅" };
   const restart   = { id: "restart",    title: "Restart 🔄" };
 
   if (VALUE_SKIP_RE.test(text)) {
-    const asked = await askForNextMissingValue(phoneNumber, batchId, { after: question.listingId });
+    const asked = await askForNextMissingValue(phoneNumber, batchId, { after: question.listingId, resubmit: question.resubmit });
     if (!asked) {
       await replyButtons(phoneNumber, "No problem — you can fill it in on the review page any time. Jumia won't accept the product without it.", [submitAll, restart]);
     }
@@ -2388,10 +2447,36 @@ async function answerMissingValue(
     .eq("id", question.listingId)
     .eq("user_id", userId)
     .maybeSingle();
-  const attr = row?.category_code
+  if (!row) return false;
+  const label = batchSize > 1 && row.whatsapp_seq != null ? `product ${row.whatsapp_seq}` : ((row.title as string | null) ?? "your product");
+
+  if (question.field === VARIATION_FIELD) {
+    const options = await variationOptions(Number(row.category_code));
+    const parsed = parseVariations(options, text);
+    if (!parsed.ok) {
+      // A sentence about something else isn't an answer: handled as usual.
+      if (text.trim().split(/\s+/).length > 6) return false;
+      const shown = options.length > 12 ? `${options.slice(0, 12).join(", ")} and ${options.length - 12} more` : options.join(", ");
+      const named = parsed.unknown.map((u) => `"${u}"`).join(", ");
+      await replyButtons(
+        phoneNumber,
+        `⚠️ ${named} ${parsed.unknown.length === 1 ? "isn't" : "aren't"} one of this category's options. Reply with one or more of: ${shown}.`,
+        [{ id: "skip value", title: "Skip for now" }],
+      );
+      return true;
+    }
+    if (!(await saveVariations(question.listingId, parsed.values))) {
+      await replyError(phoneNumber, "⚠️ I couldn't save that just now — send it again in a moment.");
+      return true;
+    }
+    const set = `✅ Variation${parsed.values.length > 1 ? "s" : ""} set to ${parsed.values.join(", ")} for ${label}`;
+    return finishValueAnswer(userId, phoneNumber, batchId, batchSize, row, question, set);
+  }
+
+  const attr = row.category_code
     ? (await getCategoryAttributes(Number(row.category_code))).find((a) => a.name === question.field)
     : undefined;
-  if (!row || !attr) return false;
+  if (!attr) return false;
 
   const parsed = parseMissingValue(attr, text);
   if (!parsed.ok) {
@@ -2402,20 +2487,48 @@ async function answerMissingValue(
     await replyError(phoneNumber, "⚠️ I couldn't save that just now — send it again in a moment.");
     return true;
   }
-
-  const label = batchSize > 1 && row.whatsapp_seq != null ? `product ${row.whatsapp_seq}` : ((row.title as string | null) ?? "your product");
   const unit = columnFor(attr.name) === "weight_kg" ? " kg" : "";
+  return finishValueAnswer(userId, phoneNumber, batchId, batchSize, row, question, `✅ ${attr.label || attr.name} set to ${parsed.value}${unit} for ${label}`);
+}
+
+/**
+ * After a value is saved: a product whose submit Jumia's rules stopped goes
+ * straight back once nothing else holds it, and the next stopped product
+ * is asked about; otherwise the seller hears what's still missing, then
+ * the next question, or gets Submit.
+ */
+async function finishValueAnswer(
+  userId:      string,
+  phoneNumber: string,
+  batchId:     string,
+  batchSize:   number,
+  row:         { id: string; whatsapp_seq: number | null; title: string | null },
+  question:    ValueQuestion,
+  set:         string,
+): Promise<boolean> {
+  const submitAll = { id: "submit all", title: "Submit all ✅" };
+  const restart   = { id: "restart",    title: "Restart 🔄" };
   const assessment = await assessListingPushReadiness(userId, question.listingId);
+
+  if (question.resubmit && assessment.ready) {
+    await updateSession(phoneNumber, { awaitingValueFor: null });
+    const label = row.whatsapp_seq != null ? `Product ${row.whatsapp_seq}` : (row.title ?? "Your product");
+    await pushAndReport(userId, phoneNumber, question.listingId, label, { lead: `${set}.` });
+    await askForNextMissingValue(phoneNumber, batchId, { after: question.listingId, resubmit: true });
+    return true;
+  }
+
   const otherReasons = assessment.missingFields?.length ? [] : assessment.reasons;
   const confirmation = assessment.ready
-    ? `✅ ${attr.label || attr.name} set to ${parsed.value}${unit} for ${label} — ready to submit.`
-    : `✅ ${attr.label || attr.name} set to ${parsed.value}${unit} for ${label}.` +
-      (otherReasons.length > 0 ? `\n⚠️ Still held: ${heldReasonsText(otherReasons)}` : "");
+    ? `${set} — ready to submit.`
+    : `${set}.` + (otherReasons.length > 0 ? `\n⚠️ Still held: ${heldReasonsText(otherReasons)}` : "");
 
   const asked = await askForNextMissingValue(phoneNumber, batchId, {
-    from:   question.listingId,
-    prefix: confirmation,
-    known:  new Map([[question.listingId, assessment.missingFields ?? []]]),
+    from:     question.listingId,
+    prefix:   confirmation,
+    known:    new Map([[question.listingId, assessment.missingFields ?? []]]),
+    reasons:  new Map([[question.listingId, assessment.reasons]]),
+    resubmit: question.resubmit,
   });
   if (!asked) {
     const submit = batchSize > 1 && row.whatsapp_seq != null
@@ -2602,7 +2715,7 @@ export async function finalizeBatch(
         // Never offer Submit on a Held product — confidence over optimism:
         // a seller should never be handed a button that would fail or ship
         // something other than what they typed. The editor is the action.
-        const askable = (assessment.missingFields?.length ?? 0) > 0 || !only.selling_price;
+        const askable = (assessment.missingFields?.length ?? 0) > 0 || !only.selling_price || reasons.some(isVariationBlock);
         await replyCtaOrSplit(
           phoneNumber,
           `✅ Product drafted: ${only.title}.${heldText}\n\n` +
@@ -2615,7 +2728,10 @@ export async function finalizeBatch(
       // asked for right here rather than left as a warning: each is one
       // word the seller knows, and the editor was the only other way on.
       if (!(await askForNextMissingPrice(phoneNumber, batchId))) {
-        await askForNextMissingValue(phoneNumber, batchId, { known: new Map([[only.id, assessment.missingFields ?? []]]) });
+        await askForNextMissingValue(phoneNumber, batchId, {
+          known:   new Map([[only.id, assessment.missingFields ?? []]]),
+          reasons: new Map([[only.id, reasons]]),
+        });
       }
       return;
     }
@@ -2838,7 +2954,8 @@ export async function finalizeBatch(
 
   if (!(await askForNextMissingPrice(phoneNumber, batchId))) {
     await askForNextMissingValue(phoneNumber, batchId, {
-      known: new Map(drafted.map((l, i) => [l.id, assessments[i].missingFields ?? []])),
+      known:   new Map(drafted.map((l, i) => [l.id, assessments[i].missingFields ?? []])),
+      reasons: new Map(drafted.map((l, i) => [l.id, assessments[i].reasons])),
     });
   }
 }
@@ -3253,6 +3370,7 @@ async function handleSubmit(
     // this file — tapping it replies with the focused editor link as its
     // own follow-up button, same round trip "review" and the Held-product
     // edit flow already use.
+    let askedForValue = false;
     if (notSent.length > 0) {
       const shortReason = (r: string) => r.length > 60 ? `${r.slice(0, 59)}…` : r;
       // Named, not just numbered: "Edit product 4" alone left the seller
@@ -3266,7 +3384,19 @@ async function handleSubmit(
             ...notSent.map((item) => `${named(item)}: ${shortReason(item.reason)}`),
           ].join("\n");
 
-      if (notSent.length <= 3) {
+      // What the seller can answer in a word (a price, a field the category
+      // requires, a variation from its stocked options) is asked for here,
+      // one product at a time, as the price is; an answered value sends the
+      // product straight back. Only what can't be answered gets Edit taps.
+      askedForValue = await askForNextMissingPrice(phoneNumber, batchId, { prefix: body })
+        || await askForNextMissingValue(phoneNumber, batchId, {
+          prefix:           body,
+          resubmit:         true,
+          variationBlocked: new Set(notSent.filter((item) => isVariationBlock(item.reason)).map((item) => item.listingId)),
+        });
+      if (askedForValue) {
+        // Asked; the Edit taps below would only repeat it.
+      } else if (notSent.length <= 3) {
         await replyButtons(
           phoneNumber,
           body,
@@ -3295,7 +3425,7 @@ async function handleSubmit(
     if (allSubmitted) {
       await resetSession(phoneNumber);
       await sendBatchDoneMessage(phoneNumber);
-    } else {
+    } else if (!askedForValue) {
       // Still stuff left in this batch — never leave the seller to guess
       // the next command from the result text alone. Short, fixed body
       // here (not the result text) so this one's always well under the
@@ -3623,6 +3753,22 @@ async function handleFixAndResubmit(
     remedy = classifyJumiaRejection(rejectionText);
   }
 
+  // Jumia refused the variation itself (not one of the category's stocked
+  // options): ask for it, as a stopped submit does, rather than redraft a
+  // guess or send the seller to the editor. The answer resubmits.
+  if (row.jumia_qc_status !== "rejected" && /attribute\s*\[\s*variation\s*\]|stocked options/i.test(rejectionText)) {
+    const { data: full } = await db.from("listings").select("*").eq("id", listingId).eq("user_id", userId).maybeSingle();
+    if (full) {
+      const who = row.whatsapp_seq != null ? `Product ${row.whatsapp_seq} — ${row.title}` : ((row.title as string | null) ?? label);
+      const asked = await askBlockingValue(phoneNumber, full as ListingRow, who, {
+        prefix:           `⚠️ ${label}: Jumia won't take its variation.`,
+        variationBlocked: true,
+        resubmit:         true,
+      });
+      if (asked) return;
+    }
+  }
+
   if (!isAutoFixable(remedy.kind)) {
     await replyError(
       phoneNumber,
@@ -3785,17 +3931,39 @@ async function pushAndReport(
   phoneNumber: string,
   listingId:   string,
   label:       string,
+  /** `lead`: a line said first in the same message ("✅ Variation set to 100ml…"). */
+  opts: { lead?: string } = {},
 ): Promise<void> {
   const result = await pushListingToJumia(userId, listingId);
+  const lead = opts.lead ? `${opts.lead}\n` : "";
 
   if (result.ok) {
     await replyText(
       phoneNumber,
       result.adjustments?.length
-        ? `✅ ${label}: resubmitted — pending Jumia review.\n⚠️ ${result.adjustments.join("; ")}.`
-        : `✅ ${label}: resubmitted — pending Jumia review.`,
+        ? `${lead}✅ ${label}: resubmitted — pending Jumia review.\n⚠️ ${result.adjustments.join("; ")}.`
+        : `${lead}✅ ${label}: resubmitted — pending Jumia review.`,
     );
     return;
+  }
+
+  // Something only the seller can supply (a field the category requires, or
+  // a variation from its stocked options): asked for here, and the answer
+  // sends it straight back. It used to be "Jumia still isn't happy — … pick
+  // one in the editor" (owner's request, 2026-10-03).
+  if (result.code === "validation") {
+    const db = createServerClient();
+    const { data: listing } = await db.from("listings").select("*").eq("id", listingId).eq("user_id", userId).maybeSingle();
+    if (listing) {
+      const row = listing as ListingRow;
+      const who = row.whatsapp_seq != null ? `Product ${row.whatsapp_seq} — ${row.title}` : (row.title ?? label);
+      const asked = await askBlockingValue(phoneNumber, row, who, {
+        prefix:           `${lead}⚠️ ${label} wasn't sent yet.`,
+        variationBlocked: isVariationBlock(result.message) || undefined,
+        resubmit:         true,
+      });
+      if (asked) return;
+    }
   }
 
   if (result.code === "insufficient_credits") {
