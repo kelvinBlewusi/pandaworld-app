@@ -774,6 +774,17 @@ only appear while billing is off.
   the product straight back once nothing else holds it. A single product
   drafted without a price gets one message: "✅ Product drafted: X. ⚠️
   needs price. What price…?" with an "Or enter it here" editor button.
+- **Start another, and "already with Jumia" (2026-10-03)**: the button
+  under a submitted batch, a resubmitted product and a drafted product is
+  *Start another* (`START_ANOTHER`, id "start another", a restart with a
+  "Let's list more!" hello), where Restart was; errors, connect prompts
+  and help keep Restart. A batch that's all gone to Jumia ends in
+  `finishSubmittedBatch`, which resets the session and keeps the batch in
+  `whatsapp_sessions.last_submitted_batch_id`. While that's set, a reply
+  in awaiting_count that isn't plainly a count (`CLEAR_COUNT_RE`: "3",
+  "3 products") gets "✅ … already with Jumia" instead of being read as a
+  count: "Quantity 20" used to start a 20-product batch. A count or Start
+  another clears it.
 - **WhatsApp text caps (2026-10-02)**: Meta refuses (400, nothing sent)
   any interactive body over 1,024 characters, a list's included, and plain
   text over 4,096. A 20-product batch summary of 1,731 went in a list and
