@@ -508,7 +508,9 @@ async function runAutoAnalyzeUnmetered(
   // the right category somewhere else.
   let candidates: CategoryCandidate[] = [];
   let candidatesWithSchemas: CandidateWithSchema[] = [];
-  let provenCount = 0;
+  // Candidates put in front of retrieval's (close to a category the seller
+  // named, then live-listing ones), which don't count against its top N.
+  let frontCount = 0;
   let ranked: Awaited<ReturnType<typeof aiPassB_rankCategory>>;
   let filled: Awaited<ReturnType<typeof extractAttributesForCategory>>;
 
@@ -529,7 +531,9 @@ async function runAutoAnalyzeUnmetered(
   if (stated) {
     console.info(
       `[auto-analyze] listing=${listingId} notes name a category: ` +
-        (stated.kind === "match" ? `${stated.category.code} ${stated.category.path}` : stated.options.map((o) => o.code).join(", ")),
+        (stated.kind === "match"
+          ? `${stated.category.code} ${stated.category.path}`
+          : `${stated.kind === "near" ? "close to " : ""}${stated.options.map((o) => o.code).join(", ")}`),
     );
   }
   if (kept) {
@@ -670,11 +674,29 @@ async function runAutoAnalyzeUnmetered(
         }),
         ...candidates.filter((c) => !provenCodes.has(c.code)),
       ];
-      provenCount = proven.length;
+      frontCount = proven.length;
       console.info(
         `[auto-analyze] ${proven.length} live-listing categor${proven.length === 1 ? "y" : "ies"} for "${description.title}": ` +
           proven.map((p) => `${p.code} (${p.score.toFixed(2)}, like "${p.exampleTitle}")`).join(", "),
       );
+    }
+
+    // Jumia's nearest matches to a category the seller named that isn't
+    // its exact name ("Portable Power Banks" for "Portable Power Banks &
+    // Battery Packs") go first, marked for the model. Offered beside the
+    // usual candidates, not instead of them: a close name can still be the
+    // wrong shelf (lib/jumia/stated-category.ts).
+    if (stated?.kind === "near") {
+      const near = stated.options.flatMap((o): CategoryCandidate[] => {
+        const row = listableCategories.find((c) => Number(c.code) === o.code);
+        return row
+          ? [{ code: Number(row.code), name: row.name, path: row.path, attribute_set_sid: row.attribute_set_sid, retrievalScore: 1, source: "seller", sellerNamed: true }]
+          : [];
+      });
+      const nearCodes = new Set(near.map((c) => c.code));
+      const frontKept = candidates.slice(0, frontCount).filter((c) => !nearCodes.has(c.code)).length;
+      candidates = [...near, ...candidates.filter((c) => !nearCodes.has(c.code))];
+      frontCount = near.length + frontKept;
     }
 
     // Enrich with is_leaf from the SAME listableCategories rows the pool
@@ -719,13 +741,14 @@ async function runAutoAnalyzeUnmetered(
     //         flow: aiPassB_rankCategory → schema fetch → extractAttrs.
     const tCombined        = Date.now();
     const TOP_N_FOR_COMBINED = 3;
-    // Live-listing categories sit in front and don't count against the
-    // retrieval top N, so the model still sees retrieval's best three, no
-    // more than two of them siblings (diverseTop).
+    // Categories close to the seller's named one and live-listing ones sit
+    // in front and don't count against the retrieval top N, so the model
+    // still sees retrieval's best three, no more than two of them siblings
+    // (diverseTop).
     // The categories the seller named are the shortlist as they are.
     const topNCandidates   = statedCandidates.length > 0 ? candidates : [
-      ...candidates.slice(0, provenCount),
-      ...diverseTop(candidates.slice(provenCount), TOP_N_FOR_COMBINED),
+      ...candidates.slice(0, frontCount),
+      ...diverseTop(candidates.slice(frontCount), TOP_N_FOR_COMBINED),
     ];
 
     // Parallel schema fetch for top-N candidates. We need them all in hand
@@ -759,6 +782,7 @@ async function runAutoAnalyzeUnmetered(
           attrs,
           is_leaf: c.is_leaf ?? false,
           liveExample: c.liveExample,
+          sellerNamed: c.sellerNamed,
         };
       }),
     );

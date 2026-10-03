@@ -13,6 +13,8 @@ const CATALOGUE = [
   "Toys & Games > Dress Up & Pretend Play > Wigs",
   "Health & Beauty > Personal Care > Skin Care > Body > Cleansers > Body Washes",
   "Home & Office > Arts, Crafts & Sewing > Crafting > Craft Supplies > Wiggle Eyes",
+  "Phones & Tablets > Mobile Accessories > Portable Power Banks & Battery Packs",
+  "Phones & Tablets > Mobile Accessories > Chargers",
 ].map((path, i) => ({
   code: 1000 + i, path, name: path.split(" > ").pop()!,
   parent_code: null, level: 5, is_leaf: true, attribute_set_sid: `sid-${i}`, attribute_set_name: null,
@@ -73,5 +75,19 @@ describe("resolveStatedCategory", () => {
 
   it("ignores a name that only loosely matches", async () => {
     expect(await resolveStatedCategory("user_1", "Category is wiggly things", "Toy")).toBeNull();
+  });
+
+  // Owner's request, 2026-10-03: a name that isn't Jumia's exact one still
+  // steers the draft, as the AI's first, marked candidates.
+  it("offers a close match when no category has the name as written", async () => {
+    const stated = await resolveStatedCategory("user_1", "Category: Portable Power Banks\nPrice 150", "Power Bank 20000mAh");
+    expect(stated).toEqual({
+      kind: "near",
+      options: [expect.objectContaining({ path: "Phones & Tablets > Mobile Accessories > Portable Power Banks & Battery Packs" })],
+    });
+  });
+
+  it("only counts a close match holding every word the seller wrote", async () => {
+    expect(await resolveStatedCategory("user_1", "Category: Portable Solar Power Banks", "Power Bank")).toBeNull();
   });
 });

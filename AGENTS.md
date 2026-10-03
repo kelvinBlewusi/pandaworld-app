@@ -776,6 +776,15 @@ only appear while billing is off.
   the product straight back once nothing else holds it. A single product
   drafted without a price gets one message: "✅ Product drafted: X. ⚠️
   needs price. What price…?" with an "Or enter it here" editor button.
+- **A category named close to Jumia's (2026-10-03)**: notes naming a
+  category ("Category: Portable Power Banks") that isn't Jumia's exact
+  name used to be ignored. `resolveStatedCategory` now returns `near`: up
+  to 3 categories whose path holds every word the seller wrote. Drafting
+  puts them in front of retrieval's candidates, marked
+  `[CLOSE TO THE CATEGORY THE SELLER NAMED]` (`sellerNamed`, ai.ts), with
+  the usual candidates kept after them, since a close name can still be
+  the wrong shelf. An exact name is still used outright, and a shared one
+  is still the whole shortlist.
 - **One variant by default (2026-10-03)**: runAutoAnalyze keeps one
   variant unless the seller's notes name options (`notesNameVariants`,
   lib/whatsapp/variant-claims.ts: a stocked-options claim, "comes in …",
