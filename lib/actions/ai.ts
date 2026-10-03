@@ -1454,6 +1454,23 @@ function liveMarker(example: string | undefined): string {
   return example ? ` [ACCEPTED ON JUMIA — a similar product went live here: "${example.slice(0, 90)}"]` : "";
 }
 
+/** The candidate-line marker for a category close to the one the seller named. */
+function sellerMarker(named: boolean | undefined): string {
+  return named ? " [CLOSE TO THE CATEGORY THE SELLER NAMED]" : "";
+}
+
+/**
+ * How to weigh [CLOSE TO THE CATEGORY THE SELLER NAMED] candidates. Only
+ * emitted when one is present. The seller wrote a category in their notes
+ * that isn't Jumia's exact name; these are the closest Jumia has.
+ */
+function sellerNote(candidates: Array<{ sellerNamed?: boolean }>): string {
+  if (!candidates.some((c) => c.sellerNamed)) return "";
+  return `
+A candidate marked [CLOSE TO THE CATEGORY THE SELLER NAMED] is Jumia's nearest match to the category the seller wrote in their notes. The seller knows where their product belongs, so pick it when it is a correct shelf for THIS product, over an equally good unmarked candidate. Don't pick it if the photos plainly show a different kind of product than that category holds.
+`;
+}
+
 /**
  * How to weigh [ACCEPTED ON JUMIA] candidates. Only emitted when one is
  * present. Acceptance is real evidence (Jumia refuses some categories
@@ -1469,7 +1486,7 @@ A candidate marked [ACCEPTED ON JUMIA] is one Jumia has already accepted a simil
 
 export async function aiPassB_rankCategory(
   imageUrls:  string[],
-  candidates: Array<{ code: number; name: string; path: string; is_leaf?: boolean; liveExample?: string }>,
+  candidates: Array<{ code: number; name: string; path: string; is_leaf?: boolean; liveExample?: string; sellerNamed?: boolean }>,
   userContext?: string | null,
   // From Pass A — anchors the rank model so it disambiguates
   // visually-similar candidates by what the product is actually FOR.
@@ -1503,7 +1520,7 @@ export async function aiPassB_rankCategory(
   const rankVisionModel = await resolveModel(null, "vision", { forceBestModel: opts.forceBestModel });
 
   const candidateList = candidates
-    .map((c, i) => `${i + 1}. ${c.code} — ${c.path}${c.is_leaf === false ? " [PARENT category — has more specific sub-categories on Jumia]" : ""}${liveMarker(c.liveExample)}`)
+    .map((c, i) => `${i + 1}. ${c.code} — ${c.path}${c.is_leaf === false ? " [PARENT category — has more specific sub-categories on Jumia]" : ""}${liveMarker(c.liveExample)}${sellerMarker(c.sellerNamed)}`)
     .join("\n");
 
   const ctxSection = userContext && userContext.trim()
@@ -1522,7 +1539,7 @@ export async function aiPassB_rankCategory(
 
 CANDIDATES:
 ${candidateList}
-${liveNote(candidates)}${useCaseBlock}
+${liveNote(candidates)}${sellerNote(candidates)}${useCaseBlock}
 Rules:
 1. Pick exactly one as the primary (the best match).
 2. List up to 2 alternates in case the primary is wrong.
@@ -1742,6 +1759,8 @@ export interface CandidateWithSchema {
   is_leaf: boolean;
   /** See CategoryCandidate.liveExample (lib/jumia/category-search.ts). */
   liveExample?: string;
+  /** See CategoryCandidate.sellerNamed (lib/jumia/category-search.ts). */
+  sellerNamed?: boolean;
 }
 
 export interface PickAndFillResult {
@@ -1839,7 +1858,7 @@ export async function aiPassBC_pickAndFill(
         }).join("\n");
 
     const specificity = c.is_leaf ? "" : " [PARENT category — has more specific sub-categories on Jumia]";
-    return `${i + 1}. CODE ${c.code} — ${c.path}${specificity}${liveMarker(c.liveExample)}\n${attrLines}`;
+    return `${i + 1}. CODE ${c.code} — ${c.path}${specificity}${liveMarker(c.liveExample)}${sellerMarker(c.sellerNamed)}\n${attrLines}`;
   }).join("\n\n");
 
   const ctxSection = userContext && userContext.trim()
@@ -1865,7 +1884,7 @@ export async function aiPassBC_pickAndFill(
 STEP 1 — Pick the best Jumia category from these candidates (each shows its attribute schema underneath):
 
 ${candidateBlocks}
-${liveNote(candidates)}${useCaseBlock}
+${liveNote(candidates)}${sellerNote(candidates)}${useCaseBlock}
 STEP 2 — For YOUR CHOSEN category from Step 1, fill the attribute values you can determine from the images.
 
 ${policyBlock}

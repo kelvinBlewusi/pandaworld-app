@@ -70,7 +70,7 @@ export function suggestCategories(
 }
 
 /** Lowercase words, "&" read as "and", plurals folded ("Power Banks" ≡ "power bank"). */
-function normalizeWords(s: string): string {
+export function normalizeWords(s: string): string {
   return s
     .toLowerCase()
     .replace(/&/g, " and ")

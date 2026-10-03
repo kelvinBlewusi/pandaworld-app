@@ -67,6 +67,13 @@ export interface CategoryCandidate {
    */
   liveExample?:       string;
   /**
+   * Close to a category the seller named in their notes, which wasn't
+   * Jumia's exact name (lib/jumia/stated-category.ts, kind "near").
+   * Surfaced to the model as the seller's stated shelf, to prefer when it
+   * fits the product.
+   */
+  sellerNamed?:       boolean;
+  /**
    * Whether this is Jumia's most specific category for this branch —
    * i.e. it has no more-specific child a product could be filed under
    * instead. Optional and NOT set by the retrieval functions in this

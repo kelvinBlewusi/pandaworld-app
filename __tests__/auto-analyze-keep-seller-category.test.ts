@@ -206,3 +206,20 @@ describe("runAutoAnalyze with a similar live listing", () => {
     expect(pickCandidates.some((c) => c.liveExample)).toBe(false);
   });
 });
+
+// lib/jumia/stated-category.ts "near": a category named in the notes that
+// isn't Jumia's exact name goes first, marked, beside the usual candidates.
+describe("runAutoAnalyze with a category named close to Jumia's", () => {
+  const CHARGERS = leaf(3000001, "Phones & Tablets > Mobile Accessories > Chargers");
+
+  it("offers Jumia's nearest category first, marked as the seller's, with the usual candidates after it", async () => {
+    listable = [SELLER_PICK, CHARGERS];
+    seedListing({ field_sources: {}, category_code: null, category_path: null });
+
+    await runAutoAnalyze(USER, LISTING_ID, "Category: Portable Power Bank\nprice 150");
+
+    expect(pickCandidates[0]).toMatchObject({ code: SELLER_PICK.code, sellerNamed: true });
+    expect(pickCandidates.filter((c) => (c as { sellerNamed?: boolean }).sellerNamed)).toHaveLength(1);
+    expect(aiCalls).toContain("department");
+  });
+});
