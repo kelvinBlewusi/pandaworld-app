@@ -1885,6 +1885,35 @@ describe("Start another, after products go to Jumia", () => {
   });
 });
 
+describe("how many products a batch can hold", () => {
+  beforeEach(() => {
+    seedSession({ state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null, listing_id: null });
+    db.tables.jumia_connections = [{
+      user_id: USER, status: "active", access_token: "real-token", shop_id: "shop-1", country: "GH",
+      token_expires_at: new Date(Date.now() + 86_400_000).toISOString(),
+    }];
+  });
+  afterEach(() => {
+    db.tables.jumia_connections = [];
+    delete process.env.ADMIN_USER_IDS;
+  });
+
+  it("holds a seller to 10", async () => {
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "15" });
+
+    expect(sent[0].body).toContain("15 is more than I can draft in one go — the most is 10 at a time.");
+    expect(session().state).toBe("awaiting_count");
+  });
+
+  it("lets an admin draft 20", async () => {
+    process.env.ADMIN_USER_IDS = USER;
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "15" });
+
+    expect(session().state).toBe("awaiting_photos");
+    expect(session().batch_size).toBe(15);
+  });
+});
+
 describe("Fix & resubmit", () => {
   const REJECTED_ID = "11111111-1111-1111-1111-111111111111";
 

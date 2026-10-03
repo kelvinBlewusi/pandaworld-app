@@ -275,7 +275,9 @@ pipeline above:
     the last two jobs at once.
   - `MAX_BATCH_SIZE` went back to 20 as a result. What binds now is the
     shared Gemini/Vertex project quota (still unmeasured) and seller
-    patience, not a per-request ceiling.
+    patience, not a per-request ceiling. On 2026-10-03 the owner set it
+    to 10 for sellers; admins (`isAdmin`) keep `ADMIN_MAX_BATCH_SIZE`, 20
+    (handleAwaitingCount passes the cap to `readProductCount`).
 - **Batch cap history (2026-09-13)**: `MAX_BATCH_SIZE`
   (`lib/whatsapp/batch.ts`) dropped 20 → 5 before the queue existed. `startBatchAnalysis` runs every
   product's analysis concurrently inside the WhatsApp webhook, which Vercel

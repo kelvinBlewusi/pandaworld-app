@@ -11,6 +11,7 @@ import {
   buyCreditsUrl,
   COUNT_QUICK_PICKS,
   MAX_BATCH_SIZE,
+  ADMIN_MAX_BATCH_SIZE,
 } from "@/lib/whatsapp/batch";
 
 // parseProductCount collapses every rejection to null, which made "50"
@@ -30,6 +31,13 @@ describe("readProductCount — says WHY a count was rejected", () => {
     expect(readProductCount("50")).toEqual({ ok: false, reason: "too_many", value: 50 });
     expect(readProductCount("a few")).toEqual({ ok: false, reason: "no_number" });
     expect(readProductCount("")).toEqual({ ok: false, reason: "no_number" });
+  });
+
+  it("caps a seller at 10 and an admin at 20 (owner's call, 2026-10-03)", () => {
+    expect(MAX_BATCH_SIZE).toBe(10);
+    expect(readProductCount("11")).toEqual({ ok: false, reason: "too_many", value: 11 });
+    expect(readProductCount("15", ADMIN_MAX_BATCH_SIZE)).toEqual({ ok: true, count: 15 });
+    expect(readProductCount("21", ADMIN_MAX_BATCH_SIZE)).toEqual({ ok: false, reason: "too_many", value: 21 });
   });
 
   it("distinguishes zero from gibberish", () => {

@@ -13,6 +13,7 @@ import {
   type WhatsAppSession,
 } from "@/lib/whatsapp/session";
 import { createListingForUser } from "@/lib/listings/create";
+import { isAdmin } from "@/lib/auth/is-admin";
 import { runAutoAnalyze } from "@/lib/actions/auto-analyze";
 import { availableCredits } from "@/lib/billing/extension-credits";
 import { LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
@@ -70,6 +71,7 @@ import {
   buyCreditsUrl,
   COUNT_QUICK_PICKS,
   MAX_BATCH_SIZE,
+  ADMIN_MAX_BATCH_SIZE,
 } from "@/lib/whatsapp/batch";
 import { splitCredentialTokens, identifyCredentials, looksLikeCredential, isResendCommand, jumiaConnectLink, promptJumiaConnection, countryFromPhone } from "@/lib/whatsapp/jumia-connect";
 import { classifyBatchIntent, looksActionable } from "@/lib/whatsapp/intent";
@@ -121,7 +123,7 @@ const SUBMIT_DEADLINE_MS = 45_000;
 
 // Batch size at or above which the "drafting them now" message adds "This
 // is a bigger batch, so it may take a little while." 10, so it's said for
-// 10-20 products (MAX_BATCH_SIZE is 20) and not for a handful, which the
+// 10 or more products (a seller's most; an admin's is 20) and not for a handful, which the
 // queue drafts in about the time a single product takes. Was 3 while the
 // cap was 5.
 const BIG_BATCH_SIZE = 10;
@@ -1144,18 +1146,20 @@ async function handleAwaitingCount(
     return;
   }
 
-  const parsed = content.text ? readProductCount(content.text) : { ok: false as const, reason: "no_number" as const };
+  // 10 for sellers, 20 for admins (owner's call, 2026-10-03).
+  const max = isAdmin(userId) ? ADMIN_MAX_BATCH_SIZE : MAX_BATCH_SIZE;
+  const parsed = content.text ? readProductCount(content.text, max) : { ok: false as const, reason: "no_number" as const };
 
   if (!parsed.ok) {
     // Say which thing went wrong. Answering "50" with "I need a number"
-    // reads as the bot not understanding, when the real answer is that
-    // the batch cap is 20 — a fact the seller can act on immediately.
+    // reads as the bot not understanding, when the real answer is the
+    // batch cap — a fact the seller can act on immediately.
     const message =
       parsed.reason === "too_many"
-        ? `⚠️ ${parsed.value} is more than I can draft in one go — the most is ${MAX_BATCH_SIZE} at a time. Reply with a number up to ${MAX_BATCH_SIZE} and you can start another batch straight after.`
+        ? `⚠️ ${parsed.value} is more than I can draft in one go — the most is ${max} at a time. Reply with a number up to ${max} and you can start another batch straight after.`
         : parsed.reason === "too_few"
-          ? `⚠️ I need at least 1 product to get started — reply with how many you're listing today (1–${MAX_BATCH_SIZE}).`
-          : `⚠️ I need a number to get started — reply with how many products you're listing today (1–${MAX_BATCH_SIZE}), e.g. *3*.`;
+          ? `⚠️ I need at least 1 product to get started — reply with how many you're listing today (1–${max}).`
+          : `⚠️ I need a number to get started — reply with how many products you're listing today (1–${max}), e.g. *3*.`;
     await replyButtons(phoneNumber, message, COUNT_QUICK_PICKS);
     return;
   }
