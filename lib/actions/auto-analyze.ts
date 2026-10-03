@@ -42,6 +42,7 @@ import { aiReadNoteIntent } from "@/lib/actions/ai";
 import { verifyNoteIntent, type NoteIntent } from "@/lib/whatsapp/note-intent";
 import {
   extractVariantClaim,
+  notesNameVariants,
   reconcileVariants,
 } from "@/lib/whatsapp/variant-claims";
 import {
@@ -1780,6 +1781,18 @@ async function runAutoAnalyzeUnmetered(
       `[auto-analyze] listing=${listingId} variant claim unresolved ("${reconciled.source}"): ` +
       `${reconciled.reason} — dropped all ${description.variations.length} proposed options`,
     );
+  }
+
+  // One variant unless the seller's notes name options (owner's request,
+  // 2026-10-03). The Describe prompt says so too, and was not always
+  // followed: a single product drafted as two variants, the second with no
+  // label, and its submit stopped on "Variant 2 has no Variation label".
+  variations = variations.filter((v) => v.label.trim());
+  if (variations.length > 1 && !notesNameVariants(userContext)) {
+    console.info(
+      `[auto-analyze] listing=${listingId} kept 1 of ${variations.length} variants — the seller's notes name no options`,
+    );
+    variations = variations.slice(0, 1);
   }
 
   if (variations.length > 0) {

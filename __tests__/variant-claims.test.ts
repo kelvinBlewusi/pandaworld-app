@@ -3,6 +3,7 @@ import {
   reconcileVariants,
   variantClaimWarning,
 } from "@/lib/whatsapp/variant-claims";
+import { notesNameVariants } from "@/lib/whatsapp/variant-claims";
 
 /** The five colours the photo showed in the live failure. */
 const PHOTO = ["Red", "Yellow", "Orange", "White", "Blue"];
@@ -166,5 +167,27 @@ describe("variantClaimWarning", () => {
   it("is silent for a resolved or absent claim", () => {
     expect(variantClaimWarning({ kind: "no_claim" })).toBeNull();
     expect(variantClaimWarning({ kind: "restrict", keep: ["Red"], source: "only red" })).toBeNull();
+  });
+});
+
+describe("notesNameVariants", () => {
+  it("is true when the notes talk about options", () => {
+    for (const note of [
+      "comes in red, blue and green",
+      "Available in 3 colours",
+      "colours: red, blue",
+      "Sizes M L XL",
+      "only black and red are available",
+      "variations: 50ml, 100ml",
+      "two flavours",
+    ]) {
+      expect(notesNameVariants(note)).toBe(true);
+    }
+  });
+
+  it("is false for notes that don't", () => {
+    for (const note of ["price 150", "stock 10, brand Oraimo", "Maca + Honey hip oil, 100ml bottle", "", null]) {
+      expect(notesNameVariants(note)).toBe(false);
+    }
   });
 });

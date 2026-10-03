@@ -776,6 +776,13 @@ only appear while billing is off.
   the product straight back once nothing else holds it. A single product
   drafted without a price gets one message: "✅ Product drafted: X. ⚠️
   needs price. What price…?" with an "Or enter it here" editor button.
+- **One variant by default (2026-10-03)**: runAutoAnalyze keeps one
+  variant unless the seller's notes name options (`notesNameVariants`,
+  lib/whatsapp/variant-claims.ts: a stocked-options claim, "comes in …",
+  "colours: …", "3 sizes", "variations: …"), and never saves one without a
+  label. The Describe prompt already asked for this; a single product
+  still drafted as two variants, the second unlabelled, and its submit
+  stopped on "Variant 2 has no Variation label".
 - **Prices in chat (2026-10-03)**: a price the bot says back goes through
   `chatPrice` (intake.ts): the seller's own symbol from their shop's
   country ("GH₵150", "₦15,000", "KSh 500"), or the bare number when the
