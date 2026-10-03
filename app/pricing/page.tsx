@@ -11,6 +11,7 @@ import {
   FREE_SIGNUP_CREDITS,
   IMAGE_CREDIT_COST,
   LISTING_CREDIT_COST,
+  comingSoonLabels,
   LIVE_LISTING_CREDIT_COST,
   POPULAR_PACK_ID,
   packFeatures,
@@ -190,21 +191,14 @@ export default async function PricingPage() {
                       Never expires
                     </li>
                     {/* What the pack unlocks, kept for good (lib/billing/features.ts).
-                        Features not built yet are greyed out, unlabelled (owner's
-                        call, 2026-10-01); the FAQ says they aren't available yet. */}
-                    {packFeatures(p.id).map((f) =>
-                      f.comingSoon ? (
-                        <li key={f.id} className="flex items-start gap-2 text-zinc-400">
-                          <Check className="mt-0.5 h-4 w-4 shrink-0 text-zinc-300" />
-                          {f.label}
-                        </li>
-                      ) : (
-                        <li key={f.id} className="flex items-start gap-2 font-medium">
-                          <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-                          {f.label}
-                        </li>
-                      ),
-                    )}
+                        Features not built yet look like the rest (owner's call,
+                        2026-10-03); the FAQ below names them as not available yet. */}
+                    {packFeatures(p.id).map((f) => (
+                      <li key={f.id} className="flex items-start gap-2 font-medium">
+                        <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+                        {f.label}
+                      </li>
+                    ))}
                   </ul>
                   <div className="mt-6">
                     {billingOn && userId ? (
@@ -245,7 +239,7 @@ export default async function PricingPage() {
             />
             <FAQ
               q="What do the bigger packs unlock?"
-              a={`Buying the Standard pack or bigger once unlocks Jumia QC rejection alerts and guided fixes for good: when Jumia's quality check rejects a listing after accepting it, we tell you why, return its credits, and help you fix and resubmit it. Pro and Business add two tools to the Chrome extension: image polish, which turns your rough photos into four product images (${IMAGE_CREDIT_COST} credits per image), and the Jumia fee calculator for your country. The greyed-out tools aren't available yet.`}
+              a={`Buying the Standard pack or bigger once unlocks Jumia QC rejection alerts and guided fixes for good: when Jumia's quality check rejects a listing after accepting it, we tell you why, return its credits, and help you fix and resubmit it. Pro and Business add two tools to the Chrome extension: image polish, which turns your rough photos into four product images (${IMAGE_CREDIT_COST} credits per image), and the Jumia fee calculator for your country. Not available yet: ${comingSoonLabels().join(", ")}.`}
             />
             <FAQ
               q="Why is the Chrome extension charged per autofill?"
