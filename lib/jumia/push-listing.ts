@@ -27,6 +27,7 @@ import type { ListingRow, ListingStatus, VariantRow } from "@/lib/supabase/types
 import { chargeLiveListing, creditsDueForSubmission } from "@/lib/billing/extension-credits";
 import { LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
 import { hasFeature } from "@/lib/billing/features";
+import { isUnlistableCategoryError } from "@/lib/jumia/unlistable-categories";
 
 export interface PushListingVariantInput {
   variation:      string;
@@ -675,6 +676,25 @@ export const QC_APPROVED = "qc_approved";
 /** Not a rejection: nothing to fix. */
 const isGoodNews = (status: string) => status === "live" || status === QC_APPROVED;
 
+/**
+ * Jumia refused the listing's category ("You can't list products in this
+ * category…"): rather than "was rejected" and a Fix & resubmit tap that
+ * redrafted a guess, the seller is asked for the right category there and
+ * then (owner's request, 2026-10-03; askCategoryForRefusedListing in
+ * lib/whatsapp/intake.ts). False for any other rejection, or when the
+ * question couldn't be asked, so the usual message goes instead.
+ */
+async function askedForRefusedCategory(phoneNumber: string, listingId: string, errorMsg: string | null): Promise<boolean> {
+  if (!isUnlistableCategoryError(errorMsg)) return false;
+  try {
+    const { askCategoryForRefusedListing } = await import("@/lib/whatsapp/intake");
+    return await askCategoryForRefusedListing(phoneNumber, listingId);
+  } catch (e) {
+    console.warn(`[push-listing] category question for ${listingId} failed: ${(e as Error).message}`);
+    return false;
+  }
+}
+
 //
 // `qcAlerts` is whether the seller has QC follow-up (the Standard pack and
 // up, lib/billing/features.ts). Without it nothing will report the QC
@@ -721,6 +741,9 @@ async function notifyListingResolved(
 
     const wa = await getWhatsAppConnection(row.user_id as string);
     if (!wa.connected || !wa.phoneNumber) return;
+
+    // A refused category is asked for straight away: the question is the message.
+    if (!isGoodNews(newStatus) && await askedForRefusedCategory(wa.phoneNumber, listingId, errorMsg)) return;
 
     const name = (row.title as string | null) ?? "Your product";
     const text = resolutionLine(name, newStatus, errorMsg, counts, await hasFeature(row.user_id as string, "qc_fix"));
@@ -852,6 +875,8 @@ export async function notifyBatchResolved(
 
     if (items.length === 1) {
       const item = items[0];
+      // A refused category is asked for straight away: the question is the message.
+      if (!isGoodNews(item.newStatus) && await askedForRefusedCategory(phoneNumber, item.listingId, item.errorMsg)) return;
       const name = item.title ?? "Your product";
       const text = resolutionLine(name, item.newStatus, item.errorMsg, item.counts, qcAlerts);
       if (!isGoodNews(item.newStatus)) {
@@ -891,6 +916,8 @@ export async function notifyBatchResolved(
     await sendText([header, "", ...lines].join("\n"));
 
     if (rejected.length === 0) return;
+    // The one rejection is a refused category: asked for, not a Fix tap.
+    if (rejected.length === 1 && await askedForRefusedCategory(phoneNumber, rejected[0].listingId, rejected[0].errorMsg)) return;
 
     const label = (i: ResolvedListingNotice) => i.whatsappSeq != null ? `Product ${i.whatsappSeq}` : (i.title ?? "product");
 
