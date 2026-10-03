@@ -1238,10 +1238,13 @@ async function handleAwaitingJumiaCredentials(
     await updateSession(phoneNumber, {
       pendingAppId: null, state: "awaiting_count", listingId: null, batchId: null, batchSize: null, batchSeq: null,
     });
-    await replyText(
+    // The count buttons ride on this message, as after a restart: one
+    // message, not the question and then the buttons.
+    await replyButtons(
       phoneNumber,
       `🎉 Jumia connected — ${connected.storeName}!\n\n` +
         "How many products are you listing today? Reply with a number to get started.",
+      COUNT_QUICK_PICKS,
     );
     return;
   }
