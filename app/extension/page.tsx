@@ -1,6 +1,6 @@
 import Image from "next/image";
 import { WhatsAppIcon } from "@/components/whatsapp/whatsapp-icon";
-import {Chrome, KeyRound, UploadCloud, Wand2, ListOrdered, Camera, CheckCircle2, Megaphone} from "lucide-react";
+import { Chrome, KeyRound, UploadCloud, Wand2, ListOrdered, Camera, CheckCircle2, Megaphone, Sparkles, MessageCircleQuestion } from "lucide-react";
 import { auth } from "@clerk/nextjs/server";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { ExtensionHeroBackdrop } from "@/components/marketing/extension-hero-backdrop";
@@ -9,6 +9,7 @@ import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 import { isBillingEnabled } from "@/lib/billing/mode";
 import { CALCULATOR_HREF, WHATSAPP_LISTINGS_HREF, WHATSAPP_SIGN_UP_HREF } from "@/lib/marketing/links";
 import { FREE_SIGNUP_CREDITS } from "@/lib/billing/credit-packs";
+import { MAX_BATCH_SIZE } from "@/lib/whatsapp/batch";
 
 // ─── /extension — public page for the Chrome extension + WhatsApp flows ──────
 //
@@ -55,6 +56,8 @@ export const metadata: import("next").Metadata = {
   alternates: { canonical: "/" },
 };
 
+// What each flow is today (owner's request, 2026-10-03: How it works had
+// fallen behind the product). Keep these in step with the bot and the panel.
 const STEPS = [
   {
     Icon: Chrome,
@@ -77,28 +80,43 @@ const STEPS = [
     title: "Click Autofill, review, submit",
     body: "AI fills the title, description, highlights, and attributes. Check it, tweak anything that needs it, and submit.",
   },
+  {
+    Icon: Sparkles,
+    title: "Polish photos and check your price",
+    body: "With the Pro and Business packs, Polish turns your photos into clean studio shots, and your country's Jumia fee calculator shows what you'll take home. Both sit in the panel.",
+  },
 ];
 
 const WHATSAPP_STEPS = [
   {
     Icon: WhatsAppIcon,
     title: "Link your WhatsApp",
-    body: "Grab a connect code from your PandaWorld dashboard and send it to this WhatsApp number +233548534323. Takes a few seconds.",
+    body: "In your PandaWorld dashboard, tap WhatsApp Bot. WhatsApp opens with a connect code ready to send to our number, +233548534323.",
+  },
+  {
+    Icon: KeyRound,
+    title: "Connect your Jumia store",
+    body: "Once only: the bot shows you how to make a Self Authorization app in Vendor Center. Paste its Client ID and token in the chat and you stay connected.",
   },
   {
     Icon: ListOrdered,
     title: "Say how many products",
-    body: "Reply with a number, like 3, and we'll take you through them one by one.",
+    body: `Reply with a number, up to ${MAX_BATCH_SIZE} at a time. Send them all at once, each with a caption, or let the bot guide you one by one.`,
   },
   {
     Icon: Camera,
-    title: "Send photos and a note",
-    body: "Snap the product and send the photos. Mention anything that matters, like the price, the colour, or what's in the box.",
+    title: "Send photos with the price",
+    body: "Send each product's photos with its price and anything that matters in the caption, like sizes, colours, or what's in the box.",
+  },
+  {
+    Icon: MessageCircleQuestion,
+    title: "Answer what's missing",
+    body: "AI drafts every listing. If one still needs something, like a price or a variation, the bot asks you for it right in the chat.",
   },
   {
     Icon: CheckCircle2,
-    title: "Review and submit",
-    body: "We draft the listing and message it back to you. Check it over, reply submit, and it goes live on Jumia.",
+    title: "Submit and hear back",
+    body: "Tap Submit and your products go to Jumia for review. The bot tells you when each one goes live, or what Jumia wants changed so you can fix it in a tap.",
   },
 ];
 
