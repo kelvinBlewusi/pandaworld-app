@@ -762,6 +762,18 @@ only appear while billing is off.
   category and never mirror weight into `weight_kg`, so a switched shower
   cream lost its weight. It now carries values the new category also has
   (if allowed there) and fills empty weight/size columns.
+- **The bot asks for what blocks a product (2026-10-03)**: a price, a field
+  the category requires, or a variation from its stocked options is asked
+  for in chat instead of "pick one in the editor", at draft time, after a
+  stopped submit and in Fix & resubmit. `askBlockingValue` (intake.ts)
+  asks a required field first, then the variation
+  (lib/whatsapp/variation-question.ts: the session's awaitingValueFor gets
+  field `__variation`; the reply is matched to the category's options,
+  several allowed, and saved as variant rows with the product's price and
+  stock). `resubmit: true` on the pointer (a stopped submit or Fix) sends
+  the product straight back once nothing else holds it. A single product
+  drafted without a price gets one message: "✅ Product drafted: X. ⚠️
+  needs price. What price…?" with an "Or enter it here" editor button.
 - **WhatsApp text caps (2026-10-02)**: Meta refuses (400, nothing sent)
   any interactive body over 1,024 characters, a list's included, and plain
   text over 4,096. A 20-product batch summary of 1,731 went in a list and
