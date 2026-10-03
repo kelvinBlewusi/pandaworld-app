@@ -141,7 +141,7 @@ export default async function PricingPage() {
                       <p className="text-sm text-zinc-500">{c.detail}</p>
                     </td>
                     <td className="whitespace-nowrap px-5 py-4 text-right text-lg font-bold">
-                      {c.credits} credits
+                      {c.credits} {c.credits === 1 ? "credit" : "credits"}
                     </td>
                   </tr>
                 ))}
