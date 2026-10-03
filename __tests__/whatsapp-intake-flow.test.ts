@@ -582,7 +582,7 @@ describe("asking for a missing price in chat", () => {
   // The owner's format, 2026-10-03: the draft and the price question are
   // one message, with the editor as the other way to give it.
   it("asks a single product's price in its drafted message", async () => {
-    seedBatch([{ seq: 1, title: "Vintage Radio Eau de Parfum - 100ml" }]);
+    seedBatch([{ seq: 1, title: "Vintage Radio Eau de Parfum - 100ml, Natural Spray" }]);
     confirming({ batch_size: 1 });
     sent.length = 0;
 
@@ -592,8 +592,8 @@ describe("asking for a missing price in chat", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0].kind).toBe("cta");
     expect(sent[0].body).toBe(
-      "✅ Product drafted: Vintage Radio Eau de Parfum - 100ml.\n⚠️ *needs price.*\n\n" +
-      "*What price are you selling it at? Reply with just the number.*",
+      "✅ Product drafted: Vintage Radio Eau de Parfum - 100ml, Natural Spray.\n⚠️ *needs price.*\n\n" +
+      "*What price are you selling it at? Reply with just the amount (Eg. 1500)*",
     );
     expect(session().awaiting_price_for).toBe("listing-1");
   });
