@@ -119,7 +119,11 @@ jest.mock("@/lib/jumia/push-listing", () => ({
   ...jest.requireActual("@/lib/jumia/push-listing"),
   pushListingToJumia: async (_userId: string, listingId: string) => {
     pushCallCount++;
-    return pushResultFor.get(listingId) ?? pushResult;
+    const result = pushResultFor.get(listingId) ?? pushResult;
+    // As the real push does: a product that reached Jumia waits on its review.
+    const row = db.tables.listings.find((l) => l.id === listingId);
+    if (result.ok && row) row.status = "pending_approval";
+    return result;
   },
 }));
 
@@ -1177,7 +1181,7 @@ describe("message volume on a large batch", () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0].kind).toBe("list");
-    expect(sent[0].rows).toEqual(["submit all", "submit 1", "submit 2", "submit 3", "restart"]);
+    expect(sent[0].rows).toEqual(["submit all", "submit 1", "submit 2", "submit 3", "start another"]);
     expect(sent[0].body).toContain("Product 3: ✅ Ready");
   });
 
@@ -1194,7 +1198,7 @@ describe("message volume on a large batch", () => {
     await finalizeBatch("batch-1", PHONE, 5);
 
     const list = sent.find((m) => m.kind === "list")!;
-    expect(list.rows).toEqual(["submit all", "submit 1", "submit 2", "submit 4", "submit 5", "restart"]);
+    expect(list.rows).toEqual(["submit all", "submit 1", "submit 2", "submit 4", "submit 5", "start another"]);
     expect(sent.some((m) => m.body.includes("retry 3"))).toBe(true);
   });
 
@@ -1776,6 +1780,108 @@ describe("handleSubmit — products that fail to push get ONE compiled follow-up
     expect(followUp).toBeDefined();
     expect(followUp!.body).toContain("Weight (kg)");
     expect(followUp!.rows).toEqual(["edit:listing-1"]);
+  });
+});
+
+describe("Start another, after products go to Jumia", () => {
+  // Owner's request, 2026-10-03: "Start another" where Restart was, under
+  // every product that's gone to Jumia, and "Quantity 20" typed after a
+  // submit was read as a 20-product batch.
+  const DRAFT = {
+    user_id: USER,
+    whatsapp_batch_id: "batch-1",
+    description: "A long enough description to clear the fifty-character minimum check.",
+    category_code: "1234",
+    brand: "Panasonic",
+    images: ["https://cdn.test/a.jpg"],
+    status: "draft",
+    selling_price: 150,
+  };
+
+  function seedDrafts(n: number) {
+    db.tables.listings = Array.from({ length: n }, (_, i) => ({
+      ...DRAFT, id: `listing-${i + 1}`, whatsapp_seq: i + 1, title: `Drafted product number ${i + 1}`,
+    }));
+    seedSession({ state: "awaiting_confirmation", batch_size: n, batch_seq: null });
+    db.tables.jumia_connections = [{
+      user_id: USER, status: "active", access_token: "real-token", shop_id: "shop-1", country: "GH",
+      token_expires_at: new Date(Date.now() + 86_400_000).toISOString(),
+    }];
+    sent.length = 0;
+  }
+  afterEach(() => { db.tables.jumia_connections = []; });
+
+  it("signs off a submitted batch with a Start another button, in the same message as the results", async () => {
+    seedDrafts(2);
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "submit all" });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].kind).toBe("buttons");
+    expect(sent[0].rows).toEqual(["start another"]);
+    expect(sent[0].body).toContain("Product 2: ✅ submitted — pending Jumia review.");
+    expect(sent[0].body).toContain("Tap *Start another*");
+    expect(session().state).toBe("awaiting_count");
+    expect(session().last_submitted_batch_id).toBe("batch-1");
+  });
+
+  it("tells a seller who types more after the submit that the product is already with Jumia", async () => {
+    seedDrafts(1);
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "submit" });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "Quantity 20" });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body).toContain(`"Drafted product number 1" is already with Jumia, waiting for its review`);
+    expect(sent[0].rows).toEqual(["start another"]);
+    expect(session().state).toBe("awaiting_count");
+    expect(session().batch_id).toBeNull();
+  });
+
+  it("still starts a new batch from a plain count after the submit", async () => {
+    seedDrafts(1);
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "submit" });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "3" });
+
+    expect(session().state).toBe("awaiting_photos");
+    expect(session().batch_size).toBe(3);
+    expect(session().last_submitted_batch_id).toBeNull();
+  });
+
+  it("asks how many on Start another", async () => {
+    seedDrafts(1);
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "submit" });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "start another" });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body).toBe("Let's list more! How many products are you listing today?");
+    expect(session().last_submitted_batch_id).toBeNull();
+  });
+
+  it("says a drafted product it leaves behind stays on the review page", async () => {
+    seedDrafts(1);
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "start another" });
+
+    expect(sent[0].body).toBe("Let's list more! Your unsent draft stays on the review page. How many products are you listing today?");
+    expect(session().state).toBe("awaiting_count");
+  });
+
+  it("offers Start another under a resubmitted product once its batch is all with Jumia", async () => {
+    seedDrafts(2);
+    db.tables.listings[0].status = "pending_approval";
+    const fixId = "22222222-2222-2222-2222-222222222222";
+    db.tables.listings[1] = { ...db.tables.listings[1], id: fixId, status: "failed", jumia_error: "Attribute [warranty_type] is not visible for category [Refrigerators]" };
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${fixId}` });
+
+    const done = sent.find((m) => m.body.includes("resubmitted — pending Jumia review"));
+    expect(done?.rows).toEqual(["start another"]);
+    expect(session().state).toBe("awaiting_count");
+    expect(session().last_submitted_batch_id).toBe("batch-1");
   });
 });
 

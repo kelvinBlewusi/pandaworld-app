@@ -98,6 +98,12 @@ export interface WhatsAppSession {
    */
   awaitingValueFor: ValueQuestion | null;
   /**
+   * The batch the seller just submitted in full, while the chat waits for
+   * what's next: only a clear new count or "Start another" begins a batch,
+   * anything else is told the products are already with Jumia.
+   */
+  lastSubmittedBatchId: string | null;
+  /**
    * True when the seller picked "just send it all" at the how-many-
    * products step instead of the default step-by-step flow. Nothing sent
    * back for any product but the last — see handleQuietBatchText in
@@ -132,6 +138,7 @@ function fromRow(row: Record<string, unknown>): WhatsAppSession {
     awaitingCategoryFor: (row.awaiting_category_for as string | null) ?? null,
     awaitingQcAnswer: (row.awaiting_qc_answer as QcQuestion | null) ?? null,
     awaitingValueFor: (row.awaiting_value_for as ValueQuestion | null) ?? null,
+    lastSubmittedBatchId: (row.last_submitted_batch_id as string | null) ?? null,
     batchQuiet: (row.batch_quiet as boolean | null) ?? false,
   };
 }
@@ -261,6 +268,7 @@ export async function updateSession(
     awaitingCategoryFor: string | null;
     awaitingQcAnswer: QcQuestion | null;
     awaitingValueFor: ValueQuestion | null;
+    lastSubmittedBatchId: string | null;
     batchQuiet: boolean;
   }>,
 ): Promise<void> {
@@ -278,6 +286,7 @@ export async function updateSession(
   if (patch.awaitingCategoryFor !== undefined) update.awaiting_category_for = patch.awaitingCategoryFor;
   if (patch.awaitingQcAnswer !== undefined) update.awaiting_qc_answer = patch.awaitingQcAnswer;
   if (patch.awaitingValueFor !== undefined) update.awaiting_value_for = patch.awaitingValueFor;
+  if (patch.lastSubmittedBatchId !== undefined) update.last_submitted_batch_id = patch.lastSubmittedBatchId;
   if (patch.batchQuiet !== undefined) update.batch_quiet = patch.batchQuiet;
   await db.from("whatsapp_sessions").update(update).eq("phone_number", phoneNumber);
 }
@@ -367,6 +376,8 @@ export async function resetSession(phoneNumber: string): Promise<void> {
     awaitingQcAnswer: null,
     // And for a missing-value question about the abandoned batch.
     awaitingValueFor: null,
+    // A restart is a clear "list something new".
+    lastSubmittedBatchId: null,
     // A mode choice belongs to the batch it was made for. Without this,
     // restarting after a quiet batch would silently carry quiet mode into
     // the next one before the seller ever gets asked again.

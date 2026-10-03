@@ -225,6 +225,14 @@ async function replyError(
   await replyButtons(to, text, buttons);
 }
 
+/**
+ * The button under a product that's gone to Jumia, and under a drafted
+ * product, where Restart used to be (owner's request, 2026-10-03): the
+ * seller is done with these, not starting over. Same as *restart*, with a
+ * friendlier hello (handleGlobalCommand).
+ */
+const START_ANOTHER = { id: "start another", title: "Start another ➕" };
+
 async function getBatchListings(batchId: string): Promise<ListingRow[]> {
   const db = createServerClient();
   const { data, error } = await db
@@ -598,7 +606,7 @@ export async function handleLinkedMessage(
         await handleAwaitingJumiaOauth(userId, phoneNumber, content);
         break;
       case "awaiting_count":
-        await handleAwaitingCount(userId, phoneNumber, content);
+        await handleAwaitingCount(userId, phoneNumber, session, content);
         break;
       case "awaiting_photos":
         await handleAwaitingPhotos(userId, phoneNumber, session, content);
@@ -627,6 +635,16 @@ async function handleGlobalCommand(
     case "restart":
       await handleGlobalRestart(userId, phoneNumber);
       return;
+    case "start_another": {
+      // Tapped under a drafted product that hasn't gone yet: it stays on
+      // the review page, which the seller should hear.
+      const unsent = session.state === "awaiting_confirmation" && session.batchId
+        ? (await getBatchListings(session.batchId)).filter((l) => l.status === "draft" || l.status === "failed").length
+        : 0;
+      const kept = unsent === 0 ? "" : unsent === 1 ? " Your unsent draft stays on the review page." : ` Your ${unsent} unsent drafts stay on the review page.`;
+      await handleGlobalRestart(userId, phoneNumber, `Let's list more!${kept}`);
+      return;
+    }
     case "retry":
       await handleGlobalRetry(userId, phoneNumber, session, cmd.seq);
       return;
@@ -687,41 +705,43 @@ async function handleGlobalCommand(
  * products?" only to hit the same gate again on the very next message.
  */
 /**
- * The end of a batch — every product submitted, session already reset.
+ * The end of a batch — every product submitted (finishSubmittedBatch).
  *
- * Used to carry a "Create new listing" button here, on the reasoning that
- * the seller had nothing else to tap. That button fires the instant
- * submission completes — before Jumia has resolved a single product — so
- * a seller who tapped it straight away could start a whole new batch
- * before ever seeing whether the one they just submitted actually went
- * live. The resolution messages (notifyBatchResolved/
- * notifyListingResolved, lib/jumia/push-listing.ts) still arrive
- * regardless of what the seller does next — restart doesn't suppress
- * them — but nothing here should actively invite moving on before that.
- * No button now; *restart* (typed) is still how a seller starts a new
- * batch, same canonical phrase the global command already recognises
- * (lib/whatsapp/commands.ts).
+ * It carries Start another (owner's request, 2026-10-03). It once had a
+ * "Create new listing" button, dropped so nobody started a new batch
+ * before seeing how this one went. The resolution messages
+ * (notifyBatchResolved/notifyListingResolved, lib/jumia/push-listing.ts)
+ * arrive whatever the seller does next, so starting another loses nothing.
  */
 const BATCH_DONE_TEXT =
-  "🎉 That's the whole batch submitted! I'll message you here as each one goes live.\n\nOnce you've seen how these went, reply *restart* to list something else.";
+  "🎉 That's the whole batch submitted! I'll message you here as each one goes live.\n\nTap *Start another* to list something else.";
 
 /** The sign-off, after the per-product lines in the same message when there are any. */
-function sendBatchDoneMessage(phoneNumber: string, resultLines: string[] = []): Promise<void> {
-  return replyLongText(phoneNumber, [...resultLines, ...(resultLines.length ? [""] : []), BATCH_DONE_TEXT].join("\n"));
+async function sendBatchDoneMessage(phoneNumber: string, resultLines: string[] = []): Promise<void> {
+  const body = await prefixedBody(phoneNumber, resultLines.join("\n") || undefined, BATCH_DONE_TEXT);
+  await replyButtons(phoneNumber, body, [START_ANOTHER]);
 }
 
-async function handleGlobalRestart(userId: string, phoneNumber: string): Promise<void> {
+/**
+ * Every product of the batch has gone to Jumia: the chat waits for the next
+ * count, remembering the batch so a stray reply ("Quantity 20") is told the
+ * products are already with Jumia rather than read as a new count
+ * (handleAwaitingCount).
+ */
+async function finishSubmittedBatch(phoneNumber: string, batchId: string): Promise<void> {
+  await resetSession(phoneNumber);
+  await updateSession(phoneNumber, { lastSubmittedBatchId: batchId });
+}
+
+/** `lead`: the hello before the count question ("Let's list more!" for Start another). */
+async function handleGlobalRestart(userId: string, phoneNumber: string, lead = "No problem — let's start fresh."): Promise<void> {
   await resetSession(phoneNumber);
   const kind = await getJumiaConnectionKind(userId);
   if (kind !== "connected") {
-    await promptJumiaConnection(userId, phoneNumber, kind, "No problem — let's start fresh.\n\n");
+    await promptJumiaConnection(userId, phoneNumber, kind, `${lead}\n\n`);
     return;
   }
-  await replyButtons(
-    phoneNumber,
-    "No problem — let's start fresh. How many products are you listing today?",
-    COUNT_QUICK_PICKS,
-  );
+  await replyButtons(phoneNumber, `${lead} How many products are you listing today?`, COUNT_QUICK_PICKS);
 }
 
 /**
@@ -1082,9 +1102,13 @@ async function describeStatus(
   }
 }
 
+/** A reply that is plainly a count ("3", "3 products"), not text that holds a number ("Quantity 20"). */
+const CLEAR_COUNT_RE = /^\s*\d{1,3}\s*(products?|items?)?\s*[.!]?\s*$/i;
+
 async function handleAwaitingCount(
   userId: string,
   phoneNumber: string,
+  session: WhatsAppSession,
   content: { text?: string; imageMediaId?: string },
 ): Promise<void> {
   // Defense in depth: the LINK-code branch in app/api/whatsapp/webhook/
@@ -1096,6 +1120,27 @@ async function handleAwaitingCount(
   const kind = await getJumiaConnectionKind(userId);
   if (kind !== "connected") {
     await promptJumiaConnection(userId, phoneNumber, kind);
+    return;
+  }
+
+  // Straight after a batch went to Jumia, a reply that isn't plainly a
+  // count is about those products. "Quantity 20" was read as a count and
+  // started a 20-product batch (owner's report, 2026-10-03).
+  const typed = content.text?.trim();
+  if (session.lastSubmittedBatchId && typed && !CLEAR_COUNT_RE.test(typed)) {
+    const sent = await getBatchListings(session.lastSubmittedBatchId);
+    const one = sent.length === 1;
+    const which = one && sent[0].title ? `"${sent[0].title}" is` : one ? "Your product is" : "Your products are";
+    const waiting = sent.some((l) => l.status === "pending_approval" || l.status === "processing");
+    await replyButtons(
+      phoneNumber,
+      `✅ ${which} already with Jumia` +
+        (waiting
+          ? `, waiting for its review. I'll message you here as ${one ? "it goes" : "each one goes"} live.`
+          : ". I've messaged you above how it went.") +
+        "\n\nTo change something, edit it in Jumia Vendor Center. To list something new, tap *Start another*.",
+      [START_ANOTHER],
+    );
     return;
   }
 
@@ -1123,6 +1168,7 @@ async function handleAwaitingCount(
     batchSize: count,
     batchSeq:  1,
     listingId: null,
+    lastSubmittedBatchId: null,
   });
 
   // A single product has no "in between" for quiet mode to skip — the
@@ -2428,12 +2474,11 @@ async function answerMissingValue(
   text:        string,
 ): Promise<boolean> {
   const submitAll = { id: "submit all", title: "Submit all ✅" };
-  const restart   = { id: "restart",    title: "Restart 🔄" };
 
   if (VALUE_SKIP_RE.test(text)) {
     const asked = await askForNextMissingValue(phoneNumber, batchId, { after: question.listingId, resubmit: question.resubmit });
     if (!asked) {
-      await replyButtons(phoneNumber, "No problem — you can fill it in on the review page any time. Jumia won't accept the product without it.", [submitAll, restart]);
+      await replyButtons(phoneNumber, "No problem — you can fill it in on the review page any time. Jumia won't accept the product without it.", [submitAll, START_ANOTHER]);
     }
     return true;
   }
@@ -2507,7 +2552,6 @@ async function finishValueAnswer(
   set:         string,
 ): Promise<boolean> {
   const submitAll = { id: "submit all", title: "Submit all ✅" };
-  const restart   = { id: "restart",    title: "Restart 🔄" };
   const assessment = await assessListingPushReadiness(userId, question.listingId);
 
   if (question.resubmit && assessment.ready) {
@@ -2534,7 +2578,7 @@ async function finishValueAnswer(
     const submit = batchSize > 1 && row.whatsapp_seq != null
       ? [{ id: `submit ${row.whatsapp_seq}`, title: `Submit product ${row.whatsapp_seq}` }, submitAll]
       : [{ id: "submit all", title: "Submit ✅" }];
-    await replyButtons(phoneNumber, confirmation, assessment.ready ? submit : [submitAll, restart]);
+    await replyButtons(phoneNumber, confirmation, assessment.ready ? submit : [submitAll, START_ANOTHER]);
   }
   return true;
 }
@@ -2591,7 +2635,7 @@ async function applyChatPrice(
   if (!asked) {
     await replyButtons(phoneNumber, `${confirmation}\n\nThat's every price filled in.`, [
       { id: "submit all", title: "Submit all ✅" },
-      { id: "restart",    title: "Restart 🔄" },
+      START_ANOTHER,
     ]);
   }
 }
@@ -2696,7 +2740,7 @@ export async function finalizeBatch(
           `✅ Product drafted: ${only.title}. Ready to submit!\n\n` +
           `Edit it here: ${focusedEditorUrl(only.id)}\n\n` +
           `Reply *submit*, or say something like "change the price to 150" to edit it first.`;
-        const buttons = [{ id: "submit all", title: "Submit ✅" }, { id: "restart", title: "Restart 🔄" }];
+        const buttons = [{ id: "submit all", title: "Submit ✅" }, START_ANOTHER];
         if (body.length <= INTERACTIVE_BODY_MAX) {
           await replyButtons(phoneNumber, body, buttons);
         } else {
@@ -2905,13 +2949,12 @@ export async function finalizeBatch(
   //
   // Up to two ready products fit reply buttons ("Submit all" + one each),
   // which render inline. More go in a list, which holds ten rows in one
-  // message: "Submit all", the products, and Restart. Status lines too long
+  // message: "Submit all", the products, and Start another. Status lines too long
   // for an interactive body (about a dozen products) go first as plain
   // text, and the buttons or list carry just the closing line.
   const closing = `${headline} Reply *submit all* when ready — or tell me a product number (e.g. *submit 2*) to submit just one.`;
   const body = [statusText, closing].filter(Boolean).join("\n\n");
   const submitAll = { id: "submit all", title: "Submit all ✅" };
-  const restart   = { id: "restart",    title: "Restart 🔄" };
 
   let statusSent = false;
   try {
@@ -2927,7 +2970,7 @@ export async function finalizeBatch(
         actionBody,
         readyListings.length === 2
           ? [submitAll, ...readyListings.map((l) => ({ id: `submit ${l.whatsapp_seq}`, title: `Submit product ${l.whatsapp_seq}` }))]
-          : [submitAll, restart],
+          : [submitAll, START_ANOTHER],
       );
     } else {
       // Rows past the ninth would overflow the list: "submit N" still works typed.
@@ -2940,7 +2983,7 @@ export async function finalizeBatch(
           // nothing about which product it is.
           description: l.title as string,
         })),
-        { id: "restart", title: "Restart 🔄", description: "Start a new batch" },
+        { ...START_ANOTHER, description: "List more products" },
       ]);
     }
   } catch (e) {
@@ -3033,7 +3076,7 @@ async function handleAwaitingBatchConfirmation(
           "No problem — you can set prices on the review page any time. Jumia won't accept a product without one.",
           [
             { id: "submit all", title: "Submit all ✅" },
-            { id: "restart",    title: "Restart 🔄" },
+            START_ANOTHER,
           ],
         );
       }
@@ -3192,10 +3235,9 @@ async function handleSubmit(
     const refreshed = await getBatchListings(batchId);
     const allSubmitted = refreshed.every((l) => l.status !== "draft" && l.status !== "failed");
     if (allSubmitted) {
-      await resetSession(phoneNumber);
-      // Same split as the else-branch below: the per-product lines go as
-      // plain text (a full batch's worth can exceed the interactive body
-      // cap), then the short sign-off carries the button.
+      await finishSubmittedBatch(phoneNumber, batchId);
+      // The per-product lines go first as plain text when they're too long
+      // to share the button message (sendBatchDoneMessage).
       await sendBatchDoneMessage(phoneNumber, alreadySubmittedMessages);
     } else {
       // Plain text first (a long list of "already submitted" lines can
@@ -3342,7 +3384,7 @@ async function handleSubmit(
     if (!shortOfCredits && notSent.length === 0) {
       const settled = await getBatchListings(batchId);
       if (settled.every((l) => l.status !== "draft" && l.status !== "failed")) {
-        await resetSession(phoneNumber);
+        await finishSubmittedBatch(phoneNumber, batchId);
         await sendBatchDoneMessage(phoneNumber, resultLines);
         return;
       }
@@ -3423,7 +3465,7 @@ async function handleSubmit(
     const refreshed = await getBatchListings(batchId);
     const allSubmitted = refreshed.every((l) => l.status !== "draft" && l.status !== "failed");
     if (allSubmitted) {
-      await resetSession(phoneNumber);
+      await finishSubmittedBatch(phoneNumber, batchId);
       await sendBatchDoneMessage(phoneNumber);
     } else if (!askedForValue) {
       // Still stuff left in this batch — never leave the seller to guess
@@ -3440,7 +3482,7 @@ async function handleSubmit(
         "What's next?\nEdit to fix all un-submitted products and tap *Submit all*.",
         [
           { id: "submit all", title: "Submit all ✅" },
-          { id: "restart", title: "Restart 🔄" },
+          START_ANOTHER,
         ],
       );
     }
@@ -3938,12 +3980,24 @@ async function pushAndReport(
   const lead = opts.lead ? `${opts.lead}\n` : "";
 
   if (result.ok) {
-    await replyText(
-      phoneNumber,
-      result.adjustments?.length
-        ? `${lead}✅ ${label}: resubmitted — pending Jumia review.\n⚠️ ${result.adjustments.join("; ")}.`
-        : `${lead}✅ ${label}: resubmitted — pending Jumia review.`,
-    );
+    const text = result.adjustments?.length
+      ? `${lead}✅ ${label}: resubmitted — pending Jumia review.\n⚠️ ${result.adjustments.join("; ")}.`
+      : `${lead}✅ ${label}: resubmitted — pending Jumia review.`;
+    // The last product of the chat's batch to go finishes that batch.
+    const session = await getOrCreateSession(userId, phoneNumber);
+    if (session.state === "awaiting_confirmation" && session.batchId) {
+      const batch = await getBatchListings(session.batchId);
+      if (batch.length > 0 && batch.every((l) => l.status !== "draft" && l.status !== "failed")) {
+        await finishSubmittedBatch(phoneNumber, session.batchId);
+      }
+    }
+    // Start another, as under every product that's gone to Jumia, unless
+    // the chat is collecting or drafting another batch it would throw away.
+    if (session.state === "awaiting_photos" || session.state === "analyzing" || session.state.startsWith("awaiting_jumia")) {
+      await replyLongText(phoneNumber, text);
+    } else {
+      await replyButtons(phoneNumber, await fitInteractiveBody(phoneNumber, text, "List something else?"), [START_ANOTHER]);
+    }
     return;
   }
 

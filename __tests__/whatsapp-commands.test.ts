@@ -12,6 +12,13 @@ describe("parseGlobalCommand", () => {
     expect(parseGlobalCommand("stop")).toEqual({ type: "restart" });
   });
 
+  it("matches Start another, the button under submitted and drafted products", () => {
+    expect(parseGlobalCommand("start another")).toEqual({ type: "start_another" });
+    expect(parseGlobalCommand("Start another!")).toEqual({ type: "start_another" });
+    expect(parseGlobalCommand("list more")).toEqual({ type: "start_another" });
+    expect(parseGlobalCommand("start another product please")).toBeNull();
+  });
+
   it("matches disconnect and confirm disconnect, preferring the more specific phrase", () => {
     expect(parseGlobalCommand("disconnect")).toEqual({ type: "disconnect" });
     expect(parseGlobalCommand("Disconnect Jumia")).toEqual({ type: "disconnect" });

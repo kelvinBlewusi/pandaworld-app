@@ -20,6 +20,7 @@
 
 export type GlobalCommand =
   | { type: "restart" }
+  | { type: "start_another" }
   | { type: "retry"; seq: number | null }
   | { type: "disconnect" }
   | { type: "confirm_disconnect" }
@@ -30,6 +31,10 @@ export type GlobalCommand =
   | { type: "help" };
 
 const RESTART_RE = /^(restart|start over|start again|cancel|stop|new batch|reset)[.!]?$/i;
+// The "Start another" button on drafted and submitted messages
+// (2026-10-03), and what a seller would type for it: a restart, worded for
+// someone who is done rather than giving up.
+const START_ANOTHER_RE = /^(start another|list another|list more)[.!]?$/i;
 // "Retry" is the deliberate opposite of "restart": same batch, same photos,
 // run the failed step again. Every error message pairs the two (see
 // replyError in lib/whatsapp/intake.ts), because after a failure those are
@@ -66,6 +71,7 @@ export function parseGlobalCommand(text: string): GlobalCommand | null {
   if (DISCONNECT_RE.test(t)) return { type: "disconnect" };
   if (RECONNECT_JUMIA_RE.test(t)) return { type: "reconnect_jumia" };
   if (RESTART_RE.test(t)) return { type: "restart" };
+  if (START_ANOTHER_RE.test(t)) return { type: "start_another" };
   const retry = RETRY_RE.exec(t);
   if (retry) return { type: "retry", seq: retry[1] ? Number(retry[1]) : null };
   if (HOW_IT_WORKS_RE.test(t)) return { type: "how_it_works" };
