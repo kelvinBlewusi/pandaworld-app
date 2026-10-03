@@ -3824,21 +3824,15 @@ async function handleFixAndResubmit(
     return;
   }
 
-  const categoryRefused = isUnlistableCategoryError(rejectionText);
-  const sellerPicked    = (row.field_sources as Record<string, string> | null)?.category_code === "user";
-  const refusedName     = ((row.category_path as string | null) ?? "").split(">").pop()?.trim() || "that category";
+  const sellerPicked = (row.field_sources as Record<string, string> | null)?.category_code === "user";
 
-  // Jumia refused a category the seller chose themselves. A redraft keeps
-  // the seller's category (see runAutoAnalyze), so it would just resubmit
-  // the same one: ask them again straight away instead, with the tip for
-  // finding a category Jumia already uses for a similar product.
-  if (categoryRefused && sellerPicked) {
-    await db.from("listings").update({
-      jumia_rerun_fingerprint: null,
-      jumia_rerun_count:       0,
-      updated_at:              new Date().toISOString(),
-    }).eq("id", listingId);
-    await askSellerForCategory(userId, phoneNumber, row, label, `Jumia refused "${refusedName}", the category you picked.`, { tipFirst: true });
+  // Jumia refused the category: the seller is asked for the right one
+  // straight away, not after a redraft that guesses again (owner's
+  // request, 2026-10-03). They can see what Vendor Center accepts; the
+  // question offers categories not refused in their country and says how
+  // to find one on their country's Jumia site.
+  if (isUnlistableCategoryError(rejectionText)) {
+    await askRefusedCategory(userId, phoneNumber, row, label);
     return;
   }
 
@@ -3866,15 +3860,6 @@ async function handleFixAndResubmit(
       jumia_rerun_count:       0,
       updated_at:              new Date().toISOString(),
     }).eq("id", listingId);
-
-    // Jumia refused our category twice (the original pick and the
-    // redraft's). The seller can see which categories Vendor Center
-    // accepts and we can't, so ask them. Never the editor for this: it has
-    // no Vendor Center-style category picker to offer them.
-    if (categoryRefused) {
-      await askSellerForCategory(userId, phoneNumber, row, label, "Jumia has refused 2 categories for this product and I can't find one it accepts.");
-      return;
-    }
 
     await replyError(
       phoneNumber,
@@ -3934,12 +3919,6 @@ async function handleFixAndResubmit(
         trueOriginalNote,
       );
       const result = await runAutoAnalyze(userId, listingId, rerunContext);
-      if (!result.ok && categoryRefused) {
-        // The redraft couldn't find another category at all — ask the
-        // seller now rather than send them to the editor.
-        await askSellerForCategory(userId, phoneNumber, row, label, "Jumia won't accept this product's category and I couldn't find another one it accepts.");
-        return;
-      }
       if (!result.ok) {
         await replyError(
           phoneNumber,
@@ -4370,11 +4349,62 @@ async function finishQcPhotos(userId: string, phoneNumber: string, listingId: st
   await pushAndReport(userId, phoneNumber, listingId, label);
 }
 
+/** The category question's opening for a category Jumia refused, in the owner's words (2026-10-03). */
+const CATEGORY_REFUSED_LEAD =
+  "Jumia can't list products in this category. Let's choose a different (more specific) category and try again.";
+
+/**
+ * Ask for the category Jumia refused, naming the product by its title
+ * ("Product 3" alone left sellers guessing). A category the seller picked
+ * themselves is named too, with the tip for finding one first.
+ */
+async function askRefusedCategory(
+  userId:      string,
+  phoneNumber: string,
+  row:         Record<string, unknown>,
+  fallback:    string,
+): Promise<void> {
+  const db = createServerClient();
+  await db.from("listings").update({
+    jumia_rerun_fingerprint: null,
+    jumia_rerun_count:       0,
+    updated_at:              new Date().toISOString(),
+  }).eq("id", row.id as string);
+
+  const title = ((row.title as string | null) ?? "").trim();
+  const label = title ? `"${title.length > 120 ? `${title.slice(0, 119)}…` : title}"` : fallback;
+  if ((row.field_sources as Record<string, string> | null)?.category_code === "user") {
+    const refusedName = ((row.category_path as string | null) ?? "").split(">").pop()?.trim() || "that category";
+    await askSellerForCategory(userId, phoneNumber, row, label, `Jumia refused "${refusedName}", the category you picked.`, { tipFirst: true });
+    return;
+  }
+  await askSellerForCategory(userId, phoneNumber, row, label, CATEGORY_REFUSED_LEAD);
+}
+
+/**
+ * Jumia refused a WhatsApp listing's category: its rejection message is
+ * the category question, asked straight away (lib/jumia/push-listing.ts).
+ * False when the listing isn't found, so the caller sends the usual
+ * rejection with its Fix & resubmit button.
+ */
+export async function askCategoryForRefusedListing(phoneNumber: string, listingId: string): Promise<boolean> {
+  const db = createServerClient();
+  const { data: row } = await db
+    .from("listings")
+    .select("id, user_id, whatsapp_seq, title, category_code, category_path, category_alternates, field_sources")
+    .eq("id", listingId)
+    .maybeSingle();
+  if (!row) return false;
+  const fallback = row.whatsapp_seq != null ? `Product ${row.whatsapp_seq}` : "Your product";
+  await askRefusedCategory(row.user_id as string, phoneNumber, row, fallback);
+  return true;
+}
+
 /**
  * Ask the seller which category Jumia will accept for this product. Used
- * whenever a category problem is past what we can fix ourselves: Jumia
- * refused our category twice (the original pick and the redraft's), the
- * redraft found no other category, or Jumia refused the seller's own pick.
+ * whenever Jumia refuses a category (askRefusedCategory: the moment the
+ * rejection arrives, or on Fix & resubmit) or its quality check says the
+ * category is wrong without one we can find.
  *
  * The seller can see which categories Vendor Center accepts and we can't.
  * They get suggestions Jumia hasn't refused in their country, can type a

@@ -275,6 +275,7 @@ jest.mock("@/lib/jumia/credentials", () => ({
 
 import { handleLinkedMessage } from "@/lib/whatsapp/intake";
 import { classifyJumiaRejection, rejectionFingerprint } from "@/lib/jumia/rejection-remedy";
+import { notifyBatchResolved } from "@/lib/jumia/push-listing";
 
 const USER  = "user_1";
 const PHONE = "233550607231";
@@ -1943,24 +1944,37 @@ describe("Fix & resubmit", () => {
     pushCallCount = 0;
   });
 
-  // The exact live case: category rejected as too broad. This used to be
-  // "seller"-only because refillAttributesForCategory could never change
-  // the category — a full rerun can.
-  it("reruns the full draft for a category rejection instead of just handing it back", async () => {
-    seedRejectedListing();
+  const SHORT_DESCRIPTION = "The description is too short: it must have at least 50 characters.";
+
+  it("reruns the full draft for a rejection a redraft can fix, keeping the seller's note", async () => {
+    seedRejectedListing({ jumia_error: SHORT_DESCRIPTION });
     sent.length = 0;
 
     await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
 
     expect(autoAnalyzeCalls).toHaveLength(1);
     expect(autoAnalyzeCalls[0].listingId).toBe(REJECTED_ID);
-    // Told which category NOT to repeat...
-    expect(autoAnalyzeCalls[0].userPromptOverride).toContain("Home > Kitchen > Kettles");
-    // ...and the seller's own original note survives into the rerun.
+    expect(autoAnalyzeCalls[0].userPromptOverride).toContain("at least 50 characters");
+    // The seller's own original note survives into the rerun.
     expect(autoAnalyzeCalls[0].userPromptOverride).toContain("1.8 litres");
     expect(sent.some((m) => m.body.includes("Fixing and resubmitting"))).toBe(true);
     expect(sent.some((m) => m.body.includes("resubmitted"))).toBe(true);
     expect(pushCallCount).toBe(1);
+  });
+
+  // Owner's request, 2026-10-03: a refused category is asked for at once,
+  // not redrafted into another guess first.
+  it("asks for the category straight away on a category rejection, without a redraft", async () => {
+    seedRejectedListing();
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
+
+    expect(autoAnalyzeCalls).toHaveLength(0);
+    expect(pushCallCount).toBe(0);
+    const question = sent.find((m) => m.body.includes("Which category does Vendor Center allow"));
+    expect(question!.body).toContain(`⚠️ "Electric Kettle - Stainless Steel, 1.8L Capacity": Jumia can't list products in this category. Let's choose a different (more specific) category and try again.`);
+    expect(session().awaiting_category_for).toBe(REJECTED_ID);
   });
 
   // Real production symptom (2026-09-17/18 chat log): the SAME "Fix &
@@ -1975,7 +1989,7 @@ describe("Fix & resubmit", () => {
   // identical wamid must never reach runAutoAnalyze or pushListingToJumia
   // at all.
   it("never reruns/re-pushes for a redelivered copy of the same fix: tap", async () => {
-    seedRejectedListing();
+    seedRejectedListing({ jumia_error: SHORT_DESCRIPTION });
     sent.length = 0;
 
     await handleLinkedMessage(USER, PHONE, "dup-wamid", { text: `fix:${REJECTED_ID}` });
@@ -2042,8 +2056,8 @@ describe("Fix & resubmit", () => {
   // The rerun succeeded but Jumia still isn't happy — say so plainly
   // rather than looping the same automatic fix forever.
   it("reports a second rejection instead of retrying silently", async () => {
-    seedRejectedListing();
-    pushResult = { ok: false, message: "You can't list products in this category. Please choose a different (more specific) category and try again." };
+    seedRejectedListing({ jumia_error: SHORT_DESCRIPTION });
+    pushResult = { ok: false, message: SHORT_DESCRIPTION };
     sent.length = 0;
 
     await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
@@ -2068,8 +2082,9 @@ describe("Fix & resubmit", () => {
 // Real case, 2026-09-27: a power bank was refused in "Portable Power Banks",
 // the automatic redraft moved it to "External Battery Packs", and Jumia
 // refused that too. The seller could see in Vendor Center which category
-// works; the bot could only send them to the editor. Now it asks.
-describe("asking the seller for a category after Jumia refuses ours twice", () => {
+// works; the bot could only send them to the editor. Now it asks, from the
+// first refusal (owner's request, 2026-10-03).
+describe("asking the seller for a category Jumia refuses", () => {
   const LISTING_ID = "22222222-2222-2222-2222-222222222222";
   const CANT_LIST = "You can't list products in this category. Please choose a different (more specific) category and try again.";
   const CANT_LIST_FINGERPRINT = rejectionFingerprint(classifyJumiaRejection(CANT_LIST).kind, CANT_LIST);
@@ -2120,7 +2135,8 @@ describe("asking the seller for a category after Jumia refuses ours twice", () =
 
     const question = listSent().find((m) => m.body.includes("Which category does Vendor Center allow"));
     expect(question).toBeDefined();
-    expect(question!.body).toContain("Jumia has refused 2 categories");
+    expect(question!.body).toContain(`"Portable Power Bank 20000mAh Fast Charging": Jumia can't list products in this category.`);
+    expect(question!.body).toContain("Search jumia.com.gh for a product like this one");
     expect(question!.rows).toContain(`recat:${LISTING_ID}:1000279`);
     // Never offers a category Jumia has already refused in Ghana.
     expect(question!.rows).not.toContain(`recat:${LISTING_ID}:1000176`);
@@ -2269,16 +2285,46 @@ describe("asking the seller for a category after Jumia refuses ours twice", () =
     expect(session().awaiting_category_for).toBe(LISTING_ID);
   });
 
-  it("asks the seller when the first redraft can't find another category at all", async () => {
+  it("asks on the first refusal, before any redraft", async () => {
     seedTwiceRefused({ jumia_rerun_fingerprint: null, jumia_rerun_count: 0 });
-    autoAnalyzeResult = { ok: false, message: "no confident category" };
 
     await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${LISTING_ID}` });
 
-    expect(listSent().some((m) => m.body.includes("couldn't find another one it accepts"))).toBe(true);
-    expect(sent.some((m) => m.body.includes("couldn't redraft it"))).toBe(false);
+    expect(listSent().some((m) => m.body.includes("Let's choose a different (more specific) category"))).toBe(true);
+    expect(autoAnalyzeCalls).toHaveLength(0);
     expect(pushCallCount).toBe(0);
     expect(session().awaiting_category_for).toBe(LISTING_ID);
+  });
+
+  // The rejection message itself is the question: no Fix tap first.
+  it("asks for the category in the message that says Jumia refused it", async () => {
+    seedTwiceRefused({ jumia_rerun_fingerprint: null, jumia_rerun_count: 0, whatsapp_batch_id: "batch-1" });
+    sent.length = 0;
+
+    await notifyBatchResolved(PHONE, "batch-1", [{
+      listingId: LISTING_ID, title: "Portable Power Bank 20000mAh Fast Charging", whatsappSeq: 1, batchId: "batch-1",
+      newStatus: "failed", errorMsg: CANT_LIST, counts: { liveCount: 0, totalCount: 1, rejectedSkus: [] },
+    }]);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].kind).toBe("list");
+    expect(sent[0].body).toContain(`⚠️ "Portable Power Bank 20000mAh Fast Charging": Jumia can't list products in this category.`);
+    expect(sent[0].rows).toContain(`recat:${LISTING_ID}:1000279`);
+    expect(sent.some((m) => (m.rows ?? []).includes(`fix:${LISTING_ID}`))).toBe(false);
+    expect(session().awaiting_category_for).toBe(LISTING_ID);
+  });
+
+  it("keeps the Fix button for a rejection that isn't about the category", async () => {
+    seedTwiceRefused({ whatsapp_batch_id: "batch-1" });
+    sent.length = 0;
+
+    await notifyBatchResolved(PHONE, "batch-1", [{
+      listingId: LISTING_ID, title: "Portable Power Bank 20000mAh Fast Charging", whatsappSeq: 1, batchId: "batch-1",
+      newStatus: "failed", errorMsg: "The description is too short.", counts: { liveCount: 0, totalCount: 1, rejectedSkus: [] },
+    }]);
+
+    expect(sent[0].rows).toEqual([`fix:${LISTING_ID}`]);
+    expect(session().awaiting_category_for).toBeNull();
   });
 
   // A stale code has to be re-picked even if the seller chose it, so the

@@ -776,6 +776,16 @@ only appear while billing is off.
   the product straight back once nothing else holds it. A single product
   drafted without a price gets one message: "✅ Product drafted: X. ⚠️
   needs price. What price…?" with an "Or enter it here" editor button.
+- **A refused category is asked for at once (2026-10-03)**: Jumia's "You
+  can't list products in this category…" no longer gets a redraft that
+  guesses another category first. The rejection message itself is the
+  category question (`askedForRefusedCategory` in lib/jumia/push-listing.ts
+  calls `askCategoryForRefusedListing` in intake.ts), and a Fix tap on one
+  asks it too (`askRefusedCategory`): the product named by its title,
+  suggestions not refused in the seller's country, and the tip to copy the
+  path off a similar product on their Jumia site (jumia.com.gh, .ng, …).
+  A batch with several rejections keeps its Fix taps; each category one
+  asks when tapped.
 - **Start another, and "already with Jumia" (2026-10-03)**: the button
   under a submitted batch, a resubmitted product and a drafted product is
   *Start another* (`START_ANOTHER`, id "start another", a restart with a
