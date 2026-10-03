@@ -399,6 +399,22 @@ async function shopCurrencyForUser(userId: string): Promise<string> {
   }
 }
 
+/**
+ * A price as the chat shows it: in the seller's own currency ("GH₵150",
+ * "₦2,000", "KSh 500") when their shop's country is known, and the bare
+ * number when it isn't, never another country's currency (owner's request,
+ * 2026-10-03: "GHS 150"). shopCurrencyForUser's GHS fallback is right for
+ * reading a price, not for showing one.
+ */
+async function chatPrice(userId: string, amount: number): Promise<string> {
+  const country = await sellerCountry(userId).catch(() => null);
+  const code = country ? COUNTRY_CURRENCY[country] : undefined;
+  const shown = amount.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  if (!code) return shown;
+  const symbol = currencySymbol(code);
+  return /[A-Za-z]$/.test(symbol) ? `${symbol} ${shown}` : `${symbol}${shown}`;
+}
+
 /** Same as shopCurrencyForUser, for a call site that only has the listing
  *  id handy (applyNotes runs on every batch photo message and doesn't
  *  otherwise need the seller's userId). */
@@ -2627,10 +2643,10 @@ async function applyChatPrice(
   // answered the one question we asked will otherwise assume the product
   // is ready, and only find out at submit time that it isn't.
   const stillMissing = await missingFieldsFor(listingId);
-  const currency = saved?.user_id ? await shopCurrencyForUser(saved.user_id) : "GHS";
+  const shown = saved?.user_id ? await chatPrice(saved.user_id, price) : String(price);
   const confirmation = stillMissing.length === 0
-    ? `✅ Price set to ${currency} ${price} for ${label} — ready to submit.`
-    : `✅ Price set to ${currency} ${price} for ${label}.\n⚠️ Still needs: ${stillMissing.join(", ")} — tap *Edit product ${saved?.whatsapp_seq ?? ""}*.`.trimEnd();
+    ? `✅ Price set to ${shown} for ${label} — ready to submit.`
+    : `✅ Price set to ${shown} for ${label}.\n⚠️ Still needs: ${stillMissing.join(", ")} — tap *Edit product ${saved?.whatsapp_seq ?? ""}*.`.trimEnd();
 
   // The confirmation rides along with the next question rather than going
   // out as its own message — one send per answer, not two.
@@ -3553,9 +3569,9 @@ async function handleEdit(
   // much later at push time with no explanation.
   const saleComplete = sale != null && !!sale.startDate && !!sale.endDate;
   const applied: string[] = [];
-  if (price != null) { applied.push(`price to ${currency} ${price}`); }
+  if (price != null) { applied.push(`price to ${await chatPrice(userId, price)}`); }
   if (stock != null) { applied.push(`stock to ${stock}`); }
-  if (saleComplete) { applied.push(`sale price to ${currency} ${sale!.salePrice} with dates`); }
+  if (saleComplete) { applied.push(`sale price to ${await chatPrice(userId, sale!.salePrice)} with dates`); }
   if (applied.length > 0) {
     await db
       .from("listings")
@@ -3576,7 +3592,7 @@ async function handleEdit(
 
   let ack = applied.length > 0 ? `✅ Updated product ${seq}'s ${applied.join(" and ")}. ` : "";
   if (sale != null && !saleComplete) {
-    ack += `I didn't set the sale price of ${currency} ${sale.salePrice} — Jumia needs a start AND end date with it. Tell me both together (e.g. "sale 80 from 20 Sept to 30 Sept") and I'll set it. `;
+    ack += `I didn't set the sale price of ${await chatPrice(userId, sale.salePrice)} — Jumia needs a start AND end date with it. Tell me both together (e.g. "sale 80 from 20 Sept to 30 Sept") and I'll set it. `;
   }
   await replyCta(
     phoneNumber,

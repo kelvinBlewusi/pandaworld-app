@@ -776,6 +776,11 @@ only appear while billing is off.
   the product straight back once nothing else holds it. A single product
   drafted without a price gets one message: "✅ Product drafted: X. ⚠️
   needs price. What price…?" with an "Or enter it here" editor button.
+- **Prices in chat (2026-10-03)**: a price the bot says back goes through
+  `chatPrice` (intake.ts): the seller's own symbol from their shop's
+  country ("GH₵150", "₦15,000", "KSh 500"), or the bare number when the
+  country isn't on file, never "GHS" for someone who isn't in Ghana.
+  `shopCurrencyForUser` (GHS fallback) is for reading a typed price only.
 - **A refused category is asked for at once (2026-10-03)**: Jumia's "You
   can't list products in this category…" no longer gets a redraft that
   guesses another category first. The rejection message itself is the
