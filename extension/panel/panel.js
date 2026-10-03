@@ -473,8 +473,9 @@ $("autofill").addEventListener("click", async () => {
 
 // ── Polish images (admin-only prototype) ────────────────────────────────────
 //
-// Reads the rough photos uploaded on the form (the same HARVEST the
-// autofill uses), sends up to 3 to /api/extension/polish-images, which
+// Reads the rough photos uploaded on the form (HARVEST_IMAGES: the photos
+// only, none of the form's fields), sends up to 3 to
+// /api/extension/polish-images, which
 // returns 4 generated product shots, shows them here, and asks the content
 // script to put them in Jumia's image slots (PLACE_IMAGES). Every image can
 // also be saved from the grid, in case the slots can't be filled.
@@ -556,7 +557,7 @@ $("polishBtn").addEventListener("click", async () => {
     }
 
     setPolishStatus("Reading your photos…");
-    const harvest = await sendToTab(tab.id, { type: "HARVEST" });
+    const harvest = await sendToTab(tab.id, { type: "HARVEST_IMAGES" });
     if (!harvest?.images?.length) {
       setPolishStatus("No product photo found — upload at least one on Jumia, then try again.", "err");
       return;
