@@ -5,8 +5,7 @@ import {
   extractNotVisibleAttributeNames,
   extractRejectionText,
   rejectionFingerprint,
-  shouldBlockRepeatedAutoFix,
-} from "@/lib/jumia/rejection-remedy";
+  shouldBlockRepeatedAutoFix, priceLimitInRejection, isPriceRejection } from "@/lib/jumia/rejection-remedy";
 
 // Real rejection strings from this account's failed pushes.
 describe("classifyJumiaRejection", () => {
@@ -506,5 +505,27 @@ describe("rejectionFingerprint + shouldBlockRepeatedAutoFix", () => {
   it("never blocks a not_visible_attributes fix, even at the same fingerprint", () => {
     const fp = rejectionFingerprint("not_visible_attributes", "Attribute [color_family] is not visible for category [Compact Refrigerators].");
     expect(shouldBlockRepeatedAutoFix("not_visible_attributes", fp, { fingerprint: fp, count: 5 })).toBe(false);
+  });
+});
+
+describe("a price outside Jumia's limits", () => {
+  const LOW = "The Global Price [3] GHS must be equal or more than [8.81] GHS.";
+
+  it("reads what was sent and the minimum", () => {
+    expect(priceLimitInRejection(LOW)).toEqual({ was: 3, limit: 8.81, bound: "min", currency: "GHS" });
+    expect(priceLimitInRejection("The Global Sale Price [3] GHS must be equal or more than [8.81] GHS.")).toBeNull();
+  });
+
+  it("says so, instead of calling it a missing price", () => {
+    const remedy = classifyJumiaRejection(LOW);
+    expect(remedy.kind).toBe("seller");
+    expect(remedy.explanation).toBe("The price was GHS 3, and the lowest Jumia allows for it is GHS 8.81.");
+  });
+
+  it("counts as a price rejection, a sale price's rules not", () => {
+    expect(isPriceRejection(LOW)).toBe(true);
+    expect(isPriceRejection("The Global Price is mandatory in order to create a Product.")).toBe(true);
+    expect(isPriceRejection("Global Sale Price StartAt must be before EndAt")).toBe(false);
+    expect(isPriceRejection("You can't list products in this category.")).toBe(false);
   });
 });

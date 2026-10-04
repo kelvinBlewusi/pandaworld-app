@@ -22,7 +22,7 @@ import { assessListingPushReadiness, type ListingReadinessResult } from "@/lib/w
 import { autoFillMissingFields, missingValueQuestion, parseMissingValue, saveMissingValue } from "@/lib/whatsapp/missing-value";
 import { columnFor, readAttributeValue } from "@/lib/jumia/attribute-mapping";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
-import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames, isStaleCategoryError, type Remedy } from "@/lib/jumia/rejection-remedy";
+import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames, isStaleCategoryError, type Remedy, isPriceRejection } from "@/lib/jumia/rejection-remedy";
 import { decideQcAction, type QcContext } from "@/lib/jumia/qc-remedy";
 import { featureMinPackName, hasFeature } from "@/lib/billing/features";
 import { removeAttributesFromCache, getCategoryByCode, getCategoryAttributes, type JumiaCategoryAttribute } from "@/lib/jumia/categories";
@@ -56,7 +56,7 @@ import {
   unsupportedMediaMessage,
 } from "@/lib/whatsapp/onboarding";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
-import { endsWithDoneSignal, stripDoneSignal } from "@/lib/whatsapp/draft";
+import { endsWithDoneSignal, stripDoneSignal, isProductNumber } from "@/lib/whatsapp/draft";
 import {
   parseProductCount,
   readProductCount,
@@ -237,6 +237,18 @@ async function replyError(
  * friendlier hello (handleGlobalCommand).
  */
 const START_ANOTHER = { id: "start another", title: "Start another ➕" };
+
+/** Of these listings, the ones with a draft queued or running right now. */
+async function listingsStillDrafting(listingIds: string[]): Promise<Set<string>> {
+  if (listingIds.length === 0) return new Set();
+  const { data, error } = await createServerClient()
+    .from("analysis_jobs")
+    .select("listing_id")
+    .in("listing_id", listingIds)
+    .in("status", ["queued", "running"]);
+  if (error) console.warn(`[whatsapp intake] drafting lookup failed: ${error.message}`);
+  return new Set((data ?? []).map((r) => r.listing_id as string));
+}
 
 async function getBatchListings(batchId: string): Promise<ListingRow[]> {
   const db = createServerClient();
@@ -1911,6 +1923,25 @@ async function handleAwaitingPhotos(
     return;
   }
 
+  // A product number on its own ("2"), typed the way the other way of
+  // sending (I) works. Not a note and not a price: saved as a note, a bare
+  // number became the price. Live 2026-10-04: a seller who never picked I
+  // or II captioned photos "169", then typed "1", "2", "3" between them,
+  // and product 1 went to Jumia at GHS 3. A photo with it is kept as usual.
+  if (isProductNumber(text, batchSize)) {
+    if (content.imageMediaId) return;
+    const n = text.replace(/\D/g, "");
+    const nudge =
+      `No need to type product numbers — I'm guiding you one product at a time, and I'm on product ${seq} of ${batchSize}. ` +
+      `Send its photos and price, then tap *Done* to move on. If ${n} was the price, send it as *price ${n}*.`;
+    if (listingId) {
+      await replyButtons(phoneNumber, nudge, [{ id: "done", title: "Done ✅" }]);
+    } else {
+      await replyText(phoneNumber, nudge);
+    }
+    return;
+  }
+
   if (endsWithDoneSignal(text)) {
     // How long ago the last photo actually landed, read FIRST.
     //
@@ -3248,13 +3279,41 @@ async function handleSubmit(
   }
   const effectiveStatus = (l: ListingRow): ListingRow["status"] => refreshedStatuses.get(l.id) ?? l.status;
 
-  const targets = requested.filter((l) => !ALREADY_SUBMITTED_STATUSES.has(effectiveStatus(l)));
+  const unsubmitted = requested.filter((l) => !ALREADY_SUBMITTED_STATUSES.has(effectiveStatus(l)));
+
+  // A product that never drafted (the credit check stopped it, or drafting
+  // failed) has nothing to send. Pushed anyway, it came back as Jumia-side
+  // "title is required. description is required. category is required —
+  // open the listing…", which told a seller who had simply run out of
+  // credits nothing useful (2026-10-04). Each gets one line saying how to
+  // draft it, and a Retry tap.
+  const undrafted = unsubmitted.filter((l) => !l.title);
+  const targets = unsubmitted.filter((l) => l.title);
+  const drafting = await listingsStillDrafting(undrafted.map((l) => l.id));
+  const undraftedMessages = undrafted.map((l) => drafting.has(l.id)
+    ? `Product ${l.whatsapp_seq}: ⏳ still drafting — I'll message you when it's ready.`
+    : `Product ${l.whatsapp_seq}: ⚠️ not drafted yet, so there was nothing to send. Reply *retry ${l.whatsapp_seq}* to draft it from the photos you already sent.`);
+  const retryTaps = undrafted
+    .filter((l) => !drafting.has(l.id) && l.whatsapp_seq != null)
+    .slice(0, 2)
+    .map((l) => ({ id: `retry ${l.whatsapp_seq}`, title: `Retry product ${l.whatsapp_seq}` }));
+
   const alreadySubmittedMessages = requested
     .filter((l) => ALREADY_SUBMITTED_STATUSES.has(effectiveStatus(l)))
     .map((l) => {
       const status = effectiveStatus(l);
       return `Product ${l.whatsapp_seq}: already ${STATUS_LABELS[status]?.toLowerCase() ?? status} — no need to resubmit.`;
     });
+
+  if (targets.length === 0 && undrafted.length > 0) {
+    const body = [...alreadySubmittedMessages, ...undraftedMessages].join("\n");
+    await replyButtons(
+      phoneNumber,
+      await fitInteractiveBody(phoneNumber, body, "Nothing else is ready to send yet."),
+      [...retryTaps, START_ANOTHER],
+    );
+    return;
+  }
 
   if (targets.length === 0) {
     // Every requested product was already submitted — nothing to push.
@@ -3401,7 +3460,7 @@ async function handleSubmit(
     // body cap (a plain text message allows far more), and a rejected
     // send here would look like "submitting failed" even though every
     // product actually went through.
-    const resultLines = [...alreadySubmittedMessages, ...raceResult];
+    const resultLines = [...alreadySubmittedMessages, ...raceResult, ...undraftedMessages];
 
     // Jumia stopped accepting the connection. Reconnecting comes before
     // anything else here, and the batch is kept for straight after it
@@ -3520,13 +3579,17 @@ async function handleSubmit(
       // names the actual next step rather than asking an open question:
       // the Edit buttons are already sitting above it, one per unsent
       // product, and Submit all is the button right underneath.
+      const notDrafted = retryTaps.length === 1 ? "the product that wasn't drafted" : "the products that weren't drafted";
       await replyButtons(
         phoneNumber,
-        "What's next?\nEdit to fix all un-submitted products and tap *Submit all*.",
-        [
-          { id: "submit all", title: "Submit all ✅" },
-          START_ANOTHER,
-        ],
+        retryTaps.length === 0
+          ? "What's next?\nEdit to fix all un-submitted products and tap *Submit all*."
+          : notSent.length === 0
+            ? `What's next?\nTap *Retry* to draft ${notDrafted}, then tap *Submit all*.`
+            : `What's next?\nTap *Retry* to draft ${notDrafted}, fix the others with *Edit*, then tap *Submit all*.`,
+        retryTaps.length === 0
+          ? [{ id: "submit all", title: "Submit all ✅" }, START_ANOTHER]
+          : [...retryTaps, { id: "submit all", title: "Submit all ✅" }],
       );
     }
   } catch (e) {
@@ -3774,9 +3837,30 @@ async function handleFixAndResubmit(
     return;
   }
 
+  // Cleaned to plain text once, up front — jumia_error is a JSON blob most
+  // of the time, and both the classifier and the rerun context below want
+  // the human-readable form, not a string full of braces and quotes.
+  const rejectionText = extractRejectionText(row.jumia_error as string | null);
+
   // Anything the seller alone can supply blocks the push regardless of
   // what Jumia complained about — check it before spending an AI call.
   const missing = await missingFieldsFor(listingId);
+
+  // A price Jumia refused, or no price at all: one number only the seller
+  // can give, so it's asked for here and the answer resubmits
+  // (applyQcAnswer). Sending them to the editor instead cost a seller three
+  // Fix taps on "price must be at least 8.81" (2026-10-04).
+  const priceOnly = missing.length === 1 && missing[0] === "price";
+  if (row.jumia_qc_status !== "rejected" && (priceOnly || (missing.length === 0 && isPriceRejection(rejectionText)))) {
+    const why = priceOnly ? "Jumia needs a price on it." : classifyJumiaRejection(rejectionText).explanation;
+    await askQc(
+      phoneNumber,
+      { listingId, kind: "price" },
+      `💰 ${label}: ${why}\n*What price are you selling it at? Reply with just the amount (Eg. 1500)* and I'll resubmit it.`,
+    );
+    return;
+  }
+
   if (missing.length > 0) {
     await replyError(
       phoneNumber,
@@ -3785,11 +3869,6 @@ async function handleFixAndResubmit(
     );
     return;
   }
-
-  // Cleaned to plain text once, up front — jumia_error is a JSON blob most
-  // of the time, and both the classifier and the rerun context below want
-  // the human-readable form, not a string full of braces and quotes.
-  const rejectionText = extractRejectionText(row.jumia_error as string | null);
 
   // A brand Jumia (or our own restricted-brand list) won't allow for this
   // category has exactly one always-safe answer: Jumia's own Generic/

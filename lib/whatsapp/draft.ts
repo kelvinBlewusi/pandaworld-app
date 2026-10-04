@@ -34,3 +34,16 @@ export function stripDoneSignal(text: string): string {
   tokens.pop();
   return tokens.join(" ").trim();
 }
+
+/**
+ * True when the whole message is one of this batch's product numbers
+ * ("2", "#2", "2."), the way sending them all at once (way I) closes each
+ * product. In guide-me mode it's neither a note nor a price — read as a
+ * bare-number price, "3" once became a product's price (2026-10-04).
+ */
+export function isProductNumber(text: string, batchSize: number): boolean {
+  const m = /^#?(\d{1,2})[.!]?$/.exec(text.trim());
+  if (!m) return false;
+  const n = Number(m[1]);
+  return n >= 1 && n <= batchSize;
+}

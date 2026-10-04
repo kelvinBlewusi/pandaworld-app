@@ -1,4 +1,4 @@
-import { endsWithDoneSignal, stripDoneSignal } from "@/lib/whatsapp/draft";
+import { endsWithDoneSignal, stripDoneSignal, isProductNumber } from "@/lib/whatsapp/draft";
 
 describe("endsWithDoneSignal", () => {
   it("matches the bare word", () => {
@@ -38,5 +38,21 @@ describe("stripDoneSignal", () => {
   it("returns an empty string when the whole text was just the done-signal", () => {
     expect(stripDoneSignal("done")).toBe("");
     expect(stripDoneSignal("Done!")).toBe("");
+  });
+});
+
+describe("isProductNumber", () => {
+  it("is one of the batch's product numbers, alone", () => {
+    expect(isProductNumber("2", 3)).toBe(true);
+    expect(isProductNumber(" #3 ", 3)).toBe(true);
+    expect(isProductNumber("1.", 1)).toBe(true);
+  });
+
+  it("isn't a number outside the batch, or anything with more in it", () => {
+    expect(isProductNumber("4", 3)).toBe(false);
+    expect(isProductNumber("0", 3)).toBe(false);
+    expect(isProductNumber("169", 3)).toBe(false);
+    expect(isProductNumber("2 pieces", 3)).toBe(false);
+    expect(isProductNumber("price 2", 3)).toBe(false);
   });
 });

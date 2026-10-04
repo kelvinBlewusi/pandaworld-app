@@ -1242,6 +1242,41 @@ describe("reconnecting Jumia in the middle of a batch keeps the batch", () => {
   });
 });
 
+describe("guide-me mode: a product number typed on its own", () => {
+  // 2026-10-04: a seller who never picked I or II captioned photos "169",
+  // then typed "1", "2", "3" between them, the way way I closes a product.
+  // Each was saved as a note and read as the price; product 1 went at GHS 3.
+  it("is neither the price nor a note, and says how this mode works", async () => {
+    db.tables.listings = [{
+      id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, status: "draft",
+      images: ["https://cdn.test/a.jpg"], selling_price: 169, user_prompt: "169",
+    }];
+    seedSession({ state: "awaiting_photos", batch_size: 3, batch_seq: 1, listing_id: "listing-1" });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "2" });
+
+    expect(listings()[0].selling_price).toBe(169);
+    expect(listings()[0].user_prompt).toBe("169");
+    expect(sent[0].body).toContain("No need to type product numbers");
+    expect(sent[0].body).toContain("If 2 was the price, send it as *price 2*");
+    expect(sent[0].rows).toEqual(["done"]);
+    expect(session().batch_seq).toBe(1);
+  });
+
+  it("still takes a bare number above the batch's product numbers as the price", async () => {
+    db.tables.listings = [{
+      id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, status: "draft",
+      images: ["https://cdn.test/a.jpg"], selling_price: null, user_prompt: null,
+    }];
+    seedSession({ state: "awaiting_photos", batch_size: 3, batch_seq: 1, listing_id: "listing-1" });
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "250" });
+
+    expect(listings()[0].selling_price).toBe(250);
+  });
+});
+
 describe("message volume on a large batch", () => {
   // The live failure: a 10-product batch sent roughly 25 messages to one
   // recipient in about 30 seconds. Meta throttles per business/consumer
@@ -1857,6 +1892,41 @@ describe("handleSubmit — products that fail to push get ONE compiled follow-up
     expect(followUp!.rows).toEqual(["edit:listing-2", "edit:listing-4"]);
   });
 
+  // 2026-10-04: a seller ran out of credits mid-batch, so product 2 never
+  // drafted. Submit all pushed it anyway and relayed "title is required.
+  // description is required. category is required — open the listing…".
+  it("doesn't push a product that never drafted, and offers Retry for it", async () => {
+    seedBatch(3);
+    db.tables.listings[1].title = null;
+    db.tables.listings[1].description = null;
+    seedSession({ state: "awaiting_confirmation", batch_size: 3, batch_seq: null });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "submit all" });
+
+    expect(pushCallCount).toBe(2);
+    const all = sent.map((m) => m.body).join("\n");
+    expect(all).toContain("Product 2: ⚠️ not drafted yet, so there was nothing to send. Reply *retry 2*");
+    expect(all).not.toContain("title is required");
+    const next = sent.find((m) => m.body.startsWith("What's next?"));
+    expect(next?.body).toContain("Tap *Retry* to draft the product that wasn't drafted");
+    expect(next?.rows).toEqual(["retry 2", "submit all"]);
+  });
+
+  it("says a product is still drafting rather than offering Retry", async () => {
+    seedBatch(1);
+    db.tables.listings[0].title = null;
+    db.tables.analysis_jobs = [{ id: "job-1", listing_id: "listing-1", batch_id: "batch-1", status: "running" }];
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "submit all" });
+
+    expect(pushCallCount).toBe(0);
+    expect(sent[0].body).toContain("Product 1: ⏳ still drafting");
+    expect(sent[0].rows).toEqual(["start another"]);
+  });
+
   it("lists 20 products that failed to push, their reasons as text first", async () => {
     seedBatch(20);
     for (let i = 1; i <= 20; i++) {
@@ -2149,8 +2219,9 @@ describe("Fix & resubmit", () => {
     expect(sent.some((m) => m.body.includes("already live"))).toBe(true);
   });
 
-  // Never fixed by a redraft — no amount of rerunning invents a price.
-  it("still refuses to auto-fix a price/stock rejection", async () => {
+  // Never fixed by a redraft — no amount of rerunning invents a price. The
+  // seller is asked for it in the chat instead, and the answer resubmits.
+  it("asks for the price, rather than redrafting, on a price rejection", async () => {
     seedRejectedListing({ jumia_error: "The Global Price is mandatory in order to create a Product." });
     sent.length = 0;
 
@@ -2158,7 +2229,29 @@ describe("Fix & resubmit", () => {
 
     expect(autoAnalyzeCalls).toHaveLength(0);
     expect(pushCallCount).toBe(0);
-    expect(sent.some((m) => m.body.includes("needs you"))).toBe(true);
+    expect(sent.some((m) => m.body.includes("What price are you selling it at?"))).toBe(true);
+    expect(session().awaiting_qc_answer).toEqual({ listingId: REJECTED_ID, kind: "price" });
+  });
+
+  // Live 2026-10-04: a product went at GHS 3, and three Fix taps each said
+  // "Jumia needs a price on this product… open the editor".
+  it("names Jumia's minimum on a price that's too low, and resubmits the answer", async () => {
+    seedSession({ state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null });
+    seedRejectedListing({ selling_price: 3, jumia_error: "The Global Price [3] GHS must be equal or more than [8.81] GHS." });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
+
+    const ask = sent.find((m) => m.body.includes("What price are you selling it at?"));
+    expect(ask?.body).toContain("The price was GHS 3, and the lowest Jumia allows for it is GHS 8.81.");
+    expect(ask?.body).not.toContain("needs a price");
+    expect(pushCallCount).toBe(0);
+
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "169" });
+
+    expect(listings()[0].selling_price).toBe(169);
+    expect(pushCallCount).toBe(1);
+    expect(session().awaiting_qc_answer).toBeNull();
   });
 
   // Never fixed by a redraft — a rerun can't re-upload a file.
@@ -2207,7 +2300,18 @@ describe("Fix & resubmit", () => {
     await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
 
     expect(autoAnalyzeCalls).toHaveLength(0);
-    expect(sent.some((m) => m.body.includes("still needs"))).toBe(true);
+    // A missing price is one number: asked for here, not sent to the editor.
+    expect(sent.some((m) => m.body.includes("What price are you selling it at?"))).toBe(true);
+  });
+
+  it("still sends the seller to the editor when more than the price is missing", async () => {
+    seedRejectedListing({ selling_price: null, brand: null });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
+
+    expect(autoAnalyzeCalls).toHaveLength(0);
+    expect(sent.some((m) => m.body.includes("still needs price and brand"))).toBe(true);
   });
 });
 
