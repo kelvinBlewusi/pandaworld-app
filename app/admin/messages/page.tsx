@@ -29,15 +29,24 @@ async function recentPhoneNumbers(): Promise<{ phone_number: string; last_activi
   return Array.from(seen, ([phone_number, last_activity]) => ({ phone_number, last_activity })).slice(0, 30);
 }
 
-async function conversationFor(phone: string): Promise<MessageRow[]> {
+const THREAD_PAGE = 500;
+
+/**
+ * The latest THREAD_PAGE messages (before `before`, when paging back),
+ * oldest first. It used to be the FIRST 500 ever, so a number past 500
+ * stopped showing anything new (2026-10-04: 527, the latest 27 missing).
+ */
+async function conversationFor(phone: string, before?: string): Promise<MessageRow[]> {
   const db = createServerClient();
-  const { data } = await db
+  let query = db
     .from("whatsapp_message_log")
     .select("*")
-    .eq("phone_number", phone)
-    .order("created_at", { ascending: true })
-    .limit(500);
-  return (data ?? []) as MessageRow[];
+    .eq("phone_number", phone);
+  if (before) query = query.lt("created_at", before);
+  const { data } = await query
+    .order("created_at", { ascending: false })
+    .limit(THREAD_PAGE);
+  return ((data ?? []) as MessageRow[]).reverse();
 }
 
 function payloadSummary(row: MessageRow): string | null {
@@ -53,11 +62,12 @@ function payloadSummary(row: MessageRow): string | null {
 export default async function AdminMessagesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ phone?: string }>;
+  searchParams: Promise<{ phone?: string; before?: string }>;
 }) {
-  const { phone } = await searchParams;
+  const { phone, before } = await searchParams;
   const recent = await recentPhoneNumbers();
-  const thread = phone ? await conversationFor(phone) : [];
+  const thread = phone ? await conversationFor(phone, before) : [];
+  const threadUrl = (extra: string) => `/admin/messages?phone=${encodeURIComponent(phone ?? "")}${extra}`;
 
   return (
     <div>
@@ -100,6 +110,20 @@ export default async function AdminMessagesPage({
         <div>
           {!phone && <p className="text-sm text-zinc-500">Pick a number on the left, or search above.</p>}
           {phone && thread.length === 0 && <p className="text-sm text-zinc-500">No messages found for {phone}.</p>}
+          {phone && (thread.length === THREAD_PAGE || before) && (
+            <div className="mb-4 flex gap-4 text-sm">
+              {thread.length === THREAD_PAGE && (
+                <a href={threadUrl(`&before=${encodeURIComponent(thread[0].created_at)}`)} className="text-orange-700 underline">
+                  ← Older messages
+                </a>
+              )}
+              {before && (
+                <a href={threadUrl("")} className="text-orange-700 underline">
+                  Latest messages →
+                </a>
+              )}
+            </div>
+          )}
           <div className="space-y-2">
             {thread.map((row) => {
               const isOut = row.direction === "outbound";
