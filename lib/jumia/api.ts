@@ -111,8 +111,14 @@ export function countryForCurrency(currency: string): string {
  */
 const DEFINITIVE_AUTH_DEATH_CODES = new Set(["invalid_grant", "invalid_token", "unauthorized_client"]);
 
-export function isDefinitiveAuthDeath(status: number, code: string | undefined): boolean {
-  return !!code && DEFINITIVE_AUTH_DEATH_CODES.has(code);
+export function isDefinitiveAuthDeath(status: number, code: string | undefined, description?: string): boolean {
+  if (code && DEFINITIVE_AUTH_DEATH_CODES.has(code)) return true;
+  // The application itself is gone: deleted in Vendor Center. Jumia says so
+  // as a 400 "server_error — client not found" (seen live 2026-10-04), which
+  // no retry can fix. Read as transient, the stored access token kept
+  // working until it expired and then every push failed with no word to the
+  // seller that they had to reconnect.
+  return /client not found/i.test(description ?? "");
 }
 
 const REFRESH_LOCK_POLL_MS     = 400;
@@ -223,7 +229,7 @@ export async function refreshJumiaConnection(
   } catch (e) {
     await db.from("jumia_connections").update({ refresh_locked_at: null }).eq("user_id", userId);
 
-    if (e instanceof JumiaTokenError && isDefinitiveAuthDeath(e.status, e.code)) {
+    if (e instanceof JumiaTokenError && isDefinitiveAuthDeath(e.status, e.code, e.description)) {
       console.error(`[Jumia refresh] definitive auth death for ${userId}: ${e.message}`);
       await markNeedsReconnect(db, userId);
       throw new Error("JUMIA_RECONNECT_REQUIRED");
