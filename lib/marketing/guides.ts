@@ -13,19 +13,11 @@
 
 import { Link2, Laptop } from "lucide-react";
 import { WhatsAppIcon } from "@/components/whatsapp/whatsapp-icon";
+import { VIDEOS, type YouTubeVideo } from "@/lib/marketing/videos";
 
 /** Any icon that takes a className — lucide's, or one of our own brand
  *  marks (WhatsAppIcon isn't a lucide ForwardRef). */
 type IconComponent = (props: { className?: string }) => React.ReactNode;
-
-/** A video on the PandaWorld YouTube channel. */
-export interface YouTubeVideo {
-  /** youtu.be/<id> */
-  id: string;
-  /** ISO 8601, for the VideoObject markup (components/marketing/video-ld.tsx). */
-  duration: string;
-  uploadDate: string;
-}
 
 export interface Guide {
   /** URL segment: /how-to/<slug>. Changing one breaks indexed links. */
@@ -65,7 +57,7 @@ export const GUIDES: Guide[] = [
       "Copy the application's Client ID too.",
       "In PandaWorld, open the Connect Jumia page, pick your country, paste the Client ID and the token, and click \"Connect Jumia\". Or paste both into the WhatsApp chat. Paste the token straight away: a generated token only works for a short time.",
     ],
-    video: { id: "FTQmSdMNuNE", duration: "PT1M55S", uploadDate: "2026-10-04" },
+    video: VIDEOS.connectVendorCenter,
   },
   {
     slug: "link-whatsapp",
@@ -81,7 +73,7 @@ export const GUIDES: Guide[] = [
       "Tap \"Open WhatsApp to link\" — or send the code yourself to +233548534323. The message is pre-filled for you either way.",
       "PandaWorld confirms the link right away. The code expires after 15 minutes, so generate a new one if it lapses before you send it.",
     ],
-    video: { id: "XDoao0IO7RM", duration: "PT1M4S", uploadDate: "2026-10-04" },
+    video: VIDEOS.linkWhatsApp,
   },
   {
     slug: "chrome-extension-autofill",
@@ -98,7 +90,7 @@ export const GUIDES: Guide[] = [
       "Click \"Autofill this listing\". AI fills in the title, description, highlights, attributes, brand, and more.",
       "Review what's been filled in, tweak anything that needs it, and submit on Jumia's own form.",
     ],
-    video: { id: "JKv7b81M7fE", duration: "PT1M47S", uploadDate: "2026-10-04" },
+    video: VIDEOS.chromeExtension,
   },
   {
     slug: "list-on-jumia-from-whatsapp",
@@ -114,7 +106,7 @@ export const GUIDES: Guide[] = [
       "The AI drafts every listing and messages you back once they're ready — usually within a couple of minutes.",
       "Review each draft, then reply submit for one product, or submit all to push everything to Jumia at once.",
     ],
-    video: { id: "YRoahiccZdI", duration: "PT2M9S", uploadDate: "2026-10-04" },
+    video: VIDEOS.listFromWhatsApp,
     recording: "whatsapp-flow",
     sendingModes: true,
   },
@@ -128,7 +120,7 @@ export const WALKTHROUGH = {
     "See both ways to list on Jumia with PandaWorld: on a laptop with the Chrome extension, and from your phone on WhatsApp.",
   intro:
     "New to PandaWorld? See both ways to list in four minutes: on a laptop with the Chrome extension, and from your phone on WhatsApp.",
-  video: { id: "kcmy3jnEFZk", duration: "PT3M59S", uploadDate: "2026-10-04" } satisfies YouTubeVideo,
+  video: VIDEOS.walkthrough,
 };
 
 export function getGuide(slug: string): Guide | undefined {

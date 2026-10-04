@@ -12,7 +12,7 @@ jest.mock("@/lib/supabase/server", () => ({
   createServerClient: () => db,
 }));
 
-import { describeOutboundMessage, logInboundMessage, logOutboundMessage } from "@/lib/whatsapp/message-log";
+import { describeOutboundMessage, logInboundMessage, logOutboundMessage, sentRecently } from "@/lib/whatsapp/message-log";
 
 describe("describeOutboundMessage — pure extraction from callGraphApi's body", () => {
   it("extracts a plain text send", () => {
@@ -123,5 +123,37 @@ describe("logOutboundMessage / logInboundMessage — write to whatsapp_message_l
     expect(db.tables.whatsapp_message_log[0]).toMatchObject({
       phone_number: "233550607231", direction: "inbound", message_type: "text", body_text: "3 products", wamid: "wamid.123",
     });
+  });
+});
+
+describe("sentRecently — whether a number was already sent a message", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+  const row = (fields: Record<string, unknown>) => ({
+    phone_number: "233550607231", direction: "outbound", message_type: "text", body_text: "▶️ Watch\nhttps://youtu.be/kcmy3jnEFZk",
+    created_at: ago(60_000), ...fields,
+  });
+
+  beforeEach(() => {
+    db.tables.whatsapp_message_log = [];
+  });
+
+  it("finds a message sent to the number within the window", async () => {
+    db.tables.whatsapp_message_log.push(row({}));
+    await expect(sentRecently("233550607231", "youtu.be/kcmy3jnEFZk", DAY)).resolves.toBe(true);
+  });
+
+  it("ignores one sent before the window, to another number, or received rather than sent", async () => {
+    db.tables.whatsapp_message_log.push(
+      row({ created_at: ago(2 * DAY) }),
+      row({ phone_number: "233240000000" }),
+      row({ direction: "inbound" }),
+    );
+    await expect(sentRecently("233550607231", "youtu.be/kcmy3jnEFZk", DAY)).resolves.toBe(false);
+  });
+
+  it("ignores other messages to the number", async () => {
+    db.tables.whatsapp_message_log.push(row({ body_text: "How many products are you listing today?" }));
+    await expect(sentRecently("233550607231", "youtu.be/kcmy3jnEFZk", DAY)).resolves.toBe(false);
   });
 });

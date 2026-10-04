@@ -6,7 +6,12 @@ import {
   guideControlsMessage,
   helpMessage,
   unsupportedMediaMessage,
+  walkthroughVideoMessage,
+  WALKTHROUGH_VIDEO_MARK,
+  notLinkedMessage,
+  linkedMessagePrefix,
 } from "@/lib/whatsapp/onboarding";
+import { buildConnectInstructions, SELF_AUTH_STEPS } from "@/lib/whatsapp/jumia-connect";
 import { parseGlobalCommand } from "@/lib/whatsapp/commands";
 import { MAX_BATCH_SIZE } from "@/lib/whatsapp/batch";
 
@@ -114,5 +119,39 @@ describe("unsupported media reply", () => {
     for (const kind of ["video", "audio", "document", "sticker", "location", "contacts", "unknown"]) {
       expect(unsupportedMediaMessage(kind)).toMatch(/photo/i);
     }
+  });
+});
+
+describe("the walkthrough video and the messages under it", () => {
+  it("sends the full walkthrough's YouTube link, and is found again by its mark", () => {
+    expect(walkthroughVideoMessage()).toContain("https://youtu.be/kcmy3jnEFZk");
+    expect(walkthroughVideoMessage()).toContain(WALKTHROUGH_VIDEO_MARK);
+  });
+
+  it("puts the link last, where WhatsApp's preview card belongs to it", () => {
+    expect(walkthroughVideoMessage().trim().endsWith("https://youtu.be/kcmy3jnEFZk")).toBe(true);
+  });
+
+  it("points a number that isn't linked to the video and the Guide page", () => {
+    expect(notLinkedMessage()).toMatch(/isn't linked to a PandaWorld account yet/);
+    expect(notLinkedMessage()).toMatch(/learn how PandaWorld works from the video above or visit the Guide page/);
+    expect(notLinkedMessage()).toMatch(/\/how-to$/);
+  });
+
+  it("starts the linked confirmation the same way", () => {
+    expect(linkedMessagePrefix()).toMatch(/^✅ Your WhatsApp is now linked to PandaWorld!/);
+    expect(linkedMessagePrefix()).toMatch(/from the video above or visit the Guide page/);
+    expect(linkedMessagePrefix()).toMatch(/\n\n$/);
+  });
+
+  it("keeps every linked confirmation inside WhatsApp's interactive body cap", () => {
+    // It rides on a message with buttons. The longest one is the expired
+    // connection's: its own two sentences, then the setup steps.
+    const expired =
+      "Your Jumia connection expired: the kind of application you set up needs a new login about once a day.\n\n" +
+      "Set up automatic access once and it won't happen again:\n" + SELF_AUTH_STEPS;
+    expect((linkedMessagePrefix() + buildConnectInstructions()).length).toBeLessThan(1024);
+    expect((linkedMessagePrefix() + expired).length).toBeLessThan(1024);
+    expect(notLinkedMessage().length).toBeLessThan(1024);
   });
 });

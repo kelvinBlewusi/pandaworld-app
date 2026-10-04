@@ -1,6 +1,7 @@
 import { PlayCircle } from "lucide-react";
 import { WhatsAppFlowVideo } from "@/components/marketing/whatsapp-flow-video";
-import type { Guide, YouTubeVideo } from "@/lib/marketing/guides";
+import type { Guide } from "@/lib/marketing/guides";
+import type { YouTubeVideo } from "@/lib/marketing/videos";
 
 /** A YouTube video in a 16:9 frame. Loads only once it's scrolled near, so a
  *  page of guides doesn't pull every player in on mobile data. */

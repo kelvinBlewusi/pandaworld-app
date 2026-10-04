@@ -19,6 +19,8 @@
  */
 
 import { MAX_BATCH_SIZE } from "@/lib/whatsapp/batch";
+import { appUrl } from "@/lib/whatsapp/app-url";
+import { VIDEOS, youtubeUrl } from "@/lib/marketing/videos";
 
 /** Every command the bot understands, with what it does. Rendered into
  *  both the guide and the *help* reply. */
@@ -41,6 +43,45 @@ function commandLines(): string {
  *  tap and a typed "how it works" run the identical path — the same rule
  *  every other button in this bot follows (see lib/whatsapp/commands.ts). */
 export const HOW_IT_WORKS_BUTTON = { id: "how it works", title: "How it works" };
+
+/**
+ * The full walkthrough video, sent on its own as plain text with the link
+ * preview on, so WhatsApp shows it as a card with the video's thumbnail —
+ * a link inside a message with buttons never gets one. Goes out just
+ * before notLinkedMessage and the linked confirmation, which both point
+ * at "the video above".
+ *
+ * ▶️ rather than an emoji outside the Basic Multilingual Plane: this
+ * string joins a runtime value, the case the minifier can mangle (see
+ * guideHowToListMessage).
+ */
+export function walkthroughVideoMessage(): string {
+  return "▶️ *How PandaWorld works* (4 min)\n" + youtubeUrl(VIDEOS.walkthrough);
+}
+
+/** What the walkthrough message contains that nothing else does — how the
+ *  webhook tells whether a number was already sent it. */
+export const WALKTHROUGH_VIDEO_MARK = youtubeUrl(VIDEOS.walkthrough).replace("https://", "");
+
+function getStartedLine(): string {
+  return "To get started, we recommend you learn how PandaWorld works from the video above or visit the Guide page:\n" + appUrl() + "/how-to";
+}
+
+/**
+ * The reply to any message from a number with no PandaWorld account linked,
+ * under the walkthrough video, beside a "Connect WhatsApp" button. The
+ * Guide page goes in as a link: a WhatsApp message can carry only one link
+ * button.
+ */
+export function notLinkedMessage(): string {
+  return "👋 This number isn't linked to a PandaWorld account yet.\n\n" + getStartedLine();
+}
+
+/** The top of the linked confirmation, under the walkthrough video; the
+ *  seller's next step (connect Jumia, or "how many products?") follows. */
+export function linkedMessagePrefix(): string {
+  return "✅ Your WhatsApp is now linked to PandaWorld!\n\n" + getStartedLine() + "\n\n";
+}
 
 /**
  * Layer 1 — sent once, the first time a number is linked.
