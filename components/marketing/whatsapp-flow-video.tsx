@@ -1,8 +1,8 @@
 /**
  * Screen recording of the whole WhatsApp flow — a real 3-product batch
  * from "how many products?" to the drafted listings, ending on a "Live on
- * Jumia" notification. Used on the homepage ("See it happen") and the
- * Guides page ("Use the WhatsApp Chatbot").
+ * Jumia" notification. Shown on the Guides page ("Use the WhatsApp
+ * Chatbot") whenever that guide has no YouTube video.
  *
  * Re-encoded from the 13 MB phone capture to 720px wide H.264 (3.4 MB),
  * which is still sharp at the ~300px it's shown at. Click to play rather

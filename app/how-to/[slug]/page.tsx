@@ -8,6 +8,7 @@ import { GuideMedia } from "@/components/marketing/guide-media";
 import { GuideSteps } from "@/components/marketing/guide-steps";
 import { WhatsAppSendingModes } from "@/components/marketing/whatsapp-sending-modes";
 import { BreadcrumbLd } from "@/components/marketing/breadcrumb-ld";
+import { VideoLd } from "@/components/marketing/video-ld";
 import { isBillingEnabled } from "@/lib/billing/mode";
 import { GUIDES, getGuide } from "@/lib/marketing/guides";
 import { CALCULATOR_HREF, SIGN_IN_HREF, SIGN_UP_HREF } from "@/lib/marketing/links";
@@ -45,6 +46,7 @@ export default async function GuidePage({ params }: { params: { slug: string } }
   return (
     <div className="min-h-screen bg-white text-zinc-900">
       <BreadcrumbLd items={[["PandaWorld", "/"], ["Guides", "/how-to"], [guide.metaTitle, `/how-to/${guide.slug}`]]} />
+      {guide.video && <VideoLd video={guide.video} name={guide.metaTitle} description={guide.description} />}
       <HomeFloatingNav signInHref={SIGN_IN_HREF} signUpHref={SIGN_UP_HREF} calculatorHref={CALCULATOR_HREF} pricingLive={billingOn} />
 
       <article className="mx-auto max-w-3xl px-6 pb-16 pt-12 sm:pt-16">
@@ -62,6 +64,11 @@ export default async function GuidePage({ params }: { params: { slug: string } }
         </div>
         <p className="mt-4 text-lg leading-relaxed text-zinc-600">{guide.intro}</p>
 
+        {/* The video first: many sellers would rather watch than read the steps. */}
+        <div className="mt-8">
+          <GuideMedia guide={guide} />
+        </div>
+
         <h2 className="mt-10 text-xl font-bold">Steps</h2>
         <div className="mt-4">
           <GuideSteps steps={guide.steps} />
@@ -72,10 +79,6 @@ export default async function GuidePage({ params }: { params: { slug: string } }
             <WhatsAppSendingModes />
           </div>
         )}
-
-        <div className="mt-10">
-          <GuideMedia guide={guide} />
-        </div>
 
         <div className="mt-12 rounded-2xl bg-orange-50 p-6 text-center">
           <p className="text-lg font-semibold">Ready to list faster on Jumia?</p>
