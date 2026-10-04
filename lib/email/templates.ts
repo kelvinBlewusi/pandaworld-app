@@ -15,6 +15,7 @@
  */
 
 import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
+import { FREE_SIGNUP_CREDITS, LISTING_CREDIT_COST, LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
 
 const BRAND = "PandaWorld";
 
@@ -217,6 +218,210 @@ export function whatsappExtensionAnnouncementEmail(opts: {
       "Reply to this email if you get stuck - we read every message.",
     ].join("\n"),
   };
+}
+
+// ─── What's new + how-to videos (October 2026) ───────────────────────────────
+//
+// One-off broadcast to every sign-up (app/api/admin/broadcast/[campaign]):
+// the improvements sellers will notice, and the five YouTube videos.
+// Written for sellers reading on a phone, many in their second language:
+// short sentences, one idea per line, every video a big tappable picture.
+//
+// Its own layout rather than layout(): the video pictures need the full
+// width and two columns that fold to one on a phone. The columns are
+// inline-block divs with Outlook-only tables around them (Outlook renders
+// through Word, which ignores inline-block); everywhere else they wrap on
+// their own when the screen is too narrow for two.
+//
+// The pictures live at /email/2026-10/ on the site: our YouTube thumbnails
+// with a play button and the running time drawn on. YouTube's own copies
+// have neither, and a picture that doesn't look playable doesn't get tapped.
+
+const WHATSAPP_BOT_WA_ME = "https://wa.me/233548534323?text=Hi";
+
+const UPDATE_VIDEOS = [
+  { id: "XDoao0IO7RM", img: "01-link-whatsapp",          title: "Link your WhatsApp",         line: "One message links your number.",          mins: "1 min" },
+  { id: "FTQmSdMNuNE", img: "02-connect-vendor-center",  title: "Connect your Vendor Center", line: "Do it once. It stays connected.",         mins: "2 min" },
+  { id: "YRoahiccZdI", img: "03-list-from-whatsapp",     title: "List from WhatsApp",         line: "Send photos and the price. We do the rest.", mins: "2 min" },
+  { id: "JKv7b81M7fE", img: "04-auto-fill-laptop",       title: "Auto-fill on a laptop",      line: "Fill Jumia's Add Product form in one click.", mins: "2 min" },
+];
+
+const UPDATE_NEWS: [title: string, line: string][] = [
+  ["Connect Jumia once. It stays connected.", "Paste your Client ID and token one time. No more logging in to Jumia every day."],
+  ["List up to 10 products at once on WhatsApp.", "Send them all together, or let the bot guide you one product at a time."],
+  ["The bot asks instead of guessing.", "If a price, size or colour is missing, it asks you. Just reply."],
+  ["Choose the category yourself.", "Not sure the bot picked the right one? Tap the right category, or write it in your notes, like \"category: wigs\"."],
+  ["Fix and resubmit in the chat.", "If Jumia rejects a listing, tap Fix & resubmit and answer the bot's question."],
+  ["We tell you when it's live.", "The bot messages you as each listing goes live on Jumia."],
+  ["Pay only when your listing goes live.",
+    `A WhatsApp listing is ${LIVE_LISTING_CREDIT_COST} credits and an autofill is ${LISTING_CREDIT_COST}. ` +
+    `Drafts, fixes and rejected listings are free. New accounts get ${FREE_SIGNUP_CREDITS} free credits, and credits never expire.`],
+  ["Free price calculator for every Jumia country.", "See what you keep after Jumia's commission and fees, before you set your price."],
+];
+
+export function improvementsAndVideosEmail(opts: {
+  firstName?: string | null;
+  appUrl:     string;
+}): RenderResult {
+  const name     = opts.firstName?.trim();
+  const greeting = name ? `Hi ${escapeHtml(name)},` : "Hi there,";
+  const img      = (file: string) => `${opts.appUrl}/email/2026-10/${file}.jpg`;
+  const yt       = (id: string) => `https://youtu.be/${id}`;
+  const howTo    = `${opts.appUrl}/how-to`;
+  const calc     = `${opts.appUrl}/calculator`;
+  const subject  = "New on PandaWorld: easier listing, and videos that show you how";
+  const preheader = "Five short videos. Watch one, then list your next product from WhatsApp.";
+
+  const font = "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;";
+  const button = (label: string, href: string, filled: boolean) => `
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto;"><tr>
+      <td align="center" style="border-radius:10px; ${filled ? "background:#f97316;" : "border:2px solid #f97316;"}">
+        <a href="${href}" style="display:inline-block; padding:${filled ? "14px 26px" : "12px 24px"}; ${font} font-size:16px; font-weight:700; color:${filled ? "#ffffff" : "#c2410c"}; text-decoration:none; border-radius:10px;">${escapeHtml(label)}</a>
+      </td>
+    </tr></table>`;
+
+  const card = (v: (typeof UPDATE_VIDEOS)[number], n: number) => `
+    <div class="pw-col" style="display:inline-block; width:100%; max-width:276px; vertical-align:top;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td class="pw-cell" style="padding:8px 8px 16px;">
+        <a href="${yt(v.id)}" style="text-decoration:none;"><img class="pw-img" src="${img(v.img)}" width="260" alt="Video: ${escapeHtml(v.title)} (${v.mins})" style="display:block; width:100%; max-width:260px; height:auto; border:0; border-radius:10px;" /></a>
+        <p style="margin:10px 0 2px; ${font} font-size:16px; line-height:1.35; font-weight:700; color:#18181b;"><a href="${yt(v.id)}" style="color:#18181b; text-decoration:none;">${n}. ${escapeHtml(v.title)}</a></p>
+        <p style="margin:0; ${font} font-size:14px; line-height:1.5; color:#52525b;">${escapeHtml(v.line)} <span style="color:#a1a1aa;">&middot; ${v.mins}</span></p>
+      </td></tr></table>
+    </div>`;
+
+  const pairs = [UPDATE_VIDEOS.slice(0, 2), UPDATE_VIDEOS.slice(2, 4)].map((pair, row) => `
+    <tr><td align="center" class="pw-pad" style="padding:0 16px; font-size:0;">
+      <!--[if mso]><table role="presentation" width="552" cellpadding="0" cellspacing="0" border="0"><tr><td width="276" valign="top"><![endif]-->
+      ${card(pair[0], row * 2 + 1)}
+      <!--[if mso]></td><td width="276" valign="top"><![endif]-->
+      ${card(pair[1], row * 2 + 2)}
+      <!--[if mso]></td></tr></table><![endif]-->
+    </td></tr>`).join("");
+
+  const news = UPDATE_NEWS.map(([title, line]) => `
+    <tr>
+      <td width="34" valign="top" style="padding:2px 12px 18px 0;">
+        <div style="width:24px; height:24px; line-height:24px; border-radius:12px; background:#fff1e6; color:#c2410c; ${font} font-size:14px; font-weight:700; text-align:center;">&#10003;</div>
+      </td>
+      <td valign="top" style="padding:0 0 18px; ${font}">
+        <p style="margin:0 0 2px; font-size:16px; line-height:1.4; font-weight:700; color:#18181b;">${escapeHtml(title)}</p>
+        <p style="margin:0; font-size:14px; line-height:1.55; color:#52525b;">${escapeHtml(line)}</p>
+      </td>
+    </tr>`).join("");
+
+  const html = `<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light" />
+<meta name="supported-color-schemes" content="light" />
+<title>${escapeHtml(subject)}</title>
+<style>
+  /* Phones: one video per row, as wide as the text. Clients that drop
+     this block still get two columns that wrap, just a little narrower. */
+  @media (max-width: 600px) {
+    .pw-col { max-width: 100% !important; }
+    .pw-img { max-width: 100% !important; }
+    .pw-cell { padding: 8px 0 16px !important; }
+    .pw-pad { padding-left: 24px !important; padding-right: 24px !important; }
+  }
+</style>
+</head>
+<body style="margin:0; padding:0; background:#f4f4f5;">
+  <div style="display:none; max-height:0; overflow:hidden; mso-hide:all;">${escapeHtml(preheader)}${"&#847;&zwnj;&nbsp;".repeat(60)}</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f4f5;">
+    <tr><td align="center" style="padding:24px 12px;">
+      <!--[if mso]><table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px; background:#ffffff; border-radius:16px;">
+
+        <tr><td style="padding:24px 24px 8px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+            <td style="padding-right:10px;"><img src="${opts.appUrl}/brand/panda-p-logo-trimmed.png" width="36" height="32" alt="" style="display:block; border:0;" /></td>
+            <td style="${font} font-size:18px; font-weight:800; color:#18181b; letter-spacing:-0.01em;">PandaWorld</td>
+          </tr></table>
+        </td></tr>
+
+        <tr><td style="padding:16px 24px 4px; ${font}">
+          <h1 style="margin:0 0 14px; font-size:26px; line-height:1.25; font-weight:800; color:#18181b;">List on Jumia faster, with videos that show you how</h1>
+          <p style="margin:0 0 12px; font-size:16px; line-height:1.6; color:#27272a;">${greeting}</p>
+          <p style="margin:0 0 20px; font-size:16px; line-height:1.6; color:#27272a;">We have made PandaWorld easier to use. Below are the biggest changes, and five short videos that show every step. Most take about a minute.</p>
+        </td></tr>
+
+        <tr><td style="padding:0 24px; ${font}">
+          <p style="margin:0 0 10px; font-size:13px; font-weight:800; letter-spacing:0.08em; text-transform:uppercase; color:#c2410c;">Start here</p>
+          <a href="${yt("kcmy3jnEFZk")}" style="text-decoration:none;"><img src="${img("00-walkthrough")}" width="552" alt="Video: the full PandaWorld walkthrough (4 min)" style="display:block; width:100%; max-width:552px; height:auto; border:0; border-radius:12px;" /></a>
+          <p style="margin:14px 0 4px; font-size:18px; line-height:1.35; font-weight:800; color:#18181b;"><a href="${yt("kcmy3jnEFZk")}" style="color:#18181b; text-decoration:none;">The full walkthrough</a></p>
+          <p style="margin:0 0 18px; font-size:15px; line-height:1.55; color:#52525b;">Both ways to list, in 4 minutes: on your laptop with the Chrome extension, and from your phone on WhatsApp.</p>
+          ${button("Watch the walkthrough", yt("kcmy3jnEFZk"), true)}
+        </td></tr>
+
+        <tr><td style="padding:32px 24px 6px; ${font}">
+          <h2 style="margin:0 0 4px; font-size:20px; line-height:1.3; font-weight:800; color:#18181b;">Step by step</h2>
+          <p style="margin:0; font-size:15px; line-height:1.55; color:#52525b;">Watch them in order the first time. Videos 1 and 2 you only do once.</p>
+        </td></tr>
+        ${pairs}
+
+        <tr><td style="padding:16px 24px 0;"><div style="height:1px; line-height:1px; background:#e4e4e7;">&nbsp;</div></td></tr>
+
+        <tr><td style="padding:28px 24px 8px; ${font}">
+          <h2 style="margin:0 0 18px; font-size:20px; line-height:1.3; font-weight:800; color:#18181b;">What's new</h2>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${news}</table>
+          <p style="margin:0 0 4px; font-size:14px; line-height:1.55; color:#52525b;">Try the calculator: <a href="${calc}" style="color:#c2410c; font-weight:700;">${calc.replace(/^https?:\/\//, "")}</a></p>
+        </td></tr>
+
+        <tr><td style="padding:24px 24px 8px; ${font}">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#fff7ed; border-radius:14px;"><tr><td align="center" style="padding:24px 20px;">
+            <p style="margin:0 0 6px; ${font} font-size:20px; line-height:1.3; font-weight:800; color:#18181b;">Ready to list your next product?</p>
+            <p style="margin:0 0 18px; ${font} font-size:15px; line-height:1.55; color:#52525b;">Message the bot on WhatsApp: <strong style="color:#18181b; white-space:nowrap;">+233 54 853 4323</strong></p>
+            ${button("Start on WhatsApp", WHATSAPP_BOT_WA_ME, true)}
+            <div style="height:12px; line-height:12px;">&nbsp;</div>
+            ${button("Get the Chrome extension", CHROME_WEB_STORE_URL, false)}
+          </td></tr></table>
+        </td></tr>
+
+        <tr><td style="padding:16px 24px 28px; ${font}">
+          <p style="margin:0 0 6px; font-size:14px; line-height:1.6; color:#52525b;">Every guide, with its video: <a href="${howTo}" style="color:#c2410c; font-weight:700;">${howTo.replace(/^https?:\/\//, "")}</a></p>
+          <p style="margin:0; font-size:14px; line-height:1.6; color:#52525b;">Stuck? Reply to this email. We read every message.</p>
+        </td></tr>
+
+        <tr><td style="padding:18px 24px 24px; border-top:1px solid #e4e4e7; ${font}">
+          <p style="margin:0; font-size:12px; line-height:1.6; color:#a1a1aa;">You're getting this email because you have a PandaWorld account. Don't want updates like this? Reply "unsubscribe" and we'll take you off the list.</p>
+        </td></tr>
+
+      </table>
+      <!--[if mso]></td></tr></table><![endif]-->
+    </td></tr>
+  </table>
+</body>
+</html>`;
+
+  const text = [
+    greeting,
+    "",
+    "We have made PandaWorld easier to use. Below are the biggest changes, and five short videos that show every step. Most take about a minute.",
+    "",
+    "START HERE",
+    `The full walkthrough (4 min): ${yt("kcmy3jnEFZk")}`,
+    "",
+    "STEP BY STEP",
+    ...UPDATE_VIDEOS.map((v, i) => `${i + 1}. ${v.title} (${v.mins}): ${yt(v.id)}`),
+    "",
+    "WHAT'S NEW",
+    ...UPDATE_NEWS.map(([title, line]) => `- ${title} ${line}`),
+    `Price calculator: ${calc}`,
+    "",
+    "READY TO LIST YOUR NEXT PRODUCT?",
+    `Message the bot on WhatsApp, +233 54 853 4323: ${WHATSAPP_BOT_WA_ME}`,
+    `Get the Chrome extension: ${CHROME_WEB_STORE_URL}`,
+    "",
+    `Every guide, with its video: ${howTo}`,
+    "Stuck? Reply to this email. We read every message.",
+    "",
+    "Don't want updates like this? Reply \"unsubscribe\" and we'll take you off the list.",
+  ].join("\n");
+
+  return { subject, html, text };
 }
 
 // ─── Payment confirmation ────────────────────────────────────────────────────
