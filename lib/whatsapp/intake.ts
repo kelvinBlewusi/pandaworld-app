@@ -1236,9 +1236,9 @@ async function handleAwaitingCount(
   await replyButtons(
     phoneNumber,
     `Got it — ${count} products. You can send all ${count} in two ways.\n\n` +
-    `I. Select all the photos of each product and caption it with the price and any other notes then send. After sending all the images of product 1, type and send 1, after sending all the images of product 2, type and send 2. Do same in that order until you finish sending all the ${count} products.\n` +
+    `#I. Select all the photos of each product and caption it with the price and any other notes then send. After sending all the images of product 1, type and send 1, after sending all the images of product 2, type and send 2. Do same in that order until you finish sending all the ${count} products.\n` +
     `I'll stay quiet until the last one, then start drafting everything at once.\n\n` +
-    `II. Guide me each step` +
+    `#II. Guide me each step` +
     (session.preferredBatchQuiet != null
       ? `\n\nNo tap needed for *${session.preferredBatchQuiet ? "#I" : "#II"}*: it's the one you used last time.`
       : ""),
@@ -1796,7 +1796,13 @@ async function handleQuietBatchMessage(
     // seller is told: going on in silence would put the next product's
     // photos on this one.
     if (notes) await parkNotes(phoneNumber, session, notes);
-    await replyText(phoneNumber, `I haven't received any photos for product ${seq} yet. Send them, then reply *${seq}*.`);
+    // Often the number overtook photos the seller did send: it reached the
+    // webhook before them (live, 2026-10-04, by a quarter of a second).
+    await replyText(
+      phoneNumber,
+      `I haven't received any photos for product ${seq} yet. Send them, then reply *${seq}*.\n\n` +
+        `Make sure the images are sent before entering *${seq}*.`,
+    );
     return;
   }
 

@@ -63,12 +63,12 @@ export function faqSections(billingOn: boolean): FaqSection[] {
       items: [
         {
           q: "What are the two ways to send products?",
-          text: "After you say how many products you're listing, the bot offers two. I: send each product's photos with its price as the caption, then its number (1, 2, 3…); the bot stays quiet until the last one. II: the bot takes you through one product at a time, and you reply done after each.",
+          text: "After you say how many products you're listing, the bot offers two. #I: send each product's photos with its price as the caption, then its number (1, 2, 3…); the bot stays quiet until the last one. #II: the bot takes you through one product at a time, and you reply done after each.",
           a: (
             <>
-              After you say how many products you&apos;re listing, the bot offers two. <strong>I</strong>: send each
+              After you say how many products you&apos;re listing, the bot offers two. <strong>#I</strong>: send each
               product&apos;s photos with its price as the caption, then its number (1, 2, 3…); the bot stays quiet
-              until the last one. <strong>II</strong>: the bot takes you through one product at a time, and you reply{" "}
+              until the last one. <strong>#II</strong>: the bot takes you through one product at a time, and you reply{" "}
               <strong>done</strong> after each.{" "}
               <Link href="/how-to/list-on-jumia-from-whatsapp" className={linkClass}>See both, with an example</Link>
             </>
