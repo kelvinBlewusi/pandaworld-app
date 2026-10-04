@@ -56,6 +56,18 @@ export const maxDuration = 60;
 const CLAIM_LIMIT = 2;
 
 /**
+ * Time a batch's closing messages need for themselves: the Ready/Held
+ * check of every product (which reaches Jumia), the summary, then the
+ * question for the first missing price or value. Live, 2026-10-04: a slow
+ * draft (42s, its first AI reply malformed) left the summary going out at
+ * second 58, and the run was cut off before the variation question that
+ * follows it. With less than this left after drafting, the batch is left
+ * for a fresh run (the nudge below, else pg_cron within the minute), which
+ * claims nothing and closes it with the whole budget.
+ */
+const FINALIZE_MIN_REMAINING_MS = 25_000;
+
+/**
  * Close out every batch that has settled but never got a closing message —
  * see findUnfinalizedSettledBatches's own doc comment for why that can
  * happen even though every job in it has already reached a terminal
@@ -86,6 +98,7 @@ async function closeSettledBatches(): Promise<number> {
 }
 
 export async function POST(req: NextRequest) {
+  const startedAt = Date.now();
   const cronSecret = process.env.CRON_SECRET;
   if (!cronSecret) {
     console.error("[worker] CRON_SECRET is not set — refusing to run.");
@@ -180,8 +193,15 @@ export async function POST(req: NextRequest) {
   // Close out any batch that has settled, including one whose last job
   // just finished above AND one whose last job silently retired to
   // 'failed' on some earlier tick without ever being claimed again — see
-  // closeSettledBatches.
-  const batchesClosed = await closeSettledBatches();
+  // closeSettledBatches. Only with time left to finish it: see
+  // FINALIZE_MIN_REMAINING_MS.
+  const remainingMs = maxDuration * 1000 - (Date.now() - startedAt);
+  let batchesClosed = 0;
+  if (remainingMs >= FINALIZE_MIN_REMAINING_MS) {
+    batchesClosed = await closeSettledBatches();
+  } else {
+    console.info(`[worker] ${Math.round(remainingMs / 1000)}s left after drafting — leaving settled batches to a fresh run`);
+  }
 
   // Keep the queue draining without waiting for the next scheduled tick.
   // Only fires when this tick actually had work, so an empty queue can't
