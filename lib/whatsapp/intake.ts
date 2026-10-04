@@ -3328,7 +3328,7 @@ async function handleSubmit(
             // one of its fields did not.
             messages[i] = result.adjustments?.length
               ? `Product ${seq}: ✅ submitted — pending Jumia review.\n` +
-                `⚠️ The listing went, but ${result.adjustments.join("; ")}. Edit and resubmit if that matters.`
+                `⚠️ The listing went, but ${result.adjustments.join("; ")}.`
               : `Product ${seq}: ✅ submitted — pending Jumia review.`;
           } else if (result.code === "already_submitted") {
             // Not a failure, and not the seller's mistake — they tapped

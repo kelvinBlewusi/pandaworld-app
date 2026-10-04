@@ -162,8 +162,9 @@ export async function fetchJumiaSellerProfile(accessToken: string): Promise<{
  * in lib/jumia/api.ts.
  */
 export class JumiaTokenError extends Error {
-  status: number;
-  code:   string | undefined;
+  status:      number;
+  code:        string | undefined;
+  description: string | undefined;
 
   constructor(status: number, body: unknown) {
     const b = (typeof body === "object" && body !== null) ? (body as Record<string, unknown>) : {};
@@ -177,8 +178,9 @@ export class JumiaTokenError extends Error {
     // that need it to classify a failure as definitive vs. transient.
     Object.setPrototypeOf(this, JumiaTokenError.prototype);
     this.name   = "JumiaTokenError";
-    this.status = status;
-    this.code   = code;
+    this.status      = status;
+    this.code        = code;
+    this.description = description;
   }
 }
 

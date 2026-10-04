@@ -97,6 +97,13 @@ describe("isDefinitiveAuthDeath", () => {
     expect(isDefinitiveAuthDeath(401, "unauthorized_client")).toBe(true);
   });
 
+  it("treats a deleted application as definitive, though Jumia calls it a server_error", () => {
+    // What Jumia answered every refresh with after a seller deleted their
+    // Self Authorization app in Vendor Center (2026-10-04).
+    expect(isDefinitiveAuthDeath(400, "server_error", "client not found")).toBe(true);
+    expect(isDefinitiveAuthDeath(500, "server_error", "something went wrong")).toBe(false);
+  });
+
   it("treats everything else — including an unrecognised 400 — as transient", () => {
     expect(isDefinitiveAuthDeath(503, undefined)).toBe(false);
     expect(isDefinitiveAuthDeath(500, "server_error")).toBe(false);
@@ -169,6 +176,19 @@ describe("refreshJumiaConnection", () => {
 
     expect(db.table.status).toBe("needs_reconnect");
     expect(db.table.refresh_locked_at).toBeNull();
+  });
+
+  it("marks needs_reconnect when the seller's application was deleted in Vendor Center", async () => {
+    const db = makeFakeDb(activeRow());
+    global.fetch = jest.fn().mockResolvedValue(
+      jsonResponse(400, { error: "server_error", error_description: "client not found" }),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      refreshJumiaConnection(db as never, "u1", "old-refresh", "deleted-app", undefined),
+    ).rejects.toThrow("JUMIA_RECONNECT_REQUIRED");
+
+    expect(db.table.status).toBe("needs_reconnect");
   });
 
   it("only one of two concurrent refreshes calls Jumia; the other reuses its result", async () => {
