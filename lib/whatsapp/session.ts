@@ -104,12 +104,17 @@ export interface WhatsAppSession {
    */
   lastSubmittedBatchId: string | null;
   /**
-   * True when the seller picked "just send it all" at the how-many-
-   * products step instead of the default step-by-step flow. Nothing sent
-   * back for any product but the last — see handleQuietBatchText in
-   * lib/whatsapp/intake.ts.
+   * The way of sending picked for this batch: true for I (send it all,
+   * nothing sent back for any product but the last, see
+   * handleQuietBatchMessage in lib/whatsapp/intake.ts), false for II
+   * (guide me each step), null while nothing is picked.
    */
-  batchQuiet: boolean;
+  batchQuiet: boolean | null;
+  /**
+   * The way this number picked last time, used when a batch's choice isn't
+   * tapped. Null until one is picked.
+   */
+  preferredBatchQuiet: boolean | null;
 }
 
 /** What awaitingQcAnswer holds. */
@@ -139,7 +144,8 @@ function fromRow(row: Record<string, unknown>): WhatsAppSession {
     awaitingQcAnswer: (row.awaiting_qc_answer as QcQuestion | null) ?? null,
     awaitingValueFor: (row.awaiting_value_for as ValueQuestion | null) ?? null,
     lastSubmittedBatchId: (row.last_submitted_batch_id as string | null) ?? null,
-    batchQuiet: (row.batch_quiet as boolean | null) ?? false,
+    batchQuiet: (row.batch_quiet as boolean | null) ?? null,
+    preferredBatchQuiet: (row.preferred_batch_quiet as boolean | null) ?? null,
   };
 }
 
@@ -208,7 +214,9 @@ export async function getOrCreateSession(
           awaiting_category_for: null,
           awaiting_qc_answer: null,
           awaiting_value_for: null,
-          batch_quiet:     false,
+          batch_quiet:     null,
+          // The previous account's habit, not this one's.
+          preferred_batch_quiet: null,
           updated_at:      new Date().toISOString(),
         })
         .eq("phone_number", phoneNumber)
@@ -269,7 +277,8 @@ export async function updateSession(
     awaitingQcAnswer: QcQuestion | null;
     awaitingValueFor: ValueQuestion | null;
     lastSubmittedBatchId: string | null;
-    batchQuiet: boolean;
+    batchQuiet: boolean | null;
+    preferredBatchQuiet: boolean | null;
   }>,
 ): Promise<void> {
   const db = createServerClient();
@@ -288,6 +297,7 @@ export async function updateSession(
   if (patch.awaitingValueFor !== undefined) update.awaiting_value_for = patch.awaitingValueFor;
   if (patch.lastSubmittedBatchId !== undefined) update.last_submitted_batch_id = patch.lastSubmittedBatchId;
   if (patch.batchQuiet !== undefined) update.batch_quiet = patch.batchQuiet;
+  if (patch.preferredBatchQuiet !== undefined) update.preferred_batch_quiet = patch.preferredBatchQuiet;
   await db.from("whatsapp_sessions").update(update).eq("phone_number", phoneNumber);
 }
 
@@ -380,7 +390,8 @@ export async function resetSession(phoneNumber: string): Promise<void> {
     lastSubmittedBatchId: null,
     // A mode choice belongs to the batch it was made for. Without this,
     // restarting after a quiet batch would silently carry quiet mode into
-    // the next one before the seller ever gets asked again.
-    batchQuiet: false,
+    // the next one before the seller ever gets asked again. Unpicked, the
+    // next batch falls back to preferredBatchQuiet, which is kept.
+    batchQuiet: null,
   });
 }

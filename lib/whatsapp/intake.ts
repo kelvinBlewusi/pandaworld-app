@@ -1218,6 +1218,8 @@ async function handleAwaitingCount(
     batchSeq:  1,
     listingId: null,
     lastSubmittedBatchId: null,
+    // Not picked yet: handleAwaitingPhotos falls back to the last pick.
+    batchQuiet: null,
   });
 
   // A single product has no "in between" for quiet mode to skip — the
@@ -1236,10 +1238,13 @@ async function handleAwaitingCount(
     `Got it — ${count} products. You can send all ${count} in two ways.\n\n` +
     `I. Select all the photos of each product and caption it with the price and any other notes then send. After sending all the images of product 1, type and send 1, after sending all the images of product 2, type and send 2. Do same in that order until you finish sending all the ${count} products.\n` +
     `I'll stay quiet until the last one, then start drafting everything at once.\n\n` +
-    `II. Guide me each step`,
+    `II. Guide me each step` +
+    (session.preferredBatchQuiet != null
+      ? `\n\nNo tap needed for *${session.preferredBatchQuiet ? "#I" : "#II"}*: it's the one you used last time.`
+      : ""),
     [
-      { id: "batch_mode:quiet",       title: "I" },
-      { id: "batch_mode:interactive", title: "II" },
+      { id: "batch_mode:quiet",       title: "#I" },
+      { id: "batch_mode:interactive", title: "#II" },
     ],
   );
 }
@@ -1871,7 +1876,7 @@ async function handleAwaitingPhotos(
   // any photo, so it's safe to check first without touching listingId.
   if (content.text === "batch_mode:quiet" || content.text === "batch_mode:interactive") {
     const quiet = content.text === "batch_mode:quiet";
-    await updateSession(phoneNumber, { batchQuiet: quiet });
+    await updateSession(phoneNumber, { batchQuiet: quiet, preferredBatchQuiet: quiet });
     if (!quiet) {
       await replyText(
         phoneNumber,
@@ -1896,7 +1901,11 @@ async function handleAwaitingPhotos(
   }
 
   // ── Quiet mode: no per-product confirmations, closed by a number ────────
-  if (session.batchQuiet) {
+  // Not picked for this batch, the seller's last pick stands. Only for an
+  // actual batch, where the choice is offered: a single product keeps the
+  // replies its own instructions promise.
+  const quiet = session.batchQuiet ?? (batchSize > 1 ? session.preferredBatchQuiet : null) ?? false;
+  if (quiet) {
     await handleQuietBatchMessage(userId, phoneNumber, session, content, seq, batchSize);
     return;
   }
@@ -1940,6 +1949,17 @@ async function handleAwaitingPhotos(
   if (isProductNumber(text, batchSize)) {
     if (content.imageMediaId) return;
     const n = text.replace(/\D/g, "");
+    // Nothing picked, and this is how I works: it's the way they're
+    // sending, so switch to it and let I close the product. Told "No need
+    // to type product numbers" instead, the same seller carried on the I
+    // way, and product 2's photo and price landed on product 1 (live,
+    // 2026-10-04). Remembered, so their next batch starts in I.
+    if (session.batchQuiet == null) {
+      await updateSession(phoneNumber, { batchQuiet: true, preferredBatchQuiet: true });
+      console.info(`[whatsapp intake] ${phoneNumber}: product number "${text}" with no way picked — switching to I`);
+      await handleQuietBatchMessage(userId, phoneNumber, { ...session, batchQuiet: true, listingId }, { text: n }, seq, batchSize);
+      return;
+    }
     const nudge =
       `No need to type product numbers — I'm guiding you one product at a time, and I'm on product ${seq} of ${batchSize}. ` +
       `Send its photos and price, then tap *Done* to move on. If ${n} was the price, send it as *price ${n}*.`;
@@ -1959,6 +1979,14 @@ async function handleAwaitingPhotos(
     // "250\nDone" look like a photo had just arrived, and the settle hold
     // further down would fire on the most common message in the whole flow
     // — a price and a done in one breath.
+    // "Done" can overtake the photo sent with it: both reach the webhook a
+    // moment apart and the photo hasn't made the listing yet. Live,
+    // 2026-10-04: a photo and "Done" 0.3s apart got "Send at least one
+    // photo first", twice. Wait for it, and for the rest of its album.
+    if (!listingId) {
+      listingId = await slotListingOnceInFlightPhotoLands(userId, phoneNumber, session.batchId, seq);
+      if (listingId) await settlePhotosBeforeClose(listingId);
+    }
     const lastPhotoAgeMs = listingId ? await msSinceLastPhoto(listingId) : Infinity;
 
     // The done-signal can be the WHOLE message ("done") or trail a
