@@ -73,7 +73,10 @@ import {
   MAX_BATCH_SIZE,
   ADMIN_MAX_BATCH_SIZE,
 } from "@/lib/whatsapp/batch";
-import { splitCredentialTokens, identifyCredentials, looksLikeCredential, isResendCommand, jumiaConnectLink, promptJumiaConnection, countryFromPhone } from "@/lib/whatsapp/jumia-connect";
+import {
+  splitCredentialTokens, identifyCredentials, looksLikeCredential, isResendCommand, jumiaConnectLink, promptJumiaConnection, countryFromPhone,
+  promptReconnectKeepingBatch, resumeBatchAfterReconnect, RECONNECT_JUMIA_BUTTON,
+} from "@/lib/whatsapp/jumia-connect";
 import { classifyBatchIntent, looksActionable } from "@/lib/whatsapp/intent";
 import type { ListingRow } from "@/lib/supabase/types";
 import { enqueueAnalysisJobs, nudgeWorker, workersFor, isBatchSettled, type AnalysisJob } from "@/lib/whatsapp/analysis-queue";
@@ -708,6 +711,11 @@ async function handleGlobalCommand(
         await replyText(phoneNumber, "✅ Jumia's already connected — you're good to go!");
         return;
       }
+      // Tapped under drafts that can't go yet: keep them.
+      if (session.batchId && (session.state === "awaiting_confirmation" || session.state === "awaiting_jumia_credentials")) {
+        await promptReconnectKeepingBatch(userId, phoneNumber, kind);
+        return;
+      }
       await promptJumiaConnection(userId, phoneNumber, kind);
       return;
     }
@@ -1303,6 +1311,11 @@ async function handleAwaitingJumiaCredentials(
     return;
   }
   if (connected.ok) {
+    // Reconnected in the middle of a batch (promptReconnectKeepingBatch).
+    if (session.batchId) {
+      await resumeBatchAfterReconnect(phoneNumber, connected.storeName);
+      return;
+    }
     await updateSession(phoneNumber, {
       pendingAppId: null, state: "awaiting_count", listingId: null, batchId: null, batchSize: null, batchSeq: null,
     });
@@ -2743,18 +2756,16 @@ export async function finalizeBatch(
       const heldText = reasons.length > 0 ? `\n⚠️ ${heldReasonsText(reasons)}` : "";
       // A disconnected Jumia account can't be fixed by opening the editor —
       // "Edit product" would send the seller to a form with nothing wrong
-      // on it. Offer the reconnect link instead, same one-time-token
-      // mechanism the SUBMIT flow already uses for the same condition.
-      // One message, not two: the draft, how to change it, and what to tap
-      // next used to arrive as a link message plus a buttons message.
-      // Meta charges per message the bot sends from 2026-10-01.
+      // on it. Offer Reconnect Jumia instead: the tap asks for whatever this
+      // seller's connection needs (a new token, or a login) and keeps the
+      // draft (promptReconnectKeepingBatch). One message, not two: Meta
+      // charges per message the bot sends from 2026-10-01.
       if (assessment.needsReconnect) {
-        const token = await createConnectToken(only.user_id as string);
-        await replyCtaOrSplit(
+        const reconnect = "Jumia needs to be reconnected before it can go: tap *Reconnect Jumia*.";
+        await replyButtons(
           phoneNumber,
-          `✅ Product drafted: ${only.title}.${heldText}\n\nReconnect Jumia, then reply *submit*.`,
-          "Reconnect Jumia",
-          jumiaConnectLink(token),
+          await fitInteractiveBody(phoneNumber, `✅ Product drafted: ${only.title}.${heldText}\n\n` + reconnect, reconnect),
+          [RECONNECT_JUMIA_BUTTON],
         );
       } else if (ready) {
         const body =
@@ -2915,18 +2926,14 @@ export async function finalizeBatch(
         : `Product ${l.whatsapp_seq}: ⚠️ Held — ${heldReasonsText(reasons)}`;
     });
     // One product held on a disconnected Jumia account means every OTHER
-    // product held for the same reason is fixed by the exact same tap —
-    // the token below isn't per-product, so it's generated once and
-    // appended to the message rather than repeated per status line (which
-    // would be one link per Held-for-reconnect product, all but the first
-    // dead the moment any one of them gets used).
+    // product held for the same reason is fixed by the exact same step, so
+    // it's said once under the status lines rather than per line. The
+    // reply asks for whatever this seller's connection needs (a new token,
+    // or a login) and keeps the batch (promptReconnectKeepingBatch).
     const anyNeedsReconnect = assessments.some((a) => a.needsReconnect);
-    let reconnectFooter = "";
-    if (anyNeedsReconnect) {
-      const userId = drafted[0].user_id as string;
-      const token = await createConnectToken(userId);
-      reconnectFooter = `\n\n🔗 Reconnect Jumia: ${jumiaConnectLink(token)}`;
-    }
+    const reconnectFooter = anyNeedsReconnect
+      ? "\n\n🔗 Jumia needs to be reconnected before these can go: reply *reconnect jumia*."
+      : "";
     statusText = statusLines.join("\n") + reconnectFooter;
   }
 
@@ -3309,6 +3316,9 @@ async function handleSubmit(
     // Held back for lack of credits: nothing to edit, so these get a Buy
     // credits button after the results instead of an editor link.
     let shortOfCredits = false;
+    // Products Jumia couldn't take because the connection needs redoing:
+    // one reconnect prompt after the results covers them all.
+    let reconnectCount = 0;
     let cursor = 0;
     const pushWorker = async (): Promise<void> => {
       for (let i = cursor++; i < targets.length; i = cursor++) {
@@ -3345,14 +3355,8 @@ async function handleSubmit(
             shortOfCredits = true;
             messages[i] = `Product ${seq}: ⚠️ Not submitted — not enough credits (${LIVE_LISTING_CREDIT_COST} are charged when it goes live).`;
           } else if (result.needsReconnect) {
-            // Same one-time-link mechanism as lib/whatsapp/jumia-connect.ts's
-            // promptJumiaConnection, used inline here rather than through it —
-            // this must NOT touch session state (still awaiting_confirmation),
-            // since the seller is mid-review of this batch, not starting a
-            // fresh connect flow. They just tap the link, reconnect, and reply
-            // submit again from right where they left off.
-            const token = await createConnectToken(userId);
-            messages[i] = `Product ${seq}: ⚠️ Jumia needs to be reconnected — tap here: ${jumiaConnectLink(token)}, then reply submit again.`;
+            reconnectCount++;
+            messages[i] = `Product ${seq}: ⚠️ Not submitted — Jumia needs to be reconnected.`;
           } else {
             notSent.push({ seq, listingId: listing.id, title: listing.title ?? null, reason: result.message });
             messages[i] = `Product ${seq}: ❌ Not submitted — ${result.message}`;
@@ -3398,6 +3402,24 @@ async function handleSubmit(
     // send here would look like "submitting failed" even though every
     // product actually went through.
     const resultLines = [...alreadySubmittedMessages, ...raceResult];
+
+    // Jumia stopped accepting the connection. Reconnecting comes before
+    // anything else here, and the batch is kept for straight after it
+    // (promptReconnectKeepingBatch): a Self Authorization seller pastes a
+    // new token, which the old login link could never take. Anything else
+    // that went wrong shows again on the next Submit all.
+    if (reconnectCount > 0) {
+      const kind = await getJumiaConnectionKind(userId);
+      if (kind !== "connected") {
+        const nothingElse = reconnectCount === targets.length && alreadySubmittedMessages.length === 0;
+        if (!nothingElse) await replyLongText(phoneNumber, resultLines.join("\n"));
+        await promptReconnectKeepingBatch(
+          userId, phoneNumber, kind,
+          nothingElse ? "⚠️ Nothing was sent: Jumia needs to be reconnected first.\n\n" : "",
+        );
+        return;
+      }
+    }
 
     // Everything reached Jumia: the results and the sign-off go as one
     // message, not two (Meta charges per message the bot sends from

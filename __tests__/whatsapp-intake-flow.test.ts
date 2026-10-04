@@ -1031,13 +1031,14 @@ describe("a multi-product batch with one hard-failed product", () => {
   });
 });
 
-describe("finalizeBatch — Held-for-reconnect status messages carry a reconnect link", () => {
+describe("finalizeBatch — Held-for-reconnect status messages say how to reconnect", () => {
   // Real production report, 2026-09-24: a batch came back with several
   // products Held on "Jumia needs to be (re)connected before this can be
   // checked" and no way to act on it from the message — the seller had to
-  // already know to type "connect". One token fixes every Held-for-
-  // reconnect product in the batch at once, so it's generated once and
-  // appended to the status message rather than repeated per line.
+  // already know to type "connect". One reconnect fixes every Held-for-
+  // reconnect product in the batch at once, so it's said once under the
+  // status lines. It's a reply, not a login link: a Self Authorization
+  // seller pastes a new token, which the link can't take (2026-10-04).
   const FULL = {
     description: "A long enough description to clear the fifty-character minimum check.",
     category_code: "1234",
@@ -1058,7 +1059,7 @@ describe("finalizeBatch — Held-for-reconnect status messages carry a reconnect
     }));
   }
 
-  it("appends one reconnect link to the multi-product status message when any product needs it", async () => {
+  it("says once, under the multi-product status lines, how to reconnect", async () => {
     seedBatch([
       { seq: 1, title: "Panasonic Electric Kettle 1.7L" },
       { seq: 2, title: "Sony Wireless Over-Ear Headphones" },
@@ -1076,11 +1077,11 @@ describe("finalizeBatch — Held-for-reconnect status messages carry a reconnect
     expect(status).toBeDefined();
     expect(status!.body).toContain("Product 1: ⚠️ Held — Jumia needs to be (re)connected");
     expect(status!.body).toContain("Product 3: ⚠️ Held — Jumia needs to be (re)connected");
-    // Exactly one link, not one per Held-for-reconnect line.
-    const linkCount = (status!.body.match(/\/api\/jumia\/connect\?wa_token=/g) ?? []).length;
-    expect(linkCount).toBe(1);
-    expect(db.tables.jumia_connect_tokens).toHaveLength(1);
-    expect(db.tables.jumia_connect_tokens[0].user_id).toBe(USER);
+    // Said once, not per Held-for-reconnect line.
+    expect(status!.body.match(/reply \*reconnect jumia\*/g) ?? []).toHaveLength(1);
+    // No login link minted up front: what the seller needs depends on
+    // their connection, and the reply works that out.
+    expect(db.tables.jumia_connect_tokens ?? []).toHaveLength(0);
   });
 
   it("adds no reconnect link when nothing in the batch needs one", async () => {
@@ -1095,11 +1096,11 @@ describe("finalizeBatch — Held-for-reconnect status messages carry a reconnect
     await finalizeBatch("batch-1", PHONE, 2);
 
     const status = sent.find((m) => m.body.includes("Product 1:"));
-    expect(status!.body).not.toContain("/api/jumia/connect");
+    expect(status!.body).not.toContain("reconnect jumia");
     expect(db.tables.jumia_connect_tokens ?? []).toHaveLength(0);
   });
 
-  it("offers a Reconnect Jumia link instead of Edit product for a single-product batch that needs reconnecting", async () => {
+  it("offers Reconnect Jumia instead of Edit product for a single-product batch that needs reconnecting", async () => {
     seedBatch([{ seq: 1, title: "Panasonic Electric Kettle 1.7L" }]);
     needsReconnectFor.add("listing-1");
     seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
@@ -1110,7 +1111,8 @@ describe("finalizeBatch — Held-for-reconnect status messages carry a reconnect
 
     const draftMsg = sent.find((m) => m.body.includes("Product drafted"));
     expect(draftMsg?.body).toContain("Jumia needs to be (re)connected");
-    expect(db.tables.jumia_connect_tokens).toHaveLength(1);
+    expect(draftMsg?.rows).toEqual(["reconnect jumia"]);
+    expect(db.tables.jumia_connect_tokens ?? []).toHaveLength(0);
   });
 
   it("still offers Edit product for a single-product batch Held for an ordinary reason", async () => {
@@ -1125,6 +1127,118 @@ describe("finalizeBatch — Held-for-reconnect status messages carry a reconnect
     const draftMsg = sent.find((m) => m.body.includes("Product drafted"));
     expect(draftMsg?.body ?? "").not.toContain("re)connected");
     expect(db.tables.jumia_connect_tokens ?? []).toHaveLength(0);
+  });
+});
+
+describe("reconnecting Jumia in the middle of a batch keeps the batch", () => {
+  // 2026-10-04: a seller deleted their Self Authorization application in
+  // Vendor Center. Submit all answered each product with the old login
+  // link, which is built from that deleted application and can never work;
+  // the seller has to paste a new Client ID and token instead, and their
+  // drafts should be waiting when they have.
+  const FULL = {
+    description: "A long enough description to clear the fifty-character minimum check.",
+    category_code: "1234",
+    brand: "Panasonic",
+    images: ["https://cdn.test/a.jpg"],
+    status: "draft",
+    selling_price: 150,
+  };
+  const EXPIRED = "2026-01-01T00:00:00.000Z";
+
+  function seedBatch(n: number) {
+    db.tables.listings = Array.from({ length: n }, (_, i) => ({
+      id: `listing-${i + 1}`, user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: i + 1,
+      title: `Drafted product number ${i + 1}`, ...FULL,
+    }));
+    seedSession({ state: "awaiting_confirmation", batch_size: n, batch_seq: null });
+  }
+
+  // What the push leaves behind when Jumia refuses the connection for good:
+  // a Self Authorization row with no token left (needs_new_token), or a
+  // Web Application's run out (needs_reconnect).
+  function connectionDies(authType: "self" | "web") {
+    db.tables.jumia_connections = [{ user_id: USER, auth_type: authType, status: "active", refresh_token: null, token_expires_at: EXPIRED }];
+  }
+
+  afterEach(() => { db.tables.jumia_connections = []; });
+
+  it("asks a Self Authorization seller for a new token, not the login link, and keeps the batch", async () => {
+    seedBatch(2);
+    connectionDies("self");
+    pushResult = { ok: false, message: "Your Jumia OAuth app was deleted or revoked. Please reconnect.", needsReconnect: true };
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "submit all" });
+
+    // One prompt for the whole batch, no per-product lines when nothing went.
+    expect(sent).toHaveLength(1);
+    expect(sent[0].kind).toBe("cta");
+    expect(sent[0].body).toMatch(/^⚠️ Nothing was sent: Jumia needs to be reconnected first\./);
+    expect(sent[0].body).toContain("tap on the padlock icon 🔒 next to PandaWorld to generate a new token");
+    expect(sent[0].body).toContain("Your drafted products are kept");
+    expect(db.tables.jumia_connect_tokens ?? []).toHaveLength(0);
+    expect(session().state).toBe("awaiting_jumia_credentials");
+    expect(session().batch_id).toBe("batch-1");
+  });
+
+  it("goes back to the batch, Submit all one tap away, once the new token is pasted", async () => {
+    seedBatch(2);
+    seedSession({ state: "awaiting_jumia_credentials", batch_size: 2, batch_seq: null });
+    selfAuthResult = { ok: true, storeName: "Kelvin's Store" };
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m2", {
+      text: "c9758cb3-0000-4000-8000-000000000000 abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
+    });
+
+    expect(session().state).toBe("awaiting_confirmation");
+    expect(session().batch_id).toBe("batch-1");
+    const back = sent.find((m) => m.body.includes("Jumia connected"));
+    expect(back?.body).toContain("Your drafted products are still here");
+    expect(back?.rows).toEqual(["submit all", "start another"]);
+  });
+
+  it("names what did go, then asks for the reconnect, when only some products were refused", async () => {
+    seedBatch(2);
+    pushResultFor.set("listing-2", { ok: false, message: "Your Jumia OAuth app was deleted or revoked. Please reconnect.", needsReconnect: true });
+    connectionDies("self");
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "submit all" });
+
+    const results = sent.find((m) => m.kind === "text" && m.body.includes("Product 1:"));
+    expect(results?.body).toContain("Product 1: ✅ submitted — pending Jumia review.");
+    expect(results?.body).toContain("Product 2: ⚠️ Not submitted — Jumia needs to be reconnected.");
+    const prompt = sent[sent.length - 1];
+    expect(prompt.kind).toBe("cta");
+    expect(prompt.body).not.toContain("Nothing was sent");
+    expect(prompt.body).toContain("generate a new token");
+  });
+
+  it("still gives a Web Application seller the login link, and leaves the chat on the batch", async () => {
+    seedBatch(1);
+    connectionDies("web");
+    pushResult = { ok: false, message: "Jumia access token expired. Reconnect in Settings → Integrations.", needsReconnect: true };
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "submit all" });
+
+    expect(sent[sent.length - 1].body).toContain("Log in to Jumia again to reconnect, then reply *submit all*");
+    expect(db.tables.jumia_connect_tokens).toHaveLength(1);
+    expect(session().state).toBe("awaiting_confirmation");
+  });
+
+  it("keeps the batch when Reconnect Jumia is tapped under a draft", async () => {
+    seedBatch(1);
+    connectionDies("self");
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "reconnect jumia" });
+
+    expect(sent[0].body).toContain("generate a new token");
+    expect(session().state).toBe("awaiting_jumia_credentials");
+    expect(session().batch_id).toBe("batch-1");
   });
 });
 

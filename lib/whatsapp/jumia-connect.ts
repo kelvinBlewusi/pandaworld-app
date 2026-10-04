@@ -1,7 +1,7 @@
 import { appUrl } from "@/lib/whatsapp/app-url";
 import { createConnectToken } from "@/lib/jumia/connect-token";
 import { updateSession } from "@/lib/whatsapp/session";
-import { sendCtaUrlIfConfigured } from "@/lib/whatsapp/client";
+import { sendButtonsIfConfigured, sendCtaUrlIfConfigured } from "@/lib/whatsapp/client";
 import type { JumiaConnectionKind } from "@/lib/jumia/credentials";
 
 /**
@@ -115,6 +115,12 @@ export const SELF_AUTH_STEPS = [
   "5. Copy the Client ID and the token, then paste them here — together, or one at a time.",
 ].join("\n");
 
+/** What a Self Authorization seller does once Jumia stops accepting the
+ *  saved token. Plain strings only, like SELF_AUTH_STEPS above. */
+export const NEW_TOKEN_STEPS =
+  "Jumia stopped accepting PandaWorld's saved token (it was regenerated, or the application was deleted in Vendor Center).\n\n" +
+  "In Vendor Center → Settings → Applications, tap on the padlock icon 🔒 next to PandaWorld to generate a new token, then paste the Client ID and the new token here.";
+
 export function buildConnectInstructions(): string {
   return ["Let's connect your Jumia store.", "", SELF_AUTH_STEPS].join("\n");
 }
@@ -168,13 +174,7 @@ export async function promptJumiaConnection(
   await updateSession(phoneNumber, { state: "awaiting_jumia_credentials", ...CLEAR_BATCH });
 
   if (kind === "needs_new_token") {
-    await sendCtaUrlIfConfigured(
-      phoneNumber,
-      `${prefix}Jumia stopped accepting PandaWorld's saved token (it was regenerated, or the application was deleted in Vendor Center).\n\n` +
-        "In Vendor Center → Settings → Applications, tap on the padlock icon 🔒 next to PandaWorld to generate a new token, then paste the Client ID and the new token here.",
-      "Open Vendor Center",
-      VENDOR_CENTER_URL,
-    );
+    await sendCtaUrlIfConfigured(phoneNumber, prefix + NEW_TOKEN_STEPS, "Open Vendor Center", VENDOR_CENTER_URL);
     return;
   }
 
@@ -204,5 +204,57 @@ export async function promptJumiaConnection(
     `${prefix}${buildConnectInstructions()}`,
     "Open Vendor Center",
     VENDOR_CENTER_URL,
+  );
+}
+
+/** Tapped under a draft that can't go until Jumia is reconnected. Its id is
+ *  the typed phrase, so it reaches the reconnect_jumia global command. */
+export const RECONNECT_JUMIA_BUTTON = { id: "reconnect jumia", title: "Reconnect Jumia" };
+
+/**
+ * promptJumiaConnection for a seller in the middle of a batch: their drafts
+ * stay attached to the chat, and Submit all comes back the moment Jumia is
+ * connected (resumeBatchAfterReconnect).
+ *
+ * A Self Authorization seller, or one with no connection at all, pastes a
+ * Client ID and token, so the chat waits for those with the batch kept.
+ * The login link is no use to them: it is built from the saved application,
+ * which is the thing Jumia stopped accepting. A Web Application seller gets
+ * the login link and the chat stays on the batch, since they reply *submit
+ * all* after logging in.
+ */
+export async function promptReconnectKeepingBatch(
+  userId: string,
+  phoneNumber: string,
+  kind: Exclude<JumiaConnectionKind, "connected">,
+  prefix = "",
+): Promise<void> {
+  if (kind === "needs_new_token" || kind === "needs_credentials") {
+    await updateSession(phoneNumber, { state: "awaiting_jumia_credentials", pendingAppId: null });
+    await sendCtaUrlIfConfigured(
+      phoneNumber,
+      prefix + (kind === "needs_new_token" ? NEW_TOKEN_STEPS : buildConnectInstructions()) +
+        "\n\nYour drafted products are kept: I'll bring them back as soon as Jumia is connected.",
+      "Open Vendor Center",
+      VENDOR_CENTER_URL,
+    );
+    return;
+  }
+  const token = await createConnectToken(userId);
+  await sendCtaUrlIfConfigured(
+    phoneNumber,
+    prefix + "Log in to Jumia again to reconnect, then reply *submit all* to send your products.",
+    "Reconnect Jumia",
+    jumiaConnectLink(token),
+  );
+}
+
+/** Back to the batch after a reconnect that kept it: Submit all is one tap. */
+export async function resumeBatchAfterReconnect(phoneNumber: string, storeName: string | null): Promise<void> {
+  await updateSession(phoneNumber, { state: "awaiting_confirmation", pendingAppId: null });
+  await sendButtonsIfConfigured(
+    phoneNumber,
+    "🎉 Jumia connected" + (storeName ? " — " + storeName : "") + "!\n\nYour drafted products are still here. Tap *Submit all* to send them to Jumia.",
+    [{ id: "submit all", title: "Submit all ✅" }, { id: "start another", title: "Start another ➕" }],
   );
 }
