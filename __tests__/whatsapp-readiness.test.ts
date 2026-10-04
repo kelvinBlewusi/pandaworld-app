@@ -38,6 +38,7 @@ jest.mock("@/lib/jumia/push-listing", () => ({
 }));
 
 import { assessListingPushReadiness } from "@/lib/whatsapp/readiness";
+import { _resetPriceMinimumCache } from "@/lib/jumia/price-minimums";
 
 const FULL_FIELDS = {
   description: "A long enough description to clear the fifty-character minimum check.",
@@ -681,5 +682,33 @@ describe("assessListingPushReadiness — canary 02:45 soft-snap sizes + exact ke
     const result = await assessListingPushReadiness("user_1", "listing-1");
     expect(result.ready).toBe(true);
     expect(result.reasons.join(" ").toLowerCase()).not.toContain("capacity");
+  });
+});
+
+// 2026-10-04: a product went to Jumia at GHS 3 against its GHS 8.81 floor
+// for Ghana. Once Jumia has named a country's floor, a draft priced below
+// it is Held for it, and the bot asks for the price.
+describe("assessListingPushReadiness — Jumia's lowest price for the country", () => {
+  beforeEach(() => {
+    db.tables.jumia_connections = [{ user_id: "user_1", country: "GH" }];
+    db.tables.jumia_price_minimums = [{ country: "GH", currency: "GHS", min_price: 8.81 }];
+    _resetPriceMinimumCache();
+  });
+  afterEach(() => {
+    db.tables.jumia_connections = [];
+    db.tables.jumia_price_minimums = [];
+    _resetPriceMinimumCache();
+  });
+
+  it("is Held on a price below it", async () => {
+    seedListing({ selling_price: 3 });
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.ready).toBe(false);
+    expect(result.reasons).toEqual(["the price (GHS 3) is below the lowest Jumia allows (GHS 8.81)"]);
+  });
+
+  it("is Ready at or above it", async () => {
+    seedListing({ selling_price: 8.81 });
+    expect(await assessListingPushReadiness("user_1", "listing-1")).toMatchObject({ ready: true, reasons: [] });
   });
 });

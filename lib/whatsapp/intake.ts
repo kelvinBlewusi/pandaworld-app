@@ -22,7 +22,7 @@ import { assessListingPushReadiness, type ListingReadinessResult } from "@/lib/w
 import { autoFillMissingFields, missingValueQuestion, parseMissingValue, saveMissingValue } from "@/lib/whatsapp/missing-value";
 import { columnFor, readAttributeValue } from "@/lib/jumia/attribute-mapping";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
-import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames, isStaleCategoryError, type Remedy, isPriceRejection } from "@/lib/jumia/rejection-remedy";
+import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames, isStaleCategoryError, type Remedy, isPriceRejection, priceLimitInRejection } from "@/lib/jumia/rejection-remedy";
 import { decideQcAction, type QcContext } from "@/lib/jumia/qc-remedy";
 import { featureMinPackName, hasFeature } from "@/lib/billing/features";
 import { removeAttributesFromCache, getCategoryByCode, getCategoryAttributes, type JumiaCategoryAttribute } from "@/lib/jumia/categories";
@@ -57,6 +57,7 @@ import {
 } from "@/lib/whatsapp/onboarding";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { endsWithDoneSignal, stripDoneSignal, isProductNumber } from "@/lib/whatsapp/draft";
+import { priceMinimumForUser, isBelowMinimum, belowMinimumText, money, type PriceMinimum } from "@/lib/jumia/price-minimums";
 import {
   parseProductCount,
   readProductCount,
@@ -134,6 +135,14 @@ const BIG_BATCH_SIZE = 10;
 // Session states in which a typed reply can be an answer to
 // askSellerForCategory's question — see handleLinkedMessage.
 const CATEGORY_ANSWER_STATES = new Set<WhatsAppSession["state"]>(["awaiting_count", "awaiting_confirmation", "error"]);
+
+const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** A price answer that's still below Jumia's lowest: asked again, the question left open. */
+function tooLowAgain(price: number, minimum: PriceMinimum): string {
+  return `${money(price, minimum.currency)} is below the lowest price Jumia allows (${money(minimum.min, minimum.currency)}). ` +
+    `*What price are you selling it at? Reply with at least ${minimum.min}.*`;
+}
 
 function replyText(to: string, text: string): Promise<void> {
   return sendTextIfConfigured(to, text);
@@ -2368,8 +2377,10 @@ async function askForNextMissingPrice(
   // restarts the walk rather than skipping the whole thing.
   const startAt = opts.after ? listings.findIndex((l) => l.id === opts.after) + 1 : 0;
   // A product with no title never drafted at all; its own failure message
-  // already covers it, and a price would not make it submittable.
-  const next = listings.slice(startAt).find((l) => l.title && !l.selling_price);
+  // already covers it, and a price would not make it submittable. A price
+  // below Jumia's lowest for the country is as good as none: the push stops it.
+  const minimum = await priceMinimumForUser(listings[0]?.user_id as string | undefined);
+  const next = listings.slice(startAt).find((l) => l.title && (!l.selling_price || isBelowMinimum(l.selling_price, minimum)));
 
   if (!next) {
     await updateSession(phoneNumber, { awaitingPriceFor: null });
@@ -2387,7 +2398,9 @@ async function askForNextMissingPrice(
   // other way to answer. No currency: the seller's own number is the
   // answer, whatever their country. Typing "skip" still moves on
   // (PRICE_SKIP_RE).
-  const lead = opts.drafted ?? `💰 *${who}*\n⚠️ *needs price.*`;
+  const lead = opts.drafted ?? (isBelowMinimum(next.selling_price, minimum)
+    ? `💰 *${who}*\n⚠️ *${capitalise(belowMinimumText(next.selling_price as number, minimum))}.*`
+    : `💰 *${who}*\n⚠️ *needs price.*`);
   await replyCtaOrSplit(
     phoneNumber,
     `${opts.prefix ? `${opts.prefix}\n\n` : ""}${lead}\n\n*What price are you selling it at? Reply with just the amount (Eg. 1500)*`,
@@ -2649,6 +2662,31 @@ async function finishValueAnswer(
 }
 
 /**
+ * A price set in chat reaches the variants that were following the
+ * listing's own. Jumia is sent each variant's own price
+ * (mapListingToJumiaProducts), and a draft's variants are made at the
+ * listing's price (runAutoAnalyze), so without this a sized product priced
+ * again in chat still went to Jumia at the drafted price. A variant priced
+ * separately in the editor keeps its own. Best-effort: the listing's price
+ * is already saved.
+ */
+async function carryPriceToVariants(listingId: string, oldPrice: unknown, newPrice: number): Promise<void> {
+  const old = Number(oldPrice);
+  if (!(old > 0) || old === newPrice) return;
+  const db = createServerClient();
+  try {
+    const { data } = await db.from("variants").select("id, global_price").eq("listing_id", listingId);
+    const following = ((data ?? []) as { id: string; global_price: unknown }[]).filter((v) => Number(v.global_price) === old);
+    for (const v of following) {
+      const { error } = await db.from("variants").update({ global_price: newPrice }).eq("id", v.id);
+      if (error) throw new Error(error.message);
+    }
+  } catch (e) {
+    console.warn(`[whatsapp intake] couldn't carry the price to listing ${listingId}'s variants: ${(e as Error).message}`);
+  }
+}
+
+/**
  * Save a price the seller sent in answer to askForNextMissingPrice, then
  * move the walk on to the next product missing one.
  *
@@ -2664,10 +2702,12 @@ async function applyChatPrice(
   price:       number,
 ): Promise<void> {
   const db = createServerClient();
+  const { data: before } = await db.from("listings").select("selling_price").eq("id", listingId).maybeSingle();
   const { error } = await db
     .from("listings")
     .update({ selling_price: price, updated_at: new Date().toISOString() })
     .eq("id", listingId);
+  if (!error) await carryPriceToVariants(listingId, before?.selling_price, price);
 
   if (error) {
     console.error(`[whatsapp intake] chat price for listing ${listingId} failed: ${error.message}`);
@@ -2810,10 +2850,11 @@ export async function finalizeBatch(
           await replyCta(phoneNumber, `✅ Product drafted: ${only.title}. Ready to submit!`, "Edit product", focusedEditorUrl(only.id));
           await replyButtons(phoneNumber, `Reply *submit*, or say something like "change the price to 150" to edit it first.`, buttons);
         }
-      } else if (!only.selling_price) {
+      } else if (!only.selling_price || isBelowMinimum(only.selling_price, await priceMinimumForUser(only.user_id as string))) {
         // The draft and its price question as one message: "✅ Product
         // drafted… ⚠️ needs price… What price…?" Anything else it's held
-        // for is asked once the price is in (applyChatPrice).
+        // for is asked once the price is in (applyChatPrice). A price below
+        // Jumia's lowest for the country is asked for the same way.
         await askForNextMissingPrice(phoneNumber, batchId, {
           drafted: `✅ Product drafted: ${only.title}.\n⚠️ *${heldReasonsText(reasons)}*`,
         });
@@ -3123,6 +3164,11 @@ async function handleAwaitingBatchConfirmation(
     const priceFor = session.awaitingPriceFor;
     const price = extractPrice(text, await shopCurrencyForUser(userId));
     if (price != null && price > 0) {
+      const minimum = await priceMinimumForUser(userId);
+      if (isBelowMinimum(price, minimum)) {
+        await replyText(phoneNumber, tooLowAgain(price, minimum));
+        return;
+      }
       await applyChatPrice(phoneNumber, batchId, priceFor, price);
       return;
     }
@@ -3674,6 +3720,7 @@ async function handleEdit(
         updated_at: new Date().toISOString(),
       })
       .eq("id", listing.id);
+    if (price != null) await carryPriceToVariants(listing.id, listing.selling_price, price);
   }
 
   let ack = applied.length > 0 ? `✅ Updated product ${seq}'s ${applied.join(" and ")}. ` : "";
@@ -4356,7 +4403,7 @@ async function applyQcAnswer(userId: string, phoneNumber: string, q: QcQuestion,
   const db = createServerClient();
   const { data: row } = await db
     .from("listings")
-    .select("id, whatsapp_seq, title, description, dynamic_attributes, field_sources, sale_price")
+    .select("id, whatsapp_seq, title, description, dynamic_attributes, field_sources, selling_price, sale_price, jumia_error")
     .eq("id", q.listingId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -4374,12 +4421,29 @@ async function applyQcAnswer(userId: string, phoneNumber: string, q: QcQuestion,
       await replyText(phoneNumber, `I couldn't read a price in that. Reply with just the amount, e.g. *150*.`);
       return;
     }
+    // Checked before resubmitting: the limit Jumia named in this rejection,
+    // else the one it named for the country. Resubmitting a price that's
+    // still too low only earns the same rejection.
+    const limit = priceLimitInRejection(extractRejectionText(row.jumia_error as string | null));
+    const minimum: PriceMinimum | null = limit?.bound === "min"
+      ? { min: limit.limit, currency: limit.currency }
+      : await priceMinimumForUser(userId);
+    if (isBelowMinimum(n, minimum)) {
+      await replyText(phoneNumber, tooLowAgain(n, minimum));
+      return;
+    }
+    if (limit?.bound === "max" && n > limit.limit) {
+      await replyText(phoneNumber, `${money(n, limit.currency)} is above the highest price Jumia allows (${money(limit.limit, limit.currency)}). ` +
+        `*What price are you selling it at? Reply with at most ${limit.limit}.*`);
+      return;
+    }
     const sale = row.sale_price != null ? Number(row.sale_price) : null;
     await db.from("listings").update({
       selling_price: n,
       ...(sale != null && sale >= n ? { sale_price: null } : {}),
       field_sources: { ...sources, selling_price: "user" },
     }).eq("id", q.listingId);
+    await carryPriceToVariants(q.listingId, row.selling_price, n);
     await updateSession(phoneNumber, { awaitingQcAnswer: null });
     await replyText(phoneNumber, `🔧 ${label}: price set to ${n}. Resubmitting…`);
     await pushAndReport(userId, phoneNumber, q.listingId, label);

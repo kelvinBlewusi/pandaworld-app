@@ -28,6 +28,7 @@ import { chargeLiveListing, creditsDueForSubmission } from "@/lib/billing/extens
 import { LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
 import { hasFeature } from "@/lib/billing/features";
 import { isUnlistableCategoryError } from "@/lib/jumia/unlistable-categories";
+import { priceMinimumFor, isBelowMinimum, money } from "@/lib/jumia/price-minimums";
 
 export interface PushListingVariantInput {
   variation:      string;
@@ -387,6 +388,24 @@ export async function pushListingToJumia(
       return { ok: false, code: "jumia_no_shop_id", message: "Could not retrieve your Jumia shop ID. Try disconnecting and reconnecting in Settings → Integrations." };
     }
     return { ok: false, code: "credentials_error", message: msg };
+  }
+
+  // ── A price below Jumia's minimum for this country ────────────────────────
+  // Learned from Jumia's own rejections (lib/jumia/price-minimums.ts). Caught
+  // here it costs nothing: no Jumia call, no rejection to fix, no credits
+  // held. A product went to Jumia at GHS 3 against a GHS 8.81 floor on
+  // 2026-10-04.
+  // The prices as sent: each variant's own, else the listing's
+  // (mapListingToJumiaProducts).
+  const minimum = await priceMinimumFor(country);
+  const sentPrices = variants.length > 0 ? variants.map((v) => v.global_price ?? row.selling_price) : [row.selling_price];
+  const lowestPrice = Math.min(...sentPrices.map(Number).filter((n) => n > 0));
+  if (isBelowMinimum(lowestPrice, minimum)) {
+    return {
+      ok: false,
+      code: "validation",
+      message: `price ${money(lowestPrice, minimum.currency)} is below the lowest Jumia allows (${money(minimum.min, minimum.currency)}) — set a higher price`,
+    };
   }
 
   // ── Generate a fresh parentSku on retry ────────────────────────────────────

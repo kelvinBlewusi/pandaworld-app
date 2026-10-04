@@ -29,6 +29,7 @@ jest.mock("@/lib/jumia/api", () => ({
 import { pushListingToJumia, refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
 import { _resetBillingModeCache } from "@/lib/billing/mode";
 import { LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
+import { _resetPriceMinimumCache } from "@/lib/jumia/price-minimums";
 
 const USER = "user_1";
 const COST = LIVE_LISTING_CREDIT_COST;
@@ -39,6 +40,7 @@ function seed(balance: number) {
   db.tables.extension_credit_transactions = [];
   db.tables.variants = [];
   db.tables.jumia_feed_outcomes = [];
+  db.tables.jumia_price_minimums = [];
   db.tables.listings = [{
     id:              "listing-1",
     user_id:         USER,
@@ -53,6 +55,7 @@ function seed(balance: number) {
     jumia_synced_at: null,
   }];
   _resetBillingModeCache();
+  _resetPriceMinimumCache();
 }
 
 const listing = () => db.tables.listings[0];
@@ -103,4 +106,58 @@ it("refuses to submit, before anything reaches Jumia, when the seller can't cove
   expect(await pushListingToJumia(USER, "listing-1")).toMatchObject({ ok: false, code: "insufficient_credits" });
   expect(pushed).toBe(0);
   expect(listing().status).toBe("draft");
+});
+
+// Live 2026-10-04: a product went at GHS 3 against Jumia's GHS 8.81 floor
+// for Ghana. Once Jumia has named the floor, it's caught here, before
+// anything reaches Jumia or a credit is held.
+it("refuses a price below Jumia's lowest for the country, before anything reaches Jumia", async () => {
+  seed(10);
+  db.tables.jumia_price_minimums = [{ country: "GH", currency: "GHS", min_price: 8.81 }];
+  listing().selling_price = 3;
+
+  expect(await pushListingToJumia(USER, "listing-1")).toEqual({
+    ok: false,
+    code: "validation",
+    message: "price GHS 3 is below the lowest Jumia allows (GHS 8.81) — set a higher price",
+  });
+  expect(pushed).toBe(0);
+  expect(listing()).toMatchObject({ status: "draft" });
+  expect(listing().credits_due ?? null).toBeNull();
+});
+
+it("checks each variant's own price against the minimum too", async () => {
+  seed(10);
+  db.tables.jumia_price_minimums = [{ country: "GH", currency: "GHS", min_price: 8.81 }];
+  db.tables.variants = [
+    { id: "v1", listing_id: "listing-1", variation: "Small", seller_sku: "SKU-1-S", quantity: 1, global_price: 5 },
+    { id: "v2", listing_id: "listing-1", variation: "Large", seller_sku: "SKU-1-L", quantity: 1, global_price: 120 },
+  ];
+
+  expect(await pushListingToJumia(USER, "listing-1")).toMatchObject({ ok: false, code: "validation" });
+  expect(pushed).toBe(0);
+});
+
+// Each variant goes at its own price, so the listing's own doesn't matter
+// once every variant has one.
+it("goes by the variants' own prices when they have them", async () => {
+  seed(10);
+  db.tables.jumia_price_minimums = [{ country: "GH", currency: "GHS", min_price: 8.81 }];
+  listing().selling_price = 3;
+  db.tables.variants = [
+    { id: "v1", listing_id: "listing-1", variation: "Small", seller_sku: "SKU-1-S", quantity: 1, global_price: 90 },
+    { id: "v2", listing_id: "listing-1", variation: "Large", seller_sku: "SKU-1-L", quantity: 1, global_price: 120 },
+  ];
+
+  expect(await pushListingToJumia(USER, "listing-1")).toMatchObject({ ok: true });
+  expect(pushed).toBe(1);
+});
+
+it("lets a price at or above the minimum through", async () => {
+  seed(10);
+  db.tables.jumia_price_minimums = [{ country: "GH", currency: "GHS", min_price: 8.81 }];
+  listing().selling_price = 8.81;
+
+  expect(await pushListingToJumia(USER, "listing-1")).toMatchObject({ ok: true });
+  expect(pushed).toBe(1);
 });

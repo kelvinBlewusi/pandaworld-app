@@ -276,6 +276,7 @@ jest.mock("@/lib/jumia/credentials", () => ({
 import { handleLinkedMessage } from "@/lib/whatsapp/intake";
 import { classifyJumiaRejection, rejectionFingerprint } from "@/lib/jumia/rejection-remedy";
 import { notifyBatchResolved } from "@/lib/jumia/push-listing";
+import { _resetPriceMinimumCache } from "@/lib/jumia/price-minimums";
 
 const USER  = "user_1";
 const PHONE = "233550607231";
@@ -718,6 +719,103 @@ describe("asking for a missing price in chat", () => {
     await finalizeBatch("batch-1", PHONE, 2);
 
     expect(session().awaiting_price_for).toBe("listing-2");
+  });
+
+  // 2026-10-04: a product went to Jumia at GHS 3 against its GHS 8.81 floor
+  // for Ghana. Once Jumia has named a country's floor, a price below it is
+  // asked for like a missing one, and an answer below it is asked again.
+  describe("below Jumia's lowest price for the country", () => {
+    beforeEach(() => {
+      db.tables.jumia_connections = [{ user_id: USER, country: "GH" }];
+      db.tables.jumia_price_minimums = [{ country: "GH", currency: "GHS", min_price: 8.81 }];
+      _resetPriceMinimumCache();
+    });
+    afterEach(() => {
+      db.tables.jumia_connections = [];
+      db.tables.jumia_price_minimums = [];
+      _resetPriceMinimumCache();
+    });
+
+    it("asks again, keeping the question open, when the answer is still below it", async () => {
+      seedBatch([{ seq: 1, title: "Panasonic Electric Kettle 1.7L" }]);
+      confirming({ batch_size: 1, awaiting_price_for: "listing-1" });
+      sent.length = 0;
+
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "5" });
+
+      expect(listings()[0].selling_price).toBeNull();
+      expect(session().awaiting_price_for).toBe("listing-1");
+      expect(sent.map((m) => m.body)).toEqual([
+        "GHS 5 is below the lowest price Jumia allows (GHS 8.81). *What price are you selling it at? Reply with at least 8.81.*",
+      ]);
+
+      await handleLinkedMessage(USER, PHONE, "m2", { text: "12" });
+
+      expect(listings()[0].selling_price).toBe(12);
+      expect(session().awaiting_price_for).toBeNull();
+    });
+
+    // A draft's variants are made at the listing's price, and Jumia is sent
+    // each variant's own: the answer has to reach them too.
+    it("carries the answer to the variants drafted at the old price", async () => {
+      seedBatch([{ seq: 1, title: "Leather Sandals", price: 3 }]);
+      db.tables.variants = [
+        { id: "v1", listing_id: "listing-1", variation: "EU 40", global_price: 3 },
+        { id: "v2", listing_id: "listing-1", variation: "EU 41", global_price: 3 },
+        { id: "v3", listing_id: "listing-1", variation: "EU 42", global_price: 95 },
+      ];
+      confirming({ batch_size: 1, awaiting_price_for: "listing-1" });
+
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "90" });
+
+      expect(listings()[0].selling_price).toBe(90);
+      expect(db.tables.variants.map((v) => v.global_price)).toEqual([90, 90, 95]);
+    });
+
+    it("carries a typed price edit to the variants too", async () => {
+      seedBatch([{ seq: 1, title: "Leather Sandals", price: 3 }]);
+      db.tables.variants = [{ id: "v1", listing_id: "listing-1", variation: "EU 40", global_price: 3 }];
+      confirming({ batch_size: 1 });
+
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "1: change the price to 150" });
+
+      expect(listings()[0].selling_price).toBe(150);
+      expect(db.tables.variants[0].global_price).toBe(150);
+    });
+
+    it("asks for the price of a drafted product priced below it", async () => {
+      seedBatch([
+        { seq: 1, title: "Panasonic Electric Kettle 1.7L", price: 150 },
+        { seq: 2, title: "Sony Wireless Over-Ear Headphones", price: 3 },
+      ]);
+      confirming();
+      sent.length = 0;
+
+      const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+      await finalizeBatch("batch-1", PHONE, 2);
+
+      const ask = sent.find((m) => m.body.includes("What price are you selling it at?"));
+      expect(ask!.body).toContain("Product 2 — Sony Wireless Over-Ear Headphones");
+      expect(ask!.body).toContain("⚠️ *The price (GHS 3) is below the lowest Jumia allows (GHS 8.81).*");
+      expect(session().awaiting_price_for).toBe("listing-2");
+    });
+
+    it("asks a single product's price in its drafted message when it's below it", async () => {
+      seedBatch([{ seq: 1, title: "Panasonic Electric Kettle 1.7L", price: 3 }]);
+      // As the real assessor Holds it (lib/whatsapp/readiness.ts).
+      heldReasonsFor.set("listing-1", ["the price (GHS 3) is below the lowest Jumia allows (GHS 8.81)"]);
+      confirming({ batch_size: 1 });
+      sent.length = 0;
+
+      const { finalizeBatch } = await import("@/lib/whatsapp/intake");
+      await finalizeBatch("batch-1", PHONE, 1);
+
+      expect(sent.map((m) => m.body)).toEqual([
+        "✅ Product drafted: Panasonic Electric Kettle 1.7L.\n⚠️ *the price (GHS 3) is below the lowest Jumia allows (GHS 8.81).*\n\n" +
+        "*What price are you selling it at? Reply with just the amount (Eg. 1500)*",
+      ]);
+      expect(session().awaiting_price_for).toBe("listing-1");
+    });
   });
 });
 
@@ -2252,6 +2350,56 @@ describe("Fix & resubmit", () => {
     expect(listings()[0].selling_price).toBe(169);
     expect(pushCallCount).toBe(1);
     expect(session().awaiting_qc_answer).toBeNull();
+  });
+
+  // Checked before resubmitting: a price still below the limit Jumia named
+  // would only earn the same rejection, and another Fix tap.
+  it("asks again, without resubmitting, when the answer is still below Jumia's minimum", async () => {
+    seedSession({ state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null });
+    seedRejectedListing({ selling_price: 3, jumia_error: "The Global Price [3] GHS must be equal or more than [8.81] GHS." });
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "5" });
+
+    expect(pushCallCount).toBe(0);
+    expect(listings()[0].selling_price).toBe(3);
+    expect(session().awaiting_qc_answer).toEqual({ listingId: REJECTED_ID, kind: "price" });
+    expect(sent.map((m) => m.body)).toEqual([
+      "GHS 5 is below the lowest price Jumia allows (GHS 8.81). *What price are you selling it at? Reply with at least 8.81.*",
+    ]);
+
+    await handleLinkedMessage(USER, PHONE, "m3", { text: "9" });
+
+    expect(listings()[0].selling_price).toBe(9);
+    expect(pushCallCount).toBe(1);
+    expect(session().awaiting_qc_answer).toBeNull();
+  });
+
+  it("resubmits the answer at the variants' price too", async () => {
+    seedSession({ state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null });
+    seedRejectedListing({ selling_price: 3, jumia_error: "The Global Price [3] GHS must be equal or more than [8.81] GHS." });
+    db.tables.variants = [{ id: "v1", listing_id: REJECTED_ID, variation: "1.8L", global_price: 3 }];
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
+
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "169" });
+
+    expect(db.tables.variants[0].global_price).toBe(169);
+    expect(pushCallCount).toBe(1);
+  });
+
+  it("asks again when the answer is above the highest price Jumia named", async () => {
+    seedSession({ state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null });
+    seedRejectedListing({ selling_price: 90000, jumia_error: "The Global Price [90000] GHS must be equal or less than [50000] GHS." });
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "60000" });
+
+    expect(pushCallCount).toBe(0);
+    expect(sent.map((m) => m.body)).toEqual([
+      "GHS 60000 is above the highest price Jumia allows (GHS 50000). *What price are you selling it at? Reply with at most 50000.*",
+    ]);
   });
 
   // Never fixed by a redraft — a rerun can't re-upload a file.

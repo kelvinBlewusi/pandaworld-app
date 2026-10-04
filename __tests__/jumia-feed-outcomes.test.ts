@@ -127,3 +127,28 @@ describe("logFeedOutcome — fields Jumia doesn't show for the category", () => 
     expect(db.tables.jumia_excluded_attributes).toHaveLength(0);
   });
 });
+
+// "must be equal or more than [8.81] GHS" is the country's lowest price,
+// saved as soon as the rejection is logged so the next push there checks
+// it first (lib/jumia/price-minimums.ts).
+describe("logFeedOutcome — Jumia's lowest price for the country", () => {
+  beforeEach(() => {
+    db.tables.jumia_feed_outcomes = [];
+    db.tables.jumia_price_minimums = [];
+  });
+
+  it("remembers the minimum a rejection names", async () => {
+    await logFeedOutcome({
+      listingId: "listing-1", outcome: "rejected", categoryCode: "1000639", country: "GH",
+      rawError: "The Global Price [3] GHS must be equal or more than [8.81] GHS.",
+    });
+    expect(db.tables.jumia_price_minimums).toEqual([
+      expect.objectContaining({ country: "GH", currency: "GHS", min_price: 8.81, category_code: 1000639 }),
+    ]);
+  });
+
+  it("remembers nothing for any other rejection", async () => {
+    await logFeedOutcome({ listingId: "listing-1", outcome: "rejected", categoryCode: "1", rawError: "Image is blurry", country: "GH" });
+    expect(db.tables.jumia_price_minimums).toHaveLength(0);
+  });
+});
