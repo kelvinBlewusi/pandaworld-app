@@ -12,21 +12,16 @@ interface MessageRow {
   created_at:   string;
 }
 
-async function recentPhoneNumbers(): Promise<{ phone_number: string; last_activity: string }[]> {
+async function recentPhoneNumbers(): Promise<{ phone_number: string; last_activity: string; messages: number }[]> {
   const db = createServerClient();
-  // No group-by in PostgREST — pull a bounded recent window and reduce
-  // client-side. This table is new and low-volume; revisit with an RPC if
-  // it ever isn't.
-  const { data } = await db
-    .from("whatsapp_message_log")
-    .select("phone_number, created_at")
-    .order("created_at", { ascending: false })
-    .limit(500);
-  const seen = new Map<string, string>();
-  for (const row of (data ?? []) as { phone_number: string; created_at: string }[]) {
-    if (!seen.has(row.phone_number)) seen.set(row.phone_number, row.created_at);
-  }
-  return Array.from(seen, ([phone_number, last_activity]) => ({ phone_number, last_activity })).slice(0, 30);
+  // Every number, latest activity first (admin_recent_whatsapp_numbers,
+  // 2026-10-04_admin-recent-whatsapp-numbers.sql). It used to be the
+  // numbers in the latest 500 rows, so a number that went quiet for 500
+  // messages dropped off the list.
+  const { data, error } = await db.rpc("admin_recent_whatsapp_numbers", { p_limit: 100 });
+  if (error) console.error(`[admin/messages] couldn't list numbers: ${error.message}`);
+  return ((data ?? []) as { phone_number: string; last_activity: string; messages: number | string }[])
+    .map((r) => ({ ...r, messages: Number(r.messages) }));
 }
 
 const THREAD_PAGE = 500;
@@ -100,6 +95,9 @@ export default async function AdminMessagesPage({
                   className={`block rounded-md px-2 py-1.5 text-sm hover:bg-zinc-100 ${r.phone_number === phone ? "bg-zinc-100 font-medium" : ""}`}
                 >
                   {r.phone_number}
+                  <span className="block text-[11px] text-zinc-400">
+                    {new Date(r.last_activity).toLocaleDateString()} · {r.messages} message{r.messages === 1 ? "" : "s"}
+                  </span>
                 </a>
               </li>
             ))}
