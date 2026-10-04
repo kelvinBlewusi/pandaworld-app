@@ -39,6 +39,34 @@ async function insertLog(fields: LogFields): Promise<void> {
   }
 }
 
+/**
+ * Whether `phoneNumber` was sent a message containing `text` in the last
+ * `withinMs` — for a reply that should go out once, not on every message
+ * (the walkthrough video to a number that isn't linked). Answers false on
+ * any error, so the message is sent again rather than never.
+ */
+export async function sentRecently(phoneNumber: string, text: string, withinMs: number): Promise<boolean> {
+  try {
+    const db = createServerClient();
+    const { data, error } = await db
+      .from("whatsapp_message_log")
+      .select("id")
+      .eq("phone_number", phoneNumber)
+      .eq("direction", "outbound")
+      .like("body_text", `%${text}%`)
+      .gt("created_at", new Date(Date.now() - withinMs).toISOString())
+      .limit(1);
+    if (error) {
+      console.warn(`[whatsapp] message log lookup failed: ${error.message}`);
+      return false;
+    }
+    return (data?.length ?? 0) > 0;
+  } catch (e) {
+    console.warn(`[whatsapp] message log lookup threw: ${(e as Error).message}`);
+    return false;
+  }
+}
+
 /** Log an inbound message — call with the same normalized shape
  *  contentOf() already produces, so the webhook route doesn't need to
  *  re-derive anything just to log it. */

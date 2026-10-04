@@ -138,9 +138,10 @@ const CLEAR_BATCH = { listingId: null, batchId: null, batchSize: null, batchSeq:
 
 /**
  * Puts the session into the right Jumia-connect state for `kind` and
- * sends the matching message — `prefix` is prepended (e.g. "✅ Your
- * WhatsApp is now linked to PandaWorld!\n\n" right after linking; empty
- * when re-checking mid-conversation, since the seller's already linked).
+ * sends the matching message — `prefix` is prepended (the linked
+ * confirmation, lib/whatsapp/onboarding.ts's linkedMessagePrefix, right
+ * after linking; empty when re-checking mid-conversation, since the
+ * seller's already linked).
  * Never called for kind === "connected" — callers check that first and
  * proceed with the real listing flow instead.
  */

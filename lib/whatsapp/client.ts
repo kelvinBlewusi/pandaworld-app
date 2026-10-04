@@ -128,12 +128,14 @@ async function callGraphApi(body: Record<string, unknown>): Promise<void> {
   }
 }
 
-/** Plain text reply. */
-export async function sendText(to: string, text: string): Promise<void> {
+/** Plain text reply. With `preview`, WhatsApp shows the first link as a
+ *  card (a YouTube link gets its thumbnail and title); a link inside an
+ *  interactive message never gets one. */
+export async function sendText(to: string, text: string, { preview = false } = {}): Promise<void> {
   await callGraphApi({
     to,
     type: "text",
-    text: { body: text, preview_url: false },
+    text: { body: text, preview_url: preview },
   });
 }
 
@@ -173,12 +175,12 @@ export async function sendButtons(
  * lib/whatsapp/intake.ts so neither has to duplicate the "not configured"
  * guard.
  */
-export async function sendTextIfConfigured(to: string, text: string): Promise<void> {
+export async function sendTextIfConfigured(to: string, text: string, options?: { preview?: boolean }): Promise<void> {
   if (!isWhatsAppConfigured()) {
     console.warn(`[whatsapp] not configured — would have sent to ${to}: ${text}`);
     return;
   }
-  await sendText(to, text);
+  await sendText(to, text, options);
 }
 
 /** Config-guarded wrapper around sendButtons — matches sendTextIfConfigured's

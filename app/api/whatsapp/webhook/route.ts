@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { claimOnboarding, redeemLinkCode, getUserIdForPhoneNumber } from "@/lib/whatsapp/link";
-import { welcomeMessage, HOW_IT_WORKS_BUTTON } from "@/lib/whatsapp/onboarding";
-import { sendButtonsIfConfigured, sendCtaUrlIfConfigured, markReadWithTypingIfConfigured } from "@/lib/whatsapp/client";
+import {
+  welcomeMessage, HOW_IT_WORKS_BUTTON, walkthroughVideoMessage, WALKTHROUGH_VIDEO_MARK, notLinkedMessage, linkedMessagePrefix,
+} from "@/lib/whatsapp/onboarding";
+import {
+  sendButtonsIfConfigured, sendCtaUrlIfConfigured, sendTextIfConfigured, markReadWithTypingIfConfigured,
+} from "@/lib/whatsapp/client";
 import { verifyWhatsAppSignature, extractLinkCode } from "@/lib/whatsapp/webhook-verify";
 import { contentOf, METAS_OWN_UNSUPPORTED_TYPE, type IncomingMessage } from "@/lib/whatsapp/message-content";
 import { handleLinkedMessage } from "@/lib/whatsapp/intake";
@@ -10,7 +14,7 @@ import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
 import { getOrCreateSession, updateSession } from "@/lib/whatsapp/session";
 import { promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
 import { appUrl } from "@/lib/whatsapp/app-url";
-import { logInboundMessage } from "@/lib/whatsapp/message-log";
+import { logInboundMessage, sentRecently } from "@/lib/whatsapp/message-log";
 import { logAppError } from "@/lib/observability/errors";
 import { failedDeliveries, recordFailedDeliveries } from "@/lib/whatsapp/delivery-status";
 
@@ -33,6 +37,11 @@ import { failedDeliveries, recordFailedDeliveries } from "@/lib/whatsapp/deliver
 // needed. See app/api/listings/[id]/auto-analyze/route.ts for the full
 // reasoning.
 export const maxDuration = 60;
+
+// A number that isn't linked gets the walkthrough video once a day at most:
+// its every message is answered, and someone typing "hi", "hello?", "how
+// does this work" shouldn't get the video three times.
+const WALKTHROUGH_RESEND_AFTER_MS = 24 * 60 * 60 * 1000;
 
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
@@ -167,19 +176,23 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
       await sendButtonsIfConfigured(msg.from, welcomeMessage(), [HOW_IT_WORKS_BUTTON]);
     }
 
+    // The walkthrough video, then the linked confirmation, which points
+    // to it and goes on to the seller's next step.
+    await sendTextIfConfigured(msg.from, walkthroughVideoMessage(), { preview: true });
+
     if (kind === "connected") {
       await updateSession(msg.from, {
         state: "awaiting_count", listingId: null, batchId: null, batchSize: null, batchSeq: null, pendingAppId: null,
       });
       await sendButtonsIfConfigured(
         msg.from,
-        "✅ Your WhatsApp is now linked to PandaWorld! How many products are you listing today?",
+        linkedMessagePrefix() + "How many products are you listing today?",
         COUNT_QUICK_PICKS,
       );
       return;
     }
 
-    await promptJumiaConnection(result.userId, msg.from, kind, "✅ Your WhatsApp is now linked to PandaWorld!\n\n");
+    await promptJumiaConnection(result.userId, msg.from, kind, linkedMessagePrefix());
     return;
   }
 
@@ -189,10 +202,14 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
     // the seller pastes back here) lives in WhatsAppCard, which the
     // extension settings page renders — send them straight there rather
     // than to the batch review page, which is about listings from a
-    // number that's already linked.
+    // number that's already linked. The walkthrough video goes first, for
+    // someone who found the number before they found PandaWorld.
+    if (!(await sentRecently(msg.from, WALKTHROUGH_VIDEO_MARK, WALKTHROUGH_RESEND_AFTER_MS))) {
+      await sendTextIfConfigured(msg.from, walkthroughVideoMessage(), { preview: true });
+    }
     await sendCtaUrlIfConfigured(
       msg.from,
-      "👋 This number isn't linked to a PandaWorld account yet.",
+      notLinkedMessage(),
       "Connect WhatsApp",
       `${appUrl()}/extension/settings`,
     );

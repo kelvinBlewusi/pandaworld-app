@@ -1,4 +1,4 @@
-import type { YouTubeVideo } from "@/lib/marketing/guides";
+import type { YouTubeVideo } from "@/lib/marketing/videos";
 
 /**
  * VideoObject structured data for a YouTube video on the page, so Google
