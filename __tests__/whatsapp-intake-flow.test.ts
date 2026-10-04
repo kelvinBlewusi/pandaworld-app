@@ -1344,12 +1344,13 @@ describe("guide-me mode: a product number typed on its own", () => {
   // 2026-10-04: a seller who never picked I or II captioned photos "169",
   // then typed "1", "2", "3" between them, the way way I closes a product.
   // Each was saved as a note and read as the price; product 1 went at GHS 3.
+  // Picked II, it's a nudge; nothing picked, it's I (below).
   it("is neither the price nor a note, and says how this mode works", async () => {
     db.tables.listings = [{
       id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, status: "draft",
       images: ["https://cdn.test/a.jpg"], selling_price: 169, user_prompt: "169",
     }];
-    seedSession({ state: "awaiting_photos", batch_size: 3, batch_seq: 1, listing_id: "listing-1" });
+    seedSession({ state: "awaiting_photos", batch_size: 3, batch_seq: 1, listing_id: "listing-1", batch_quiet: false });
     sent.length = 0;
 
     await handleLinkedMessage(USER, PHONE, "m1", { text: "2" });
@@ -1662,6 +1663,112 @@ describe("asking for the variation when it's what Jumia won't take", () => {
     expect(sent.at(-1)?.body).toContain("⚠️ Product 1 wasn't sent yet.");
     expect(sent.at(-1)?.body).toContain("*What variation(s) do you have?*");
     expect(session().awaiting_value_for).toEqual({ listingId: FIX_ID, field: "__variation", resubmit: true });
+  });
+});
+
+// Live 2026-10-04: a seller who had picked I twice skipped the tap twice
+// and sent photos the I way: a photo captioned "189", then "1"; a photo
+// captioned "169", then "2". The bot assumed II, answered "No need to type
+// product numbers", and product 2's photo and price landed on product 1,
+// which went live with both.
+describe("the way of sending when the choice isn't tapped", () => {
+  afterEach(() => { db.tables.whatsapp_message_log = []; });
+
+  it("switches to I when a product number arrives, so each product keeps its own photos and price", async () => {
+    seedSession({ batch_size: 2, batch_seq: 1 });
+
+    await handleLinkedMessage(USER, PHONE, "m1", { imageMediaId: "p1a", text: "189" });
+    listings()[0].updated_at = new Date(Date.now() - 60_000).toISOString();
+    sent.length = 0;
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "1" });
+
+    expect(sent).toHaveLength(0);
+    expect(session().batch_seq).toBe(2);
+    expect(session().batch_quiet).toBe(true);
+    expect(session().preferred_batch_quiet).toBe(true);
+
+    await handleLinkedMessage(USER, PHONE, "m3", { imageMediaId: "p2a", text: "169" });
+    listings()[1].updated_at = new Date(Date.now() - 60_000).toISOString();
+    await handleLinkedMessage(USER, PHONE, "m4", { text: "2" });
+
+    expect(sent.some((m) => m.body.includes("No need to type product numbers"))).toBe(false);
+    expect(sent.some((m) => m.body.includes("Got everything for all 2 products"))).toBe(true);
+    expect(listings().map((l) => [l.images, l.selling_price])).toEqual([
+      [["https://cdn.test/p1a.jpg"], 189],
+      [["https://cdn.test/p2a.jpg"], 169],
+    ]);
+  });
+
+  it("uses the way the seller picked last time", async () => {
+    seedSession({ batch_size: 3, batch_seq: 1, preferred_batch_quiet: true });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { imageMediaId: "p1a", text: "Price 240" });
+    listings()[0].updated_at = new Date(Date.now() - 60_000).toISOString();
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "1" });
+
+    // I is silent between products; II would have said "noted".
+    expect(sent).toHaveLength(0);
+    expect(session().batch_seq).toBe(2);
+  });
+
+  it("keeps a single product's own replies whatever was picked last time", async () => {
+    seedSession({ batch_size: 1, batch_seq: 1, preferred_batch_quiet: true });
+    await handleLinkedMessage(USER, PHONE, "m1", photo("p1a"));
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "Price 240" });
+
+    expect(sent.some((m) => m.body.includes("noted for product 1"))).toBe(true);
+  });
+
+  it("says which way it'll use in the choice, and starts the batch unpicked", async () => {
+    seedSession({ state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null, preferred_batch_quiet: true, batch_quiet: false });
+    db.tables.jumia_connections = [{ user_id: USER, status: "active", access_token: "real-token" }];
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "3" });
+    db.tables.jumia_connections = [];
+
+    const choice = sent.find((m) => m.body.includes("You can send all 3 in two ways"));
+    expect(choice!.body).toContain("No tap needed for *#I*: it's the one you used last time.");
+    expect(choice!.rows).toEqual(["batch_mode:quiet", "batch_mode:interactive"]);
+    expect(session().batch_quiet).toBeNull();
+  });
+
+  it("remembers the way the seller taps", async () => {
+    seedSession({ batch_size: 3, batch_seq: 1, preferred_batch_quiet: true });
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "batch_mode:interactive" });
+
+    expect(session().batch_quiet).toBe(false);
+    expect(session().preferred_batch_quiet).toBe(false);
+  });
+
+  // The same session: product 2's photo and "Done" reached the webhook
+  // 0.3s apart, and "Done" got "Send at least one photo first", twice.
+  it("waits for a photo still being handled when Done overtakes it", async () => {
+    jest.useFakeTimers({ doNotFake: ["nextTick"] });
+    try {
+      seedSession({ batch_size: 2, batch_seq: 1, batch_quiet: false });
+      db.tables.whatsapp_message_log = [{ phone_number: PHONE, direction: "inbound", message_type: "image", created_at: new Date().toISOString() }];
+      sent.length = 0;
+
+      const closing = handleLinkedMessage(USER, PHONE, "m2", { text: "Done" });
+      await jest.advanceTimersByTimeAsync(0);
+      expect(listings()).toHaveLength(0); // "Done" is waiting for the photo
+
+      await handleLinkedMessage(USER, PHONE, "m1", photo("p1a"));
+      await jest.advanceTimersByTimeAsync(20_000);
+      await closing;
+
+      expect(sent.map((m) => m.body)).toEqual([
+        "✅ Product 1 saved (1 photo). Next: product 2 of 2 — photos + price/notes, then *done*.",
+      ]);
+      expect(session().batch_seq).toBe(2);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 
