@@ -1923,7 +1923,9 @@ describe("quiet batch mode", () => {
 
     await handleLinkedMessage(USER, PHONE, "m1", { text: "Price 40\n1" });
 
-    expect(sent.map((m) => m.body)).toEqual(["I haven't received any photos for product 1 yet. Send them, then reply *1*."]);
+    expect(sent.map((m) => m.body)).toEqual([
+      "I haven't received any photos for product 1 yet. Send them, then reply *1*.\n\nMake sure the images are sent before entering *1*.",
+    ]);
     expect(session().batch_seq).toBe(1);
     expect(listings()).toHaveLength(0);
     // The note waits for the photo; the marker isn't kept as a note.

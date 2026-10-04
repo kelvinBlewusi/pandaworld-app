@@ -14,12 +14,12 @@ export function WhatsAppSendingModes() {
       <h3 className="text-lg font-bold text-zinc-900">Two ways to send your products</h3>
       <p className="mt-2 text-base text-zinc-600">
         After you say how many products you&apos;re listing, the bot asks how you want to send them. Tap{" "}
-        <strong>I</strong> or <strong>II</strong>.
+        <strong>#I</strong> or <strong>#II</strong>.
       </p>
 
       <div className="mt-5 grid gap-5 sm:grid-cols-2">
         <div className="rounded-xl border border-zinc-200 p-5">
-          <p className="text-sm font-semibold uppercase tracking-wide text-orange-600">I · All at once</p>
+          <p className="text-sm font-semibold uppercase tracking-wide text-orange-600">#I · All at once</p>
           <p className="mt-2 font-semibold text-zinc-900">Send every product, each followed by its number</p>
           <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-zinc-600">
             <li>Select all the photos of product 1, type its price and any notes as the caption (e.g. <em>GHS 120. Capacity 1.8L</em>), and send.</li>
@@ -33,7 +33,7 @@ export function WhatsAppSendingModes() {
         </div>
 
         <div className="rounded-xl border border-zinc-200 p-5">
-          <p className="text-sm font-semibold uppercase tracking-wide text-orange-600">II · Guide me each step</p>
+          <p className="text-sm font-semibold uppercase tracking-wide text-orange-600">#II · Guide me each step</p>
           <p className="mt-2 font-semibold text-zinc-900">The bot takes you through one product at a time</p>
           <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-zinc-600">
             <li>Send the product&apos;s photos with its price and any notes: variations, sizes, sale price.</li>
