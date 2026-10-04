@@ -22,6 +22,7 @@
 
 import { Resend } from "resend";
 import * as Sentry from "@sentry/nextjs";
+import { SUPPORT_EMAIL } from "@/lib/constants/support";
 
 let resendClient: Resend | null = null;
 
@@ -49,6 +50,8 @@ export interface SendEmailOptions {
    * Doesn't show up in the email itself.
    */
   category?: string;
+  /** Extra mail headers, e.g. List-Unsubscribe on a broadcast. */
+  headers?:  Record<string, string>;
 }
 
 export interface SendEmailResult {
@@ -70,6 +73,11 @@ export async function sendEmail(opts: SendEmailOptions): Promise<SendEmailResult
   try {
     const result = await resend.emails.send({
       from:    process.env.EMAIL_FROM ?? DEFAULT_FROM,
+      // Every email tells the seller to reply for help, but the sending
+      // domain has no inbox (pandaworldai.site has no MX record), so a
+      // reply to the From address bounced. Replies go to support instead.
+      replyTo: SUPPORT_EMAIL,
+      headers: opts.headers,
       to:      opts.to,
       subject: opts.subject,
       html:    opts.html,

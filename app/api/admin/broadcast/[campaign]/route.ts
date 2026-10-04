@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth, clerkClient } from "@clerk/nextjs/server";
 import { isAdmin } from "@/lib/auth/is-admin";
 import { sendEmail } from "@/lib/email/send";
+import { SUPPORT_EMAIL } from "@/lib/constants/support";
 import { improvementsAndVideosEmail, whatsappExtensionAnnouncementEmail } from "@/lib/email/templates";
 
 // ─── /api/admin/broadcast/<campaign> ─────────────────────────────────────────
@@ -43,6 +44,11 @@ interface Recipient {
 }
 
 const appUrl = () => process.env.NEXT_PUBLIC_APP_URL ?? "https://pandaworldai.site";
+
+// Gmail and others show their own "Unsubscribe" link for mail that carries
+// this, and treat a bulk send without it with more suspicion. Requests land
+// in the support inbox, the same place a reply of "unsubscribe" goes.
+const LIST_UNSUBSCRIBE = { "List-Unsubscribe": `<mailto:${SUPPORT_EMAIL}?subject=unsubscribe>` };
 
 async function collectRecipients(): Promise<Recipient[]> {
   const client = await clerkClient();
@@ -112,6 +118,7 @@ export async function POST(req: NextRequest, { params }: { params: { campaign: s
     const tpl = campaign.render({ firstName: null, appUrl: appUrl() });
     const result = await sendEmail({
       to: body.testTo, subject: `[Test] ${tpl.subject}`, html: tpl.html, text: tpl.text, category: `${campaign.category}-test`,
+      headers: LIST_UNSUBSCRIBE,
     });
     return NextResponse.json({ test: true, to: body.testTo, ...result });
   }
@@ -143,6 +150,7 @@ export async function POST(req: NextRequest, { params }: { params: { campaign: s
           html:     tpl.html,
           text:     tpl.text,
           category: campaign.category,
+          headers:  LIST_UNSUBSCRIBE,
         });
         return { email: r.email, result };
       }),
