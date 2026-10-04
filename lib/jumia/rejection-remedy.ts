@@ -115,6 +115,25 @@ function isCutOffNotVisibleComplaint(fragment: string): boolean {
   return full.startsWith(rest) || (rest.startsWith(full) && !rest.includes("]"));
 }
 
+/**
+ * The limit in Jumia's "The Global Price [3] GHS must be equal or more than
+ * [8.81] GHS": what was sent, the bound, and which way. Null for any other
+ * message, a sale price's included.
+ */
+export function priceLimitInRejection(raw: string | null | undefined): { was: number; limit: number; bound: "min" | "max"; currency: string | null } | null {
+  const m = /(?<!sale\s)price\s*\[\s*([\d.]+)\s*\]\s*([a-z]{3})?\s*must be equal or (more|less) than\s*\[\s*([\d.]+)\s*\]/i.exec(raw ?? "");
+  if (!m) return null;
+  return { was: Number(m[1]), limit: Number(m[4]), bound: m[3].toLowerCase() === "more" ? "min" : "max", currency: m[2]?.toUpperCase() ?? null };
+}
+
+/** Jumia refused the price itself (missing, or outside its limits) — not a
+ *  sale price, which comes with dates and a discount rule of its own. The
+ *  answer is one number the seller can type. */
+export function isPriceRejection(raw: string | null | undefined): boolean {
+  const msg = (raw ?? "").toLowerCase().replace(/sale price/g, "");
+  return /\bprice\b/.test(msg) && /(required|missing|mandatory|must|equal or (?:more|less) than|should not be zero|negative)/.test(msg);
+}
+
 export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
   const msg = (raw ?? "").toLowerCase();
 
@@ -226,6 +245,19 @@ export function classifyJumiaRejection(raw: string | null | undefined): Remedy {
   // gap that let both fall through to "unknown" and waste an automatic
   // rerun+resubmit cycle that could never have supplied a price or a
   // stock count either way — runAutoAnalyze never touches either field.
+  // Before the general price rule below, which read "must be equal or more
+  // than" as a missing price: a seller whose product went at GHS 3 was told
+  // "Jumia needs a price on this product" three times (2026-10-04).
+  const limit = priceLimitInRejection(raw);
+  if (limit) {
+    const cur = limit.currency ? `${limit.currency} ` : "";
+    return {
+      kind: "seller",
+      explanation: limit.bound === "min"
+        ? `The price was ${cur}${limit.was}, and the lowest Jumia allows for it is ${cur}${limit.limit}.`
+        : `The price was ${cur}${limit.was}, and the highest Jumia allows for it is ${cur}${limit.limit}.`,
+    };
+  }
   if (/\bprice\b/.test(msg) && /(required|missing|invalid|must|mandatory)/.test(msg)) {
     return { kind: "seller", explanation: "Jumia needs a price on this product, and I never set prices myself." };
   }
