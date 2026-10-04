@@ -30,6 +30,7 @@ import type { PreflightReason } from "@/lib/jumia/preflight";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import { columnFor } from "@/lib/jumia/attribute-mapping";
 import type { ListingRow } from "@/lib/supabase/types";
+import { priceMinimumForUser, isBelowMinimum, belowMinimumText } from "@/lib/jumia/price-minimums";
 
 export interface ListingReadinessResult {
   /** True only when a real push, as the seller currently has the listing,
@@ -284,6 +285,13 @@ export async function assessListingPushReadiness(
   }
 
   const reasons: string[] = [];
+
+  // Below Jumia's lowest price for this country: the push stops it, so the
+  // draft is Held for it now and the price asked for (askForNextMissingPrice).
+  const minimum = await priceMinimumForUser(userId);
+  if (isBelowMinimum(row.selling_price, minimum)) {
+    reasons.push(belowMinimumText(row.selling_price as number, minimum));
+  }
 
   if (preview.missingRequired.length > 0) {
     reasons.push(`this category also needs ${preview.missingRequired.join(", ")}`);

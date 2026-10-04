@@ -23,6 +23,7 @@ import { restrictedWordsInJumiaRejection } from "@/lib/ai/restricted-words";
 import { rememberRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 import { extractNotVisibleAttributeNames } from "@/lib/jumia/rejection-remedy";
 import { removeAttributesFromCache } from "@/lib/jumia/categories";
+import { rememberPriceMinimum } from "@/lib/jumia/price-minimums";
 
 /**
  * A stable hash of the listing content that actually drives a Jumia
@@ -104,6 +105,9 @@ export async function logFeedOutcome(input: FeedOutcomeInput): Promise<void> {
     }
     if (input.outcome === "rejected") {
       await rememberRestrictedWords(restrictedWordsInJumiaRejection(input.rawError), input.rawError ?? null);
+      // "must be equal or more than [8.81] GHS": the country's lowest price,
+      // checked before every later push there (pushListingToJumia).
+      await rememberPriceMinimum(country, categoryCode, input.rawError);
     }
     // Fields Jumia says this category doesn't show ("Attribute [x] is not
     // visible for category [y]") leave its cached schema for good, so the
