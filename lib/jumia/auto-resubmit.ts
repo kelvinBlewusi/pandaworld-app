@@ -71,14 +71,31 @@ export async function removeBrandWords(listingId: string, words: string[]): Prom
   return true;
 }
 
+export type AutoFixKind = "hidden_fields" | "banned_words" | "brand_words";
+
+/**
+ * Which of the fixes above a rejection calls for, from its text alone
+ * (Jumia's raw error or its plain text); null when it's left to the
+ * seller. Also lists them on /admin/auto-fix.
+ */
+export function autoFixKind(rejection: string | null | undefined): AutoFixKind | null {
+  if (!rejection) return null;
+  const text = extractRejectionText(rejection);
+  if (classifyJumiaRejection(text).kind === "not_visible_attributes") return "hidden_fields";
+  if (onlyRestrictedWordsInRejection(text)) return "banned_words";
+  if (restrictedBrandWordsInRejection(text).length > 0) return "brand_words";
+  return null;
+}
+
 /**
  * What to change for this rejection, done, and what to tell the seller;
  * null when it isn't one we fix ourselves.
  */
 async function prepareFix(listingId: string, text: string): Promise<AutoResubmitted | null> {
-  if (classifyJumiaRejection(text).kind === "not_visible_attributes") return { note: null };
+  const kind = autoFixKind(text);
+  if (kind === "hidden_fields") return { note: null };
 
-  if (onlyRestrictedWordsInRejection(text)) {
+  if (kind === "banned_words") {
     const words = restrictedWordsInJumiaRejection(text);
     // Usually learned already, as the rejection was logged; again here so
     // this process strips them on the push below.
@@ -87,7 +104,7 @@ async function prepareFix(listingId: string, text: string): Promise<AutoResubmit
   }
 
   const brandWords = restrictedBrandWordsInRejection(text);
-  if (brandWords.length > 0 && (await removeBrandWords(listingId, brandWords))) {
+  if (kind === "brand_words" && (await removeBrandWords(listingId, brandWords))) {
     return {
       note: `Jumia's quality check doesn't let your shop use ${quoted(brandWords)} in the listing, so I took ${them(brandWords)} out and sent it back to Jumia.`,
     };
