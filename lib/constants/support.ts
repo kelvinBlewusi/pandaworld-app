@@ -18,7 +18,7 @@ export const SUPPORT_MAILTO = `mailto:${SUPPORT_EMAIL}`;
  * (gi_t = "group invite, tracked"); don't strip it.
  */
 export const COMMUNITY_WHATSAPP_URL =
-  "https://chat.whatsapp.com/HINMw1QxsQFHbetQLv2Q4h?mode=gi_t";
+  "https://chat.whatsapp.com/BY189TalCcPE4C0F3PkK42?mode=gi_t";
 
 /**
  * Social channels for the brand. Used by the marketing footer and the
