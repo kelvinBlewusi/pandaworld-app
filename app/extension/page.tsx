@@ -5,6 +5,7 @@ import { auth } from "@clerk/nextjs/server";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { ExtensionHeroBackdrop } from "@/components/marketing/extension-hero-backdrop";
 import { LoopingVideo } from "@/components/marketing/looping-video";
+import { JumiaPandaWorldPuzzle } from "@/components/marketing/jumia-pandaworld-puzzle";
 import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 import { isBillingEnabled } from "@/lib/billing/mode";
 import { CALCULATOR_HREF, WHATSAPP_LISTINGS_HREF, WHATSAPP_SIGN_UP_HREF } from "@/lib/marketing/links";
@@ -269,6 +270,42 @@ export async function ExtensionPage() {
         calculatorHref={calculatorHref}
         pricingLive={billingOn}
       />
+
+      {/* PandaWorld and Jumia as two jigsaw pieces that lock together (owner's
+          design, 2026-10-05, after the Jumia × WooCommerce one): what
+          PandaWorld is, in one picture, before How it works says how. The
+          line under it keeps the picture from reading as a Jumia
+          partnership. */}
+      <section className="bg-white">
+        <div className="mx-auto grid max-w-5xl grid-cols-1 items-center gap-10 px-6 pb-16 pt-4 lg:grid-cols-2 lg:gap-14">
+          <JumiaPandaWorldPuzzle className="mx-auto h-auto w-full max-w-md lg:max-w-none" />
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-widest text-orange-500">
+              Made for Jumia sellers
+            </p>
+            <h2 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">
+              The missing piece of your Jumia shop
+            </h2>
+            <p className="mt-4 text-base leading-relaxed text-zinc-600 sm:text-lg">
+              Connect your Vendor Center once and it stays connected. PandaWorld writes each
+              listing (title, description, highlights, category and every detail Jumia asks for)
+              and sends it straight to your shop from WhatsApp, or fills in Jumia&apos;s own form
+              with the Chrome extension.
+            </p>
+            {/* No second Get Started: the hero's is just above. */}
+            <a
+              href="/how-to/connect-jumia-vendor-center"
+              className="mt-6 inline-flex items-center justify-center gap-2 rounded-full border border-stone-200 px-6 py-3 text-base text-zinc-700 transition-colors hover:border-zinc-400 hover:bg-zinc-50"
+            >
+              How to connect Vendor Center
+              <span aria-hidden="true">→</span>
+            </a>
+            <p className="mt-6 text-xs text-zinc-400">
+              PandaWorld is an independent tool for Jumia sellers. It isn&apos;t run or endorsed by Jumia.
+            </p>
+          </div>
+        </div>
+      </section>
 
       {/* How it works — two tracks side by side (Chrome extension, WhatsApp),
           each its own vertical step list rather than the old single 4-up
