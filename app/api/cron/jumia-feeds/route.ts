@@ -4,9 +4,9 @@ import { decrypt } from "@/lib/security/token-crypto";
 
 export const dynamic = "force-dynamic";
 import { refreshJumiaConnection } from "@/lib/jumia/api";
-import { refreshPendingFeedStatus, notifyResolvedListings, toResolvedNotice, type ResolvedListingNotice } from "@/lib/jumia/push-listing";
+import { refreshPendingFeedStatus, notifyResolvedListings, toResolvedNotice, AUTO_RESUBMITTED, type ResolvedListingNotice } from "@/lib/jumia/push-listing";
 import { followUpQc, qcAlertPromised, type QcCandidate } from "@/lib/jumia/qc-followup";
-import { resubmitWithoutHiddenFields } from "@/lib/jumia/auto-resubmit";
+import { resubmitAutomatically } from "@/lib/jumia/auto-resubmit";
 import { hasFeature } from "@/lib/billing/features";
 
 // ─── GET /api/cron/jumia-feeds ────────────────────────────────────────────────
@@ -204,12 +204,26 @@ export async function GET(req: NextRequest) {
           (result.totalCount > 1 ? ` (${result.liveCount}/${result.totalCount} variants live)` : ""),
         );
       }
-      // Refused only for fields its category doesn't show: our mistake,
-      // corrected as the rejection was logged, so it goes straight back to
-      // Jumia rather than asking the seller to tap Fix.
-      if (result.status === "failed" && (await resubmitWithoutHiddenFields(userId, listing.id as string, result.error))) {
-        console.info(`[Cron] ${listing.id} resubmitted without the fields Jumia doesn't show in its category`);
-        continue;
+      // A rejection we can fix ourselves (fields the category doesn't
+      // show, banned words) goes straight back to Jumia rather than asking
+      // the seller to tap Fix. They're told only when the listing changed.
+      if (result.status === "failed") {
+        const auto = await resubmitAutomatically(userId, listing.id as string, result.error);
+        if (auto) {
+          console.info(`[Cron] ${listing.id} fixed and resubmitted automatically`);
+          if (auto.note && listing.whatsapp_batch_id) {
+            resolved.push({
+              listingId:   listing.id as string,
+              title:       listing.title as string | null,
+              whatsappSeq: listing.whatsapp_seq as number | null,
+              batchId:     listing.whatsapp_batch_id as string,
+              newStatus:   AUTO_RESUBMITTED,
+              errorMsg:    auto.note,
+              counts:      { liveCount: 0, totalCount: 0, rejectedSkus: [] },
+            });
+          }
+          continue;
+        }
       }
       const notice = toResolvedNotice(
         {
@@ -226,7 +240,7 @@ export async function GET(req: NextRequest) {
 
     // Quality check on listings Jumia accepted: approvals and rejections are
     // told in the same message as this run's feed resolutions.
-    const qcResolved = await followUpQc(accessToken, country, qcByUser.get(userId) ?? []);
+    const qcResolved = await followUpQc(accessToken, country, qcByUser.get(userId) ?? [], userId);
     updated += qcResolved.length;
     resolved.push(...qcResolved);
 

@@ -50,7 +50,7 @@ jest.mock("@/lib/jumia/api", () => ({
   getFeedProductDetails: async () => feedProductDetailsResult,
 }));
 
-import { refreshPendingFeedStatus, notifyBatchResolved, notifyResolvedListings, toResolvedNotice, QC_APPROVED, type ResolvedListingNotice, type FeedResolution } from "@/lib/jumia/push-listing";
+import { refreshPendingFeedStatus, notifyBatchResolved, notifyResolvedListings, toResolvedNotice, QC_APPROVED, AUTO_RESUBMITTED, type ResolvedListingNotice, type FeedResolution } from "@/lib/jumia/push-listing";
 
 const PHONE = "233550607231";
 
@@ -188,6 +188,25 @@ describe("notifyBatchResolved", () => {
     await notifyBatchResolved(PHONE, "batch-1", [notice({ listingId: "a" }), notice({ listingId: "b" })], { qcAlerts: false });
     expect(sent[0].body).toContain("Since your last update: Jumia accepted 2 products.");
     expect(sent[0].body).not.toContain("Will alert you");
+  });
+
+  // Fixed and sent back without the seller (lib/jumia/auto-resubmit.ts):
+  // told what changed, with nothing to tap.
+  it("says what it fixed and sent back, with no Fix button", async () => {
+    const note = 'Jumia doesn\'t allow "camouflage" in listings, so I took it out and sent it back to Jumia.';
+    await notifyBatchResolved(PHONE, "batch-1", [notice({ newStatus: AUTO_RESUBMITTED, errorMsg: note })]);
+
+    expect(sent).toEqual([expect.objectContaining({ kind: "text", body: `🔧 "Electric Kettle": ${note} I'll tell you how it goes.` })]);
+  });
+
+  it("counts what it sent back apart from what was rejected", async () => {
+    await notifyBatchResolved(PHONE, "batch-1", [
+      notice({ listingId: "listing-1", whatsappSeq: 1, newStatus: AUTO_RESUBMITTED, errorMsg: "I took it out." }),
+      notice({ listingId: "listing-2", title: "Massager", whatsappSeq: 2, newStatus: "failed", errorMsg: "Mandatory FDA registration number is missing." }),
+    ]);
+
+    expect(sent[0].body).toContain("Since your last update: 1 fixed and sent back, 1 rejected.");
+    expect(sent.filter((m) => m.kind === "buttons").map((m) => m.buttons)).toEqual([["fix:listing-2"]]);
   });
 
   it("announces a product live once it passes Jumia QC, with nothing to fix", async () => {

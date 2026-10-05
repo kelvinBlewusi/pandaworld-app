@@ -1745,6 +1745,57 @@ describe("the way of sending when the choice isn't tapped", () => {
     expect(session().preferred_batch_quiet).toBe(false);
   });
 
+  // Live 2026-10-04: a second photo and "Done" 1.4s apart closed the
+  // product on "1 photo" while the second was still arriving. In a batch
+  // it would have landed on the next product.
+  it("waits for a further photo still arriving when Done comes", async () => {
+    jest.useFakeTimers({ doNotFake: ["nextTick"] });
+    try {
+      seedSession({ batch_size: 2, batch_seq: 1, batch_quiet: false });
+      await handleLinkedMessage(USER, PHONE, "m1", photo("p1a"));
+      listings()[0].updated_at = new Date(Date.now() - 60_000).toISOString();
+      // The second photo has reached the webhook, not the listing.
+      db.tables.whatsapp_message_log = [{ phone_number: PHONE, direction: "inbound", message_type: "image", created_at: new Date().toISOString() }];
+      sent.length = 0;
+
+      const closing = handleLinkedMessage(USER, PHONE, "m3", { text: "Done" });
+      await jest.advanceTimersByTimeAsync(0);
+      expect(session().batch_seq).toBe(1); // "Done" is waiting for it
+
+      await handleLinkedMessage(USER, PHONE, "m2", photo("p1b"));
+      await jest.advanceTimersByTimeAsync(20_000);
+      await closing;
+
+      expect(sent.map((m) => m.body)).toEqual([
+        "✅ Product 1 saved (2 photos). Next: product 2 of 2 — photos + price/notes, then *done*.",
+      ]);
+      expect(listings()).toHaveLength(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("waits for it in #I too, before the product's number closes it", async () => {
+    jest.useFakeTimers({ doNotFake: ["nextTick"] });
+    try {
+      seedSession({ batch_size: 2, batch_seq: 1, batch_quiet: true });
+      await handleLinkedMessage(USER, PHONE, "m1", photo("p1a"));
+      listings()[0].updated_at = new Date(Date.now() - 60_000).toISOString();
+      db.tables.whatsapp_message_log = [{ phone_number: PHONE, direction: "inbound", message_type: "image", created_at: new Date().toISOString() }];
+
+      const closing = handleLinkedMessage(USER, PHONE, "m3", { text: "1" });
+      await jest.advanceTimersByTimeAsync(0);
+      await handleLinkedMessage(USER, PHONE, "m2", photo("p1b"));
+      await jest.advanceTimersByTimeAsync(20_000);
+      await closing;
+
+      expect(session().batch_seq).toBe(2);
+      expect(listings()[0].images).toEqual(["https://cdn.test/p1a.jpg", "https://cdn.test/p1b.jpg"]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   // The same session: product 2's photo and "Done" reached the webhook
   // 0.3s apart, and "Done" got "Send at least one photo first", twice.
   it("waits for a photo still being handled when Done overtakes it", async () => {
@@ -2509,6 +2560,28 @@ describe("Fix & resubmit", () => {
     expect(sent.map((m) => m.body)).toEqual([
       "GHS 60000 is above the highest price Jumia allows (GHS 50000). *What price are you selling it at? Reply with at most 50000.*",
     ]);
+  });
+
+  // Live 2026-10-05: "Restricted Brand: Police in NAME" on a police officer
+  // costume. The word was the trouble, not the product: it comes out and
+  // the listing goes back, instead of "your shop can't sell this brand".
+  it("takes a brand word Jumia's quality check refused out of the name, and resubmits", async () => {
+    seedSession({ state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null });
+    seedRejectedListing({
+      title: "Police Officer Role Play Costume Set - Vest",
+      jumia_qc_status: "rejected",
+      jumia_qc_comment: "Restricted Brand: Police in NAME - Seller not in approved list",
+      jumia_error: "quality check: Restricted Brand: Police in NAME - Seller not in approved list",
+    });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${REJECTED_ID}` });
+
+    expect(listings()[0].title).toBe("Officer Role Play Costume Set - Vest");
+    expect(pushCallCount).toBe(1);
+    expect(autoAnalyzeCalls).toHaveLength(0);
+    expect(sent[0].body).toBe('🔧 Product 1: Jumia\'s quality check doesn\'t let your shop use "Police" in the listing, so I\'m taking it out and resubmitting.');
+    expect(sent.some((m) => /seller support|isn't a brand Jumia/.test(m.body))).toBe(false);
   });
 
   // Never fixed by a redraft — a rerun can't re-upload a file.

@@ -208,6 +208,59 @@ export function restrictedWordsInJumiaRejection(raw: string | null | undefined):
   return Array.from(out);
 }
 
+/**
+ * True when every complaint in a Jumia rejection is a banned word, so
+ * taking the words out is the whole fix (lib/jumia/auto-resubmit.ts):
+ * "The highlighted word has been placed on the blacklist, prohibiting its
+ * usage in Ghana\nThe Attribute [ description ] contains the restricted
+ * words : camouflage;". False when anything else is wrong with it too.
+ */
+export function onlyRestrictedWordsInRejection(raw: string | null | undefined): boolean {
+  if (restrictedWordsInJumiaRejection(raw).length === 0) return false;
+  return (raw ?? "")
+    .split(/\n|\|/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .every((line) => /restricted words?\s*:|blacklist|highlighted word/i.test(line));
+}
+
+/**
+ * Brand names Jumia's quality check refused for this shop in the listing's
+ * own text: "Restricted Brand: Police in NAME - Seller not in approved
+ * list" gives ["Police"]. Here the word is the trouble, not the product (a
+ * police officer costume is not a Police product), so taking it out of the
+ * text fixes it. Never learned for everyone: a shop approved for that
+ * brand may use it.
+ */
+export function restrictedBrandWordsInRejection(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  // Keyed lowercase, kept as Jumia spelled it, for telling the seller.
+  const out = new Map<string, string>();
+  const re = /restricted brand\s*:\s*([^\n:;|]+?)\s+in\s+(?:the\s+)?(?:product\s+)?(?:name|title|description|short[_ ]description|highlights?)\b/gi;
+  for (const m of Array.from(raw.matchAll(re))) {
+    const w = m[1].replace(/["'`]/g, "").trim();
+    if (w.length >= 2 && w.length <= 40 && w.split(/\s+/).length <= 4 && !out.has(w.toLowerCase())) out.set(w.toLowerCase(), w);
+  }
+  return Array.from(out.values());
+}
+
+/**
+ * Take whole-word occurrences of `words` out of a listing's text, tidying
+ * what's left: "Police Officer Role Play Costume Set - Vest" becomes
+ * "Officer Role Play Costume Set - Vest". `line` for a one-line field (a
+ * title), which also loses separators left dangling at either end.
+ */
+export function removeWordsFromText(text: string, words: string[], opts: { line?: boolean } = {}): string {
+  if (!text || words.length === 0) return text;
+  let out = text.replace(buildRegex(words), "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]+([,.;:!?])/g, "$1")
+    .replace(/([,;:])(\s*[,;:])+/g, "$1")
+    .replace(/\(\s*\)/g, "");
+  if (opts.line) out = out.replace(/^[\s,;:|\-–—]+|[\s,;:|\-–—]+$/g, "");
+  return out.trim();
+}
+
 export function stripRestrictedWords(text: string): string {
   if (!text) return text;
   return text
