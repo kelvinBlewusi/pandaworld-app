@@ -130,3 +130,14 @@ describe("a brand word refused in quality check", () => {
     expect(pushed).toEqual([]);
   });
 });
+
+describe("autoFixKind", () => {
+  it("names the fix for each kind of rejection the bot handles, and nothing for the rest", async () => {
+    const { autoFixKind } = await import("@/lib/jumia/auto-resubmit");
+    expect(autoFixKind(hidden)).toBe("hidden_fields");
+    expect(autoFixKind("The Attribute [ description ] contains the restricted words : camouflage;")).toBe("banned_words");
+    expect(autoFixKind("quality check: Restricted Brand: Police in NAME - Seller not in approved list")).toBe("brand_words");
+    expect(autoFixKind("quality check: Kindly Provide Product's Health/Food Regulation Registration Number.")).toBeNull();
+    expect(autoFixKind(null)).toBeNull();
+  });
+});
