@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Mail, Users } from "lucide-react";
-import { Wordmark } from "./wordmark";
+import { PandaworldLogo } from "./pandaworld-logo";
 import { FooterPricingTrigger } from "./footer-pricing-trigger";
 import { CALCULATOR_HREF, COMMISSION_RATES_HREF } from "@/lib/marketing/links";
 import {
@@ -38,10 +38,13 @@ const SOCIAL_ICON_MAP: Record<string, (p: { className?: string }) => JSX.Element
  * /privacy, the guides and tools). Lives outside app/page.tsx because
  * Next.js refuses to tree-shake non-default exports from page files.
  *
- * Laid out as a brand column (wordmark, one-line tagline, community and
- * social links) and three labelled link columns, over a bottom bar with
- * the copyright and the legal links. Redesigned 2026-10-01: it was one
- * row of eleven items whose tagline wrapped onto three lines.
+ * Laid out as a brand column (one-line tagline, community and social
+ * links) and three labelled link columns, over a bottom bar with the
+ * copyright and the legal links, and the Pandaworld logo across the full
+ * width, sitting on the footer's bottom edge (owner's request, 2026-10-05;
+ * it replaced the small panda wordmark at the top of the brand column).
+ * Redesigned 2026-10-01: it was one row of eleven items whose tagline
+ * wrapped onto three lines.
  *
  * Terms and Privacy are linked since 2026-10-01, when the owner published
  * them as written (they were held back pending a lawyer's review).
@@ -79,15 +82,14 @@ export function MarketingFooter({
 } = {}) {
   return (
     <footer className="border-t border-zinc-200 bg-zinc-50">
-      <div className="mx-auto max-w-6xl px-6 py-12">
+      <div className="mx-auto max-w-6xl px-6 pt-12">
         {/* Phones: brand, then Product beside Tools, then Support on its
             own row so the email address never breaks mid-word. Tablets:
             brand above three columns. Desktop: all four in one row. */}
         <div className="grid grid-cols-2 gap-x-8 gap-y-10 md:grid-cols-[0.8fr_1fr_1.2fr] lg:grid-cols-[1.4fr_0.8fr_1.1fr_1.3fr]">
           {/* Brand */}
           <div className="col-span-2 md:col-span-3 lg:col-span-1">
-            <Wordmark size={22} />
-            <p className="mt-3 max-w-xs text-sm leading-relaxed text-zinc-500">
+            <p className="max-w-xs text-sm leading-relaxed text-zinc-500">
               Built for Jumia sellers. List products from WhatsApp or the Chrome extension.
             </p>
             <div className="mt-5 flex items-center gap-2">
@@ -171,6 +173,9 @@ export function MarketingFooter({
             <Link href="/privacy" className="transition-colors hover:text-zinc-900">Privacy</Link>
           </div>
         </div>
+
+        {/* No padding under it: the P's foot sits on the footer's edge. */}
+        <PandaworldLogo className="mt-10 block h-auto w-full" />
       </div>
     </footer>
   );
