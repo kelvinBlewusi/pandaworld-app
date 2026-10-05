@@ -25,6 +25,12 @@ jest.mock("@/lib/billing/extension-credits", () => ({
   refundLiveListing: async (id: string) => { refunded.push(id); return { refunded: 0 }; },
 }));
 
+const pushes: string[] = [];
+jest.mock("@/lib/jumia/push-listing", () => ({
+  ...jest.requireActual("@/lib/jumia/push-listing"),
+  pushListingToJumia: async (_userId: string, listingId: string) => { pushes.push(listingId); return { ok: true }; },
+}));
+
 import { getProductQc } from "@/lib/jumia/api";
 import {
   describeQcRejection,
@@ -173,6 +179,24 @@ describe("followUpQc", () => {
     expect(forgotten).toEqual([MALTA.id]);
     expect(refunded).toEqual([MALTA.id]);
     expect(logged).toEqual([expect.objectContaining({ listingId: MALTA.id, outcome: "rejected", rawError: `${MALTA_REASON}: ${MALTA_COMMENT}` })]);
+  });
+
+  // Live 2026-10-05: "Restricted Brand: Police in NAME" on a police
+  // officer costume. The word comes out and it goes back, no tap needed.
+  it("fixes a brand word refused in the name and sends it back, telling the seller", async () => {
+    pushes.length = 0;
+    Object.assign(listing(), { title: "Police Officer Role Play Costume Set - Vest", description: "<p>Kids costume.</p>", highlights: null });
+    qcBySku["PA-MUO503EV-P6X330"] = { status: "REJECTED", rejectionComment: "Restricted Brand: Police in NAME - Seller not in approved list" };
+
+    const notices = await followUpQc("token", "GH", [MALTA], "user_1");
+
+    expect(listing().title).toBe("Officer Role Play Costume Set - Vest");
+    expect(pushes).toEqual([MALTA.id]);
+    expect(refunded).toEqual([MALTA.id]);
+    expect(notices).toEqual([expect.objectContaining({
+      listingId: MALTA.id, newStatus: "auto_resubmitted",
+      errorMsg: 'Jumia\'s quality check doesn\'t let your shop use "Police" in the listing, so I took it out and sent it back to Jumia.',
+    })]);
   });
 
   it("records approval and the product sid that updates need, and announces it live", async () => {

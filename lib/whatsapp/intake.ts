@@ -57,6 +57,7 @@ import {
 } from "@/lib/whatsapp/onboarding";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { endsWithDoneSignal, stripDoneSignal, isProductNumber } from "@/lib/whatsapp/draft";
+import { removeBrandWords } from "@/lib/jumia/auto-resubmit";
 import { priceMinimumForUser, isBelowMinimum, belowMinimumText, money, type PriceMinimum } from "@/lib/jumia/price-minimums";
 import {
   parseProductCount,
@@ -81,7 +82,7 @@ import {
 import { classifyBatchIntent, looksActionable } from "@/lib/whatsapp/intent";
 import type { ListingRow } from "@/lib/supabase/types";
 import { enqueueAnalysisJobs, nudgeWorker, workersFor, isBatchSettled, type AnalysisJob } from "@/lib/whatsapp/analysis-queue";
-import { restrictedWordsInJumiaRejection } from "@/lib/ai/restricted-words";
+import { restrictedWordsInJumiaRejection, restrictedBrandWordsInRejection } from "@/lib/ai/restricted-words";
 import { rememberRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 
 /**
@@ -1701,6 +1702,43 @@ async function slotListingOnceInFlightPhotoLands(
   return null;
 }
 
+/** When the newest photo from this number reached the webhook, if one did
+ *  since `sinceMs` (as photoReceivedSince, but the time itself). */
+async function latestPhotoReceivedAt(phoneNumber: string, sinceMs: number): Promise<number | null> {
+  const { data, error } = await createServerClient()
+    .from("whatsapp_message_log")
+    .select("created_at")
+    .eq("phone_number", phoneNumber)
+    .eq("direction", "inbound")
+    .eq("message_type", "image")
+    .gt("created_at", new Date(sinceMs).toISOString())
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (error || !Array.isArray(data) || data.length === 0) return null;
+  const at = Date.parse((data[0] as { created_at: string }).created_at);
+  return Number.isFinite(at) ? at : null;
+}
+
+/**
+ * Wait for a photo that reached the webhook but hasn't landed on this
+ * product's listing yet, when the product already has photos (with none,
+ * slotListingOnceInFlightPhotoLands waits). Live, 2026-10-04: a second
+ * photo and "Done" 1.4s apart; the product closed on "1 photo" with the
+ * second still arriving. On a single product it landed anyway, but in a
+ * batch it would have landed on the next product. True when it waited.
+ */
+async function awaitPhotoInFlight(listingId: string, phoneNumber: string): Promise<boolean> {
+  const received = await latestPhotoReceivedAt(phoneNumber, Date.now() - PHOTO_IN_FLIGHT_MS);
+  if (received == null) return false;
+  const deadline = Date.now() + PHOTO_IN_FLIGHT_MS;
+  while (Date.now() < deadline) {
+    // The listing's updated_at moves past the photo's arrival once it lands.
+    if (Date.now() - (await msSinceLastPhoto(listingId)) >= received) return true;
+    await new Promise((resolve) => setTimeout(resolve, PHOTO_IN_FLIGHT_POLL_MS));
+  }
+  return true;
+}
+
 /**
  * Notes still parked on the session when a product closes belong to it: a
  * note that overtook its photo is parked, and the photo's delivery only
@@ -1788,7 +1826,9 @@ async function handleQuietBatchMessage(
 
   // This delivery may have read the session before the product's photo
   // made its listing; look for it, and wait for one still being handled.
+  // With photos already in, wait for one more still arriving.
   if (!listingId) listingId = await slotListingOnceInFlightPhotoLands(userId, phoneNumber, session.batchId, seq);
+  else await awaitPhotoInFlight(listingId, phoneNumber);
 
   if (!listingId) {
     // Closing a product that has no photo. Not advanced, so the photos
@@ -1992,6 +2032,10 @@ async function handleAwaitingPhotos(
     if (!listingId) {
       listingId = await slotListingOnceInFlightPhotoLands(userId, phoneNumber, session.batchId, seq);
       if (listingId) await settlePhotosBeforeClose(listingId);
+    } else if (await awaitPhotoInFlight(listingId, phoneNumber)) {
+      // A further photo was still arriving: wait for it and the rest of
+      // its album rather than close on the count so far.
+      await settlePhotosBeforeClose(listingId);
     }
     const lastPhotoAgeMs = listingId ? await msSinceLastPhoto(listingId) : Infinity;
 
@@ -3980,6 +4024,23 @@ async function handleFixAndResubmit(
       updated_at: new Date().toISOString(),
     }).eq("id", listingId);
     await replyText(phoneNumber, `🔧 ${label}: "${row.brand}" isn't a brand Jumia will list here, so I switched it to "${fallbackBrand}". Resubmitting…`);
+    await pushAndReport(userId, phoneNumber, listingId, label);
+    return;
+  }
+
+  // A brand name this shop isn't approved for, in the listing's own text
+  // ("Restricted Brand: Police in NAME - Seller not in approved list", on a
+  // police officer costume): the word is the trouble, not the product, so
+  // it comes out and the listing goes back. It used to read as "your shop
+  // can't sell this brand" (2026-10-05). Usually done before the seller
+  // sees it (lib/jumia/auto-resubmit.ts); this is for one that wasn't.
+  const brandWords = restrictedBrandWordsInRejection(rejectionText);
+  if (brandWords.length > 0 && (await removeBrandWords(listingId, brandWords))) {
+    const quotedWords = brandWords.map((w) => `"${w}"`).join(", ");
+    await replyText(
+      phoneNumber,
+      `🔧 ${label}: Jumia's quality check doesn't let your shop use ${quotedWords} in the listing, so I'm taking ${brandWords.length === 1 ? "it" : "them"} out and resubmitting.`,
+    );
     await pushAndReport(userId, phoneNumber, listingId, label);
     return;
   }

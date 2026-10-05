@@ -691,9 +691,15 @@ type ResolutionCounts = { liveCount: number; totalCount: number; rejectedSkus: s
 // promises the QC verdict, and QC_APPROVED is the "🎉 live" message, sent
 // when that check passes. Wording set by the owner, 2026-10-01.
 export const QC_APPROVED = "qc_approved";
+/**
+ * A notice status, never a listing's: rejected, then fixed and sent back
+ * without the seller (lib/jumia/auto-resubmit.ts). Its errorMsg says what
+ * was changed.
+ */
+export const AUTO_RESUBMITTED = "auto_resubmitted";
 
 /** Not a rejection: nothing to fix. */
-const isGoodNews = (status: string) => status === "live" || status === QC_APPROVED;
+const isGoodNews = (status: string) => status === "live" || status === QC_APPROVED || status === AUTO_RESUBMITTED;
 
 /**
  * Jumia refused the listing's category ("You can't list products in this
@@ -720,6 +726,7 @@ async function askedForRefusedCategory(phoneNumber: string, listingId: string, e
 // verdict, so acceptance doesn't promise one.
 function resolutionLine(name: string, newStatus: string, errorMsg: string | null, counts: ResolutionCounts, qcAlerts = true): string {
   if (newStatus === QC_APPROVED) return `🎉 "${name}" passed Jumia QC and is now live on Jumia!`;
+  if (newStatus === AUTO_RESUBMITTED) return `🔧 "${name}": ${errorMsg ?? "I fixed it and sent it back to Jumia."} I'll tell you how it goes.`;
   const partial = newStatus === "live" && counts.totalCount > counts.liveCount && counts.liveCount > 0;
   const promise = (they: boolean) => qcAlerts
     ? ` — Will alert you if ${they ? "they pass" : "it passes"} Jumia QC`
@@ -915,6 +922,7 @@ export async function notifyBatchResolved(
     const rejected = items.filter((i) => !isGoodNews(i.newStatus));
     const accepted = items.filter((i) => i.newStatus === "live").length;
     const passed   = items.filter((i) => i.newStatus === QC_APPROVED).length;
+    const resent   = items.filter((i) => i.newStatus === AUTO_RESUBMITTED).length;
     // Numbered, so each "Fix product N" tap below matches a line here.
     const number = (i: ResolvedListingNotice) => (i.whatsappSeq != null ? `Product ${i.whatsappSeq}: ` : "");
     const lines = items.map((i) => number(i) + resolutionLine(i.title ?? "Your product", i.newStatus, i.errorMsg, i.counts, qcAlerts));
@@ -926,11 +934,14 @@ export async function notifyBatchResolved(
           ? `✅ Since your last update: Jumia accepted ${products(accepted)}${qcAlerts ? " — Will alert you as they pass Jumia QC" : "."}`
           : rejected.length === items.length
             ? `⚠️ Since your last update: ${products(rejected.length)} ${rejected.length === 1 ? "was" : "were"} rejected by Jumia.`
-            : `Since your last update: ${[
-                accepted > 0 ? `${accepted} accepted` : null,
-                passed > 0 ? `${passed} passed QC` : null,
-                rejected.length > 0 ? `${rejected.length} rejected` : null,
-              ].filter(Boolean).join(", ")}.`;
+            : resent === items.length
+              ? `🔧 Since your last update: I fixed ${products(resent)} Jumia turned down and sent ${resent === 1 ? "it" : "them"} back.`
+              : `Since your last update: ${[
+                  accepted > 0 ? `${accepted} accepted` : null,
+                  passed > 0 ? `${passed} passed QC` : null,
+                  resent > 0 ? `${resent} fixed and sent back` : null,
+                  rejected.length > 0 ? `${rejected.length} rejected` : null,
+                ].filter(Boolean).join(", ")}.`;
 
     await sendText([header, "", ...lines].join("\n"));
 

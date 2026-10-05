@@ -19,6 +19,9 @@
  * is refunded, and the seller gets the usual rejection message with a
  * Fix & resubmit button. A "Wrong Category" rejection names the category
  * Jumia wants, which Fix & resubmit switches to (jumiaSuggestedCategoryPath).
+ * A rejection we can fix ourselves (a refused brand word in the listing's
+ * text) is fixed and sent back without the seller (lib/jumia/auto-
+ * resubmit.ts), who is told what changed instead.
  */
 
 import { createServerClient } from "@/lib/supabase/server";
@@ -26,7 +29,8 @@ import { getProductQc, type ProductQc } from "@/lib/jumia/api";
 import { logFeedOutcome } from "@/lib/jumia/feed-outcomes";
 import { forgetLiveListing } from "@/lib/jumia/live-listings";
 import { refundLiveListing } from "@/lib/billing/extension-credits";
-import { QC_APPROVED, toResolvedNotice, type ResolvedListingNotice } from "@/lib/jumia/push-listing";
+import { QC_APPROVED, AUTO_RESUBMITTED, toResolvedNotice, type ResolvedListingNotice } from "@/lib/jumia/push-listing";
+import { resubmitAutomatically } from "@/lib/jumia/auto-resubmit";
 
 export interface QcCandidate {
   id:                string;
@@ -113,6 +117,8 @@ export async function followUpQc(
   accessToken: string,
   country:     string | null,
   candidates:  QcCandidate[],
+  /** The seller, for fixing a rejection without them; none, nothing is resubmitted. */
+  userId?:     string,
 ): Promise<ResolvedListingNotice[]> {
   if (candidates.length === 0) return [];
   const db = createServerClient();
@@ -184,6 +190,18 @@ export async function followUpQc(
         outcome:      "rejected",
         rawError:     [verdict.reason, verdict.comment].filter(Boolean).join(": ") || "Rejected in quality check",
       });
+
+      const auto = userId ? await resubmitAutomatically(userId, c.id, errorMsg) : null;
+      if (auto) {
+        console.info(`[qc] ${c.id} fixed and resubmitted automatically`);
+        if (auto.note && c.whatsapp_batch_id) {
+          notices.push({
+            listingId: c.id, title: c.title, whatsappSeq: c.whatsapp_seq, batchId: c.whatsapp_batch_id,
+            newStatus: AUTO_RESUBMITTED, errorMsg: auto.note, counts: { liveCount: 0, totalCount: 0, rejectedSkus: [] },
+          });
+        }
+        continue;
+      }
 
       const notice = toResolvedNotice(c, "live", {
         status: "failed", error: errorMsg, liveCount: 0, totalCount: skus.length, rejectedSkus: skus,
