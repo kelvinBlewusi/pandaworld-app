@@ -1,14 +1,10 @@
-import { Inter_Tight } from "next/font/google";
-
-const inter = Inter_Tight({ subsets: ["latin"], weight: ["800"], display: "swap" });
-
 /**
- * The "Pandaworld" logo as one SVG: the gold-swoosh P
- * (public/brand/panda-p-logo.webp, from panda-p-logo-trimmed.png) followed
- * by "andaworld" in Inter Tight 800, laid out as the nav has it
+ * The "Pandaworld" logo as SVG pieces: the gold-swoosh P
+ * (public/brand/panda-p-logo.webp, a light copy of panda-p-logo-trimmed.png)
+ * followed by "andaworld" in Inter Tight 800, laid out as the nav has it
  * (components/marketing/home-floating-nav.tsx: a 28px P, 21px text, -2px
- * overlap). As SVG it scales to any width as one piece, which the footer's
- * full-width logo needs.
+ * overlap). For placing inside another SVG, which sets the font: the
+ * Jumia × PandaWorld puzzle (components/marketing/jumia-pandaworld-puzzle.tsx).
  *
  * Units: the P is 100 tall. The text width is measured, not estimated:
  * "andaworld" at 100px with -2.5px letter-spacing is 479.06 wide in
@@ -32,19 +28,5 @@ export function PandaworldLogoMark({ ink = "#18181b" }: { ink?: string }) {
         andaworld
       </text>
     </>
-  );
-}
-
-/** The logo on its own, as wide as its container allows. */
-export function PandaworldLogo({ className = "", ink }: { className?: string; ink?: string }) {
-  return (
-    <svg
-      viewBox={`0 0 ${PANDAWORLD_LOGO.width} ${PANDAWORLD_LOGO.height}`}
-      role="img"
-      aria-label="Pandaworld"
-      className={`${inter.className} ${className}`}
-    >
-      <PandaworldLogoMark ink={ink} />
-    </svg>
   );
 }
