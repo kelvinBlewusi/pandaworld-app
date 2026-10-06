@@ -772,7 +772,8 @@ async function notifyListingResolved(
     if (!isGoodNews(newStatus) && await askedForRefusedCategory(wa.phoneNumber, listingId, errorMsg)) return;
 
     const name = (row.title as string | null) ?? "Your product";
-    const text = resolutionLine(name, newStatus, errorMsg, counts, await hasFeature(row.user_id as string, "qc_fix"));
+    // Whether QC follow-up will run: by pack, whatever the balance (it runs at 0 too).
+    const text = resolutionLine(name, newStatus, errorMsg, counts, await hasFeature(row.user_id as string, "qc_fix", { ignoreBalance: true }));
 
     // A rejection gets a way out of it. Without this the message is a dead
     // end: Jumia's own wording ("The column [product_weight] is missing
@@ -1025,7 +1026,7 @@ export async function notifyResolvedListings(userId: string, resolved: ResolvedL
       if (!byBatch.has(item.batchId)) byBatch.set(item.batchId, []);
       byBatch.get(item.batchId)!.push(item);
     }
-    const qcAlerts = await hasFeature(userId, "qc_fix");
+    const qcAlerts = await hasFeature(userId, "qc_fix", { ignoreBalance: true });
     for (const [batchId, items] of Array.from(byBatch)) {
       await notifyBatchResolved(wa.phoneNumber, batchId, items, { qcAlerts });
     }

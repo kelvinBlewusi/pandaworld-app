@@ -97,6 +97,19 @@ it("charges for the images that came back, and says what's left", async () => {
   }));
 });
 
+it("a Pro buyer at 0 credits is told to buy credits, not to upgrade (owner's rule, 2026-10-06)", async () => {
+  db.tables.extension_credits.find((r) => r.user_id === "user_pro")!.balance = 0;
+  const res = await call({ images: [{ dataUrl: PHOTO }] });
+  expect(res.status).toBe(402);
+  expect(await res.json()).toEqual({ error: "You're out of credits. Buy credits from your dashboard to keep using Polish.", buyCredits: true });
+  expect(generated).toHaveLength(0);
+});
+
+it("follows the pack bought last: Pro then Starter means no Polish", async () => {
+  db.tables.extension_credit_transactions.push({ user_id: "user_pro", type: "purchase", amount: 100, reference: "later", created_at: "2099-01-01T00:00:00Z" });
+  expect((await call({ images: [{ dataUrl: PHOTO }] })).status).toBe(403);
+});
+
 it("stops before generating when the balance can't cover four images", async () => {
   db.tables.extension_credits.find((r) => r.user_id === "user_pro")!.balance = 4 * IMAGE_CREDIT_COST - 1;
   const res = await call({ images: [{ dataUrl: PHOTO }] });
@@ -135,6 +148,14 @@ describe("the panel's account", () => {
   // 0.2.55 show it from imagePolish, so that is true for everyone.
   it("shows a Starter buyer the Polish button but not the right to use it, and no calculator", async () => {
     expect((await accountFor("user_starter")).features).toEqual({ imagePolish: true, imagePolishAllowed: false, feeCalculator: false });
+  });
+
+  it("turns a Pro buyer's tools off at 0 credits and says why, so 0.2.58 offers Buy credits", async () => {
+    db.tables.extension_credits.find((r) => r.user_id === "user_pro")!.balance = 0;
+    const body = await accountFor("user_pro");
+    expect(body.features).toEqual({ imagePolish: true, imagePolishAllowed: false, feeCalculator: false });
+    expect(body.outOfCredits).toBe(true);
+    expect((await accountFor("user_starter")).outOfCredits).toBe(false);
   });
 
   it("uses where the seller is when they haven't connected Jumia", async () => {

@@ -918,11 +918,15 @@ only appear while billing is off.
   needs a permission: never add one, since Chrome disables an extension
   that gains permissions until every seller re-approves. Panels before
   0.2.57 have none of this, and Chrome updates them by itself within hours.
-- **Queued for the next extension release (0.2.58)**: Autofill and Polish
-  sign the seller out the moment the server answers 401 "revoked" (panel.js
-  now clears the saved key only when the account call gets that 401, i.e. when
-  the panel opens), running the same removal as the power button's logout().
-  Owner agreed 2026-10-06; 0.2.57 is with Google, so it can't go in 0.2.57.
+- **Extension 0.2.58 (built 2026-10-06, for the owner to upload; no new
+  permissions)**: Autofill and Polish sign the seller out the moment the
+  server answers 401 "revoked" (`signOutRevoked`, same removal as the power
+  button's logout()); a 402 from Autofill shows a **Buy credits →** link
+  under the message (`buyCreditsLink`); Polish says "You're out of credits."
+  with Buy credits when the account's `outOfCredits` is true or the route
+  answers 402, and "Upgrade to use this feature." with See credit packs when
+  it's the pack. After Google publishes it, set app_settings
+  extension_latest_version to "0.2.58" so older panels show the update bar.
 - **FAQ (2026-10-02)**: public at `/faq` (app/faq/page.tsx, content in
   lib/marketing/faq.tsx with a plain-text copy of each answer for its
   FAQPage structured data), linked from the extension sidebar and the
@@ -1117,6 +1121,43 @@ Listed by priority. Pick from here when looking for "what to do next".
    `6022a45` + `94444fa`). Production runs `backend=vertex`. Left here only
    because migrating the embedding half without re-embedding the index is what
    caused the four-month category outage described below.
+
+### Credit rules (owner, 2026-10-06)
+
+- **At 0 credits or below** (metered sellers only: never admins, never while
+  billing is off): the WhatsApp bot sends ONE reply ("You've used all your
+  PandaWorld credits, so I'll stay quiet until you top up…", Buy credits),
+  then nothing at all, not even "typing…" (webhook `acknowledge` sends read
+  ticks only), until the balance is above 0 again. lib/whatsapp/credit-gate.ts
+  `creditGate`, run first in intake.ts handleLinkedMessage. Still works at 0:
+  listing updates from Jumia (sent, not answered), disconnecting Jumia
+  (disconnect / confirm disconnect / keep jumia connected), linking a number
+  (webhook, before the gate). Order alerts and every pack feature stop.
+- **Coming back**: any rise above 0 (purchase, refund, admin top-up, a hand
+  edit seen at the next message) brings everything back. A QC rejection's
+  refund is the built-in way back, so the QC check in /api/cron/jumia-feeds
+  and the listing-update wording use `hasFeature(…, { ignoreBalance: true })`.
+- **Below 6 (LOW_CREDITS)**: one WhatsApp warning with the reply to the next
+  message (so it lands inside the 24 hours), and one notice (user_notices
+  kind `credits_low`; at 0 replaced by `credits_out`) in the dashboard bell
+  and the extension panel, added by the ledger when a charge crosses the
+  line (lib/billing/credit-status.ts, called from extension-credits.ts
+  deductCredits/addToBalance/topUpBalancesTo). Remembered in credit_notices
+  (migration 2026-10-06_credit-notices.sql) and reset when the balance
+  recovers (>0 for the out flags, >=6 for the low ones), which also takes
+  the notices down. Sellers already below 6 before this shipped get the
+  WhatsApp warning at their next message, but no dashboard notice until
+  their next charge.
+- **Batch start**: if the seller's available credits (balance less what's
+  held for listings waiting on Jumia) can't list the count they gave, the
+  bot says how many it can, with Buy credits (`batchCreditShortfall`),
+  unless the low warning went out with the same message.
+- **Pack features follow the pack bought LAST** (lib/billing/features.ts
+  `currentPack`), no longer the biggest ever bought, and pause at 0
+  (`featureAccess` says "pack" or "credits"; grants pause too). Messages say
+  "buy credits" when it's the credits: Polish route answers 402
+  `{buyCredits: true}`, the account route sends `outOfCredits`, the QC fix
+  and the orders gate word it accordingly. Pricing FAQ updated to match.
 
 ### Feature expansion (when relevant)
 9. **Cloud Vision OCR** (Tier 1.2 of GCP plan) — dedicated OCR for packaging text.

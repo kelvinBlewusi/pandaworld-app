@@ -4,8 +4,9 @@ import {
   welcomeMessage, HOW_IT_WORKS_BUTTON, walkthroughVideoMessage, WALKTHROUGH_VIDEO_MARK, notLinkedMessage, linkedMessagePrefix,
 } from "@/lib/whatsapp/onboarding";
 import {
-  sendButtonsIfConfigured, sendCtaUrlIfConfigured, sendTextIfConfigured, markReadWithTypingIfConfigured,
+  sendButtonsIfConfigured, sendCtaUrlIfConfigured, sendTextIfConfigured, markReadWithTypingIfConfigured, markReadIfConfigured,
 } from "@/lib/whatsapp/client";
+import { isCreditQuiet } from "@/lib/whatsapp/credit-gate";
 import { verifyWhatsAppSignature, extractLinkCode } from "@/lib/whatsapp/webhook-verify";
 import { contentOf, METAS_OWN_UNSUPPORTED_TYPE, type IncomingMessage } from "@/lib/whatsapp/message-content";
 import { handleLinkedMessage } from "@/lib/whatsapp/intake";
@@ -117,6 +118,24 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ received: true });
 }
 
+/**
+ * Read ticks and "typing…", or read ticks alone for a seller out of credits
+ * who has had the one reply (lib/whatsapp/credit-gate.ts): nothing is
+ * coming, and a typing bubble would say otherwise.
+ */
+async function acknowledge(msg: IncomingMessage): Promise<void> {
+  try {
+    const userId = await getUserIdForPhoneNumber(msg.from);
+    if (userId && (await isCreditQuiet(userId))) {
+      await markReadIfConfigured(msg.id);
+      return;
+    }
+  } catch {
+    // Fall through to the usual acknowledgement.
+  }
+  await markReadWithTypingIfConfigured(msg.id);
+}
+
 async function handleMessage(msg: IncomingMessage, contactName?: string): Promise<void> {
   // Fired, not awaited — shows the seller blue ticks + the animated
   // "typing…" indicator right away, while everything below (image
@@ -130,7 +149,7 @@ async function handleMessage(msg: IncomingMessage, contactName?: string): Promis
   // single time. Two of those in one seller's album on 2026-09-15. The
   // call can never succeed, so not making it is the whole fix.
   if (msg.type !== METAS_OWN_UNSUPPORTED_TYPE) {
-    void markReadWithTypingIfConfigured(msg.id);
+    void acknowledge(msg);
   }
 
   const linkCode = extractLinkCode(msg.text?.body);
