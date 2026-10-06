@@ -42,8 +42,9 @@ export default async function AdminOrdersPage() {
       <p className="mt-1 max-w-3xl text-sm text-zinc-500">
         Your own shop&apos;s orders from the last 30 days{store ? ` (${store})` : ""}, read from Jumia. This is a
         trial of the label flow. Get label asks Jumia for the label of an order that is already packed (it has a
-        tracking number) and opens the PDF; it changes nothing. Pack… appears only on an order the owner has switched
-        on for packing, one at a time, because packing commits the order to a shipping provider and can&apos;t be undone.
+        tracking number) and opens the PDF; it changes nothing. Pack &amp; get label… appears only on an order the owner
+        has switched on for packing, one at a time, because packing commits the order to a shipping provider and
+        can&apos;t be undone.
       </p>
 
       {problem && <p className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">{problem}</p>}
@@ -104,7 +105,7 @@ export default async function AdminOrdersPage() {
                             href={`/admin/orders/pack?orderId=${o.id}`}
                             className="whitespace-nowrap rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-800 hover:bg-zinc-50"
                           >
-                            Pack…
+                            Pack &amp; get label…
                           </a>
                         )}
                         {!canLabel && !canPack && <span className="text-xs text-zinc-400">{noActionNote(o)}</span>}

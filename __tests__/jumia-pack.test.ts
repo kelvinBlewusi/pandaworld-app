@@ -1,10 +1,12 @@
 /**
- * Packing an order from /admin/orders/pack. Packing commits a real customer's
- * order to a shipping provider and Jumia's API has no undo, so these tests are
- * mostly about what must NOT reach POST /v2/orders/pack: not an admin, a
- * request from another site, an order the owner hasn't named, an unticked
- * confirmation, an item that is no longer pending, a provider Jumia doesn't
- * offer. First used on order #388626919 (2026-10-06).
+ * "Pack order and get label" (/admin/orders/pack). Packing commits a real
+ * customer's order to a shipping provider and Jumia's API has no undo, so these
+ * tests are mostly about what must NOT reach Jumia's pack calls: not an admin,
+ * a request from another site, an order the owner hasn't named, an unticked
+ * confirmation, an order that changed since the page was opened, a provider
+ * Jumia doesn't offer for every item. Then: one package for the whole order,
+ * the order read back, the label fetched. First used on the owner's shop on
+ * 2026-10-06.
  */
 
 import { FakeDb } from "./helpers/fake-supabase";
@@ -44,6 +46,10 @@ let itemsReplyNumber: string | undefined;
 let itemsReplyAsObject = false;
 let providers: Record<string, { id: string; name: string; trackingCodeRequired?: boolean }[]> = {};
 let packAnswer: { status: number; body: unknown } = { status: 201, body: {} };
+// What the order's items become once a pack call reaches Jumia (null: unchanged).
+let afterPack: JumiaOrderItem[] | null = null;
+let labelsAnswer: { status: number; body: unknown } = { status: 201, body: {} };
+const PDF_B64 = Buffer.from("%PDF-1.4 label").toString("base64");
 const calls: { method: string; path: string; body?: unknown }[] = [];
 
 beforeEach(() => {
@@ -57,10 +63,12 @@ beforeEach(() => {
   itemsReplyNumber = undefined;
   itemsReplyAsObject = false;
   providers = {
-    [ITEM_A]: [{ id: PROVIDER, name: "Jumia Pickup Station" }, { id: PROVIDER_NEEDS_CODE, name: "Own courier", trackingCodeRequired: true }],
-    [ITEM_B]: [{ id: PROVIDER, name: "Jumia Pickup Station" }],
+    [ITEM_A]: [{ id: PROVIDER, name: "GH-VDO-OWN-East Legon-Station" }, { id: PROVIDER_NEEDS_CODE, name: "Own courier", trackingCodeRequired: true }],
+    [ITEM_B]: [{ id: PROVIDER, name: "GH-VDO-OWN-East Legon-Station" }, { id: PROVIDER_NEEDS_CODE, name: "Own courier", trackingCodeRequired: true }],
   };
-  packAnswer = { status: 201, body: { success: { packages: [{ orderItems: [ITEM_A], trackingCode: "JG-TRACK-1" }], total: 1 }, error: { packages: [], total: 0 } } };
+  packAnswer = { status: 201, body: { success: { packages: [{ orderItems: [ITEM_A, ITEM_B], trackingCode: "DS-TRACK-1" }], total: 2 }, error: { packages: [], total: 0 } } };
+  afterPack = [item(ITEM_A, { trackingNumber: "DS-TRACK-1" }), item(ITEM_B, { trackingNumber: "DS-TRACK-1" })];
+  labelsAnswer = { status: 201, body: { success: { labels: [{ orderItemIds: [ITEM_A, ITEM_B], countryCode: "GH", trackingNumber: "DS-TRACK-1", label: PDF_B64 }], total: 1 }, error: { orderItems: [], total: 0 } } };
   global.fetch = jest.fn(async (input: URL | string, init?: RequestInit) => {
     const url = new URL(String(input));
     const method = init?.method ?? "GET";
@@ -79,14 +87,15 @@ beforeEach(() => {
     }
     else if (url.pathname === "/orders/shipment-providers") {
       body = { orderItems: url.searchParams.getAll("orderItemId").map((id) => ({ id, shipmentProviders: providers[id] ?? [] })) };
-    } else if (url.pathname === "/v2/orders/pack") ({ status, body } = packAnswer);
+    } else if (url.pathname === "/v2/orders/pack" || url.pathname === "/orders/pack") {
+      ({ status, body } = packAnswer);
+      if (afterPack) orderItems = afterPack;
+    } else if (url.pathname === "/orders/print-labels") ({ status, body } = labelsAnswer);
     return new Response(JSON.stringify(body), { status });
   }) as unknown as typeof fetch;
 });
 
-const packCalls = () => calls.filter((c) => c.path === "/v2/orders/pack");
-const onlyOneKindOfWrite = () =>
-  expect(calls.filter((c) => c.method === "POST").every((c) => c.path === "/v2/orders/pack")).toBe(true);
+const packCalls = () => calls.filter((c) => c.path === "/v2/orders/pack" || c.path === "/orders/pack");
 
 function form(fields: Record<string, string | string[]>): FormData {
   const fd = new FormData();
@@ -94,7 +103,7 @@ function form(fields: Record<string, string | string[]>): FormData {
   return fd;
 }
 const validFields = (over: Record<string, string | string[]> = {}) => ({
-  orderId: ORDER_ID, confirm: "yes", item: [ITEM_A], [`provider_${ITEM_A}`]: PROVIDER, ...over,
+  orderId: ORDER_ID, confirm: "yes", api: "v2", item: [ITEM_A, ITEM_B], provider: PROVIDER, ...over,
 });
 const post = (fields: Record<string, string | string[]>, headers: Record<string, string> = {}) =>
   packRoute(new Request("https://pandaworldai.site/admin/orders/pack", { method: "POST", body: form(fields), headers }));
@@ -182,15 +191,41 @@ describe("the confirmation page", () => {
     expect(packCalls()).toHaveLength(0);
   });
 
-  it("shows each item with the providers Jumia offers for it, and changes nothing", async () => {
+  it("offers one package for the whole order, with the providers Jumia offers for every item, and changes nothing", async () => {
     const res = await get();
     expect(res.status).toBe(200);
     const text = await res.text();
-    expect(text).toContain("Pack order #388626919");
-    expect(text).toContain("Jumia Pickup Station");
+    expect(text).toContain("Pack order #388626919 and get the label");
+    expect(text).toContain("<b>2 items</b>");
+    expect(text).toContain("one package");
+    expect(text).toContain("GH-VDO-OWN-East Legon-Station");
     expect(text).toContain("Own courier (needs a tracking code)");
-    expect(text).toContain("own package");
+    expect(text).toContain(`name="item" value="${ITEM_A}"`);
+    expect(text).toContain(`name="item" value="${ITEM_B}"`);
+    expect(text).toContain("Pack order and get label");
     expect(calls.every((c) => c.method === "GET")).toBe(true);
+  });
+
+  it("offers only the providers that take every item", async () => {
+    providers[ITEM_B] = [{ id: PROVIDER, name: "GH-VDO-OWN-East Legon-Station" }];
+    const text = await (await get()).text();
+    expect(text).toContain("GH-VDO-OWN-East Legon-Station");
+    expect(text).not.toContain("Own courier");
+  });
+
+  it("sends the owner to Vendor Center when no provider takes every item", async () => {
+    providers[ITEM_B] = [{ id: "eeeeeeee-0000-4000-8000-00000000000e", name: "Other station" }];
+    const res = await get();
+    expect(res.status).toBe(409);
+    expect(await res.text()).toContain("Pack this order in Vendor Center");
+  });
+
+  it("leaves out an item already packed", async () => {
+    orderItems = [item(ITEM_A, { trackingNumber: "JG-1" }), item(ITEM_B)];
+    const text = await (await get()).text();
+    expect(text).toContain("This item goes");
+    expect(text).not.toContain(`name="item" value="${ITEM_A}"`);
+    expect(text).toContain("Not in this package");
   });
 
   it("says so when there is nothing left to pack", async () => {
@@ -224,9 +259,10 @@ describe("packing", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("packs nothing when no item is ticked", async () => {
-    const res = await post(validFields({ item: [] }));
-    expect(res.status).toBe(400);
+  it("packs nothing with no items, or an unknown pack call", async () => {
+    expect((await post(validFields({ item: [] }))).status).toBe(400);
+    expect((await post(validFields({ api: "v3" }))).status).toBe(400);
+    expect((await post(validFields({ api: "" }))).status).toBe(400);
     expect(calls).toHaveLength(0);
   });
 
@@ -237,77 +273,154 @@ describe("packing", () => {
     expect(packCalls()).toHaveLength(0);
   });
 
-  it("packs nothing when a ticked item is no longer pending and unpacked", async () => {
-    orderItems = [item(ITEM_A, { trackingNumber: "JG-1" }), item(ITEM_B)];
+  it("packs nothing when the order changed since the page was opened", async () => {
+    // An item packed, shipped or moved to Jumia meanwhile.
+    for (const changed of [{ trackingNumber: "JG-1" }, { status: "SHIPPED" }, { isFulfilledByJumia: true }]) {
+      orderItems = [item(ITEM_A, changed), item(ITEM_B)];
+      expect((await post(validFields())).status).toBe(409);
+    }
+    // An item the page didn't show.
+    orderItems = [item(ITEM_A), item(ITEM_B), item("eeeeeeee-0000-4000-8000-000000000009")];
     expect((await post(validFields())).status).toBe(409);
-    orderItems = [item(ITEM_A, { status: "SHIPPED" }), item(ITEM_B)];
-    expect((await post(validFields())).status).toBe(409);
-    orderItems = [item(ITEM_A, { isFulfilledByJumia: true }), item(ITEM_B)];
-    expect((await post(validFields())).status).toBe(409);
+    // The page showed fewer items than are left, or one that isn't on the order.
+    orderItems = [item(ITEM_A), item(ITEM_B)];
+    expect((await post(validFields({ item: [ITEM_A] }))).status).toBe(409);
+    expect((await post(validFields({ item: [ITEM_A, "eeeeeeee-0000-4000-8000-000000000009"] }))).status).toBe(409);
     expect(packCalls()).toHaveLength(0);
   });
 
-  it("packs nothing for an item that isn't on this order", async () => {
-    const res = await post(validFields({ item: ["eeeeeeee-0000-4000-8000-000000000009"] }));
-    expect(res.status).toBe(409);
-    expect(packCalls()).toHaveLength(0);
-  });
-
-  it("packs nothing with a provider Jumia doesn't offer for that item", async () => {
-    const res = await post(validFields({ [`provider_${ITEM_A}`]: "ffffffff-0000-4000-8000-00000000000a" }));
-    expect(res.status).toBe(400);
+  it("packs nothing with a provider Jumia doesn't offer for every item", async () => {
+    expect((await post(validFields({ provider: "ffffffff-0000-4000-8000-00000000000a" }))).status).toBe(400);
+    providers[ITEM_B] = [{ id: PROVIDER, name: "GH-VDO-OWN-East Legon-Station" }];
+    expect((await post(validFields({ provider: PROVIDER_NEEDS_CODE, tracking: "E1" }))).status).toBe(400);
     expect(packCalls()).toHaveLength(0);
   });
 
   it("needs a tracking code when the provider requires one, and sends it", async () => {
-    const missing = await post(validFields({ [`provider_${ITEM_A}`]: PROVIDER_NEEDS_CODE }));
+    const missing = await post(validFields({ provider: PROVIDER_NEEDS_CODE }));
     expect(missing.status).toBe(400);
     expect(packCalls()).toHaveLength(0);
 
-    await post(validFields({ [`provider_${ITEM_A}`]: PROVIDER_NEEDS_CODE, [`tracking_${ITEM_A}`]: " E123456 " }));
+    await post(validFields({ provider: PROVIDER_NEEDS_CODE, tracking: " E123456 " }));
     expect(packCalls()[0].body).toEqual({
-      packages: [{ orderItems: ITEM_A, shipmentProviderId: PROVIDER_NEEDS_CODE, trackingCode: "E123456" }],
+      packages: [{ orderItems: [ITEM_A, ITEM_B], shipmentProviderId: PROVIDER_NEEDS_CODE, trackingCode: "E123456" }],
     });
   });
 
-  it("sends one package per ticked item, in the shape Jumia's own sample uses, and only the ticked ones", async () => {
-    packAnswer = { status: 201, body: { success: { packages: [{ orderItems: [ITEM_A], trackingCode: "JG-TRACK-1" }], total: 1 }, error: { packages: [], total: 0 } } };
+  it("packs the whole order as ONE package, reads it back and gives the label", async () => {
     const res = await post(validFields());
+    expect(res.status).toBe(200);
     expect(packCalls()).toHaveLength(1);
-    expect(packCalls()[0].body).toEqual({ packages: [{ orderItems: ITEM_A, shipmentProviderId: PROVIDER }] });
-    const text = await res.text();
-    expect(text).toContain("JG-TRACK-1");
-    expect(text).toContain("/admin/orders/label");
+    expect(packCalls()[0].path).toBe("/v2/orders/pack");
+    expect(packCalls()[0].body).toEqual({ packages: [{ orderItems: [ITEM_A, ITEM_B], shipmentProviderId: PROVIDER }] });
 
-    calls.length = 0;
-    await post(validFields({ item: [ITEM_A, ITEM_B], [`provider_${ITEM_B}`]: PROVIDER }));
-    expect(packCalls()[0].body).toEqual({
-      packages: [
-        { orderItems: ITEM_A, shipmentProviderId: PROVIDER },
-        { orderItems: ITEM_B, shipmentProviderId: PROVIDER },
-      ],
-    });
+    const paths = calls.map((c) => c.path);
+    // Read back after packing, then the label for the packed items.
+    expect(paths.lastIndexOf("/orders/items")).toBeGreaterThan(paths.indexOf("/v2/orders/pack"));
+    expect(calls.find((c) => c.path === "/orders/print-labels")?.body).toEqual({ orderItemIds: [ITEM_A, ITEM_B] });
+
+    const text = await res.text();
+    expect(text).toContain("Packed 2 item(s) into <b>1 package</b>");
+    expect(text).toContain("GH-VDO-OWN-East Legon-Station");
+    expect(text).toContain(`href="data:application/pdf;base64,${PDF_B64}"`);
+    expect(text).toContain("Download label (tracking DS-TRACK-1)");
+    expect(text).toContain("/admin/orders/label");
   });
 
-  it("never makes any other change to an order", async () => {
-    await post(validFields());
-    onlyOneKindOfWrite();
-    expect(calls.some((c) => /print-labels|ready-to-ship|cancel/.test(c.path))).toBe(false);
+  it("says so when Jumia made a package per item", async () => {
+    afterPack = [item(ITEM_A, { trackingNumber: "DS-1" }), item(ITEM_B, { trackingNumber: "DS-2" })];
+    expect(await (await post(validFields())).text()).toContain("into <b>2 packages</b>");
+  });
+
+  it("goes by what Jumia has afterwards, not by its answer: a partial pack is shown as partial", async () => {
+    afterPack = [item(ITEM_A, { trackingNumber: "DS-1" }), item(ITEM_B)];
+    const text = await (await post(validFields())).text();
+    expect(text).toContain("Only 1 of 2 items were packed");
+    expect(calls.find((c) => c.path === "/orders/print-labels")?.body).toEqual({ orderItemIds: [ITEM_A] });
+  });
+
+  it("when Jumia refuses the list and nothing was packed, offers the older pack call, which asks again", async () => {
+    packAnswer = { status: 400, body: { message: "Invalid orderItems format" } };
+    afterPack = null;
+    const res = await post(validFields());
+    expect(res.status).toBe(502);
+    const text = await res.text();
+    expect(text).toContain("Invalid orderItems format");
+    expect(text).toContain("Nothing on this order was packed");
+    expect(text).toContain('name="api" value="v1"');
+    expect(text).toContain("Try the older pack call");
+    // The offer is a form with the confirmation unticked: nothing more is sent by itself.
+    expect(text).toContain('<input type="checkbox" name="confirm" value="yes">');
+    expect(calls.some((c) => c.path === "/orders/print-labels")).toBe(false);
+  });
+
+  it("the older call sends the items as a list with their provider", async () => {
+    packAnswer = { status: 201, body: { success: { packages: [{ orderItems: [ITEM_A, ITEM_B], countryCode: "GH", trackingNumber: "DS-TRACK-1" }], total: 2 }, error: { orderItems: [], total: 0 } } };
+    const res = await post(validFields({ api: "v1" }));
+    expect(res.status).toBe(200);
+    expect(packCalls()).toHaveLength(1);
+    expect(packCalls()[0].path).toBe("/orders/pack");
+    expect(packCalls()[0].body).toEqual({
+      orderItems: [{ id: ITEM_A, shipmentProviderId: PROVIDER }, { id: ITEM_B, shipmentProviderId: PROVIDER }],
+    });
+    expect(await res.text()).toContain("into <b>1 package</b>");
+  });
+
+  it("the older call isn't used for a provider that needs a tracking code (it has no field for one)", async () => {
+    const res = await post(validFields({ api: "v1", provider: PROVIDER_NEEDS_CODE, tracking: "E1" }));
+    expect(res.status).toBe(400);
+    expect(packCalls()).toHaveLength(0);
   });
 
   it("shows what Jumia refused", async () => {
-    packAnswer = { status: 201, body: { success: { packages: [], total: 0 }, error: { packages: [{ orderItems: [ITEM_A], error: "Order items are not from the same order." }], total: 1 } } };
+    packAnswer = { status: 201, body: { success: { packages: [], total: 0 }, error: { packages: [{ orderItems: [ITEM_A, ITEM_B], error: "Order items are not from the same order." }], total: 2 } } };
+    afterPack = null;
     const res = await post(validFields());
     expect(res.status).toBe(422);
     expect(await res.text()).toContain("Order items are not from the same order.");
   });
 
+  it("when the order can't be read back, says to check Vendor Center and offers nothing more", async () => {
+    let itemsReads = 0;
+    const base = global.fetch;
+    global.fetch = jest.fn(async (input: URL | string, init?: RequestInit) => {
+      if (new URL(String(input)).pathname === "/orders/items" && ++itemsReads === 2) {
+        return new Response(JSON.stringify({ message: "busy" }), { status: 500 });
+      }
+      return base(input, init);
+    }) as unknown as typeof fetch;
+    const res = await post(validFields());
+    expect(res.status).toBe(502);
+    const text = await res.text();
+    expect(text).toContain("Check it in Vendor Center");
+    expect(text).not.toContain("Try the older pack call");
+  });
+
+  it("packs but still shows the order when the label isn't ready, with a button to fetch it", async () => {
+    labelsAnswer = { status: 201, body: { success: { labels: [], total: 0 }, error: { orderItems: [], total: 0 } } };
+    const res = await post(validFields());
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain("Packed 2 item(s)");
+    expect(text).toContain("didn't return the label yet");
+    expect(text).toContain("Open the label");
+  });
+
+  it("never marks ready to ship or cancels", async () => {
+    await post(validFields());
+    const writes = calls.filter((c) => c.method === "POST").map((c) => c.path);
+    expect(writes).toEqual(["/v2/orders/pack", "/orders/print-labels"]);
+    expect(calls.some((c) => /ready-to-ship|cancel/.test(c.path))).toBe(false);
+  });
+
   it("reports a Jumia error without saying it was packed, and never shows the token", async () => {
     packAnswer = { status: 403, body: { message: "Forbidden" } };
+    afterPack = null;
     const res = await post(validFields());
     expect(res.status).toBe(502);
     const text = await res.text();
     expect(text).toContain("VC - Order Manager");
+    expect(text).not.toContain("Packed 2");
     expect(text).not.toContain("tok_secret");
   });
 });

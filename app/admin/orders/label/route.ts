@@ -12,24 +12,11 @@
 import { auth } from "@clerk/nextjs/server";
 import { isAdmin } from "@/lib/auth/is-admin";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
-import { getOrderItems, labelableItems, printLabels, type JumiaOrderItem } from "@/lib/jumia/orders";
-import { esc, htmlPage as html } from "@/lib/jumia/order-pages";
+import { getOrderItems, labelableItems, printLabels } from "@/lib/jumia/orders";
+import { esc, htmlPage as html, itemsTable } from "@/lib/jumia/order-pages";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-function itemsTable(items: JumiaOrderItem[]): string {
-  const rows = items
-    .map((i) =>
-      `<tr><td>${esc(i.product?.name ?? i.id)}</td><td>${esc(i.status)}</td>` +
-      `<td>${esc(i.trackingNumber ?? "not packed")}</td><td>${i.isFulfilledByJumia ? "Fulfilled by Jumia" : esc(i.shipmentType ?? "")}</td></tr>`,
-    )
-    .join("");
-  return (
-    `<table border="1" cellpadding="6" style="border-collapse:collapse;margin:12px 0;font-size:13px">` +
-    `<tr><th>Item</th><th>Status</th><th>Tracking</th><th>Shipped by</th></tr>${rows}</table>`
-  );
-}
 
 export async function POST(req: Request) {
   const { userId } = await auth();
