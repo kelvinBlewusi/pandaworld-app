@@ -896,6 +896,21 @@ only appear while billing is off.
   /api/extension/notifications/dismiss with `kind: "notice"`). Panels before
   0.2.57 ignore `notices`, so a seller on one sees it on the dashboard only.
   lib/notices.ts.
+- **Update available (0.2.57, 2026-10-06)**: GET /api/extension/account
+  returns `latestExtensionVersion`, the newest version on the Chrome Web
+  Store, read from `app_settings` key `extension_latest_version`
+  (lib/extension/latest-version.ts). It is set BY HAND once the Store has
+  published a version, never from a deploy, so sellers are never told to
+  update to a version Chrome can't give them yet:
+  `insert into app_settings (key, value) values ('extension_latest_version', '"0.2.58"') on conflict (key) do update set value = excluded.value, updated_at = now();`
+  Unset or malformed means no bar. A panel older than it shows a blue bar
+  with "Update now" (panel.js): `chrome.runtime.requestUpdateCheck()` asks
+  Chrome for the update (also once, quietly, when the bar first shows), and
+  if one is ready `chrome.runtime.reload()` restarts the extension on it
+  (the seller reopens the panel and refreshes their Jumia tab). Neither call
+  needs a permission: never add one, since Chrome disables an extension
+  that gains permissions until every seller re-approves. Panels before
+  0.2.57 have none of this, and Chrome updates them by itself within hours.
 - **FAQ (2026-10-02)**: public at `/faq` (app/faq/page.tsx, content in
   lib/marketing/faq.tsx with a plain-text copy of each answer for its
   FAQPage structured data), linked from the extension sidebar and the
