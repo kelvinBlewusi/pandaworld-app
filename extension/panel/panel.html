@@ -15,6 +15,11 @@
       <button id="logoutBtn" class="iconBtn" title="Disconnect" aria-label="Disconnect">⏻</button>
     </div>
 
+    <!-- Messages from PandaWorld (GET /api/extension/account -> notices),
+         each with a "Got it" that dismisses it for good. Filled by
+         renderNotices() in panel.js. -->
+    <div class="notices" id="notices" hidden></div>
+
     <!-- Jumia banner — shown whenever the active tab isn't Vendor Center,
          connected or not (matches the reference: it sits above whichever
          of the connect screen / main form applies). -->

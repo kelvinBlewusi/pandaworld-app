@@ -255,3 +255,17 @@ footer.linksFooter .sep { color: var(--line); font-size: 11px; }
 }
 .polishGrid a { color: var(--pw-blue); text-decoration: none; font-weight: 600; }
 .polishGrid a:hover { text-decoration: underline; }
+
+/* ── Notices from PandaWorld ─────────────────────────────────────────────── */
+.notices { display: grid; gap: 10px; margin: 0 0 14px; }
+.notice {
+  background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 10px;
+  padding: 12px 13px; font-size: 13px; line-height: 1.5;
+}
+.noticeTitle { font-weight: 700; font-size: 13.5px; margin-bottom: 6px; }
+.notice p { margin: 0 0 8px; }
+.noticeOk {
+  display: block; margin-left: auto; padding: 5px 14px; border: 0; border-radius: 999px;
+  background: var(--accent); color: var(--accent-fg); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.noticeOk:hover { filter: brightness(.95); }
