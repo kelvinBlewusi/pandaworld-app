@@ -4,9 +4,9 @@
  *   - Below LOW_CREDITS (6): one "running low" notice in the dashboard bell
  *     and the extension panel when a charge takes them there, and one
  *     WhatsApp warning at their next message to the bot.
- *   - At 0 or below: one "out of credits" notice, and one WhatsApp reply;
- *     after that the bot stays quiet until the balance is above 0 again
- *     (lib/whatsapp/credit-gate.ts).
+ *   - At 0 or below: one "out of credits" notice. Below BOT_MIN_CREDITS (one
+ *     listing's cost): one WhatsApp reply, then the bot stays quiet until
+ *     they can afford a listing again (lib/whatsapp/credit-gate.ts).
  *
  * Each is remembered in credit_notices and forgotten when the balance
  * recovers (a purchase, a refund, a top-up, or a balance seen above the
@@ -20,6 +20,12 @@ import { LISTING_CREDIT_COST, LIVE_LISTING_CREDIT_COST } from "@/lib/billing/cre
 
 /** Below this, a seller is warned they're running low: about 3 WhatsApp listings. */
 export const LOW_CREDITS = 6;
+
+/**
+ * Below this the WhatsApp bot goes quiet after one reply: the seller can't
+ * afford one listing (lib/whatsapp/credit-gate.ts; owner, 2026-10-06).
+ */
+export const BOT_MIN_CREDITS = LIVE_LISTING_CREDIT_COST;
 
 type Flag = "low_warned_at" | "low_whatsapp_at" | "out_noticed_at" | "out_replied_at";
 type Row = Record<Flag, string | null>;
@@ -107,7 +113,9 @@ export async function onBalanceDropped(userId: string, balance: number): Promise
       userId,
       "credits_low",
       "You're running low on credits",
-      `You have *${plural(balance)}* left: ${creditReach(balance)}.\n\n*Buy credits* from your dashboard to keep listing.`,
+      `You have *${plural(balance)}* left: ${creditReach(balance)}.` +
+        (balance < BOT_MIN_CREDITS ? " Your WhatsApp bot is paused until you top up." : "") +
+        `\n\n*Buy credits* from your dashboard to keep listing.`,
     );
     await setFlags(userId, { low_warned_at: new Date().toISOString() });
   } catch (e) {
@@ -125,10 +133,9 @@ export async function onBalanceSeen(userId: string, balance: number): Promise<vo
     const row = await readRow(userId);
     if (!row) return;
     const patch: Partial<Row> = {};
-    if (balance > 0) {
-      if (row.out_noticed_at) patch.out_noticed_at = null;
-      if (row.out_replied_at) patch.out_replied_at = null;
-    }
+    if (balance > 0 && row.out_noticed_at) patch.out_noticed_at = null;
+    // The bot's one reply is forgotten once they can afford a listing again.
+    if (balance >= BOT_MIN_CREDITS && row.out_replied_at) patch.out_replied_at = null;
     if (balance >= LOW_CREDITS) {
       if (row.low_warned_at) patch.low_warned_at = null;
       if (row.low_whatsapp_at) patch.low_whatsapp_at = null;
@@ -147,7 +154,7 @@ export async function claimLowWhatsAppWarning(userId: string): Promise<boolean> 
   try { return await claim(userId, "low_whatsapp_at"); } catch { return false; }
 }
 
-/** True once per time at 0: this message gets the one reply, the rest get silence. */
+/** True once per quiet spell: this message gets the one reply, the rest get silence. */
 export async function claimOutOfCreditsReply(userId: string): Promise<boolean> {
   try { return await claim(userId, "out_replied_at"); } catch { return false; }
 }

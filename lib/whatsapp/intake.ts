@@ -85,7 +85,7 @@ import { enqueueAnalysisJobs, nudgeWorker, workersFor, isBatchSettled, type Anal
 import { restrictedWordsInJumiaRejection, restrictedBrandWordsInRejection } from "@/lib/ai/restricted-words";
 import { rememberRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
-import { batchCreditShortfall, creditGate } from "@/lib/whatsapp/credit-gate";
+import { batchCreditRefusal, creditGate } from "@/lib/whatsapp/credit-gate";
 
 /**
  * WhatsApp chatbot, Stage 4: multi-product batches, entirely in chat.
@@ -572,8 +572,7 @@ export async function handleLinkedMessage(
   // Credits first (lib/whatsapp/credit-gate.ts): at 0 the seller gets one
   // reply about it and then silence until they top up; below 6, a one-time
   // warning goes out ahead of the reply.
-  const credits = await creditGate(userId, phoneNumber, content.text);
-  if (credits === "stop") return;
+  if ((await creditGate(userId, phoneNumber, content.text)) === "stop") return;
 
   // Something the bot cannot read — say so rather than dropping it. This
   // used to fall through the whole state machine in silence, which is the
@@ -691,7 +690,7 @@ export async function handleLinkedMessage(
         await handleAwaitingJumiaOauth(userId, phoneNumber, content);
         break;
       case "awaiting_count":
-        await handleAwaitingCount(userId, phoneNumber, session, content, { creditsWarned: credits === "go_warned" });
+        await handleAwaitingCount(userId, phoneNumber, session, content);
         break;
       case "awaiting_photos":
         await handleAwaitingPhotos(userId, phoneNumber, session, content);
@@ -1204,7 +1203,6 @@ async function handleAwaitingCount(
   phoneNumber: string,
   session: WhatsAppSession,
   content: { text?: string; imageMediaId?: string },
-  opts: { creditsWarned?: boolean } = {},
 ): Promise<void> {
   // Defense in depth: the LINK-code branch in app/api/whatsapp/webhook/
   // route.ts already checks this once, right after linking. Re-checking
@@ -1258,10 +1256,15 @@ async function handleAwaitingCount(
   }
   const count = parsed.count;
 
-  // Said now, before a single photo is sent, rather than after Done
-  // (owner's request, 2026-10-06). Not on top of the running-low warning
-  // that just went out with this same message.
-  if (!opts.creditsWarned) await warnIfCreditsShort(userId, phoneNumber, count);
+  // Credits are checked here, before a single photo is accepted (owner,
+  // 2026-10-06: a seller with 1 credit sent a product's photos only to be
+  // refused at drafting). A count they can't cover isn't started: they're
+  // told how many they can list and asked again.
+  const refusal = await batchCreditRefusal(userId, count);
+  if (refusal) {
+    await sendCtaUrlIfConfigured(phoneNumber, refusal, "Buy credits", buyCreditsUrl());
+    return;
+  }
 
   const batchId = crypto.randomUUID();
   await updateSession(phoneNumber, {
@@ -1300,12 +1303,6 @@ async function handleAwaitingCount(
       { id: "batch_mode:interactive", title: "#II" },
     ],
   );
-}
-
-/** The batch-start credit note (lib/whatsapp/credit-gate.ts), with Buy credits. */
-async function warnIfCreditsShort(userId: string, phoneNumber: string, count: number): Promise<void> {
-  const note = await batchCreditShortfall(userId, count);
-  if (note) await sendCtaUrlIfConfigured(phoneNumber, note, "Buy credits", buyCreditsUrl());
 }
 
 async function sendJumiaConnectLink(userId: string, phoneNumber: string): Promise<void> {

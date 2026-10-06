@@ -4,7 +4,8 @@
  * Jumia has no order webhooks, so each seller's pending orders are polled.
  *
  * For each seller with WhatsApp linked, Jumia connected and the
- * `order_alerts` feature (Pro pack and up, admins, grants):
+ * `order_alerts` feature (Pro pack and up, admins, grants), whose bot isn't
+ * paused for credits (lib/whatsapp/credit-gate.ts):
  *   - quiet from 10pm to 7am in their country's timezone; orders that came
  *     in overnight go out together in the first run after 7am;
  *   - at most one alert per 30 minutes: orders arriving in between join the
@@ -23,6 +24,7 @@ import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { jumiaCountryByCode } from "@/lib/marketing/countries";
 import { toPackItems, waitingOrders } from "@/lib/jumia/order-flow";
 import { sendOrderAlert, sendOrderAlertTemplate } from "@/lib/whatsapp/orders";
+import { botPausedForCredits } from "@/lib/whatsapp/credit-gate";
 
 export const ALERT_GAP_MS = 30 * 60_000;
 export const WINDOW_MS    = 23 * 3_600_000;
@@ -78,6 +80,9 @@ export async function runOrderAlerts(now = new Date(), budgetMs = 45_000): Promi
     const phone = byUser.get(userId)!;
     try {
       if (!(await hasFeature(userId, "order_alerts"))) continue;
+      // A seller who can't afford a listing has a quiet bot: an alert's
+      // buttons would get no answer (lib/whatsapp/credit-gate.ts).
+      if (await botPausedForCredits(userId)) continue;
       run.sellers++;
 
       const { data: last } = await db.from("order_alerts").select("alerted_at").eq("user_id", userId).order("alerted_at", { ascending: false }).limit(1);
