@@ -64,7 +64,33 @@ export function variationQuestion(who: string, options: string[]): string {
 
 const squash = (s: string) => s.toLowerCase().replace(/[\s\-_.]/g, "");
 
-/** One option a reply part names: exact, the same but for spaces and case ("100 ML"), a known spelling, or the only one it starts or is part of. */
+/**
+ * Clothing sizes, each the ways a seller writes it: "Large" for a category
+ * whose options are "L", or "XL" where they're "Extra Large". The owner's
+ * example for the assistant (2026-10-06): "change the variation to Large
+ * for the drafted T-shirt".
+ */
+const SIZE_NAMES: string[][] = [
+  ["xs", "extrasmall", "xsmall"],
+  ["s", "small"],
+  ["m", "medium", "med"],
+  ["l", "large"],
+  ["xl", "extralarge", "xlarge"],
+  ["xxl", "2xl", "xxlarge", "doubleextralarge", "extraextralarge", "doublexl"],
+  ["xxxl", "3xl", "xxxlarge", "tripleextralarge", "triplexl"],
+  ["xxxxl", "4xl"],
+  ["xxxxxl", "5xl"],
+];
+
+/** The option that is the same clothing size as `part`, when exactly one is. */
+function sameSize(options: string[], part: string): string | null {
+  const names = SIZE_NAMES.find((n) => n.includes(squash(part)));
+  if (!names) return null;
+  const hits = options.filter((o) => names.includes(squash(o)));
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/** One option a reply part names: exact, the same but for spaces and case ("100 ML"), a known spelling or size name, or the only one it starts or is part of. */
 function matchOption(options: string[], part: string): string | null {
   const t = part.trim();
   if (!t) return null;
@@ -74,6 +100,8 @@ function matchOption(options: string[], part: string): string | null {
   if (squashed) return squashed;
   const snapped = snapToAllowedWithSynonyms(t, options);
   if (snapped && options.includes(snapped)) return snapped;
+  const size = sameSize(options, t);
+  if (size) return size;
   const starts = options.filter((o) => o.toLowerCase().startsWith(t.toLowerCase()));
   if (starts.length === 1) return starts[0];
   const within = options.filter((o) => o.toLowerCase().includes(t.toLowerCase()));

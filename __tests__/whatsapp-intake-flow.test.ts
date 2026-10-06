@@ -156,6 +156,20 @@ jest.mock("@/lib/billing/features", () => ({
   featureMinPackName: () => "Standard",
 }));
 
+// The AI's replies, scripted per test (the assistant's pilot). With none
+// queued it fails, as it does with no AI key: every caller copes with that.
+const aiReplies: string[] = [];
+const aiPrompts: string[] = [];
+jest.mock("@/lib/ai/gemini-client", () => ({
+  ...jest.requireActual("@/lib/ai/gemini-client"),
+  callGeminiBackend: async (model: string, parts: { text?: string }[]) => {
+    aiPrompts.push(parts.map((p) => p.text ?? "").join("\n"));
+    const text = aiReplies.shift();
+    if (text == null) throw new Error("no AI reply scripted");
+    return { text, model, backend: "vertex" };
+  },
+}));
+
 // Settable per test — listings held over their variation until they have a variant row.
 const variationHeld = new Set<string>();
 const VARIATION_OPTIONS = ["100ml", "105ml", "10ml", "50ml"];
@@ -320,6 +334,8 @@ beforeEach(() => {
   failNextList = false;
   variationHeld.clear();
   db.tables.variants = [];
+  aiReplies.length = 0;
+  aiPrompts.length = 0;
   seedSession();
 });
 
@@ -3476,5 +3492,195 @@ describe("the step after drafting, before submitting", () => {
     seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
     await handleLinkedMessage(USER, PHONE, "m2", { text: "retry" });
     expect(sent.at(-1)?.body).toContain("have been deleted");
+  });
+});
+
+describe("the assistant, on the pilot's accounts", () => {
+  const FULL = {
+    description: "A long enough description to clear the fifty-character minimum check.",
+    category_code: "1234",
+    brand: "Hisense",
+    images: ["https://cdn.test/a.jpg"],
+    status: "draft",
+    sku: "PA-TEST01",
+    quantity: 3,
+    selling_price: 4500,
+  };
+  const FRIDGE = "Hisense 205L Double Door Fridge Silver";
+  const SHIRT = "Men's Cotton Crew Neck T-Shirt Black";
+
+  function drafted(titles: string[], pilot = true) {
+    db.tables.listings = titles.map((title, i) => ({
+      id: `listing-${i + 1}`, user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: i + 1, title, ...FULL,
+    }));
+    // Drafting gives every product a variant at its quantity, and Jumia reads stock from it.
+    db.tables.variants = titles.map((_, i) => ({
+      id: `variant-${i + 1}`, listing_id: `listing-${i + 1}`, variation: "...", seller_sku: `PA-TEST0${i + 1}-1`, quantity: 3, global_price: 4500,
+    }));
+    db.tables.app_settings = pilot ? [{ key: "assistant_users", value: [USER] }] : [];
+    db.tables.whatsapp_assistant_log = [];
+    seedSession({ state: "awaiting_confirmation", batch_size: titles.length, batch_seq: null });
+    sent.length = 0;
+  }
+  afterEach(() => { db.tables.app_settings = []; });
+
+  it("changes the quantity of the product the seller describes, on its variant too", async () => {
+    drafted([FRIDGE, SHIRT]);
+    aiReplies.push('{"type":"edit","edits":[{"products":[1],"changes":{"quantity":20},"ask":false}]}');
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "change the quantity of the fridge to 20" });
+
+    expect(aiPrompts[0]).toContain(`1. "${FRIDGE}" (draft, not sent yet)`);
+    expect(aiPrompts[0]).toContain(`2. "${SHIRT}"`);
+    expect(listings()[0].quantity).toBe(20);
+    expect(db.tables.variants[0].quantity).toBe(20);
+    expect(listings()[1].quantity).toBe(3);
+    expect(sent).toEqual([expect.objectContaining({
+      kind: "buttons",
+      body: `✅ Product 1 (${FRIDGE}): quantity 20.`,
+      rows: ["submit all", "review"],
+    })]);
+    expect(db.tables.whatsapp_assistant_log).toHaveLength(1);
+    expect(db.tables.whatsapp_assistant_log[0]).toMatchObject({ user_id: USER, stage: "review", message: "change the quantity of the fridge to 20" });
+  });
+
+  it("asks which fridge when two fit, and a typed number answers it rather than submitting that product", async () => {
+    drafted([FRIDGE, "LG 250L Top Freezer Fridge Inox", SHIRT]);
+    aiReplies.push('{"type":"edit","edits":[{"products":[1,2],"changes":{"quantity":20},"ask":true}]}');
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "change the quantity of the fridge to 20" });
+
+    expect(listings().map((l) => l.quantity)).toEqual([3, 3, 3]);
+    expect(sent).toEqual([expect.objectContaining({
+      kind: "buttons",
+      body: `Which product do you mean (quantity 20)?\n1. ${FRIDGE}\n2. LG 250L Top Freezer Fridge Inox\n\nTap it, or reply with its number.`,
+      rows: ["apick:1", "apick:2", "apick:all"],
+    })]);
+    expect(session().assistant_pending).toMatchObject({ batchId: "batch-1", seqs: [1, 2], changes: { quantity: 20 } });
+
+    sent.length = 0;
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "2" });
+
+    expect(pushCallCount).toBe(0);
+    expect(listings().map((l) => l.quantity)).toEqual([3, 20, 3]);
+    expect(sent[0].body).toBe("✅ Product 2 (LG 250L Top Freezer Fridge Inox): quantity 20.");
+    expect(session().assistant_pending).toBeNull();
+    expect(aiPrompts).toHaveLength(1);
+  });
+
+  it("lists three or more to choose from", async () => {
+    drafted([FRIDGE, "LG 250L Top Freezer Fridge Inox", "Nasco 90L Table Top Fridge White"]);
+    aiReplies.push('{"type":"edit","edits":[{"products":[],"changes":{"quantity":20}}]}');
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "change the quantity to 20" });
+
+    expect(sent[0]).toMatchObject({ kind: "list", rows: ["apick:1", "apick:2", "apick:3", "apick:all"] });
+  });
+
+  it("applies the change to both when the seller taps Both", async () => {
+    drafted([FRIDGE, "LG 250L Top Freezer Fridge Inox"]);
+    aiReplies.push('{"type":"edit","edits":[{"products":[1,2],"changes":{"quantity":20},"ask":true}]}');
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "change the quantity of the fridge to 20" });
+    expect(sent[0]).toMatchObject({ kind: "buttons", rows: ["apick:1", "apick:2", "apick:all"] });
+
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "apick:all" });
+
+    expect(listings().map((l) => l.quantity)).toEqual([20, 20]);
+  });
+
+  it("drops the question when the seller moves on", async () => {
+    drafted([FRIDGE, "LG 250L Top Freezer Fridge Inox"]);
+    aiReplies.push('{"type":"edit","edits":[{"products":[1,2],"changes":{"quantity":20},"ask":true}]}');
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "change the quantity of the fridge to 20" });
+
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "submit all" });
+
+    expect(session().assistant_pending).toBeNull();
+    expect(pushCallCount).toBe(2);
+    expect(listings().map((l) => l.quantity)).toEqual([3, 3]);
+  });
+
+  it("sets a variation from the seller's own word for it, as one of the category's options", async () => {
+    drafted(["Vintage Radio Eau de Parfum Natural Spray", SHIRT]);
+    variationHeld.add("listing-1"); // the category has a closed variation list
+    aiReplies.push('{"type":"edit","edits":[{"products":[1],"changes":{"variations":["100 ML"]},"ask":false}]}');
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "change the variation of the perfume to 100 ML" });
+
+    expect(aiPrompts[0]).toContain("its category's variation options: 100ml, 105ml, 10ml, 50ml");
+    const rows = db.tables.variants.filter((v) => v.listing_id === "listing-1");
+    expect(rows.map((v) => v.variation)).toEqual(["100ml"]);
+    expect(rows[0]).toMatchObject({ quantity: 3, global_price: 4500 });
+    // A long name is shortened to 40 characters in the reply.
+    expect(sent[0].body).toBe("✅ Product 1 (Vintage Radio Eau de Parfum Natural Spr…): variation 100ml.");
+  });
+
+  it("refuses a variation the category doesn't stock, naming its options", async () => {
+    drafted(["Vintage Radio Eau de Parfum Natural Spray"]);
+    variationHeld.add("listing-1");
+    aiReplies.push('{"type":"edit","edits":[{"products":[1],"changes":{"variations":["30ml"]},"ask":false}]}');
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "make the variation 30ml" });
+
+    expect(db.tables.variants.map((v) => v.variation)).toEqual(["..."]);
+    expect(sent[0].body).toBe("⚠️ Vintage Radio Eau de Parfum Natural Spray: 30ml isn't one of this category's options (100ml, 105ml, 10ml, 50ml).");
+  });
+
+  it("never sets a price the seller didn't write", async () => {
+    drafted([FRIDGE, SHIRT]);
+    aiReplies.push('{"type":"edit","edits":[{"products":[1],"changes":{"price":3999},"ask":false}]}');
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "make the fridge a bit cheaper" });
+
+    expect(listings()[0].selling_price).toBe(4500);
+    expect(sent[0].body).toBe("⚠️ I couldn't find the price in your message: write it out, e.g. \"quantity 20\".");
+  });
+
+  it("offers submitting as a button, never submits on the AI's word", async () => {
+    drafted([FRIDGE, SHIRT]);
+    aiReplies.push('{"type":"submit","products":"all"}');
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "ok send them all to jumia now" });
+
+    expect(pushCallCount).toBe(0);
+    expect(sent).toEqual([expect.objectContaining({ kind: "buttons", body: "Send all 2 products to Jumia?", rows: ["submit all", "review"] })]);
+  });
+
+  it("keeps a plain price edit on the usual path, with no AI call", async () => {
+    drafted([FRIDGE, SHIRT]);
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "2: price 150" });
+
+    expect(aiPrompts).toHaveLength(0);
+    expect(listings()[1].selling_price).toBe(150);
+    expect(db.tables.variants[1].global_price).toBe(150);
+  });
+
+  it("carries a chat quantity to the variants on the usual path too", async () => {
+    drafted([FRIDGE, SHIRT]);
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "1: quantity 12" });
+
+    expect(listings()[0].quantity).toBe(12);
+    expect(db.tables.variants[0].quantity).toBe(12);
+  });
+
+  it("falls back to the usual handling when the AI can't be reached", async () => {
+    drafted([FRIDGE, SHIRT]);
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "change the quantity of the fridge to 20" });
+
+    expect(listings()[0].quantity).toBe(3);
+    expect(sent[0].body).toBe(`Which product number is this for? e.g. "2: change the price to 150"`);
+    expect(db.tables.whatsapp_assistant_log[0].outcome).toBe("failed: no AI reply scripted");
+  });
+
+  it("is off for everyone else", async () => {
+    drafted([FRIDGE, SHIRT], false);
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "change the quantity of the fridge to 20" });
+
+    expect(aiPrompts).toHaveLength(0);
+    expect(sent[0].body).toBe(`Which product number is this for? e.g. "2: change the price to 150"`);
   });
 });

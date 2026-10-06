@@ -1169,6 +1169,83 @@ Listed by priority. Pick from here when looking for "what to do next".
   `{buyCredits: true}`, the account route sends `outOfCredits`, the QC fix
   and the orders gate word it accordingly. Pricing FAQ updated to match.
 
+### WhatsApp assistant: the conversational layer (pilot, owner 2026-10-06)
+
+The owner: "we will maintain the way the images are sent ... but anything
+else can be a conversation where the intent of the user is understood and
+the AI executes the right code", "the conversational flow will only come to
+play if users try to talk to it like they did not know the current flow",
+"we will pilot this for my admin account". Examples given: "change the
+quantity of the fridge to 20" (ask which fridge if there are two) and
+"change the variation to Large for the drafted T-shirt".
+
+- **Who**: admins (`isAdmin`) and the user ids in app_settings
+  `assistant_users` (a JSON array). Everyone else: unchanged. To widen the
+  pilot: `insert into app_settings (key, value) values ('assistant_users',
+  '["user_…"]') on conflict (key) do update set value = excluded.value;`
+- **Where**: lib/whatsapp/assistant.ts `runAssistant`, called from
+  intake.ts at three points only:
+  - review step (`handleAwaitingBatchConfirmation`), after every exact
+    command (photo, submit, review, edit: tap, price/value answers, a bare
+    product number) and in place of the older `classifyBatchIntent`;
+  - just after a batch went to Jumia (`handleAwaitingCount`, the "already
+    with Jumia" branch);
+  - between batches, for words that aren't a count.
+  Never in awaiting_photos (text is a product's notes there, as always),
+  analyzing, or the Jumia connect steps.
+- **The plain edit stays deterministic**: "2: price 150", "quantity 20",
+  a sale with dates still go to `handleEdit` with no AI call
+  (`plainQuickEdit`: handleEdit's extractors found something and the text
+  names no other field). Anything else goes to the assistant.
+- **The AI only chooses** (gemini-2.5-flash-lite, JSON): edit / submit /
+  restart / review / orders / credits / help / answer / unclear. Our code
+  checks each part (`parseAction`, `verifyChanges`):
+  - a price or quantity must be a number written in the message;
+  - a name, brand or colour must be written in the message;
+  - a variation must be in the message, one of the category's options, or
+    one the product has (so "add XL" can keep "M"). If one isn't, the whole
+    list is dropped rather than losing a variation.
+  - What's dropped is told: "I couldn't find the price in your message".
+- **Carrying out an edit** (`applyChanges`): only draft / failed (held)
+  products. Rules:
+  - price: Jumia's minimum check, then carried to the variants;
+  - quantity: carried to the variants (see the bug below);
+  - name: at least 15 characters;
+  - brand: refused if on Jumia's forbidden list for the category;
+  - sale: read from the message with both dates, as handleEdit does;
+  - variations: `parseVariations` against the category's options, then
+    `saveVariations`. Size names now match both ways ("Large" ↔ "L",
+    "2XL" ↔ "XXL"; `SIZE_NAMES` in variation-question.ts), which also helps
+    the existing "What variation(s) do you have?" question;
+  - anything else: the Edit product link.
+  The reply lists what changed per product, with Submit all / Review listings.
+- **"Which product?"**: when the change fits several products and the
+  seller didn't say all, it asks. Two products get buttons plus Both; three
+  or more get a list plus All N. The change waits in
+  `whatsapp_sessions.assistant_pending` for 30 minutes. A tap (`apick:N`,
+  `apick:all`), a typed number (it applies, it does NOT submit that
+  product), or "both"/"all" answers it. Anything else drops it.
+- **Never on the AI's word**: submit and start over come back as a button
+  to tap ("Send all 2 products to Jumia?" → "Yes, submit ✅" with id
+  `submit all`). Orders go through `handleOrderMessage` with its own pack
+  and credit gate. Credits reply with the real balance.
+- **If the AI fails** (no reply, error): the usual handling runs, the old
+  "Which product number is this for?" included.
+- **Learning**: every message it reads is in `whatsapp_assistant_log`
+  (stage, message, validated action, outcome). Check it to see where it
+  misunderstands. Calls are in ai_usage as feature `assistant` ("WhatsApp
+  assistant (pilot)" on /admin/billing). Expect about $0.0002 a message.
+- Migration 2026-10-06_whatsapp-assistant.sql (applied).
+- **Bug fixed on the way**: a quantity changed in chat ("2: quantity 20")
+  only changed `listings.quantity`. Jumia takes stock from each variant
+  (`stock: v.quantity ?? 1`), and every draft has at least one variant, so
+  the old quantity went to Jumia. `carryStockToVariants`
+  (lib/whatsapp/listing-edits.ts, shared with the price helpers moved out
+  of intake.ts) now moves variants still at the old quantity.
+- Tests: __tests__/whatsapp-assistant.test.ts, and "the assistant, on the
+  pilot's accounts" in whatsapp-intake-flow.test.ts (gemini-client mocked
+  with scripted replies).
+
 ### Feature expansion (when relevant)
 9. **Cloud Vision OCR** (Tier 1.2 of GCP plan) — dedicated OCR for packaging text.
    $1.50/1000 images, first 1000 free monthly. Improves spec-text accuracy.

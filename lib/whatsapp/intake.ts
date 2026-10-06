@@ -41,7 +41,7 @@ import {
   parseCategoryInstruction,
   type CategoryChoice,
 } from "@/lib/whatsapp/category-question";
-import { getValidJumiaCredentials, COUNTRY_CURRENCY, DEFAULT_JUMIA_COUNTRY, currencySymbol, currencyNameWord } from "@/lib/jumia/api";
+import { getValidJumiaCredentials, currencyNameWord } from "@/lib/jumia/api";
 import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
 import { isFashionCategory } from "@/lib/jumia/fashion-category";
 import { getJumiaConnectionKind, testJumiaCredentials, saveJumiaCredentialsForUser, disconnectJumiaForUser } from "@/lib/jumia/credentials";
@@ -85,6 +85,8 @@ import { enqueueAnalysisJobs, nudgeWorker, workersFor, isBatchSettled, type Anal
 import { restrictedWordsInJumiaRejection, restrictedBrandWordsInRejection } from "@/lib/ai/restricted-words";
 import { rememberRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
+import { carryPriceToVariants, carryStockToVariants, chatPrice, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
+import { answerPendingQuestion, assistantEnabled, plainQuickEdit, runAssistant } from "@/lib/whatsapp/assistant";
 import { batchCreditRefusal, creditGate } from "@/lib/whatsapp/credit-gate";
 
 /**
@@ -432,42 +434,6 @@ async function noteWarningsFor(listingId: string): Promise<NoteWarnings> {
   }
 
   return { warnings, softWarnings };
-}
-
-/** The seller's shop currency ISO code ("GHS", "NGN", ...) for a user
- *  already in hand — best-effort, defaults to GHS on any lookup failure so
- *  a currency-copy hiccup never blocks price parsing itself. PandaWorld
- *  lists Jumia sellers across Africa, not just Ghana — extractPrice/
- *  extractSalePrice (lib/whatsapp/batch.ts) used to always assume GHS
- *  regardless of the seller's actual shop. */
-async function shopCurrencyForUser(userId: string): Promise<string> {
-  try {
-    const db = createServerClient();
-    const { data } = await db
-      .from("jumia_connections")
-      .select("country")
-      .eq("user_id", userId)
-      .maybeSingle();
-    return COUNTRY_CURRENCY[(data?.country as string | null) ?? DEFAULT_JUMIA_COUNTRY] ?? "GHS";
-  } catch {
-    return "GHS";
-  }
-}
-
-/**
- * A price as the chat shows it: in the seller's own currency ("GH₵150",
- * "₦2,000", "KSh 500") when their shop's country is known, and the bare
- * number when it isn't, never another country's currency (owner's request,
- * 2026-10-03: "GHS 150"). shopCurrencyForUser's GHS fallback is right for
- * reading a price, not for showing one.
- */
-async function chatPrice(userId: string, amount: number): Promise<string> {
-  const country = await sellerCountry(userId).catch(() => null);
-  const code = country ? COUNTRY_CURRENCY[country] : undefined;
-  const shown = amount.toLocaleString("en-US", { maximumFractionDigits: 2 });
-  if (!code) return shown;
-  const symbol = currencySymbol(code);
-  return /[A-Za-z]$/.test(symbol) ? `${symbol} ${shown}` : `${symbol}${shown}`;
 }
 
 /** Same as shopCurrencyForUser, for a call site that only has the listing
@@ -1221,6 +1187,9 @@ async function handleAwaitingCount(
   // started a 20-product batch (owner's report, 2026-10-03).
   const typed = content.text?.trim();
   if (session.lastSubmittedBatchId && typed && !CLEAR_COUNT_RE.test(typed)) {
+    // The assistant's pilot: a question about those products, the orders or
+    // the credits is answered; anything else gets the reply below.
+    if ((await assistantEnabled(userId)) && (await runAssistant(userId, phoneNumber, session, typed, "sent")) === "handled") return;
     const sent = await getBatchListings(session.lastSubmittedBatchId);
     const one = sent.length === 1;
     const which = one && sent[0].title ? `"${sent[0].title}" is` : one ? "Your product is" : "Your products are";
@@ -1242,6 +1211,10 @@ async function handleAwaitingCount(
   const parsed = content.text ? readProductCount(content.text, max) : { ok: false as const, reason: "no_number" as const };
 
   if (!parsed.ok) {
+    // Words rather than a count, on the assistant's pilot: understood if it
+    // can be ("how many credits do I have?"), else the reply below.
+    if (parsed.reason === "no_number" && typed && (await assistantEnabled(userId))
+      && (await runAssistant(userId, phoneNumber, session, typed, "idle")) === "handled") return;
     // Say which thing went wrong. Answering "50" with "I need a number"
     // reads as the bot not understanding, when the real answer is the
     // batch cap — a fact the seller can act on immediately.
@@ -2795,31 +2768,6 @@ async function finishValueAnswer(
 }
 
 /**
- * A price set in chat reaches the variants that were following the
- * listing's own. Jumia is sent each variant's own price
- * (mapListingToJumiaProducts), and a draft's variants are made at the
- * listing's price (runAutoAnalyze), so without this a sized product priced
- * again in chat still went to Jumia at the drafted price. A variant priced
- * separately in the editor keeps its own. Best-effort: the listing's price
- * is already saved.
- */
-async function carryPriceToVariants(listingId: string, oldPrice: unknown, newPrice: number): Promise<void> {
-  const old = Number(oldPrice);
-  if (!(old > 0) || old === newPrice) return;
-  const db = createServerClient();
-  try {
-    const { data } = await db.from("variants").select("id, global_price").eq("listing_id", listingId);
-    const following = ((data ?? []) as { id: string; global_price: unknown }[]).filter((v) => Number(v.global_price) === old);
-    for (const v of following) {
-      const { error } = await db.from("variants").update({ global_price: newPrice }).eq("id", v.id);
-      if (error) throw new Error(error.message);
-    }
-  } catch (e) {
-    console.warn(`[whatsapp intake] couldn't carry the price to listing ${listingId}'s variants: ${(e as Error).message}`);
-  }
-}
-
-/**
  * Save a price the seller sent in answer to askForNextMissingPrice, then
  * move the walk on to the next product missing one.
  *
@@ -3301,6 +3249,14 @@ async function handleAwaitingBatchConfirmation(
     return;
   }
 
+  // The answer to the assistant's "Which product do you mean?" (a tap, a
+  // number, "both"). Above the bare number below, which would otherwise
+  // submit the product named. Anything else drops the question.
+  if (session.assistantPending) {
+    if (await answerPendingQuestion(userId, phoneNumber, session, text)) return;
+    await updateSession(phoneNumber, { assistantPending: null });
+  }
+
   // An answer to askForNextMissingPrice's question. Sits below the button
   // ids above (none of which extractPrice can match) and above
   // parseEditCommand, which would otherwise swallow a bare number as an
@@ -3363,6 +3319,37 @@ async function handleAwaitingBatchConfirmation(
   }
 
   const editCmd = parseEditCommand(text, batchSize);
+
+  // The assistant (lib/whatsapp/assistant.ts), on the pilot's accounts:
+  // anything past the commands above is understood by AI and carried out by
+  // our code. A plain price, stock or sale edit ("2: price 150") still goes
+  // straight to handleEdit, as it always has. If the AI can't be reached,
+  // the usual handling below runs.
+  const pilot = await assistantEnabled(userId);
+  if (pilot) {
+    if (editCmd && !editCmd.needsSeq) {
+      const currency = await shopCurrencyForUser(userId);
+      const found = extractPrice(editCmd.text, currency) != null || extractStock(editCmd.text) != null
+        || extractSalePrice(editCmd.text, new Date(), currency) != null;
+      if (plainQuickEdit(editCmd.text, found)) {
+        await handleEdit(userId, phoneNumber, batchId, editCmd.seq, editCmd.text);
+        return;
+      }
+    }
+    const hint = editCmd && !editCmd.needsSeq && editCmd.explicit ? editCmd.seq : undefined;
+    const outcome = await runAssistant(userId, phoneNumber, session, text, "review", hint);
+    if (outcome === "handled") return;
+    if (outcome === "default") {
+      await replyCta(
+        phoneNumber,
+        `Reply *submit all* to push your drafted listings to Jumia, or tell me the product number you want to submit. You can also tell me what to change, e.g. "change the quantity of the fridge to 20".`,
+        "Review listings",
+        whatsappListingsUrl(batchId),
+      );
+      return;
+    }
+  }
+
   // Only the explicit "N: text" form is unambiguous. needsSeq and the
   // batchSize===1 implicit-edit fallback both match ANY text at all
   // (confirmed live: "Hi", "New listing", "Done", "Delete" were all
@@ -3389,8 +3376,8 @@ async function handleAwaitingBatchConfirmation(
   // primary path) so well-formed commands above stay fast, free, and
   // fully deterministic. looksActionable is a cheap pre-filter so an
   // off-topic reply ("thanks", "ok") never costs a Gemini call for
-  // nothing.
-  if (looksActionable(text)) {
+  // nothing. Not for the assistant's pilot, which has already asked.
+  if (!pilot && looksActionable(text)) {
     const listings = await getBatchListings(batchId);
     const intent = await classifyBatchIntent(text, listings.map((l) => ({ seq: l.whatsapp_seq ?? 0, title: l.title })));
 
@@ -3908,6 +3895,7 @@ async function handleEdit(
       })
       .eq("id", listing.id);
     if (price != null) await carryPriceToVariants(listing.id, listing.selling_price, price);
+    if (stock != null) await carryStockToVariants(listing.id, listing.quantity, stock);
   }
 
   let ack = applied.length > 0 ? `✅ Updated product ${seq}'s ${applied.join(" and ")}. ` : "";
