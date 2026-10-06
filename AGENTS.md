@@ -1126,11 +1126,17 @@ Listed by priority. Pick from here when looking for "what to do next".
 
 ### Credit rules (owner, 2026-10-06)
 
-- **At 0 credits or below** (metered sellers only: never admins, never while
-  billing is off): the WhatsApp bot sends ONE reply ("You've used all your
-  PandaWorld credits, so I'll stay quiet until you top up…", Buy credits),
-  then nothing at all, not even "typing…" (webhook `acknowledge` sends read
-  ticks only), until the balance is above 0 again. lib/whatsapp/credit-gate.ts
+- **The WhatsApp bot goes quiet below one listing's cost**
+  (`BOT_MIN_CREDITS` = LIVE_LISTING_CREDIT_COST = 2; metered sellers only:
+  never admins, never while billing is off). It sends ONE reply ("You have
+  1 credit left, and a WhatsApp listing needs 2, so I'll stay quiet until you
+  top up…", or "You've used all your PandaWorld credits…" at 0, with Buy
+  credits), then nothing at all, not even "typing…" (webhook `acknowledge`
+  sends read ticks only), until they can afford a listing again. Moved from
+  "at 0" the same day: the owner's test seller with 1 credit sent a
+  product's photos and was only refused at drafting. Order alerts stop too
+  (order-alerts.ts `botPausedForCredits`). Extension and dashboard pack
+  features still pause at 0 (Autofill costs 1). lib/whatsapp/credit-gate.ts
   `creditGate`, run first in intake.ts handleLinkedMessage. Still works at 0:
   listing updates from Jumia (sent, not answered), disconnecting Jumia
   (disconnect / confirm disconnect / keep jumia connected), linking a number
@@ -1150,10 +1156,12 @@ Listed by priority. Pick from here when looking for "what to do next".
   the notices down. Sellers already below 6 before this shipped get the
   WhatsApp warning at their next message, but no dashboard notice until
   their next charge.
-- **Batch start**: if the seller's available credits (balance less what's
-  held for listings waiting on Jumia) can't list the count they gave, the
-  bot says how many it can, with Buy credits (`batchCreditShortfall`),
-  unless the low warning went out with the same message.
+- **Batch start, before any photo**: if the seller's available credits
+  (balance less what's held for listings waiting on Jumia) can't list the
+  count they gave, the batch is NOT started: the bot says how many it can
+  ("Reply *2* to list those now, or buy credits to list all 4"), with Buy
+  credits, and waits for a new count (`batchCreditRefusal`). Done's own
+  check (reserveDraftCapacity) stays as the backstop.
 - **Pack features follow the pack bought LAST** (lib/billing/features.ts
   `currentPack`), no longer the biggest ever bought, and pause at 0
   (`featureAccess` says "pack" or "credits"; grants pause too). Messages say

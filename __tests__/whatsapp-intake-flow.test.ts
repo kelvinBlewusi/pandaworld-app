@@ -278,6 +278,7 @@ import { handleLinkedMessage } from "@/lib/whatsapp/intake";
 import { classifyJumiaRejection, rejectionFingerprint } from "@/lib/jumia/rejection-remedy";
 import { notifyBatchResolved } from "@/lib/jumia/push-listing";
 import { _resetPriceMinimumCache } from "@/lib/jumia/price-minimums";
+import { _resetBillingModeCache } from "@/lib/billing/mode";
 
 const USER  = "user_1";
 const PHONE = "233550607231";
@@ -2344,6 +2345,57 @@ describe("Start another, after products go to Jumia", () => {
     expect(done?.rows).toEqual(["start another"]);
     expect(session().state).toBe("awaiting_count");
     expect(session().last_submitted_batch_id).toBe("batch-1");
+  });
+});
+
+// Owner's rules, 2026-10-06: credits are checked before a single photo is
+// accepted, and below one listing's cost the bot says so once and goes
+// quiet. A test seller with 1 credit sent a product's photos and was only
+// refused at drafting.
+describe("credits, at the start of a batch", () => {
+  const credits = (n: number) => { db.tables.extension_credits = [{ user_id: USER, balance: n }]; };
+  beforeEach(() => {
+    seedSession({ state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null, listing_id: null });
+    db.tables.jumia_connections = [{
+      user_id: USER, status: "active", access_token: "real-token", shop_id: "shop-1", country: "GH",
+      token_expires_at: new Date(Date.now() + 86_400_000).toISOString(),
+    }];
+    db.tables.app_settings = [...(db.tables.app_settings ?? []).filter((r) => r.key !== "billing_enabled"), { key: "billing_enabled", value: true }];
+    _resetBillingModeCache();
+  });
+  afterEach(() => {
+    db.tables.app_settings = (db.tables.app_settings ?? []).filter((r) => r.key !== "billing_enabled");
+    db.tables.extension_credits = [];
+    db.tables.credit_notices = [];
+    db.tables.jumia_connections = [];
+    _resetBillingModeCache();
+  });
+
+  it("a count the credits can't cover is refused before any photo, and no batch starts", async () => {
+    credits(5);
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "4" });
+    const last = sent[sent.length - 1];
+    expect(last.body).toContain("enough to list 2 of your 4 products");
+    expect(last.body).toContain("Reply *2* to list those now");
+    expect(session().state).toBe("awaiting_count");
+    expect(session().batch_id).toBeNull();
+  });
+
+  it("a count they can cover starts as usual", async () => {
+    credits(20);
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "2" });
+    expect(session().state).toBe("awaiting_photos");
+  });
+
+  it("with 1 credit: one message that a listing needs 2, then nothing at all", async () => {
+    credits(1);
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "3" });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body).toContain("You have 1 credit left, and a WhatsApp listing needs 2, so I'll stay quiet until you top up");
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "hello?" });
+    await handleLinkedMessage(USER, PHONE, "m3", { imageMediaId: "media-1" });
+    expect(sent).toHaveLength(1);
+    expect(session().state).toBe("awaiting_count");
   });
 });
 
