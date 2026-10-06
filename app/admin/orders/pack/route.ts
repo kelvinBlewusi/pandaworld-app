@@ -20,10 +20,12 @@
  * each item as Jumia now has it, so a partial or unexpected result is seen, not
  * assumed.
  *
- * Which shape puts several items in one package is what this tries
- * (lib/jumia/orders.ts, PackPackage): first POST /v2/orders/pack with the item
- * ids as a list; if Jumia refuses and nothing was packed, the page offers the
- * older POST /orders/pack, which takes a list of items.
+ * Which call: the older POST /orders/pack (Jumia gives the tracking number,
+ * as Vendor Center does) unless the station needs a tracking code, then
+ * POST /v2/orders/pack with the item ids as a list and the code. v2 refused a
+ * station that takes no code on 2026-10-06 ("Tracking Code should not be
+ * null"). If a v2 call is refused and nothing was packed, the page offers the
+ * older call.
  * A route handler isn't wrapped by app/admin/layout.tsx, so it checks admin itself.
  */
 
@@ -103,7 +105,7 @@ export async function GET(req: Request) {
       (others.length ? `<p>Not in this package (already packed, or not pending): ${others.map((i) => esc(itemName(i))).join(", ")}</p>` : "") +
       `<form method="post" action="/admin/orders/pack"><input type="hidden" name="orderId" value="${esc(orderId)}">` +
       todo.map((i) => `<input type="hidden" name="item" value="${esc(i.id)}">`).join("") +
-      `<input type="hidden" name="api" value="v2">` +
+      `<input type="hidden" name="api" value="auto">` +
       `<fieldset style="margin:12px 0;padding:8px 12px;border:1px solid #ccc;border-radius:6px">` +
       `<legend>Drop-off station: ${common.length} that take${common.length === 1 ? "s" : ""} every item</legend>${options}</fieldset>` +
       (common.some((p) => p.trackingCodeRequired)
@@ -127,8 +129,8 @@ export async function POST(req: Request) {
   const orderId = String(form?.get("orderId") ?? "");
   if (!ORDER_ID_RE.test(orderId)) return html("<p>That isn't an order.</p>", 400);
   if (form?.get("confirm") !== "yes") return html("<p>Nothing was packed: the confirmation box wasn't ticked.</p>", 400);
-  const api = String(form?.get("api") ?? "");
-  if (api !== "v2" && api !== "v1") return html("<p>Nothing was packed: unknown pack call.</p>", 400);
+  const requested = String(form?.get("api") ?? "");
+  if (requested !== "auto" && requested !== "v2" && requested !== "v1") return html("<p>Nothing was packed: unknown pack call.</p>", 400);
 
   const shown = Array.from(new Set((form?.getAll("item") ?? []).map(String)));
   if (shown.length === 0) return html("<p>Nothing was packed: no item was sent.</p>", 400);
@@ -158,6 +160,11 @@ export async function POST(req: Request) {
   if (provider.trackingCodeRequired && !trackingCode) {
     return html(`${head}<p>Nothing was packed: ${esc(provider.name)} needs a tracking code and none was entered.</p>`, 400);
   }
+  // "auto" (the page's own choice): the older call, where Jumia gives the
+  // tracking number as Vendor Center does, unless the station needs a code.
+  // v2 refused a station that takes none on 2026-10-06: "Tracking Code should
+  // not be null".
+  const api = requested === "auto" ? (provider.trackingCodeRequired ? "v2" : "v1") : requested;
   if (provider.trackingCodeRequired && api === "v1") {
     return html(`${head}<p>Nothing was packed: the older pack call can't send the tracking code ${esc(provider.name)} needs.</p>`, 400);
   }
