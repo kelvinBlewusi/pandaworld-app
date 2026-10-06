@@ -48,7 +48,12 @@ export interface JumiaOrderItem {
   trackingUrl?:      string | null;
   shipmentType?:     string;
   isFulfilledByJumia?: boolean;
-  product?:          { name?: string; sellerSku?: string };
+  deliveryOption?:   string;
+  /** In the shop's own currency (country.currencyCode). */
+  paidPriceLocal?:   number;
+  itemPriceLocal?:   number;
+  country?:          { code?: string; currencyCode?: string };
+  product?:          { name?: string; sellerSku?: string; imageUrl?: string };
 }
 
 export interface JumiaLabel {
@@ -227,6 +232,37 @@ export async function getOrderItems(
       raw:         r.data,
     },
   };
+}
+
+/**
+ * The items of several orders in one call (GET /orders/items takes the
+ * orderId repeated), by order id. Asked in chunks so the URL stays short.
+ */
+export async function getItemsOfOrders(
+  accessToken: string,
+  orderIds:    string[],
+): Promise<JumiaCall<Map<string, { orderNumber: string; items: JumiaOrderItem[] }>>> {
+  const out = new Map<string, { orderNumber: string; items: JumiaOrderItem[] }>();
+  for (let i = 0; i < orderIds.length; i += 25) {
+    const r = await call<unknown>(accessToken, "GET", "/orders/items", { query: { orderId: orderIds.slice(i, i + 25) } });
+    if (!r.ok) return r;
+    for (const e of Array.isArray(r.data) ? r.data : [r.data]) {
+      if (!e || typeof e !== "object") continue;
+      const entry = e as Record<string, unknown>;
+      if (typeof entry.orderId !== "string") continue;
+      out.set(entry.orderId, {
+        orderNumber: pickOrderNumber(entry),
+        items:       Array.isArray(entry.items) ? (entry.items as JumiaOrderItem[]) : [],
+      });
+    }
+  }
+  return { ok: true, data: out };
+}
+
+/** The providers Jumia offers for every one of the items: one package goes with one provider. */
+export function commonProviders(ids: string[], byItem: Map<string, ShipmentProvider[]>): ShipmentProvider[] {
+  const [first, ...rest] = ids.map((id) => byItem.get(id) ?? []);
+  return (first ?? []).filter((p) => rest.every((list) => list.some((q) => q.id === p.id)));
 }
 
 /**

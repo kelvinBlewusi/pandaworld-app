@@ -325,6 +325,88 @@ export async function sendCtaUrlIfConfigured(
 }
 
 /**
+ * Upload a file to WhatsApp's media store and return its media id, so a
+ * document can be sent without a public link (a shipping label carries the
+ * customer's name and address, so it never gets one).
+ */
+export async function uploadMedia(bytes: Uint8Array, mimeType: string, filename: string): Promise<string> {
+  const { token, phoneNumberId } = requireConfig();
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("type", mimeType);
+  form.append("file", new Blob([new Uint8Array(bytes)], { type: mimeType }), filename);
+  const res = await fetch(`https://graph.facebook.com/${GRAPH_API_VERSION}/${phoneNumberId}/media`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  const text = await res.text().catch(() => "");
+  if (!res.ok) throw new Error(`WhatsApp media upload failed (${res.status}): ${text}`);
+  const id = (JSON.parse(text) as { id?: string }).id;
+  if (!id) throw new Error("WhatsApp media upload returned no id");
+  return id;
+}
+
+/** A PDF (shipping labels) as a WhatsApp document, uploaded first: see uploadMedia. */
+export async function sendDocument(to: string, bytes: Uint8Array, filename: string, caption?: string): Promise<void> {
+  const id = await uploadMedia(bytes, "application/pdf", filename);
+  await callGraphApi({
+    to,
+    type: "document",
+    document: { id, filename, ...(caption ? { caption } : {}) },
+  });
+}
+
+export async function sendDocumentIfConfigured(to: string, bytes: Uint8Array, filename: string, caption?: string): Promise<void> {
+  if (!isWhatsAppConfigured()) {
+    console.warn(`[whatsapp] not configured — would have sent a document to ${to}: ${filename}`);
+    return;
+  }
+  await sendDocument(to, bytes, filename, caption);
+}
+
+/**
+ * An approved template (Meta's "template" message): the only kind WhatsApp
+ * delivers outside the 24 hours after the recipient's last message. Body
+ * values fill {{1}}, {{2}}…, in order; a value may not contain a new line.
+ * Each quick-reply button gets its payload here, at send time, so a tap
+ * comes back as that payload whatever language the button is written in
+ * (lib/whatsapp/message-content.ts reads it as text).
+ */
+export async function sendTemplate(
+  to:          string,
+  name:        string,
+  language:    string,
+  bodyValues:  string[],
+  buttonPayloads: string[] = [],
+): Promise<void> {
+  await callGraphApi({
+    to,
+    type: "template",
+    template: {
+      name,
+      language: { code: language },
+      components: [
+        { type: "body", parameters: bodyValues.map((text) => ({ type: "text", text: text.replace(/\s*\n+\s*/g, " ") })) },
+        ...buttonPayloads.map((payload, i) => ({
+          type: "button", sub_type: "quick_reply", index: String(i), parameters: [{ type: "payload", payload }],
+        })),
+      ],
+    },
+  });
+}
+
+export async function sendTemplateIfConfigured(
+  to: string, name: string, language: string, bodyValues: string[], buttonPayloads: string[] = [],
+): Promise<void> {
+  if (!isWhatsAppConfigured()) {
+    console.warn(`[whatsapp] not configured — would have sent template ${name} to ${to}`);
+    return;
+  }
+  await sendTemplate(to, name, language, bodyValues, buttonPayloads);
+}
+
+/**
  * Marks an incoming message as read (blue ticks) and shows the animated
  * "typing…" indicator in the chat for up to 25 seconds or until the next
  * message is sent, whichever comes first — Meta's Cloud API ties both to

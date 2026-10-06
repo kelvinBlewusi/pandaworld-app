@@ -84,6 +84,7 @@ import type { ListingRow } from "@/lib/supabase/types";
 import { enqueueAnalysisJobs, nudgeWorker, workersFor, isBatchSettled, type AnalysisJob } from "@/lib/whatsapp/analysis-queue";
 import { restrictedWordsInJumiaRejection, restrictedBrandWordsInRejection } from "@/lib/ai/restricted-words";
 import { rememberRestrictedWords } from "@/lib/jumia/learned-restricted-words";
+import { handleOrderMessage } from "@/lib/whatsapp/orders";
 
 /**
  * WhatsApp chatbot, Stage 4: multi-product batches, entirely in chat.
@@ -598,6 +599,12 @@ export async function handleLinkedMessage(
     }
     return;
   }
+
+  // Jumia orders (lib/whatsapp/orders.ts): "orders" typed, or a tap on an
+  // order alert's buttons. Global, like fix: below, because an alert
+  // arrives whatever the session is doing, and stateless: every id names
+  // the order it acts on.
+  if (!content.imageMediaId && (await handleOrderMessage(userId, phoneNumber, content.text))) return;
 
   // Global commands (restart/cancel, disconnect, status, help) work in ANY
   // state — checked before the per-state dispatch, not folded into it, so

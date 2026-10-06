@@ -104,6 +104,11 @@ export function contentOf(msg: IncomingMessage): MessageContent {
     const tapped = msg.interactive?.button_reply?.id ?? msg.interactive?.list_reply?.id;
     if (tapped) return { text: tapped };
   }
+  // A quick-reply button on a TEMPLATE (an order alert sent outside the
+  // 24-hour window) arrives as type "button", carrying the payload set when
+  // it was sent (lib/whatsapp/client.ts sendTemplate): the same command
+  // phrase an interactive button would have as its id.
+  if (msg.type === "button" && msg.button?.payload) return { text: msg.button.payload };
   if (msg.text?.body) return { text: msg.text.body };
   if (msg.type === METAS_OWN_UNSUPPORTED_TYPE) {
     return { unsupported: msg.type, platformError: describeError(msg) };

@@ -1298,6 +1298,31 @@ Listed by priority. Pick from here when looking for "what to do next".
       by the customer"). "orders" typed any time shows what's waiting.
       **No afternoon or other reminders** (owner said no). Defaults (30
       min, 10pm–7am) may become per-seller settings later.
+    - **BUILT 2026-10-06** (owner: "can we test the entire flow using my
+      whatsapp"; then "don't switch for only me, it should be gated for the
+      respective packages"). lib/jumia/order-flow.ts (Jumia side:
+      `waitingOrders`, `packOrders` one package per order in ONE v2 call
+      with the order's item ids as a list, `labelsPdf` merging every label
+      into one PDF with pdf-lib, `readyToShip`, `cancelOrder`; every change
+      read back), lib/whatsapp/orders.ts (messages and taps; stateless: each
+      id names its order: `orders`, `orders:packall`, `orders:packat:<station>`,
+      `orders:labels`, `orders:rtsall`, `orders:pick`, `order:<id>`,
+      `opack:<id>`, `opackat:<id>:<station>`, `olabel:<id>`, `orts:<id>`,
+      `ocancel:<id>` then `ocancelyes:<id>`), lib/whatsapp/order-alerts.ts +
+      /api/worker/order-alerts (every 10 minutes from the minute-workers
+      pg_cron job; table order_alerts; migration
+      2026-10-06_order-alerts.sql). Routed in intake.ts before the global
+      commands. **Gate: `order_alerts` to see orders and get alerts,
+      `shipping_labels` to pack / label / ship / cancel** (Pro and up,
+      admins, grants; lib/billing/features.ts). Others get "come with the
+      Pro pack" and a See packs button. Template quick replies arrive as
+      type "button" with the payload (message-content.ts). The template is
+      used only once app_settings `order_alert_template` is set, e.g.
+      `{"name":"jumia_new_order","language":"en"}` (WhatsApp account
+      1080436151465743, template in review on 2026-10-06); until then an
+      alert outside the 24 hours waits for the seller's next message.
+      PACK_FEATURES still marks both features comingSoon: flip that after
+      the owner's test.
     - **One package per order, always**, and nothing said about it: the
       owner says one label serves all of an order's boxes and sellers
       already know to print it for each box.
