@@ -13,7 +13,11 @@
  * 2026-10-02; admins only before), and costs IMAGE_CREDIT_COST per image
  * that comes back, like the review page's photo tools: checked for all
  * four up front, charged after for those that came back. Admins and
- * everyone while billing is off pay nothing (lib/billing/mode.ts).
+ * everyone while billing is off pay nothing (lib/billing/mode.ts), nor does
+ * a seller the owner gave it free (lib/billing/feature-grants.ts).
+ *
+ * The panel shows the button to everyone since 2026-10-06 and tells a
+ * seller without the pack to upgrade; this route is still the real check.
  */
 
 import { NextResponse } from "next/server";
@@ -21,6 +25,7 @@ import { authenticateExtensionKey } from "@/lib/security/extension-keys";
 import { resolveOneImage } from "@/lib/extension/harvested-images";
 import { generateProductShots, isGeminiImageEnabled, PRODUCT_SHOTS } from "@/lib/gemini-image";
 import { hasFeature, featureMinPackName } from "@/lib/billing/features";
+import { activeFeatureGrant, recordGrantUse } from "@/lib/billing/feature-grants";
 import { deductCredits, getOrCreateCreditBalance } from "@/lib/billing/extension-credits";
 import { IMAGE_CREDIT_COST, serializeCredits } from "@/lib/billing/credit-packs";
 
@@ -48,17 +53,22 @@ export async function POST(req: Request) {
   const userId = authResult.userId;
   if (!(await hasFeature(userId, "image_polish_extension"))) {
     return NextResponse.json(
-      { error: `Image polish comes with the ${featureMinPackName("image_polish_extension")} and Business credit packs.` },
+      {
+        error:   `Upgrade to use this feature. Image polish comes with the ${featureMinPackName("image_polish_extension")} and Business credit packs.`,
+        upgrade: true,
+      },
       { status: 403, headers: CORS },
     );
   }
+  const grant = await activeFeatureGrant(userId, "image_polish_extension");
+  const free = grant?.freeUse === true;
   if (!isGeminiImageEnabled()) {
     return NextResponse.json({ error: "Image generation isn't configured on the server." }, { status: 503, headers: CORS });
   }
 
   const needed = PRODUCT_SHOTS.length * IMAGE_CREDIT_COST;
   const balance = await getOrCreateCreditBalance(userId);
-  if (balance < needed) {
+  if (!free && balance < needed) {
     return NextResponse.json(
       { error: `Polishing makes ${PRODUCT_SHOTS.length} images at ${IMAGE_CREDIT_COST} credits each (${needed}), and you have ${balance}. Buy credits from your dashboard to continue.`, needed, balance },
       { status: 402, headers: CORS },
@@ -94,9 +104,15 @@ export async function POST(req: Request) {
   }
 
   // Images that didn't come back are free.
-  const charged = await deductCredits(userId, made * IMAGE_CREDIT_COST, `Polished ${made} product image${made === 1 ? "" : "s"} in the extension`);
-  if (!charged.ok) console.error(`[polish-images] credit deduction failed for ${userId}: ${charged.error}`);
-  const credits = serializeCredits(charged.balance);
+  let after = balance;
+  if (free) {
+    await recordGrantUse(grant!.id).catch(() => {});
+  } else {
+    const charged = await deductCredits(userId, made * IMAGE_CREDIT_COST, `Polished ${made} product image${made === 1 ? "" : "s"} in the extension`);
+    if (!charged.ok) console.error(`[polish-images] credit deduction failed for ${userId}: ${charged.error}`);
+    after = charged.balance;
+  }
+  const credits = serializeCredits(after);
 
   return NextResponse.json(
     { images: shots, creditsRemaining: credits.value, unlimitedCredits: credits.unlimited },
