@@ -8,6 +8,7 @@ import { getOrCreateExtensionApiKey, countRecentFills } from "@/lib/security/ext
 import { getOrCreateCreditBalance } from "@/lib/billing/extension-credits";
 import { StatCard } from "@/components/ui/stat-card";
 import { ApiKeyCard } from "@/components/extension/api-key-card";
+import { getKeyCardNotice } from "@/lib/notices";
 import { CreditsPurchaseHandler } from "@/components/extension/credits-purchase-handler";
 import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 
@@ -39,10 +40,11 @@ export default async function ExtensionDashboardPage() {
   const { userId } = await auth();
   if (!userId) redirect("/sign-in?redirect_url=/extension/dashboard");
 
-  const [keyResult, balance, recentFills] = await Promise.all([
+  const [keyResult, balance, recentFills, keyCardNotice] = await Promise.all([
     getOrCreateExtensionApiKey(userId),
     getOrCreateCreditBalance(userId),
     countRecentFills(userId, 30),
+    getKeyCardNotice(userId),
   ]);
 
   return (
@@ -103,7 +105,7 @@ export default async function ExtensionDashboardPage() {
               {keyResult.error}
             </div>
           ) : (
-            <ApiKeyCard initialKey={keyResult.fullKey} />
+            <ApiKeyCard initialKey={keyResult.fullKey} notice={keyCardNotice} />
           )}
         </div>
 

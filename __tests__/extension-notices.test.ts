@@ -20,12 +20,15 @@ jest.mock("@/lib/jumia/unlistable-categories", () => ({ sellerCountry: async () 
 jest.mock("next/headers", () => ({ headers: () => new Headers({ "x-vercel-ip-country": "GH" }) }));
 
 let clerkUser: string | null = "user_a";
-jest.mock("@clerk/nextjs/server", () => ({ auth: async () => ({ userId: clerkUser }) }));
+// Set when the session is Clerk's "Impersonate user": someone signed in AS the seller.
+let clerkActor: { sub: string } | undefined;
+jest.mock("@clerk/nextjs/server", () => ({ auth: async () => ({ userId: clerkUser, actor: clerkActor }) }));
 
 import { GET as account } from "@/app/api/extension/account/route";
 import { POST as panelDismiss } from "@/app/api/extension/notices/dismiss/route";
 import { POST as bellDismiss } from "@/app/api/extension/notifications/dismiss/route";
 import { _resetBillingModeCache } from "@/lib/billing/mode";
+import { getKeyCardNotice } from "@/lib/notices";
 
 const TITLE = "🎉 Congrats on using the PandaWorldAI Chrome extension!";
 const BODY = "You've unlocked *Polish images* on your extension panel.\n\nTo try it: tap 🪄 *Polish images* in the panel.";
@@ -49,6 +52,7 @@ beforeEach(() => {
   _resetBillingModeCache();
   authUser = "user_a";
   clerkUser = "user_a";
+  clerkActor = undefined;
 });
 
 it("sends the seller's own notices with the account, and nobody else's", async () => {
@@ -101,5 +105,41 @@ describe("the dashboard bell's x", () => {
     await post(bellDismiss, { id: "t1" });
     expect(db.tables.extension_credit_transactions[0].dismissed_at).not.toBeNull();
     expect(db.tables.user_notices[0].dismissed_at).toBeNull();
+  });
+});
+
+describe("a notice shown at the dashboard's Copy key button", () => {
+  beforeEach(() => { db.tables.user_notices[0].show_on_key_card = true; });
+
+  it("is the seller's own open notice marked for the key card, and nobody else's", async () => {
+    expect((await getKeyCardNotice("user_a"))?.id).toBe("n1");
+    db.tables.user_notices[1].show_on_key_card = true;
+    expect((await getKeyCardNotice("user_a"))?.id).toBe("n1");
+    expect((await getKeyCardNotice("user_b"))?.id).toBe("n2");
+  });
+
+  it("is nothing for a notice that isn't marked for it, or once dismissed", async () => {
+    db.tables.user_notices[0].show_on_key_card = false;
+    expect(await getKeyCardNotice("user_a")).toBeNull();
+    db.tables.user_notices[0].show_on_key_card = true;
+    db.tables.user_notices[0].dismissed_at = "2026-10-06T13:00:00Z";
+    expect(await getKeyCardNotice("user_a")).toBeNull();
+  });
+
+  // Live 2026-10-06: the owner, signed in as the seller to look, dismissed it
+  // before the seller had seen it.
+  it("isn't used up by the owner signed in as the seller", async () => {
+    clerkActor = { sub: "user_owner" };
+    const res = await post(bellDismiss, { id: "n1", kind: "notice" });
+    expect(res.status).toBe(200);
+    expect(db.tables.user_notices[0].dismissed_at).toBeNull();
+    expect((await getKeyCardNotice("user_a"))?.id).toBe("n1");
+  });
+
+  it("is dismissed when the seller copies their key", async () => {
+    await post(bellDismiss, { id: "n1", kind: "notice" });
+    expect(db.tables.user_notices[0].dismissed_at).not.toBeNull();
+    expect(await getKeyCardNotice("user_a")).toBeNull();
+    expect((await getAccount()).notices).toEqual([]);
   });
 });
