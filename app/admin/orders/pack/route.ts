@@ -29,12 +29,11 @@
 
 import { auth } from "@clerk/nextjs/server";
 import { isAdmin } from "@/lib/auth/is-admin";
-import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import {
-  findOrderNumber, getOrderItems, getShipmentProviders, labelableItems, packItems, packItemsV1, printLabels,
+  getOrderItems, getShipmentProviders, labelableItems, packItems, packItemsV1, printLabels,
   type JumiaOrderItem, type ShipmentProvider,
 } from "@/lib/jumia/orders";
-import { isPackAllowed } from "@/lib/jumia/pack-allowlist";
+import { ORDER_ID_RE, itemName, itemStatus, loadAllowedOrder as loadOrder, sameOrigin } from "@/lib/jumia/order-admin";
 import { describeShape, esc, htmlPage as html, itemsTable } from "@/lib/jumia/order-pages";
 
 export const runtime = "nodejs";
@@ -42,52 +41,13 @@ export const dynamic = "force-dynamic";
 // Pack, read back and print in one request.
 export const maxDuration = 60;
 
-const ORDER_ID_RE = /^[0-9a-f-]{36}$/i;
-
 /** Still to pack: pending, no tracking number yet, shipped by the seller. */
-const packable = (i: JumiaOrderItem) =>
-  String(i.status).toUpperCase() === "PENDING" && !i.trackingNumber && !i.isFulfilledByJumia;
-
-const itemName = (i: JumiaOrderItem) => i.product?.name ?? i.id;
+const packable = (i: JumiaOrderItem) => itemStatus(i) === "PENDING" && !i.trackingNumber && !i.isFulfilledByJumia;
 
 /** The providers Jumia offers for every one of the items: one package goes with one provider. */
 function commonProviders(ids: string[], byItem: Map<string, ShipmentProvider[]>): ShipmentProvider[] {
   const [first, ...rest] = ids.map((id) => byItem.get(id) ?? []);
   return (first ?? []).filter((p) => rest.every((list) => list.some((q) => q.id === p.id)));
-}
-
-async function loadOrder(userId: string, orderId: string) {
-  let creds: Awaited<ReturnType<typeof getValidJumiaCredentials>>;
-  try {
-    creds = await getValidJumiaCredentials(userId);
-  } catch (e) {
-    return { error: html(`<p>Jumia isn't connected for your account (${esc((e as Error).message)}).</p>`, 400) };
-  }
-  const order = await getOrderItems(creds.accessToken, orderId);
-  if (!order.ok) return { error: html(`<p><b>Couldn't read the order.</b> ${esc(order.message)}</p>`, 502) };
-  // The number comes from the orders LIST, where it is known to be what Jumia
-  // calls the order, never from the form.
-  const orderNumber = await findOrderNumber(creds.accessToken, orderId);
-  if (!orderNumber) {
-    return {
-      error: html(
-        `<h2>Order</h2><p>I couldn't confirm this order's number with Jumia, so packing stays off. ` +
-          `Jumia's items reply has these fields:</p><pre>${esc(describeShape(order.data.raw))}</pre>`,
-        409,
-      ),
-    };
-  }
-  if (!(await isPackAllowed(orderNumber))) {
-    return {
-      error: html(
-        `<h2>Order #${esc(orderNumber)}</h2>` +
-          `<p>Packing isn't switched on for this order. It is allowed one order at a time, by the owner, because packing ` +
-          `commits the order to a shipping provider and can't be undone.</p>`,
-        403,
-      ),
-    };
-  }
-  return { creds, orderNumber, items: order.data.items, raw: order.data.raw };
 }
 
 export async function GET(req: Request) {
@@ -155,14 +115,7 @@ export async function POST(req: Request) {
   if (!userId || !isAdmin(userId)) return new Response("Not found", { status: 404 });
 
   // Only from this site's own page.
-  const origin = req.headers.get("origin");
-  if (origin) {
-    let originHost = "";
-    try { originHost = new URL(origin).host; } catch { /* malformed: refused below */ }
-    if (!originHost || (originHost !== new URL(req.url).host && originHost !== req.headers.get("host"))) {
-      return new Response("Forbidden", { status: 403 });
-    }
-  }
+  if (!sameOrigin(req)) return new Response("Forbidden", { status: 403 });
 
   const form = await req.formData().catch(() => null);
   const orderId = String(form?.get("orderId") ?? "");

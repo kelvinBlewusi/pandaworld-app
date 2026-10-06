@@ -42,9 +42,9 @@ export default async function AdminOrdersPage() {
       <p className="mt-1 max-w-3xl text-sm text-zinc-500">
         Your own shop&apos;s orders from the last 30 days{store ? ` (${store})` : ""}, read from Jumia. This is a
         trial of the label flow. Get label asks Jumia for the label of an order that is already packed (it has a
-        tracking number) and opens the PDF; it changes nothing. Pack &amp; get label… appears only on an order the owner
-        has switched on for packing, one at a time, because packing commits the order to a shipping provider and
-        can&apos;t be undone.
+        tracking number) and opens the PDF; it changes nothing. Pack &amp; get label…, Ready to ship… and Cancel…
+        appear only on an order the owner has switched on, one at a time, because they change a real customer&apos;s
+        order and can&apos;t be undone. Each opens a page that asks before changing anything.
       </p>
 
       {problem && <p className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">{problem}</p>}
@@ -69,9 +69,10 @@ export default async function AdminOrdersPage() {
               {orders.map((o) => {
                 const canLabel = !o.hasItemsFulfilledByJumia && o.packedItems > 0;
                 // Packing is switched on one order at a time by the owner (lib/jumia/pack-allowlist.ts).
-                const canPack =
-                  packAllowed.includes(o.number) && !o.hasItemsFulfilledByJumia &&
-                  o.status.toUpperCase() !== "CANCELED" && o.packedItems < o.totalItems;
+                // The same switch covers Ready to ship and Cancel; each page re-checks the items.
+                const switchedOn = packAllowed.includes(o.number) && !o.hasItemsFulfilledByJumia && !/CANCEL/i.test(o.status);
+                const canPack = switchedOn && o.packedItems < o.totalItems;
+                const canShip = switchedOn && o.packedItems > 0;
                 return (
                   <tr key={o.id} className="align-top">
                     <td className="px-3 py-2">
@@ -108,7 +109,23 @@ export default async function AdminOrdersPage() {
                             Pack &amp; get label…
                           </a>
                         )}
-                        {!canLabel && !canPack && <span className="text-xs text-zinc-400">{noActionNote(o)}</span>}
+                        {canShip && (
+                          <a
+                            href={`/admin/orders/ready-to-ship?orderId=${o.id}`}
+                            className="whitespace-nowrap rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-800 hover:bg-zinc-50"
+                          >
+                            Ready to ship…
+                          </a>
+                        )}
+                        {switchedOn && (
+                          <a
+                            href={`/admin/orders/cancel?orderId=${o.id}`}
+                            className="whitespace-nowrap rounded-md border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50"
+                          >
+                            Cancel…
+                          </a>
+                        )}
+                        {!canLabel && !switchedOn && <span className="text-xs text-zinc-400">{noActionNote(o)}</span>}
                       </div>
                     </td>
                   </tr>

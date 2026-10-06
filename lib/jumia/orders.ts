@@ -4,14 +4,14 @@
  *
  * Reading is free: list orders, read an order's items and their shipment
  * providers, fetch the label of items already packed. Packing
- * (POST /v2/orders/pack, or the older POST /orders/pack) commits a real
- * customer's order to a shipping provider and can't be undone through the
- * API, so it is only ever called from /admin/orders/pack, for an order the
- * owner has named (lib/jumia/pack-allowlist.ts), after a confirmation. Ready
- * to ship and cancel are deliberately NOT here.
+ * (POST /v2/orders/pack, or the older POST /orders/pack), Ready to ship
+ * (POST /orders/ready-to-ship) and Cancel (PUT /orders/cancel) change a real
+ * customer's order and can't be undone through the API, so they are only ever
+ * called from the admin pages under /admin/orders, for an order the owner has
+ * switched on (lib/jumia/pack-allowlist.ts), after a confirmation.
  *
  * Roles: GET /orders and /orders/items need "VC - Order Viewer" or "VC - Order
- * Manager"; print-labels needs "VC - Order Manager". A Self Authorization app
+ * Manager"; print-labels, pack, ready-to-ship and cancel need "VC - Order Manager". A Self Authorization app
  * made without them gets a 403, which describeError() names.
  *
  * Used by /admin/orders to try the flow on the owner's own shop (2026-10-06).
@@ -96,6 +96,22 @@ export interface PrintLabelsResult {
   error?:  { orderItems: { id: string; response: { code: string; message: string } }[]; total?: number };
 }
 
+/** What Jumia answers for one item it refused (ready to ship, cancel, print). */
+export interface ItemRefusal {
+  id:        string;
+  response?: { code?: string; message?: string };
+}
+
+export interface ReadyToShipResult {
+  success: { packages: { orderItems: string[]; countryCode?: string; trackingNumber: string }[]; total?: number };
+  error?:  { orderItems: ItemRefusal[]; total?: number };
+}
+
+export interface CancelResult {
+  success: { orderItems: { id: string; cancellationReason?: { id?: string; description?: string } }[]; total?: number };
+  error?:  { orderItems: (ItemRefusal & { cancellationReason?: { description?: string } })[]; total?: number };
+}
+
 /** A readable reason from whatever Jumia answered with. */
 export function describeError(status: number, json: unknown, text: string): string {
   const b = (json && typeof json === "object" ? json : {}) as Record<string, unknown>;
@@ -119,7 +135,7 @@ export function describeError(status: number, json: unknown, text: string): stri
 
 async function call<T>(
   accessToken: string,
-  method:      "GET" | "POST",
+  method:      "GET" | "POST" | "PUT",
   path:        string,
   opts:        { query?: Record<string, string | number | string[] | undefined>; body?: unknown } = {},
 ): Promise<JumiaCall<T>> {
@@ -285,4 +301,30 @@ export function packItemsV1(
   items:       { id: string; shipmentProviderId: string }[],
 ): Promise<JumiaCall<PackV1Result>> {
   return call(accessToken, "POST", "/orders/pack", { body: { orderItems: items } });
+}
+
+/**
+ * POST /orders/ready-to-ship: tells Jumia the packed items are ready to hand
+ * over. Jumia requires them pending AND packed (with a tracking number), with
+ * the same provider, method and country. CHANGES THE ORDER; only called from
+ * /admin/orders/ready-to-ship.
+ */
+export function markReadyToShip(
+  accessToken:  string,
+  orderItemIds: string[],
+): Promise<JumiaCall<ReadyToShipResult>> {
+  return call(accessToken, "POST", "/orders/ready-to-ship", { body: { orderItemIds } });
+}
+
+/**
+ * PUT /orders/cancel: cancels the items. Jumia allows it for items pending or
+ * ready to ship. The request has no field for a reason, so Jumia records its
+ * default cancellation reason. CANCELS A CUSTOMER'S ORDER and can't be undone;
+ * only called from /admin/orders/cancel.
+ */
+export function cancelItems(
+  accessToken:  string,
+  orderItemIds: string[],
+): Promise<JumiaCall<CancelResult>> {
+  return call(accessToken, "PUT", "/orders/cancel", { body: { orderItemIds } });
 }
