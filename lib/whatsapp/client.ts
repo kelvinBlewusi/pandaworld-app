@@ -347,22 +347,42 @@ export async function uploadMedia(bytes: Uint8Array, mimeType: string, filename:
   return id;
 }
 
-/** A PDF (shipping labels) as a WhatsApp document, uploaded first: see uploadMedia. */
-export async function sendDocument(to: string, bytes: Uint8Array, filename: string, caption?: string): Promise<void> {
+/**
+ * The file, the text and up to 3 buttons as ONE message: Meta's
+ * interactive "button" message with a document header. Used for shipping
+ * labels, so "Packed …" and its PDF arrive together (owner, 2026-10-06).
+ */
+export async function sendButtonsWithDocument(
+  to:       string,
+  bytes:    Uint8Array,
+  filename: string,
+  bodyText: string,
+  buttons:  { id: string; title: string }[],
+): Promise<void> {
+  if (buttons.length === 0 || buttons.length > 3) {
+    throw new Error(`sendButtonsWithDocument: expected 1-3 buttons, got ${buttons.length}`);
+  }
   const id = await uploadMedia(bytes, "application/pdf", filename);
   await callGraphApi({
     to,
-    type: "document",
-    document: { id, filename, ...(caption ? { caption } : {}) },
+    type: "interactive",
+    interactive: {
+      type:   "button",
+      header: { type: "document", document: { id, filename } },
+      body:   { text: bodyText },
+      action: { buttons: buttons.map((b) => ({ type: "reply", reply: { id: b.id, title: b.title.slice(0, 20) } })) },
+    },
   });
 }
 
-export async function sendDocumentIfConfigured(to: string, bytes: Uint8Array, filename: string, caption?: string): Promise<void> {
+export async function sendButtonsWithDocumentIfConfigured(
+  to: string, bytes: Uint8Array, filename: string, bodyText: string, buttons: { id: string; title: string }[],
+): Promise<void> {
   if (!isWhatsAppConfigured()) {
-    console.warn(`[whatsapp] not configured — would have sent a document to ${to}: ${filename}`);
+    console.warn(`[whatsapp] not configured — would have sent ${filename} with buttons to ${to}: ${bodyText}`);
     return;
   }
-  await sendDocument(to, bytes, filename, caption);
+  await sendButtonsWithDocument(to, bytes, filename, bodyText, buttons);
 }
 
 /**
