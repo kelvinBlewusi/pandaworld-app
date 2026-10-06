@@ -87,8 +87,18 @@ export async function GET(req: Request) {
   }
 
   const others = items.filter((i) => !packable(i));
+  const stationName = (p: ShipmentProvider) => `${esc(p.name)}${p.trackingCodeRequired ? " (needs a tracking code)" : ""}`;
+  // Every station shown as a choice (not a dropdown), the same list a WhatsApp list message would carry.
   const options = common
-    .map((p) => `<option value="${esc(p.id)}">${esc(p.name)}${p.trackingCodeRequired ? " (needs a tracking code)" : ""}</option>`)
+    .map((p, n) => `<label style="display:block;margin:4px 0"><input type="radio" name="provider" value="${esc(p.id)}"${n === 0 ? " checked" : ""}> ${stationName(p)}</label>`)
+    .join("");
+  // Everything Jumia sent, item by item: shows whether the API gives this shop the
+  // same stations Vendor Center's map does.
+  const offered = todo
+    .map((i) => {
+      const list = byItem.get(i.id) ?? [];
+      return `<li>${esc(itemName(i))}: <b>${list.length}</b> station${list.length === 1 ? "" : "s"}: ${list.map(stationName).join(", ") || "none"}</li>`;
+    })
     .join("");
   return html(
     `<h2>Pack order #${esc(orderNumber)} and get the label</h2>` +
@@ -100,12 +110,14 @@ export async function GET(req: Request) {
       `<form method="post" action="/admin/orders/pack"><input type="hidden" name="orderId" value="${esc(orderId)}">` +
       todo.map((i) => `<input type="hidden" name="item" value="${esc(i.id)}">`).join("") +
       `<input type="hidden" name="api" value="v2">` +
-      `<p><label>Shipping provider <select name="provider">${options}</select></label></p>` +
+      `<fieldset style="margin:12px 0;padding:8px 12px;border:1px solid #ccc;border-radius:6px">` +
+      `<legend>Drop-off station: ${common.length} that take${common.length === 1 ? "s" : ""} every item</legend>${options}</fieldset>` +
       (common.some((p) => p.trackingCodeRequired)
         ? `<p><label>Tracking code (only if the provider needs one) <input name="tracking" autocomplete="off"></label></p>`
         : "") +
       `<p><label><input type="checkbox" name="confirm" value="yes"> I understand this commits the order to the courier and can't be undone.</label></p>` +
       `<button type="submit">Pack order and get label</button></form>` +
+      `<details open style="margin-top:20px"><summary>Stations Jumia sent for each item (live, for your shop)</summary><ul>${offered}</ul></details>` +
       `<details style="margin-top:20px"><summary>What Jumia sent (no customer details)</summary><pre>${esc(describeShape(raw))}</pre></details>`,
   );
 }
