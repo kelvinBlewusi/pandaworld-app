@@ -3319,3 +3319,109 @@ describe("Fix & resubmit for fields Jumia doesn't show in the category", () => {
     expect(sent.some((m) => m.body.includes("still isn't happy"))).toBe(false);
   });
 });
+
+// Live 2026-10-02 (Gadget point): with one product drafted, the seller sent
+// the next product's photo, typed "1" (our message had said "tell me the
+// product number you want to submit") and got the drafted product priced at
+// GHS 1; then "Ghs 150" priced it again. They deleted the draft on the
+// review page, and "submit all" and Retry said "couldn't load this batch".
+describe("the step after drafting, before submitting", () => {
+  const FULL = {
+    description: "A long enough description to clear the fifty-character minimum check.",
+    category_code: "1234",
+    brand: "Monark",
+    images: ["https://cdn.test/a.jpg"],
+    status: "draft",
+    sku: "PA-TEST01",
+    quantity: 3,
+  };
+  const TITLE = "Vintage Radio Eau de Parfum - 100ml, Natural Spray";
+
+  function drafted(n: number) {
+    db.tables.listings = Array.from({ length: n }, (_, i) => ({
+      id: `listing-${i + 1}`, user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: i + 1,
+      title: i === 0 ? TITLE : `Product ${i + 1}`, selling_price: 550, ...FULL,
+    }));
+    seedSession({ state: "awaiting_confirmation", batch_size: n, batch_seq: null });
+    sent.length = 0;
+  }
+
+  it("submits the product a number on its own names, rather than pricing it at that number", async () => {
+    drafted(1);
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "1" });
+
+    expect(pushCallCount).toBe(1);
+    expect(listings()[0].selling_price).toBe(550);
+    expect(sent.some((m) => m.body.includes("price to"))).toBe(false);
+    expect(sent.some((m) => m.body.includes("Product 1: ✅ submitted"))).toBe(true);
+  });
+
+  it("submits just that one in a bigger batch", async () => {
+    drafted(3);
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "2" });
+
+    expect(pushCallCount).toBe(1);
+    expect(listings().map((l) => l.status)).toEqual(["draft", "pending_approval", "draft"]);
+  });
+
+  it("still takes a number past the batch's products as the price", async () => {
+    drafted(1);
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "150" });
+
+    expect(pushCallCount).toBe(0);
+    expect(listings()[0].selling_price).toBe(150);
+  });
+
+  it("won't set a price below Jumia's lowest for the country", async () => {
+    db.tables.jumia_connections = [{ user_id: USER, country: "GH" }];
+    db.tables.jumia_price_minimums = [{ country: "GH", currency: "GHS", min_price: 8.81 }];
+    _resetPriceMinimumCache();
+    try {
+      drafted(1);
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "price 5" });
+
+      expect(listings()[0].selling_price).toBe(550);
+      expect(sent.map((m) => m.body)).toEqual([
+        "⚠️ GHS 5 is below the lowest price Jumia allows (GHS 8.81), so I haven't changed product 1. Send its price again, at least 8.81.",
+      ]);
+    } finally {
+      db.tables.jumia_connections = [];
+      db.tables.jumia_price_minimums = [];
+      _resetPriceMinimumCache();
+    }
+  });
+
+  it("says a photo can't join a drafted batch, and offers Start another", async () => {
+    drafted(1);
+    await handleLinkedMessage(USER, PHONE, "m1", { imageMediaId: "next-product", text: "Ghs 150" });
+
+    expect(listings()).toHaveLength(1);
+    expect(listings()[0].selling_price).toBe(550);
+    expect(sent).toEqual([expect.objectContaining({
+      kind: "buttons",
+      rows: ["submit all", "start another"],
+      body: "📸 This product is already drafted, so I can't add that photo to it.\n\n" +
+        "For a new product, tap *Start another* and send its photos again. To send the drafted one to Jumia first, tap *Submit all*.",
+    })]);
+  });
+
+  it("ends a batch whose products were deleted, rather than offering Retry", async () => {
+    drafted(1);
+    db.tables.listings = [];
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "submit all" });
+
+    expect(sent).toEqual([expect.objectContaining({
+      kind: "buttons",
+      rows: ["start another"],
+      body: "The products in this batch have been deleted, so there's nothing left to submit or change. Tap *Start another* to list them again.",
+    })]);
+    expect(session().state).toBe("awaiting_count");
+    expect(session().batch_id ?? null).toBeNull();
+
+    sent.length = 0;
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "retry" });
+    expect(sent.at(-1)?.body).toContain("have been deleted");
+  });
+});

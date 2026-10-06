@@ -280,6 +280,34 @@ async function getBatchListings(batchId: string): Promise<ListingRow[]> {
   return (data ?? []) as ListingRow[];
 }
 
+/**
+ * Whether a batch that came back empty has really lost its products, rather
+ * than the lookup failing: the seller deleted them on the review page, or
+ * the 2-day draft clean-up did (app/api/cron/delete-stale-drafts).
+ */
+async function batchHasNoProducts(batchId: string): Promise<boolean> {
+  const { count, error } = await createServerClient()
+    .from("listings")
+    .select("id", { count: "exact", head: true })
+    .eq("whatsapp_batch_id", batchId);
+  return !error && count === 0;
+}
+
+/**
+ * The reply for a batch with nothing left in it, which ends the batch.
+ * Retry could only fail the same way: live 2026-10-02, a seller who had
+ * deleted their one draft on the review page tapped Retry twice and got
+ * "I still can't load this batch" before finding Restart.
+ */
+async function replyBatchEmpty(phoneNumber: string): Promise<void> {
+  await resetSession(phoneNumber);
+  await replyButtons(
+    phoneNumber,
+    "The products in this batch have been deleted, so there's nothing left to submit or change. Tap *Start another* to list them again.",
+    [START_ANOTHER],
+  );
+}
+
 /** Short "still needs: price, category" summary for a listing, or "" when
  *  it's ready to push — uses the exact same checks pushListingToJumia
  *  itself enforces (lib/jumia/push-listing.ts's missingFieldLabels), so
@@ -898,6 +926,10 @@ async function retryBatchDrafts(
 
   const listings = await getBatchListings(batchId);
   if (listings.length === 0) {
+    if (await batchHasNoProducts(batchId)) {
+      await replyBatchEmpty(phoneNumber);
+      return;
+    }
     await replyError(phoneNumber, "⚠️ I still can't load this batch — give it a moment and try again.");
     return;
   }
@@ -3191,6 +3223,23 @@ async function handleAwaitingBatchConfirmation(
   const batchSize = session.batchSize ?? 1;
   const text = content.text?.trim();
 
+  // A photo now is the next product: this batch can't take more. Live
+  // 2026-10-02, a seller with one drafted product sent the next one's photo,
+  // got "Reply submit all", then typed "1" and its price, and both landed on
+  // the drafted product. A caption with it belongs to that new product too,
+  // so it isn't read as an edit here.
+  if (batchId && content.imageMediaId) {
+    const one = batchSize === 1;
+    await replyButtons(
+      phoneNumber,
+      `📸 ${one ? "This product is" : "These products are"} already drafted, so I can't add that photo to ${one ? "it" : "them"}.\n\n` +
+        `For a new product, tap *Start another* and send its photos again. ` +
+        `To send the drafted ${one ? "one" : "ones"} to Jumia first, tap *Submit all*.`,
+      [{ id: "submit all", title: "Submit all ✅" }, START_ANOTHER],
+    );
+    return;
+  }
+
   if (!batchId || !text) {
     await replyCta(
       phoneNumber,
@@ -3276,6 +3325,20 @@ async function handleAwaitingBatchConfirmation(
     await updateSession(phoneNumber, { awaitingValueFor: null });
   }
 
+  // A product number on its own is the one this step asks for ("tell me the
+  // product number you want to submit"), so it submits that product. It
+  // used to reach the edit below as a price: live 2026-10-02, "1" got
+  // "Updated product 1's price to GHS 1". A number past the batch's
+  // products is still a price.
+  const bareNumber = text.match(/^(?:product\s*)?#?(\d{1,2})[.!]?$/i);
+  if (bareNumber) {
+    const seq = parseInt(bareNumber[1], 10);
+    if (seq >= 1 && seq <= batchSize) {
+      await handleSubmit(userId, phoneNumber, batchId, { all: false, seqs: [seq] });
+      return;
+    }
+  }
+
   const editCmd = parseEditCommand(text, batchSize);
   // Only the explicit "N: text" form is unambiguous. needsSeq and the
   // batchSize===1 implicit-edit fallback both match ANY text at all
@@ -3342,9 +3405,13 @@ async function handleSubmit(
 ): Promise<void> {
   const listings = await getBatchListings(batchId);
   if (listings.length === 0) {
-    // A batch that reached submission always has at least one listing —
-    // an empty result here means the lookup itself failed (see
-    // getBatchListings), not that the seller asked for the wrong number.
+    // A batch that reached submission had at least one listing, so empty
+    // means either they were deleted since or the lookup itself failed
+    // (see getBatchListings), not that the seller asked for the wrong number.
+    if (await batchHasNoProducts(batchId)) {
+      await replyBatchEmpty(phoneNumber);
+      return;
+    }
     await replyError(
       phoneNumber,
       `⚠️ I couldn't load this batch right now — tap Retry in a moment, or start a new one.`,
@@ -3750,6 +3817,10 @@ async function handleEdit(
 ): Promise<void> {
   const listings = await getBatchListings(batchId);
   if (listings.length === 0) {
+    if (await batchHasNoProducts(batchId)) {
+      await replyBatchEmpty(phoneNumber);
+      return;
+    }
     await replyError(
       phoneNumber,
       `⚠️ I couldn't load this batch right now — tap Retry in a moment, or start a new one.`,
@@ -3770,6 +3841,21 @@ async function handleEdit(
   const db = createServerClient();
   const currency = await shopCurrencyForUser(userId);
   const price = extractPrice(editText, currency);
+  // A price Jumia would refuse is never saved: the push would only stop
+  // over it later, further from the message that set it.
+  if (price != null) {
+    const minimum = await priceMinimumForUser(userId);
+    if (isBelowMinimum(price, minimum)) {
+      await replyText(
+        phoneNumber,
+        `⚠️ ${money(price, minimum.currency)} is below the lowest price Jumia allows (${money(minimum.min, minimum.currency)}), so I haven't changed product ${seq}. ` +
+          (listings.length === 1
+            ? `Send its price again, at least ${minimum.min}.`
+            : `Send its price again as "${seq}: price", at least ${minimum.min}.`),
+      );
+      return;
+    }
+  }
   const stock = extractStock(editText);
   const sale  = extractSalePrice(editText, new Date(), currency);
   // Jumia requires the sale price AND both dates together ("The Global
