@@ -24,6 +24,8 @@ export interface JumiaCountry {
   currencyName: string;
   /** Whole units only (FCFA, shillings) or to two decimals. */
   wholeUnits:   boolean;
+  /** IANA timezone sellers there live in: order alerts hold overnight orders by it. */
+  timeZone:     string;
   storefront:   string;
   vendorCenter: string;
   vendorHub:    string;
@@ -42,7 +44,7 @@ export interface JumiaCountry {
 export const JUMIA_COUNTRIES: JumiaCountry[] = [
   {
     slug: "ghana", code: "GH", name: "Ghana",
-    currency: "GHS", currencyName: "cedis", wholeUnits: false,
+    currency: "GHS", currencyName: "cedis", wholeUnits: false, timeZone: "Africa/Accra",
     storefront: "jumia.com.gh", vendorCenter: "vendorcenter.jumia.com.gh",
     vendorHub: "https://vendorhub.jumia.com.gh/",
     commissionsUrl: "https://vendorhub.jumia.com.gh/commissions-2/",
@@ -56,7 +58,7 @@ export const JUMIA_COUNTRIES: JumiaCountry[] = [
   },
   {
     slug: "nigeria", code: "NG", name: "Nigeria",
-    currency: "NGN", currencyName: "naira", wholeUnits: true,
+    currency: "NGN", currencyName: "naira", wholeUnits: true, timeZone: "Africa/Lagos",
     storefront: "jumia.com.ng", vendorCenter: "vendorcenter.jumia.com.ng",
     vendorHub: "https://vendorhub.jumia.com.ng/",
     commissionsUrl: "https://vendorhub.jumia.com.ng/commissions-copy/",
@@ -71,7 +73,7 @@ export const JUMIA_COUNTRIES: JumiaCountry[] = [
   },
   {
     slug: "kenya", code: "KE", name: "Kenya",
-    currency: "KES", currencyName: "shillings", wholeUnits: true,
+    currency: "KES", currencyName: "shillings", wholeUnits: true, timeZone: "Africa/Nairobi",
     storefront: "jumia.co.ke", vendorCenter: "vendorcenter.jumia.co.ke",
     vendorHub: "https://vendorhub.jumia.co.ke/",
     commissionsUrl: "https://vendorhub.jumia.co.ke/commissions-copy/",
@@ -86,7 +88,7 @@ export const JUMIA_COUNTRIES: JumiaCountry[] = [
   },
   {
     slug: "egypt", code: "EG", name: "Egypt",
-    currency: "EGP", currencyName: "Egyptian pounds", wholeUnits: false,
+    currency: "EGP", currencyName: "Egyptian pounds", wholeUnits: false, timeZone: "Africa/Cairo",
     storefront: "jumia.com.eg", vendorCenter: "vendorcenter.jumia.com.eg",
     vendorHub: "https://vendorhub.jumia.com.eg/",
     commissionsUrl: "https://vendorhub.jumia.com.eg/commissions-copy/",
@@ -101,7 +103,7 @@ export const JUMIA_COUNTRIES: JumiaCountry[] = [
   },
   {
     slug: "morocco", code: "MA", name: "Morocco",
-    currency: "MAD", currencyName: "dirhams", wholeUnits: false,
+    currency: "MAD", currencyName: "dirhams", wholeUnits: false, timeZone: "Africa/Casablanca",
     storefront: "jumia.ma", vendorCenter: "vendorcenter.jumia.ma",
     vendorHub: "https://vendorhub.jumia.ma/",
     commissionsUrl: "https://vendorhub.jumia.ma/commissions-copy/",
@@ -115,7 +117,7 @@ export const JUMIA_COUNTRIES: JumiaCountry[] = [
   },
   {
     slug: "cote-divoire", code: "CI", name: "Côte d'Ivoire",
-    currency: "XOF", currencyName: "FCFA", wholeUnits: true,
+    currency: "XOF", currencyName: "FCFA", wholeUnits: true, timeZone: "Africa/Abidjan",
     storefront: "jumia.ci", vendorCenter: "vendorcenter.jumia.ci",
     vendorHub: "https://vendorhub.jumia.ci/",
     commissionsUrl: "https://vendorhub.jumia.ci/commissions-2026/",
@@ -130,7 +132,7 @@ export const JUMIA_COUNTRIES: JumiaCountry[] = [
   },
   {
     slug: "senegal", code: "SN", name: "Senegal",
-    currency: "XOF", currencyName: "FCFA", wholeUnits: true,
+    currency: "XOF", currencyName: "FCFA", wholeUnits: true, timeZone: "Africa/Dakar",
     storefront: "jumia.sn", vendorCenter: "vendorcenter.jumia.sn",
     vendorHub: "https://vendorhub.jumia.sn/",
     commissionsUrl: "https://vendorhub.jumia.sn/commissions-2026/",
@@ -145,7 +147,7 @@ export const JUMIA_COUNTRIES: JumiaCountry[] = [
   },
   {
     slug: "uganda", code: "UG", name: "Uganda",
-    currency: "UGX", currencyName: "shillings", wholeUnits: true,
+    currency: "UGX", currencyName: "shillings", wholeUnits: true, timeZone: "Africa/Kampala",
     storefront: "jumia.ug", vendorCenter: "vendorcenter.jumia.co.ug",
     vendorHub: "https://vendorhub.jumia.ug/",
     commissionsUrl: "https://vendorhub.jumia.ug/commissions-copy/",

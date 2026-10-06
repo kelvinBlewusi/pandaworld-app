@@ -41,6 +41,14 @@ describe("contentOf", () => {
     ).toEqual({ text: "submit 7" });
   });
 
+  // An order alert sent outside the 24 hours is a template; its quick-reply
+  // tap comes back as type "button" carrying the payload set at send time.
+  it("surfaces a template quick-reply's payload as text, like a button id", () => {
+    expect(
+      contentOf(msg({ type: "button", button: { text: "Pack & get label", payload: "orders:packall" } })),
+    ).toEqual({ text: "orders:packall" });
+  });
+
   // This used to return {} for anything unreadable, and the message then
   // fell through the whole state machine in silence: a seller sends a
   // video of their product, sees it delivered, and nothing ever comes

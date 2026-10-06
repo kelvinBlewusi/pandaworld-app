@@ -30,7 +30,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { isAdmin } from "@/lib/auth/is-admin";
 import {
-  getOrderItems, getShipmentProviders, labelableItems, packItems, packItemsV1, printLabels,
+  commonProviders, getOrderItems, getShipmentProviders, labelableItems, packItems, packItemsV1, printLabels,
   type JumiaOrderItem, type ShipmentProvider,
 } from "@/lib/jumia/orders";
 import { ORDER_ID_RE, itemName, itemStatus, loadAllowedOrder as loadOrder, sameOrigin } from "@/lib/jumia/order-admin";
@@ -43,12 +43,6 @@ export const maxDuration = 60;
 
 /** Still to pack: pending, no tracking number yet, shipped by the seller. */
 const packable = (i: JumiaOrderItem) => itemStatus(i) === "PENDING" && !i.trackingNumber && !i.isFulfilledByJumia;
-
-/** The providers Jumia offers for every one of the items: one package goes with one provider. */
-function commonProviders(ids: string[], byItem: Map<string, ShipmentProvider[]>): ShipmentProvider[] {
-  const [first, ...rest] = ids.map((id) => byItem.get(id) ?? []);
-  return (first ?? []).filter((p) => rest.every((list) => list.some((q) => q.id === p.id)));
-}
 
 export async function GET(req: Request) {
   const { userId } = await auth();
