@@ -12,7 +12,7 @@ import { authenticateExtensionKey } from "@/lib/security/extension-keys";
 import { getOrCreateCreditBalance, getMostRecentCreditPack } from "@/lib/billing/extension-credits";
 import { serializeCredits } from "@/lib/billing/credit-packs";
 import { isAdmin } from "@/lib/auth/is-admin";
-import { hasFeature } from "@/lib/billing/features";
+import { featureAccess } from "@/lib/billing/features";
 import { visitorJumiaCountry } from "@/lib/marketing/visitor-country";
 import { getUserNotices } from "@/lib/notices";
 import { latestExtensionVersion } from "@/lib/extension/latest-version";
@@ -36,11 +36,11 @@ export async function GET(req: Request) {
   }
 
   const userId = authResult.userId;
-  const [balance, recentPack, imagePolish, feeCalculator, country, notices, latestVersion] = await Promise.all([
+  const [balance, recentPack, polishAccess, feeCalcAccess, country, notices, latestVersion] = await Promise.all([
     getOrCreateCreditBalance(userId),
     getMostRecentCreditPack(userId),
-    hasFeature(userId, "image_polish_extension"),
-    hasFeature(userId, "fee_calc_extension"),
+    featureAccess(userId, "image_polish_extension"),
+    featureAccess(userId, "fee_calc_extension"),
     // The seller's Jumia connection, else where this request comes from:
     // the panel's calculator is for this one country only.
     visitorJumiaCountry(userId).catch(() => undefined),
@@ -68,7 +68,10 @@ export async function GET(req: Request) {
       // imagePolishAllowed is whether this seller may use it; panels from
       // 0.2.57 read it to ask for the upgrade without calling the route.
       // Panels before 0.2.53 show Polish images from isAdmin instead.
-      features:         { imagePolish: true, imagePolishAllowed: imagePolish, feeCalculator },
+      // At 0 credits both are off (pack features pause, lib/billing/features.ts);
+      // outOfCredits tells panels from 0.2.58 to offer Buy credits, not an upgrade.
+      features:         { imagePolish: true, imagePolishAllowed: polishAccess.ok, feeCalculator: feeCalcAccess.ok },
+      outOfCredits:     Number.isFinite(balance) && balance <= 0,
       notices,
       // The newest version on the Chrome Web Store, or null. Panels from
       // 0.2.57 older than it offer an update (lib/extension/latest-version.ts).

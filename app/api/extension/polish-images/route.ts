@@ -24,7 +24,7 @@ import { NextResponse } from "next/server";
 import { authenticateExtensionKey } from "@/lib/security/extension-keys";
 import { resolveOneImage } from "@/lib/extension/harvested-images";
 import { generateProductShots, isGeminiImageEnabled, PRODUCT_SHOTS } from "@/lib/gemini-image";
-import { hasFeature, featureMinPackName } from "@/lib/billing/features";
+import { featureAccess, featureMinPackName } from "@/lib/billing/features";
 import { activeFeatureGrant, recordGrantUse } from "@/lib/billing/feature-grants";
 import { deductCredits, getOrCreateCreditBalance } from "@/lib/billing/extension-credits";
 import { IMAGE_CREDIT_COST, serializeCredits } from "@/lib/billing/credit-packs";
@@ -51,7 +51,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: authResult.error }, { status: 401, headers: CORS });
   }
   const userId = authResult.userId;
-  if (!(await hasFeature(userId, "image_polish_extension"))) {
+  const access = await featureAccess(userId, "image_polish_extension");
+  if (!access.ok && access.blockedBy === "credits") {
+    // In the pack, but at 0 credits: pack features pause until they top up
+    // (lib/billing/features.ts). A 402 like any other credit refusal, so the
+    // panel offers Buy credits rather than an upgrade.
+    return NextResponse.json(
+      { error: "You're out of credits. Buy credits from your dashboard to keep using Polish.", buyCredits: true },
+      { status: 402, headers: CORS },
+    );
+  }
+  if (!access.ok) {
     return NextResponse.json(
       {
         error:   `Upgrade to use this feature. Image polish comes with the ${featureMinPackName("image_polish_extension")} and Business credit packs.`,

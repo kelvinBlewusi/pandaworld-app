@@ -133,6 +133,7 @@ export class FakeDb {
       update(patch: FakeRow) {
         const updateBuilder = (filters: Filter[]) => ({
           eq(col: string, val: unknown) { return updateBuilder([...filters, { col, val, op: "eq" }]); },
+          is(col: string, val: unknown) { return updateBuilder([...filters, { col, val, op: "is" }]); },
           in(col: string, val: unknown[]) { return updateBuilder([...filters, { col, val, op: "in" }]); },
           select() {
             const hits = rows().filter((r) => db.match(r, filters));

@@ -433,6 +433,20 @@ export async function markReadWithTypingIfConfigured(messageId: string): Promise
 }
 
 /**
+ * Blue ticks only, no "typing…": for a message that will get no reply (a
+ * seller out of credits who has had the one reply, lib/whatsapp/credit-
+ * gate.ts). Best-effort and silent, like the typing version above.
+ */
+export async function markReadIfConfigured(messageId: string): Promise<void> {
+  if (!isWhatsAppConfigured()) return;
+  try {
+    await callGraphApi({ status: "read", message_id: messageId });
+  } catch (e) {
+    console.warn(`[whatsapp] read receipt failed for message ${messageId}: ${(e as Error).message}`);
+  }
+}
+
+/**
  * Fetch an incoming media attachment's bytes. WhatsApp gives you a media ID
  * in the webhook payload, not a direct URL — two hops: resolve the ID to a
  * short-lived authenticated URL, then fetch that URL with the same bearer

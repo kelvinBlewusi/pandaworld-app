@@ -35,6 +35,8 @@ const JUMIA_HOST_RE = /^https:\/\/vendorcenter\.jumia\.com\/products\/(add\/new|
 // Whether the account may use Polish images (features.imagePolish). The
 // button shows either way; without it a tap says to upgrade.
 let polishAllowed = false;
+// At 0 credits pack tools pause (server, 2026-10-06): say Buy credits, not Upgrade.
+let outOfCredits = false;
 
 // ── Settings persistence ─────────────────────────────────────────────────────
 async function loadSettings() {
@@ -48,6 +50,24 @@ function setStatus(text, kind = "") {
   s.hidden = false;
   s.textContent = text;
   s.className = `status ${kind}`; // full replace — also clears any "fadeOut" left from a prior run
+  $("buyCreditsLink").hidden = true;
+}
+
+/** The server said "not enough credits" (402): the way to buy them, under the message. */
+function showBuyCredits() {
+  $("buyCreditsLink").hidden = false;
+}
+
+/**
+ * The server answered 401 to Autofill or Polish: this key was revoked or
+ * replaced. Signed out on the spot, as the power button does, rather than
+ * only the next time the panel opens.
+ */
+async function signOutRevoked(message) {
+  await chrome.storage.local.remove("apiKey");
+  $("apiKey").value = "";
+  showConnectScreen(message || "Your key is no longer valid — reconnect.");
+  await refreshView();
 }
 
 // Auto-dismiss for the completed-fill summary (status text + checklist) —
@@ -331,6 +351,7 @@ async function refreshAccount(apiKey) {
   // whether this seller may use it (imagePolishAllowed). Older servers only
   // sent imagePolish, meaning both.
   polishAllowed = !!(features ? (features.imagePolishAllowed ?? features.imagePolish) : resp.data.isAdmin);
+  outOfCredits = !!resp.data.outOfCredits;
   $("polishSection").hidden = false;
   renderNotices(resp.data.notices || []);
   renderUpdateBar(resp.data.latestExtensionVersion);
@@ -420,6 +441,7 @@ async function boot() {
   $("getKeyLink").href = `${apiBase}/extension/dashboard`;
   $("privacyLink").href = `${apiBase}/privacy`;
   $("polishUpgrade").href = `${apiBase}/pricing`;
+  $("buyCreditsLink").href = `${apiBase}/extension/dashboard`;
   $("footerDashboard").dataset.href = `${apiBase}/extension/dashboard`;
   $("footerHelp").dataset.href = `${apiBase}/extension#how-it-works`;
 
@@ -583,8 +605,14 @@ $("autofill").addEventListener("click", async () => {
         fields: harvest.fields,
       },
     });
+    if (fill?.status === 401) {
+      hideProgress();
+      await signOutRevoked(fill.error);
+      return;
+    }
     if (!fill?.ok) {
       setStatus(fill?.error || "Something went wrong — please try again.", "err");
+      if (fill?.status === 402) showBuyCredits();
       hideProgress();
       return;
     }
@@ -640,10 +668,19 @@ function setPolishStatus(text, kind = "") {
   $("polishUpgrade").hidden = true;
 }
 
-/** Polish isn't in this seller's packs: say so, with the way to get it. */
+/**
+ * Polish isn't available: not in this seller's pack (the way to get it), or
+ * they're out of credits (the way to buy them).
+ */
 function showPolishUpgrade() {
-  setPolishStatus("Upgrade to use this feature.", "err");
-  $("polishUpgrade").hidden = false;
+  setPolishStatus(outOfCredits ? "You're out of credits." : "Upgrade to use this feature.", "err");
+  showPolishLink(outOfCredits);
+}
+function showPolishLink(buyCredits) {
+  const link = $("polishUpgrade");
+  link.textContent = buyCredits ? "Buy credits →" : "See credit packs →";
+  link.href = buyCredits ? `${apiBase}/extension/dashboard` : `${apiBase}/pricing`;
+  link.hidden = false;
 }
 
 /** Load an image (data: or https) into a canvas-ready bitmap. */
@@ -735,6 +772,11 @@ $("polishBtn").addEventListener("click", async () => {
       body: JSON.stringify({ images: sources, notes: $("notes").value.trim() }),
     });
     const data = await res.json().catch(() => null);
+    if (res.status === 401) {
+      setPolishStatus("");
+      await signOutRevoked(data?.error);
+      return;
+    }
     if (res.status === 403 && data?.upgrade) {
       polishAllowed = false;
       showPolishUpgrade();
@@ -742,6 +784,7 @@ $("polishBtn").addEventListener("click", async () => {
     }
     if (!res.ok || !data?.images) {
       setPolishStatus(data?.error || `Something went wrong (HTTP ${res.status}) — please try again.`, "err");
+      if (res.status === 402) showPolishLink(true);
       return;
     }
 

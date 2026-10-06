@@ -17,10 +17,22 @@ import { createServerClient } from "@/lib/supabase/server";
 import { FREE_SIGNUP_CREDITS, getCreditPackByCredits, type CreditPack } from "@/lib/billing/credit-packs";
 import { isAdmin } from "@/lib/auth/is-admin";
 import { isBillingEnabled } from "@/lib/billing/mode";
+import { onBalanceDropped, onBalanceSeen } from "@/lib/billing/credit-status";
 
 /** Admins, and everyone while billing is off, spend nothing. */
 export async function isUnmetered(userId: string): Promise<boolean> {
   return isAdmin(userId) || !(await isBillingEnabled());
+}
+
+/**
+ * At 0 credits or below (owner's rule, 2026-10-06): the WhatsApp bot goes
+ * quiet after one reply (lib/whatsapp/credit-gate.ts) and pack features
+ * stop (lib/billing/features.ts) until the balance is above 0 again. Never
+ * for admins or while billing is off.
+ */
+export async function isOutOfCredits(userId: string): Promise<boolean> {
+  if (await isUnmetered(userId)) return false;
+  return (await storedBalance(userId)) <= 0;
 }
 
 export interface CreditTransaction {
@@ -203,7 +215,12 @@ async function addToBalance(userId: string, amount: number): Promise<number | nu
       console.error("[extension-credits] balance update failed:", error.message);
       return null;
     }
-    if (data && data.length > 0) return newBalance;
+    if (data && data.length > 0) {
+      // A purchase or refund resets what the seller was told; a charge may
+      // warn them (lib/billing/credit-status.ts).
+      await (amount > 0 ? onBalanceSeen(userId, newBalance) : onBalanceDropped(userId, newBalance));
+      return newBalance;
+    }
   }
   return null;
 }
@@ -256,6 +273,7 @@ export async function deductCredits(
       balance_after: newBalance,
       description,
     });
+    await onBalanceDropped(userId, newBalance);
     return { ok: true, balance: newBalance };
   }
 
@@ -356,6 +374,7 @@ export async function topUpBalancesTo(target: number): Promise<{ toppedUp: numbe
       balance_after: target,
       description: `Top-up to ${target} free credits`,
     });
+    await onBalanceSeen(row.user_id, target);
     toppedUp++;
   }
   return { toppedUp };

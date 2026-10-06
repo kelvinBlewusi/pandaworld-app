@@ -190,7 +190,7 @@ export default async function PricingPage() {
                       <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
                       Never expires
                     </li>
-                    {/* What the pack unlocks, kept for good (lib/billing/features.ts).
+                    {/* What the pack includes while it's the last one bought (lib/billing/features.ts).
                         Features not built yet look like the rest (owner's call,
                         2026-10-03); the FAQ below names them as not available yet. */}
                     {packFeatures(p.id).map((f) => (
@@ -239,7 +239,7 @@ export default async function PricingPage() {
             />
             <FAQ
               q="What do the bigger packs unlock?"
-              a={`Buying the Standard pack or bigger once unlocks Jumia QC rejection alerts and guided fixes for good: when Jumia's quality check rejects a listing after accepting it, we tell you why, return its credits, and help you fix and resubmit it. Pro and Business add two tools to the Chrome extension: image polish, which turns your rough photos into four product images (${IMAGE_CREDIT_COST} credits per image), and the Jumia fee calculator for your country. Not available yet: ${comingSoonLabels().join(", ")}.`}
+              a={`The Standard pack and bigger include Jumia QC rejection alerts and guided fixes: when Jumia's quality check rejects a listing after accepting it, we tell you why, return its credits, and help you fix and resubmit it. Pro and Business add two tools to the Chrome extension: image polish, which turns your rough photos into four product images (${IMAGE_CREDIT_COST} credits per image), and the Jumia fee calculator for your country. Your features come from the last pack you bought, and they work while you have credits: at 0 they pause until you top up. Not available yet: ${comingSoonLabels().join(", ")}.`}
             />
             <FAQ
               q="Why is the Chrome extension charged per autofill?"

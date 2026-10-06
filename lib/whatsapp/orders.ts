@@ -6,7 +6,7 @@
  *
  * Gated by pack (lib/billing/features.ts): seeing orders needs
  * `order_alerts`, changing one needs `shipping_labels` (both Pro and up;
- * admins and grants too). Works for every Jumia country: amounts in the
+ * admins and grants too), and neither works at 0 credits. Works for every Jumia country: amounts in the
  * shop's own currency and the country's formatting, Jumia's own wording
  * passed through.
  *
@@ -20,7 +20,7 @@ import {
   sendTemplateIfConfigured, sendTextIfConfigured, LIST_MAX_ROWS,
 } from "@/lib/whatsapp/client";
 import { appUrl } from "@/lib/whatsapp/app-url";
-import { featureMinPackName, hasFeature, type FeatureId } from "@/lib/billing/features";
+import { featureAccess, featureMinPackName, type FeatureBlock, type FeatureId } from "@/lib/billing/features";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
 import { promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
@@ -159,7 +159,11 @@ export function stationShortName(code: string): string {
 const VIEW_FEATURE: FeatureId = "order_alerts";
 const ACT_FEATURE: FeatureId = "shipping_labels";
 
-async function upgrade(phone: string, feature: FeatureId): Promise<void> {
+async function upgrade(phone: string, feature: FeatureId, blockedBy: FeatureBlock): Promise<void> {
+  if (blockedBy === "credits") {
+    await sendCtaUrlIfConfigured(phone, "📦 You're out of credits: buy credits to use orders on WhatsApp again.", "Buy credits", `${appUrl()}/extension/dashboard`);
+    return;
+  }
   await sendCtaUrlIfConfigured(
     phone,
     `📦 Order alerts and shipping labels on WhatsApp come with the ${featureMinPackName(feature)} pack.`,
@@ -177,8 +181,9 @@ export async function handleOrderMessage(userId: string, phone: string, text: st
   if (!cmd) return false;
 
   const feature = cmd.kind === "list" || cmd.kind === "pick" || cmd.kind === "view" ? VIEW_FEATURE : ACT_FEATURE;
-  if (!(await hasFeature(userId, feature))) {
-    await upgrade(phone, feature);
+  const access = await featureAccess(userId, feature);
+  if (!access.ok) {
+    await upgrade(phone, feature, access.blockedBy);
     return true;
   }
 

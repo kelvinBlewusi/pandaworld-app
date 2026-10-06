@@ -152,6 +152,7 @@ const heldReasonsFor = new Map<string, string[]>();
 let qcFeature = true;
 jest.mock("@/lib/billing/features", () => ({
   hasFeature:         async () => qcFeature,
+  featureAccess:      async () => (qcFeature ? { ok: true } : { ok: false, blockedBy: "pack" }),
   featureMinPackName: () => "Standard",
 }));
 

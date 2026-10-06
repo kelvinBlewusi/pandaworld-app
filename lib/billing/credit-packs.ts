@@ -42,9 +42,10 @@ export function packRank(id: string | null | undefined): number {
 
 /**
  * Features that come with a pack, from `minPack` up. A seller has a
- * feature once they've bought that pack or a bigger one, ever: the
- * highest pack bought counts, a smaller top-up later doesn't take it away
- * (lib/billing/features.ts). Set by the owner, 2026-10-01.
+ * feature while the last pack they bought is that pack or a bigger one,
+ * and only while they have credits (lib/billing/features.ts; the owner
+ * set "highest pack ever" on 2026-10-01 and changed it to this on
+ * 2026-10-06).
  *
  * `comingSoon` features are not built yet. They are listed with the packs
  * like the others (owner's call, 2026-10-03; they were greyed out before),

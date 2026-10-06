@@ -24,7 +24,7 @@ import { columnFor, readAttributeValue } from "@/lib/jumia/attribute-mapping";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
 import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames, isStaleCategoryError, type Remedy, isPriceRejection, priceLimitInRejection } from "@/lib/jumia/rejection-remedy";
 import { decideQcAction, type QcContext } from "@/lib/jumia/qc-remedy";
-import { featureMinPackName, hasFeature } from "@/lib/billing/features";
+import { featureAccess, featureMinPackName } from "@/lib/billing/features";
 import { removeAttributesFromCache, getCategoryByCode, getCategoryAttributes, type JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import { isUnlistableCategoryError, sellerCountry } from "@/lib/jumia/unlistable-categories";
 import { provenCategoriesFor } from "@/lib/jumia/live-listings";
@@ -85,6 +85,7 @@ import { enqueueAnalysisJobs, nudgeWorker, workersFor, isBatchSettled, type Anal
 import { restrictedWordsInJumiaRejection, restrictedBrandWordsInRejection } from "@/lib/ai/restricted-words";
 import { rememberRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
+import { batchCreditShortfall, creditGate } from "@/lib/whatsapp/credit-gate";
 
 /**
  * WhatsApp chatbot, Stage 4: multi-product batches, entirely in chat.
@@ -568,6 +569,12 @@ export async function handleLinkedMessage(
     return;
   }
 
+  // Credits first (lib/whatsapp/credit-gate.ts): at 0 the seller gets one
+  // reply about it and then silence until they top up; below 6, a one-time
+  // warning goes out ahead of the reply.
+  const credits = await creditGate(userId, phoneNumber, content.text);
+  if (credits === "stop") return;
+
   // Something the bot cannot read — say so rather than dropping it. This
   // used to fall through the whole state machine in silence, which is the
   // worst possible answer and lands hardest on a seller's first attempt.
@@ -684,7 +691,7 @@ export async function handleLinkedMessage(
         await handleAwaitingJumiaOauth(userId, phoneNumber, content);
         break;
       case "awaiting_count":
-        await handleAwaitingCount(userId, phoneNumber, session, content);
+        await handleAwaitingCount(userId, phoneNumber, session, content, { creditsWarned: credits === "go_warned" });
         break;
       case "awaiting_photos":
         await handleAwaitingPhotos(userId, phoneNumber, session, content);
@@ -1197,6 +1204,7 @@ async function handleAwaitingCount(
   phoneNumber: string,
   session: WhatsAppSession,
   content: { text?: string; imageMediaId?: string },
+  opts: { creditsWarned?: boolean } = {},
 ): Promise<void> {
   // Defense in depth: the LINK-code branch in app/api/whatsapp/webhook/
   // route.ts already checks this once, right after linking. Re-checking
@@ -1250,6 +1258,11 @@ async function handleAwaitingCount(
   }
   const count = parsed.count;
 
+  // Said now, before a single photo is sent, rather than after Done
+  // (owner's request, 2026-10-06). Not on top of the running-low warning
+  // that just went out with this same message.
+  if (!opts.creditsWarned) await warnIfCreditsShort(userId, phoneNumber, count);
+
   const batchId = crypto.randomUUID();
   await updateSession(phoneNumber, {
     state:     "awaiting_photos",
@@ -1287,6 +1300,12 @@ async function handleAwaitingCount(
       { id: "batch_mode:interactive", title: "#II" },
     ],
   );
+}
+
+/** The batch-start credit note (lib/whatsapp/credit-gate.ts), with Buy credits. */
+async function warnIfCreditsShort(userId: string, phoneNumber: string, count: number): Promise<void> {
+  const note = await batchCreditShortfall(userId, count);
+  if (note) await sendCtaUrlIfConfigured(phoneNumber, note, "Buy credits", buyCreditsUrl());
 }
 
 async function sendJumiaConnectLink(userId: string, phoneNumber: string): Promise<void> {
@@ -4439,13 +4458,16 @@ async function fixQcRejection(
 ): Promise<Remedy | null> {
   const listingId = row.id as string;
 
-  // Guided QC fixes come with the Standard pack and up
-  // (lib/billing/features.ts). Without it: the editor, and where to get it.
-  if (!(await hasFeature(userId, "qc_fix"))) {
+  // Guided QC fixes come with the Standard pack and up, and pause at 0
+  // credits (lib/billing/features.ts). Without them: the editor, and why.
+  const access = await featureAccess(userId, "qc_fix");
+  if (!access.ok) {
     await replyCtaOrSplit(
       phoneNumber,
-      `⚠️ ${label}: Jumia's quality check rejected it. Guided QC fixes come with the ${featureMinPackName("qc_fix")} pack and up. ` +
-      `You can fix it yourself in the editor (${focusedEditorUrl(listingId)}), then tap Fix & resubmit.`,
+      access.blockedBy === "credits"
+        ? `⚠️ ${label}: Jumia's quality check rejected it. You're out of credits: buy credits, then tap Fix & resubmit.`
+        : `⚠️ ${label}: Jumia's quality check rejected it. Guided QC fixes come with the ${featureMinPackName("qc_fix")} pack and up. ` +
+          `You can fix it yourself in the editor (${focusedEditorUrl(listingId)}), then tap Fix & resubmit.`,
       "Buy credits",
       buyCreditsUrl(),
     );

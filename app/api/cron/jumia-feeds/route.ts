@@ -115,7 +115,10 @@ export async function GET(req: NextRequest) {
     // them every minute. Listings accepted before the gate went live keep
     // their follow-up: their acceptance message promised the QC alert.
     const qc = qcByUser.get(userId);
-    if (qc && !(await hasFeature(userId, "qc_fix"))) {
+    // By pack only, whatever the balance: this check is what refunds a
+    // listing Jumia's QC rejected, and that refund is how a seller at 0
+    // credits gets going again (lib/billing/features.ts).
+    if (qc && !(await hasFeature(userId, "qc_fix", { ignoreBalance: true }))) {
       const promised = qc.filter(qcAlertPromised);
       await markQcChecked(db, qc.filter((c) => !qcAlertPromised(c)));
       if (promised.length > 0) qcByUser.set(userId, promised);

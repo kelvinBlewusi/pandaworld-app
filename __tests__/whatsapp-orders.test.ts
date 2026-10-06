@@ -21,8 +21,10 @@ jest.mock("@/lib/jumia/credentials", () => ({ getJumiaConnectionKind: async () =
 jest.mock("@/lib/whatsapp/jumia-connect", () => ({ promptJumiaConnection: jest.fn() }));
 
 let featureOn = true;
+let blockedBy: "pack" | "credits" = "pack";
 jest.mock("@/lib/billing/features", () => ({
   hasFeature: jest.fn(async () => featureOn),
+  featureAccess: jest.fn(async () => (featureOn ? { ok: true } : { ok: false, blockedBy })),
   featureMinPackName: () => "Pro",
 }));
 
@@ -81,6 +83,7 @@ beforeEach(() => {
   sent.length = 0;
   calls.length = 0;
   featureOn = true;
+  blockedBy = "pack";
   shopCountry = "GH";
   packRefused = false;
   orders = [
@@ -221,6 +224,15 @@ describe("gated by pack", () => {
     expect(await say(`opack:${O1}`)).toBe(true);
     expect(sent.map((s) => s.kind)).toEqual(["cta", "cta"]);
     expect(sent[0].body).toContain("come with the Pro pack");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a seller with the pack but out of credits is told to buy credits, not to upgrade", async () => {
+    featureOn = false;
+    blockedBy = "credits";
+    await say("orders");
+    expect(sent[0].body).toContain("out of credits");
+    expect(sent[0].body).not.toContain("Pro pack");
     expect(calls).toHaveLength(0);
   });
 });
