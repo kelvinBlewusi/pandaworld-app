@@ -23,16 +23,25 @@ const SAFE_VALUES = new Set(["id", "orderId", "orderNumber", "number", "status",
  * are objects here and print as their field names only.
  */
 export function describeShape(raw: unknown): string {
-  const top = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const show = (prefix: string, k: string, v: unknown): string => {
     if (Array.isArray(v)) return `${prefix}${k}: list of ${v.length}`;
     if (v && typeof v === "object") return `${prefix}${k}: object with ${Object.keys(v).join(", ") || "nothing"}`;
     return `${prefix}${k}: ${SAFE_VALUES.has(k) ? JSON.stringify(v) : v === null ? "null" : typeof v}`;
   };
-  const lines = Object.entries(top).map(([k, v]) => show("", k, v));
-  const first = Array.isArray(top.items) ? top.items[0] : undefined;
+  // A reply that is a list (the real items reply is) is described by its first entry.
+  const lines: string[] = [];
+  let top: unknown = raw;
+  let prefix = "";
+  if (Array.isArray(raw)) {
+    lines.push(`reply: list of ${raw.length}`);
+    top = raw[0];
+    prefix = "[0].";
+  }
+  const obj = (top && typeof top === "object" ? top : {}) as Record<string, unknown>;
+  for (const [k, v] of Object.entries(obj)) lines.push(show(prefix, k, v));
+  const first = Array.isArray(obj.items) ? obj.items[0] : undefined;
   if (first && typeof first === "object") {
-    for (const [k, v] of Object.entries(first as Record<string, unknown>)) lines.push(show("items[0].", k, v));
+    for (const [k, v] of Object.entries(first as Record<string, unknown>)) lines.push(show(`${prefix}items[0].`, k, v));
   }
   return lines.join("\n");
 }
