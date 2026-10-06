@@ -32,6 +32,9 @@ const SUPPORT_EMAIL = "help.pandaworldai@gmail.com";
 // this must agree with the manifest or the panel would claim "ready" on a
 // page it can't actually act on.
 const JUMIA_HOST_RE = /^https:\/\/vendorcenter\.jumia\.com\/products\/(add\/new|edit\/)/;
+// Whether the account may use Polish images (features.imagePolish). The
+// button shows either way; without it a tap says to upgrade.
+let polishAllowed = false;
 
 // ── Settings persistence ─────────────────────────────────────────────────────
 async function loadSettings() {
@@ -183,10 +186,13 @@ async function refreshAccount(apiKey) {
   }
   setPlanText(resp.data.plan);
   setCreditsText(resp.data.credits, resp.data.unlimitedCredits);
-  // The Pro and Business tools; the server checks again on use. A server
-  // that doesn't send `features` yet still shows Polish to admins.
+  // The Pro and Business tools; the server checks again on use. Polish
+  // shows to everyone, and a seller without the pack is told to upgrade
+  // when they tap it (owner's request, 2026-10-06). A server that doesn't
+  // send `features` yet lets admins use it.
   const features = resp.data.features;
-  $("polishSection").hidden = !(features ? features.imagePolish : resp.data.isAdmin);
+  polishAllowed = !!(features ? features.imagePolish : resp.data.isAdmin);
+  $("polishSection").hidden = false;
   setUpCalculator(features?.feeCalculator ? resp.data.country : null);
   return true;
 }
@@ -272,6 +278,7 @@ async function boot() {
   const { apiKey } = await loadSettings();
   $("getKeyLink").href = `${apiBase}/extension/dashboard`;
   $("privacyLink").href = `${apiBase}/privacy`;
+  $("polishUpgrade").href = `${apiBase}/pricing`;
   $("footerDashboard").dataset.href = `${apiBase}/extension/dashboard`;
   $("footerHelp").dataset.href = `${apiBase}/extension#how-it-works`;
 
@@ -471,7 +478,7 @@ $("autofill").addEventListener("click", async () => {
   }
 });
 
-// ── Polish images (admin-only prototype) ────────────────────────────────────
+// ── Polish images (Pro and Business packs) ──────────────────────────────────
 //
 // Reads the rough photos uploaded on the form (HARVEST_IMAGES: the photos
 // only, none of the form's fields), sends up to 3 to
@@ -489,6 +496,13 @@ function setPolishStatus(text, kind = "") {
   s.hidden = !text;
   s.textContent = text || "";
   s.className = `status ${kind}`;
+  $("polishUpgrade").hidden = true;
+}
+
+/** Polish isn't in this seller's packs: say so, with the way to get it. */
+function showPolishUpgrade() {
+  setPolishStatus("Upgrade to use this feature.", "err");
+  $("polishUpgrade").hidden = false;
 }
 
 /** Load an image (data: or https) into a canvas-ready bitmap. */
@@ -545,6 +559,10 @@ function renderPolishGrid(images) {
 }
 
 $("polishBtn").addEventListener("click", async () => {
+  if (!polishAllowed) {
+    showPolishUpgrade();
+    return;
+  }
   const btn = $("polishBtn");
   btn.disabled = true;
   $("polishGrid").hidden = true;
@@ -576,6 +594,11 @@ $("polishBtn").addEventListener("click", async () => {
       body: JSON.stringify({ images: sources, notes: $("notes").value.trim() }),
     });
     const data = await res.json().catch(() => null);
+    if (res.status === 403 && data?.upgrade) {
+      polishAllowed = false;
+      showPolishUpgrade();
+      return;
+    }
     if (!res.ok || !data?.images) {
       setPolishStatus(data?.error || `Something went wrong (HTTP ${res.status}) — please try again.`, "err");
       return;

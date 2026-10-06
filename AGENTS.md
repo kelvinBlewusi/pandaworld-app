@@ -853,9 +853,15 @@ only appear while billing is off.
   else where the request comes from, else Ghana. The page posts its height
   (`pandaworld:embed-height`) so the frame fits it; loaded when opened.
 - **Polish images in the extension (2026-10-02; Pro and Business since
-  0.2.53, admins only before)**: the side panel shows a "Polish images"
-  section when GET /api/extension/account returns
-  `features.imagePolish` (panels before 0.2.53 read `isAdmin`). The button
+  0.2.53, admins only before)**: from 0.2.56 the side panel shows "Polish
+  images" to every connected seller; without `features.imagePolish` (GET
+  /api/extension/account) a tap says "Upgrade to use this feature." with a
+  link to /pricing, as does the route's 403 (`upgrade: true`). 0.2.53–0.2.55
+  show it only with `features.imagePolish`; before 0.2.53 they read
+  `isAdmin`. A seller can also be given it, free, by a row in
+  `feature_grants` (lib/billing/feature-grants.ts: `free_use` skips the
+  credits, `credit_allowance` ends it once that many credits are spent
+  since the grant; added by hand in SQL, no page). The button
   doesn't show the price (owner's call); the credits are deducted after. It harvests the uploaded photos
   (same HARVEST as autofill), shrinks them to ≤1536px JPEG, and POSTs up to
   3 to /api/extension/polish-images (API key auth, `isAdmin` enforced

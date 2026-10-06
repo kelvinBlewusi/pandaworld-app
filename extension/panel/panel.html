@@ -119,10 +119,11 @@
       <ul id="results" class="results"></ul>
       <div id="warnings" class="warnings"></div>
 
-      <!-- Polish images — Pro and Business packs, shown when the account
-           says features.imagePolish (GET /api/extension/account). Turns the
-           rough photos uploaded on the form into 4 product images and puts
-           them in Jumia's image slots. -->
+      <!-- Polish images — Pro and Business packs (features.imagePolish,
+           GET /api/extension/account). Shown to every connected seller; a
+           tap without the pack says to upgrade. Turns the rough photos
+           uploaded on the form into 4 product images and puts them in
+           Jumia's image slots. -->
       <section class="polish" id="polishSection" hidden>
         <div class="polishHead">
           <span class="polishTitle">Polish images</span>
@@ -133,6 +134,7 @@
           <div class="progressBar pulse" style="width: 60%"></div>
         </div>
         <div id="polishStatus" class="status" aria-live="polite" hidden></div>
+        <a id="polishUpgrade" class="linkline" href="#" target="_blank" rel="noopener" hidden>See credit packs →</a>
         <div id="polishGrid" class="polishGrid" hidden></div>
       </section>
     </div>

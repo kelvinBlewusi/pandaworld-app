@@ -79,7 +79,11 @@ it("comes with the Pro and Business packs, not Starter", async () => {
   authUser = "user_starter";
   const res = await call({ images: [{ dataUrl: PHOTO }] });
   expect(res.status).toBe(403);
-  expect((await res.json()).error).toBe("Image polish comes with the Pro and Business credit packs.");
+  // The panel shows the button to everyone and says to upgrade on this.
+  expect(await res.json()).toEqual({
+    error:   "Upgrade to use this feature. Image polish comes with the Pro and Business credit packs.",
+    upgrade: true,
+  });
   expect(generated).toHaveLength(0);
 });
 
@@ -133,5 +137,61 @@ describe("the panel's account", () => {
   it("uses where the seller is when they haven't connected Jumia", async () => {
     buyer("user_new", 940, 900);
     expect((await accountFor("user_new")).country).toEqual({ code: "KE", name: "Kenya" });
+  });
+});
+
+// Owner's gift, 2026-10-06: a seller on free credits polishes free until
+// he has spent the 8 credits he had left (lib/billing/feature-grants.ts).
+describe("a free grant", () => {
+  const GRANTED_AT = "2026-10-06T12:00:00.000Z";
+  beforeEach(() => {
+    db.tables.extension_credits.push({ user_id: "user_gift", balance: 8 });
+    db.tables.feature_grants = [{
+      id: "grant-1", user_id: "user_gift", feature: "image_polish_extension",
+      free_use: true, credit_allowance: 8, ends_at: null, uses: 0, created_at: GRANTED_AT,
+    }];
+    authUser = "user_gift";
+  });
+
+  it("polishes without the pack, without the credits, and charges nothing", async () => {
+    const res = await call({ images: [{ dataUrl: PHOTO }] });
+    expect(res.status).toBe(200);
+    expect((await res.json()).creditsRemaining).toBe(8);
+    expect(db.tables.extension_credit_transactions.some((t) => t.user_id === "user_gift")).toBe(false);
+    expect(db.tables.feature_grants[0].uses).toBe(1);
+    expect((await accountFor("user_gift")).features.imagePolish).toBe(true);
+  });
+
+  it("ends once the credits it covered are spent, whatever was bought since", async () => {
+    db.tables.extension_credit_transactions.push(
+      ...Array.from({ length: 8 }, () => ({ user_id: "user_gift", type: "deduction", amount: -1, created_at: "2026-10-07T10:00:00.000Z" })),
+      { user_id: "user_gift", type: "purchase", amount: 100, created_at: "2026-10-07T11:00:00.000Z" },
+    );
+    const res = await call({ images: [{ dataUrl: PHOTO }] });
+    expect(res.status).toBe(403);
+    expect((await accountFor("user_gift")).features.imagePolish).toBe(false);
+  });
+
+  it("doesn't count what was spent before it began", async () => {
+    db.tables.extension_credit_transactions.push(
+      { user_id: "user_gift", type: "deduction", amount: -1, created_at: "2026-10-05T23:46:09.000Z" },
+      ...Array.from({ length: 7 }, () => ({ user_id: "user_gift", type: "deduction", amount: -1, created_at: "2026-10-07T10:00:00.000Z" })),
+    );
+    expect((await call({ images: [{ dataUrl: PHOTO }] })).status).toBe(200);
+  });
+
+  it("counts a refund back", async () => {
+    db.tables.extension_credit_transactions.push(
+      ...Array.from({ length: 8 }, () => ({ user_id: "user_gift", type: "deduction", amount: -1, created_at: "2026-10-07T10:00:00.000Z" })),
+      { user_id: "user_gift", type: "refund", amount: 2, created_at: "2026-10-07T10:30:00.000Z" },
+    );
+    expect((await call({ images: [{ dataUrl: PHOTO }] })).status).toBe(200);
+  });
+
+  it("charges as usual when the grant isn't a free one", async () => {
+    db.tables.feature_grants[0].free_use = false;
+    db.tables.extension_credits.find((r) => r.user_id === "user_gift")!.balance = 50;
+    const body = await (await call({ images: [{ dataUrl: PHOTO }] })).json();
+    expect(body.creditsRemaining).toBe(50 - 3 * IMAGE_CREDIT_COST);
   });
 });
