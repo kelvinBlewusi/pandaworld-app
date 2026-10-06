@@ -918,6 +918,11 @@ only appear while billing is off.
   needs a permission: never add one, since Chrome disables an extension
   that gains permissions until every seller re-approves. Panels before
   0.2.57 have none of this, and Chrome updates them by itself within hours.
+- **Queued for the next extension release (0.2.58)**: Autofill and Polish
+  sign the seller out the moment the server answers 401 "revoked" (panel.js
+  now clears the saved key only when the account call gets that 401, i.e. when
+  the panel opens), running the same removal as the power button's logout().
+  Owner agreed 2026-10-06; 0.2.57 is with Google, so it can't go in 0.2.57.
 - **FAQ (2026-10-02)**: public at `/faq` (app/faq/page.tsx, content in
   lib/marketing/faq.tsx with a plain-text copy of each answer for its
   FAQPage structured data), linked from the extension sidebar and the
@@ -1133,6 +1138,26 @@ Listed by priority. Pick from here when looking for "what to do next".
        per package), upload it to WhatsApp (POST /{phone-number-id}/media)
        and send it as a document, e.g. `Label-<order>.pdf`.
     3. "Mark ready to ship" button: POST /orders/ready-to-ship.
+
+    **Trial started 2026-10-06** (owner: "use my shop's orders to try the
+    label thing"): `/admin/orders` (admin only) lists the signed-in admin's OWN
+    shop's orders of the last 30 days and, per order already packed, a Get
+    label button (POST /admin/orders/label) that reads the order's items and
+    asks Jumia to print the label of the packed ones, then shows the PDF.
+    lib/jumia/orders.ts is READ-ONLY on purpose: list orders, read items,
+    print labels. Packing and Ready to ship are not in it and must only be
+    added with the owner's OK per order: they commit a real customer's order to
+    a shipping provider and can't be undone through the API. The owner's shop
+    is GEM MALL (admin account user_3ELTiEPmV6I2pYCgXedoxbZsQgh). Spec facts
+    (openapi.yaml): GET /orders needs createdAfter/createdBefore (else only
+    today's orders; range at most 3 months), `size` up to 300, pages by
+    `token`/`nextToken`; GET /orders/items?orderId= -> {orderId, orderNumber,
+    items[{id, status, trackingNumber, shipmentType, isFulfilledByJumia,
+    product{name, sellerSku}}]}; POST /orders/print-labels {orderItemIds} ->
+    201 {success:{labels:[{orderItemIds, countryCode, trackingNumber, label}]},
+    error:{orderItems:[{id, response:{code, message}}]}}, `label` a base64 PDF;
+    items must be packed (have a trackingNumber), seller-shipped, and share
+    country, provider and method.
 
     Before building: (a) confirm the seller's token has the **VC - Order
     Manager** role, which every order call needs (one read-only GET /orders
