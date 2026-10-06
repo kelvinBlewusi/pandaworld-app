@@ -1,6 +1,7 @@
 import {
   parseProductCount,
   readProductCount,
+  plainCount,
   parseSubmitCommand,
   parseEditCommand,
   extractPrice,
@@ -46,6 +47,28 @@ describe("readProductCount — says WHY a count was rejected", () => {
 
   it("still rejects negatives as 'no number', not as a count of -1", () => {
     expect(readProductCount("-1")).toEqual({ ok: false, reason: "no_number" });
+  });
+
+  // Owner, 2026-10-06: "users can say i want to list 5 products and the
+  // bot should understand them".
+  it("reads a count written as a word, where the message is plainly a count", () => {
+    expect(readProductCount("five")).toEqual({ ok: true, count: 5 });
+    expect(readProductCount("I want to list five products")).toEqual({ ok: true, count: 5 });
+    expect(readProductCount("I'd like to list two products today")).toEqual({ ok: true, count: 2 });
+    expect(readProductCount("i wanna list three")).toEqual({ ok: true, count: 3 });
+    expect(readProductCount("list twenty")).toEqual({ ok: false, reason: "too_many", value: 20 });
+    expect(readProductCount("which one is better")).toEqual({ ok: false, reason: "no_number" });
+    expect(readProductCount("someone help")).toEqual({ ok: false, reason: "no_number" });
+    expect(readProductCount("one question")).toEqual({ ok: false, reason: "no_number" });
+  });
+
+  it("knows a message that is plainly a count from one that holds a number", () => {
+    for (const [text, n] of [["3", 3], ["3 products", 3], ["5 items.", 5], ["I want to list 5 products", 5], ["i'm listing four today", 4], ["Five", 5]] as const) {
+      expect(plainCount(text)).toBe(n);
+    }
+    for (const text of ["Quantity 20", "I have 2 questions", "change product 2 to 20", "which one", "2: price 150"]) {
+      expect(plainCount(text)).toBeNull();
+    }
   });
 
   it("agrees with parseProductCount on every outcome", () => {

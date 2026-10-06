@@ -36,8 +36,36 @@ export const MAX_BATCH_SIZE = 10;
 /** Admins keep 20, the size the queue was proven at. */
 export const ADMIN_MAX_BATCH_SIZE = 20;
 
-/** "3", "3.", "three products" (digits only — no word-number parsing, kept
- *  deliberately simple) → 3. Rejects 0, negatives, and anything above `max`. */
+/** The counts a seller writes as words. */
+export const NUMBER_WORDS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17,
+  eighteen: 18, nineteen: 19, twenty: 20,
+};
+
+/**
+ * A message that is plainly a count: "3", "3 products", "five", "list five
+ * items", "I want to list 5 products", "I'm listing four today". Not text
+ * that only holds a number ("Quantity 20", "which one is better"). The
+ * count, or null.
+ */
+const LIST_VERB = String.raw`(?:list|upload|post|add)`;
+const COUNT_PHRASE_RE = new RegExp(
+  String.raw`^(?:i\s+want\s+to\s+${LIST_VERB}\s+|i\s+wanna\s+${LIST_VERB}\s+|i(?:\s+would|'d)\s+like\s+to\s+${LIST_VERB}\s+` +
+  String.raw`|${LIST_VERB}\s+|listing\s+|i'?m\s+listing\s+|i\s+am\s+listing\s+|i\s+have\s+)?` +
+  String.raw`(\d{1,3}|${Object.keys(NUMBER_WORDS).join("|")})(?:\s*(?:new\s+)?(?:products?|items?))?(?:\s+today)?\s*[.!]?$`,
+  "i",
+);
+
+export function plainCount(text: string): number | null {
+  const m = COUNT_PHRASE_RE.exec(text.trim());
+  if (!m) return null;
+  return /^\d+$/.test(m[1]) ? parseInt(m[1], 10) : NUMBER_WORDS[m[1].toLowerCase()];
+}
+
+/** "3", "3.", "3 products", "five products" → 3 or 5. Rejects 0, negatives,
+ *  and anything above `max`. A digit anywhere counts; a number word only
+ *  when the message is plainly a count (plainCount). */
 export function parseProductCount(text: string, max = MAX_BATCH_SIZE): number | null {
   const result = readProductCount(text, max);
   return result.ok ? result.count : null;
@@ -62,7 +90,11 @@ export type CountRejection =
 export function readProductCount(text: string, max = MAX_BATCH_SIZE): CountRejection {
   const trimmed = text.trim();
   const match = trimmed.match(/\d+/);
-  if (!match || match.index == null) return { ok: false, reason: "no_number" };
+  if (!match || match.index == null) {
+    const worded = plainCount(trimmed);
+    if (worded == null) return { ok: false, reason: "no_number" };
+    return worded > max ? { ok: false, reason: "too_many", value: worded } : { ok: true, count: worded };
+  }
   // "-1" isn't a count.
   if (trimmed[match.index - 1] === "-") return { ok: false, reason: "no_number" };
 
