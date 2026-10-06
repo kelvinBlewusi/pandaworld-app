@@ -157,12 +157,56 @@ export function listOrders(
   });
 }
 
-/** GET /orders/items?orderId=… */
-export function getOrderItems(
+/**
+ * The order number in an items response. The spec names it `orderNumber`, but
+ * the real reply (seen 2026-10-06 on the owner's shop) didn't carry it under
+ * that name, so any usual name is accepted. Empty when there is none: callers
+ * that need a number the owner can trust use findOrderNumber instead.
+ */
+export function pickOrderNumber(raw: Record<string, unknown> | null | undefined): string {
+  for (const k of ["orderNumber", "number", "orderNo", "order_number"]) {
+    const v = raw?.[k];
+    if ((typeof v === "string" || typeof v === "number") && String(v).trim()) return String(v).trim();
+  }
+  return "";
+}
+
+/** GET /orders/items?orderId=…, with `raw` as Jumia sent it (for describeShape). */
+export async function getOrderItems(
   accessToken: string,
   orderId:     string,
-): Promise<JumiaCall<{ orderId: string; orderNumber: string; items: JumiaOrderItem[] }>> {
-  return call(accessToken, "GET", "/orders/items", { query: { orderId } });
+): Promise<JumiaCall<{ orderId: string; orderNumber: string; items: JumiaOrderItem[]; raw: Record<string, unknown> }>> {
+  const r = await call<Record<string, unknown>>(accessToken, "GET", "/orders/items", { query: { orderId } });
+  if (!r.ok) return r;
+  const raw = (r.data && typeof r.data === "object" ? r.data : {}) as Record<string, unknown>;
+  return {
+    ok: true,
+    data: {
+      orderId:     String(raw.orderId ?? orderId),
+      orderNumber: pickOrderNumber(raw),
+      items:       Array.isArray(raw.items) ? (raw.items as JumiaOrderItem[]) : [],
+      raw,
+    },
+  };
+}
+
+/**
+ * The number of an order, from the orders LIST (whose reply is the shape this
+ * code was proven against), found by its id. Null when Jumia doesn't list it
+ * in the last 60 days, so the caller refuses rather than guesses.
+ */
+export async function findOrderNumber(accessToken: string, orderId: string): Promise<string | null> {
+  const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+  let token: string | undefined;
+  for (let page = 0; page < 5; page++) {
+    const r = await listOrders(accessToken, { createdAfter: day(-60), createdBefore: day(1), size: 300, sort: "DESC", token });
+    if (!r.ok) return null;
+    const hit = r.data.orders.find((o) => o.id === orderId);
+    if (hit) return String(hit.number);
+    if (!r.data.nextToken) return null;
+    token = r.data.nextToken;
+  }
+  return null;
 }
 
 /**

@@ -11,3 +11,28 @@ export function htmlPage(body: string, status = 200): Response {
     { status, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
   );
 }
+
+/** Fields whose values are shown in describeShape; everything else shows only its type. */
+const SAFE_VALUES = new Set(["id", "orderId", "orderNumber", "number", "status", "trackingNumber", "shipmentType", "isFulfilledByJumia", "deliveryOption", "sellerSku"]);
+
+/**
+ * What a Jumia reply looks like, without the customer's details: its field
+ * names and types, with the value only for a few harmless fields. Shown to the
+ * owner on the pack page so a reply that differs from the spec can be seen
+ * and fixed (the order number was missing on 2026-10-06). Names and addresses
+ * are objects here and print as their field names only.
+ */
+export function describeShape(raw: unknown): string {
+  const top = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const show = (prefix: string, k: string, v: unknown): string => {
+    if (Array.isArray(v)) return `${prefix}${k}: list of ${v.length}`;
+    if (v && typeof v === "object") return `${prefix}${k}: object with ${Object.keys(v).join(", ") || "nothing"}`;
+    return `${prefix}${k}: ${SAFE_VALUES.has(k) ? JSON.stringify(v) : v === null ? "null" : typeof v}`;
+  };
+  const lines = Object.entries(top).map(([k, v]) => show("", k, v));
+  const first = Array.isArray(top.items) ? top.items[0] : undefined;
+  if (first && typeof first === "object") {
+    for (const [k, v] of Object.entries(first as Record<string, unknown>)) lines.push(show("items[0].", k, v));
+  }
+  return lines.join("\n");
+}

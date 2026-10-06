@@ -48,7 +48,8 @@ export async function POST(req: Request) {
 
   const order = await getOrderItems(creds.accessToken, orderId);
   if (!order.ok) return html(`<p><b>Couldn't read the order.</b> ${esc(order.message)}</p>`, 502);
-  const { items, orderNumber } = order.data;
+  const { items } = order.data;
+  const orderNumber = order.data.orderNumber || orderId.slice(0, 8);
 
   const labelable = labelableItems(items);
   if (labelable.length === 0) {
