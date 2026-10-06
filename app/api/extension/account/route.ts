@@ -15,6 +15,7 @@ import { isAdmin } from "@/lib/auth/is-admin";
 import { hasFeature } from "@/lib/billing/features";
 import { visitorJumiaCountry } from "@/lib/marketing/visitor-country";
 import { getUserNotices } from "@/lib/notices";
+import { latestExtensionVersion } from "@/lib/extension/latest-version";
 
 export const runtime = "nodejs";
 
@@ -35,7 +36,7 @@ export async function GET(req: Request) {
   }
 
   const userId = authResult.userId;
-  const [balance, recentPack, imagePolish, feeCalculator, country, notices] = await Promise.all([
+  const [balance, recentPack, imagePolish, feeCalculator, country, notices, latestVersion] = await Promise.all([
     getOrCreateCreditBalance(userId),
     getMostRecentCreditPack(userId),
     hasFeature(userId, "image_polish_extension"),
@@ -45,6 +46,7 @@ export async function GET(req: Request) {
     visitorJumiaCountry(userId).catch(() => undefined),
     // Messages from us, shown on the panel until dismissed (lib/notices.ts).
     getUserNotices(userId),
+    latestExtensionVersion(),
   ]);
 
   // Same as the dashboard's Plan pill (app/extension/(app)/layout.tsx): the
@@ -68,6 +70,9 @@ export async function GET(req: Request) {
       // Panels before 0.2.53 show Polish images from isAdmin instead.
       features:         { imagePolish: true, imagePolishAllowed: imagePolish, feeCalculator },
       notices,
+      // The newest version on the Chrome Web Store, or null. Panels from
+      // 0.2.57 older than it offer an update (lib/extension/latest-version.ts).
+      latestExtensionVersion: latestVersion,
       country:          { code: country?.code ?? "GH", name: country?.name ?? "Ghana" },
       isAdmin:          isAdmin(userId),
     },

@@ -147,6 +147,7 @@ function setPlanText(plan) {
 function showConnectScreen(errorText) {
   $("statusRow").hidden = true;
   renderNotices([]);
+  $("updateBar").hidden = true;
   $("calcSection").hidden = true;
   $("connectScreen").hidden = false;
   $("mainForm").hidden = true;
@@ -169,6 +170,82 @@ function showMainForm() {
 function hideMainForm() {
   $("mainForm").hidden = true;
 }
+
+// ── New version available ───────────────────────────────────────────────────
+//
+// GET /api/extension/account returns latestExtensionVersion, the newest
+// version on the Chrome Web Store (lib/extension/latest-version.ts, set by
+// hand once it's published). A panel older than that shows a bar. Chrome
+// updates extensions by itself within hours; this tells the seller there's
+// one and lets them take it now: requestUpdateCheck asks Chrome for it, and
+// reload() restarts the extension on it. No permission needed for either.
+
+const currentVersion = chrome.runtime.getManifest().version;
+let updateCheckedOnce = false;
+
+/** True when dotted version `latest` is newer than `current` ("0.2.10" > "0.2.9"). */
+function isNewerVersion(latest, current) {
+  const a = String(latest).split(".").map(Number);
+  const b = String(current).split(".").map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] || 0, y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
+
+/** chrome.runtime.requestUpdateCheck as { status }, whichever shape this Chrome answers in. */
+function requestUpdateCheck() {
+  return new Promise((resolve) => {
+    try {
+      const done = (a, b) => resolve(a && typeof a === "object" ? a : { status: a, version: b?.version });
+      const maybePromise = chrome.runtime.requestUpdateCheck(done);
+      if (maybePromise && typeof maybePromise.then === "function") maybePromise.then(done, () => resolve({ status: "error" }));
+    } catch {
+      resolve({ status: "error" });
+    }
+  });
+}
+
+function renderUpdateBar(latest) {
+  const bar = $("updateBar");
+  if (!latest || !isNewerVersion(latest, currentVersion)) {
+    bar.hidden = true;
+    return;
+  }
+  $("updateText").textContent = `A new version of PandaWorldAI is available (v${latest}).`;
+  $("updateNote").hidden = true;
+  bar.hidden = false;
+  // Once per panel session, ask Chrome for it quietly so it's on its way
+  // even if the seller never taps. If it's already downloaded, say so.
+  if (!updateCheckedOnce) {
+    updateCheckedOnce = true;
+    requestUpdateCheck().then((r) => {
+      if (r.status === "update_available") {
+        $("updateText").textContent = `PandaWorldAI v${latest} is ready to install.`;
+        $("updateBtn").textContent = "Restart to update";
+      }
+    });
+  }
+}
+
+$("updateBtn").addEventListener("click", async () => {
+  const btn = $("updateBtn");
+  const note = $("updateNote");
+  btn.disabled = true;
+  note.hidden = false;
+  note.textContent = "Checking…";
+  const { status } = await requestUpdateCheck();
+  if (status === "update_available") {
+    note.textContent = "Updating. This panel will close: open it again, then refresh your Jumia page.";
+    setTimeout(() => chrome.runtime.reload(), 1500);
+    return;
+  }
+  note.textContent = status === "error"
+    ? "Couldn't check just now. Chrome will update PandaWorldAI by itself within a few hours."
+    : "Chrome doesn't have it yet. It will install by itself within a few hours, nothing else to do.";
+  btn.disabled = false;
+});
 
 // ── Notices from PandaWorld ─────────────────────────────────────────────────
 //
@@ -256,6 +333,7 @@ async function refreshAccount(apiKey) {
   polishAllowed = !!(features ? (features.imagePolishAllowed ?? features.imagePolish) : resp.data.isAdmin);
   $("polishSection").hidden = false;
   renderNotices(resp.data.notices || []);
+  renderUpdateBar(resp.data.latestExtensionVersion);
   setUpCalculator(features?.feeCalculator ? resp.data.country : null);
   return true;
 }

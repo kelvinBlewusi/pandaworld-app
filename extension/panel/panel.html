@@ -15,6 +15,16 @@
       <button id="logoutBtn" class="iconBtn" title="Disconnect" aria-label="Disconnect">⏻</button>
     </div>
 
+    <!-- "A new version is available" — shown when the account's
+         latestExtensionVersion is newer than this panel's own version.
+         "Update now" asks Chrome for the update and restarts the extension
+         (panel.js). -->
+    <div class="updateBar" id="updateBar" hidden>
+      <div class="updateText" id="updateText"></div>
+      <button type="button" id="updateBtn" class="updateBtn">Update now</button>
+      <div class="updateNote" id="updateNote" hidden></div>
+    </div>
+
     <!-- Messages from PandaWorld (GET /api/extension/account -> notices),
          each with a "Got it" that dismisses it for good. Filled by
          renderNotices() in panel.js. -->
