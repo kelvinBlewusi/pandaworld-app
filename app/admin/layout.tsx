@@ -31,6 +31,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
             <Link href="/admin/errors" className="hover:text-zinc-900">Errors</Link>
             <Link href="/admin/blocked-categories" className="hover:text-zinc-900">Blocked categories</Link>
             <Link href="/admin/auto-fix" className="hover:text-zinc-900">Auto-fix</Link>
+            <Link href="/admin/orders" className="hover:text-zinc-900">Orders</Link>
             <Link href="/admin/billing" className="hover:text-zinc-900">Billing</Link>
             <Link href="/admin/brands" className="hover:text-zinc-900">Brands sync</Link>
             <Link href="/admin/categories" className="hover:text-zinc-900">Categories sync</Link>
