@@ -1269,6 +1269,18 @@ Listed by priority. Pick from here when looking for "what to do next".
       from the directory still shows, with a short name made from the code,
       and is logged so it gets added. Last-used station first. WhatsApp
       lists hold 10 rows (title 24 chars, description 72).
+      **Seen 2026-10-06: the API returns only the station(s) LINKED TO THE
+      SHOP.** For both trial orders (5 items) the owner's shop got exactly
+      one, GH-VDO-OWN-East Legon-Station, while Vendor Center's map listed
+      several (Agility, Spintex, Industrial…). So with one station the bot
+      doesn't ask: it names the station (with address and hours from the
+      directory) and packs with it. The list appears only when Jumia
+      returns more than one. A seller who wants another station changes it
+      in Vendor Center; how a shop gets linked to more stations for the API
+      is not known yet.
+    - **One package per order, always**, and nothing said about it: the
+      owner says one label serves all of an order's boxes and sellers
+      already know to print it for each box.
     - **Every Jumia country, not just Ghana.** One Vendor API host for all
       (lib/jumia/oauth.ts); the seller's token decides shop and country.
       Nothing in lib/jumia/orders.ts, order-admin.ts or the admin pages is
