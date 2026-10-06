@@ -1203,12 +1203,18 @@ Listed by priority. Pick from here when looking for "what to do next".
       package). Find out from Jumia's docs or support before the bot packs
       multi-item orders; until then our route packs one item per package,
       which gives a multi-item order several labels.
-    - Not yet tried through our code: print-labels (needs VC - Order
-      Manager) on the packed order (/admin/orders → Get label).
+    - ✅ print-labels works through our code: /admin/orders → Get label on
+      #388626919 returned the label PDF (owner confirmed). So the Self
+      Authorization token has **VC - Order Manager**, and reading items,
+      picking the packed ones and turning Jumia's base64 into a PDF are
+      proven. After the owner's Vendor Center steps, GET /orders still
+      listed the order as PENDING with packedItems 2 of 2, so read the
+      items' status, not the order's, to know where an order is.
 
-    Before building: (a) confirm the seller's token has the **VC - Order
-    Manager** role, which every order call needs (one read-only GET /orders
-    with the owner's OK); (b) the owner submits a Meta **utility template**
+    Before building: (a) each seller's own Self Authorization app needs the
+    **VC - Order Manager** role, which labels and packing need (the owner's
+    has it, proven 2026-10-06; another seller's may not, so the bot must
+    name the role on a 403, as describeError does); (b) the owner submits a Meta **utility template**
     for the order alert, since it usually lands outside WhatsApp's 24-hour
     window, where only templates are delivered. QC/rejection alerts
     (`lib/jumia/qc-followup.ts`) arriving hours later have the same problem
