@@ -126,12 +126,15 @@ it("returns the four shots from up to three photos, with the seller's notes as c
 describe("the panel's account", () => {
   it("shows a Pro buyer both tools and their own country's calculator", async () => {
     const body = await accountFor("user_pro");
-    expect(body.features).toEqual({ imagePolish: true, feeCalculator: true });
+    expect(body.features).toEqual({ imagePolish: true, imagePolishAllowed: true, feeCalculator: true });
     expect(body.country).toEqual({ code: "NG", name: "Nigeria" });
   });
 
-  it("shows a Starter buyer neither", async () => {
-    expect((await accountFor("user_starter")).features).toEqual({ imagePolish: false, feeCalculator: false });
+  // Owner's request, 2026-10-06: every seller sees the Polish button; the
+  // ones without the pack are told to upgrade on tap. Panels 0.2.53 to
+  // 0.2.55 show it from imagePolish, so that is true for everyone.
+  it("shows a Starter buyer the Polish button but not the right to use it, and no calculator", async () => {
+    expect((await accountFor("user_starter")).features).toEqual({ imagePolish: true, imagePolishAllowed: false, feeCalculator: false });
   });
 
   it("uses where the seller is when they haven't connected Jumia", async () => {
@@ -159,7 +162,7 @@ describe("a free grant", () => {
     expect((await res.json()).creditsRemaining).toBe(8);
     expect(db.tables.extension_credit_transactions.some((t) => t.user_id === "user_gift")).toBe(false);
     expect(db.tables.feature_grants[0].uses).toBe(1);
-    expect((await accountFor("user_gift")).features.imagePolish).toBe(true);
+    expect((await accountFor("user_gift")).features.imagePolishAllowed).toBe(true);
   });
 
   it("ends once the credits it covered are spent, whatever was bought since", async () => {
@@ -169,7 +172,7 @@ describe("a free grant", () => {
     );
     const res = await call({ images: [{ dataUrl: PHOTO }] });
     expect(res.status).toBe(403);
-    expect((await accountFor("user_gift")).features.imagePolish).toBe(false);
+    expect((await accountFor("user_gift")).features.imagePolishAllowed).toBe(false);
   });
 
   it("doesn't count what was spent before it began", async () => {

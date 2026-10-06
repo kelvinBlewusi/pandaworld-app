@@ -146,6 +146,7 @@ function setPlanText(plan) {
 // ── View state ───────────────────────────────────────────────────────────────
 function showConnectScreen(errorText) {
   $("statusRow").hidden = true;
+  renderNotices([]);
   $("calcSection").hidden = true;
   $("connectScreen").hidden = false;
   $("mainForm").hidden = true;
@@ -167,6 +168,64 @@ function showMainForm() {
 }
 function hideMainForm() {
   $("mainForm").hidden = true;
+}
+
+// ── Notices from PandaWorld ─────────────────────────────────────────────────
+//
+// GET /api/extension/account returns the seller's undismissed notices. Each
+// is a card with a "Got it". Built with textContent only, never innerHTML:
+// *word* in the text is shown bold, a blank line starts a new paragraph.
+
+function appendRich(el, text) {
+  for (const part of text.split(/(\*[^*\n]+\*)/g)) {
+    if (/^\*[^*\n]+\*$/.test(part)) {
+      const b = document.createElement("strong");
+      b.textContent = part.slice(1, -1);
+      el.appendChild(b);
+    } else if (part) {
+      el.appendChild(document.createTextNode(part));
+    }
+  }
+}
+
+async function dismissNotice(id) {
+  const { apiKey } = await chrome.storage.local.get(["apiKey"]);
+  if (!apiKey) return;
+  fetch(`${apiBase}/api/extension/notices/dismiss`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ id }),
+  }).catch(() => {});
+}
+
+function renderNotices(notices) {
+  const box = $("notices");
+  box.textContent = "";
+  for (const n of notices) {
+    const card = document.createElement("div");
+    card.className = "notice";
+    const title = document.createElement("div");
+    title.className = "noticeTitle";
+    appendRich(title, n.title);
+    card.appendChild(title);
+    for (const paragraph of String(n.body).split(/\n{2,}/)) {
+      const p = document.createElement("p");
+      appendRich(p, paragraph);
+      card.appendChild(p);
+    }
+    const ok = document.createElement("button");
+    ok.type = "button";
+    ok.className = "noticeOk";
+    ok.textContent = "Got it";
+    ok.addEventListener("click", () => {
+      card.remove();
+      box.hidden = box.children.length === 0;
+      dismissNotice(n.id);
+    });
+    card.appendChild(ok);
+    box.appendChild(card);
+  }
+  box.hidden = notices.length === 0;
 }
 
 // ── Account status (Plan · Credits) ─────────────────────────────────────────
@@ -191,8 +250,12 @@ async function refreshAccount(apiKey) {
   // when they tap it (owner's request, 2026-10-06). A server that doesn't
   // send `features` yet lets admins use it.
   const features = resp.data.features;
-  polishAllowed = !!(features ? features.imagePolish : resp.data.isAdmin);
+  // From 0.2.57 the account says apart whether Polish is shown (always) and
+  // whether this seller may use it (imagePolishAllowed). Older servers only
+  // sent imagePolish, meaning both.
+  polishAllowed = !!(features ? (features.imagePolishAllowed ?? features.imagePolish) : resp.data.isAdmin);
   $("polishSection").hidden = false;
+  renderNotices(resp.data.notices || []);
   setUpCalculator(features?.feeCalculator ? resp.data.country : null);
   return true;
 }

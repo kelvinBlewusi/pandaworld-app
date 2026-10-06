@@ -23,6 +23,7 @@ import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 import { WhatsAppBotButton } from "@/components/whatsapp/whatsapp-bot-button";
 import { BuyCreditsModal } from "./buy-credits-modal";
 import type { CreditTransaction } from "@/lib/billing/extension-credits";
+import type { UserNotice } from "@/lib/notices";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -54,6 +55,19 @@ const TYPE_LABEL: Record<CreditTransaction["type"], string> = {
   refund: "Credits refunded",
 };
 
+/** *word* in a notice's text is shown bold; everything else is plain text. */
+function RichText({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(/(\*[^*\n]+\*)/g).map((part, i) =>
+        /^\*[^*\n]+\*$/.test(part)
+          ? <strong key={i} className="font-semibold text-zinc-900">{part.slice(1, -1)}</strong>
+          : <span key={i}>{part}</span>,
+      )}
+    </>
+  );
+}
+
 function formatRelativeTime(iso: string): string {
   const minutes = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
   if (minutes < 1) return "just now";
@@ -70,6 +84,7 @@ export function ExtensionShell({
   planLabel,
   creditsLabel,
   notifications,
+  notices = [],
   notificationsSeenAt,
   isAdmin = false,
   canBuyCredits = false,
@@ -78,6 +93,8 @@ export function ExtensionShell({
   planLabel: string;
   creditsLabel: string;
   notifications: CreditTransaction[];
+  /** Messages from PandaWorld (lib/notices.ts), shown above the account activity. */
+  notices?: UserNotice[];
   notificationsSeenAt: string | null;
   isAdmin?: boolean;
   /** Show "Buy credits" — only while billing is on (lib/billing/mode.ts). */
@@ -86,6 +103,7 @@ export function ExtensionShell({
   const [open, setOpen] = useState(false);
   const [buyOpen, setBuyOpen] = useState(false);
   const [items, setItems] = useState(notifications);
+  const [noticeItems, setNoticeItems] = useState(notices);
   // seenAt drives the bell's own alert dot — it clears the instant the
   // dropdown opens. displaySeenAt drives each item's "new" highlight and
   // deliberately lags one open behind: it only catches up to seenAt when
@@ -100,12 +118,13 @@ export function ExtensionShell({
 
   useEffect(() => {
     setItems(notifications);
+    setNoticeItems(notices);
     setSeenAt(notificationsSeenAt);
     setDisplaySeenAt(notificationsSeenAt);
-  }, [notifications, notificationsSeenAt]);
+  }, [notifications, notices, notificationsSeenAt]);
 
-  const hasUnseen = items.some((n) => !seenAt || new Date(n.created_at) > new Date(seenAt));
-  const isNew = (n: CreditTransaction) => !displaySeenAt || new Date(n.created_at) > new Date(displaySeenAt);
+  const hasUnseen = [...items, ...noticeItems].some((n) => !seenAt || new Date(n.created_at) > new Date(seenAt));
+  const isNew = (n: { created_at: string }) => !displaySeenAt || new Date(n.created_at) > new Date(displaySeenAt);
 
   function handleOpenChange(next: boolean) {
     if (next) {
@@ -123,6 +142,15 @@ export function ExtensionShell({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id }),
+    }).catch(() => {});
+  }
+
+  function dismissNotice(id: string) {
+    setNoticeItems((prev) => prev.filter((n) => n.id !== id));
+    fetch("/api/extension/notifications/dismiss", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, kind: "notice" }),
     }).catch(() => {});
   }
 
@@ -224,10 +252,37 @@ export function ExtensionShell({
                   )}
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-80 max-h-96 overflow-y-auto">
+              <DropdownMenuContent align="end" className="w-80 max-h-[28rem] overflow-y-auto">
                 <DropdownMenuLabel>Account activity</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                {items.length === 0 ? (
+                {noticeItems.map((n) => (
+                  <DropdownMenuItem
+                    key={n.id}
+                    onSelect={(e) => e.preventDefault()}
+                    className="flex-col items-start gap-1.5 whitespace-normal border-b border-zinc-100 pb-3 last:border-b-0"
+                  >
+                    <div className="flex w-full items-start gap-2">
+                      <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-orange-500" />
+                      <span className={["flex-1 text-sm", isNew(n) ? "font-semibold text-zinc-900" : "font-medium text-zinc-600"].join(" ")}>
+                        {n.title}
+                      </span>
+                      <button
+                        onClick={() => dismissNotice(n.id)}
+                        className="shrink-0 rounded p-0.5 text-zinc-300 hover:bg-zinc-100 hover:text-zinc-600"
+                        aria-label="Dismiss notification"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                    <div className="space-y-2 pl-3.5 text-xs leading-relaxed text-zinc-600">
+                      {n.body.split(/\n{2,}/).map((paragraph, i) => (
+                        <p key={i}><RichText text={paragraph} /></p>
+                      ))}
+                    </div>
+                    <div className="pl-3.5 text-xs text-zinc-400">{formatRelativeTime(n.created_at)}</div>
+                  </DropdownMenuItem>
+                ))}
+                {items.length === 0 && noticeItems.length === 0 ? (
                   <div className="px-2 py-6 text-center text-sm text-zinc-500">
                     No activity yet
                   </div>

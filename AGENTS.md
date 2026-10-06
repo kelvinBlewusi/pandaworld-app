@@ -853,12 +853,15 @@ only appear while billing is off.
   else where the request comes from, else Ghana. The page posts its height
   (`pandaworld:embed-height`) so the frame fits it; loaded when opened.
 - **Polish images in the extension (2026-10-02; Pro and Business since
-  0.2.53, admins only before)**: from 0.2.56 the side panel shows "Polish
-  images" to every connected seller; without `features.imagePolish` (GET
-  /api/extension/account) a tap says "Upgrade to use this feature." with a
-  link to /pricing, as does the route's 403 (`upgrade: true`). 0.2.53–0.2.55
-  show it only with `features.imagePolish`; before 0.2.53 they read
-  `isAdmin`. A seller can also be given it, free, by a row in
+  0.2.53, admins only before)**: every connected seller sees "Polish
+  images" (owner's request, 2026-10-06). GET /api/extension/account always
+  sends `features.imagePolish: true` (what panels 0.2.53 to 0.2.55 read to
+  show it, so no extension update was needed for that) and
+  `features.imagePolishAllowed` (whether this seller may use it; panels from
+  0.2.57 read it, and a tap without it says "Upgrade to use this feature."
+  with a link to /pricing). Panels 0.2.53 to 0.2.55 call the route, whose 403
+  (`upgrade: true`) says the same; the route is the real check. Before 0.2.53
+  panels read `isAdmin`. A seller can also be given it, free, by a row in
   `feature_grants` (lib/billing/feature-grants.ts: `free_use` skips the
   credits, `credit_allowance` ends it once that many credits are spent
   since the grant; added by hand in SQL, no page). The button
@@ -883,6 +886,16 @@ only appear while billing is off.
   clears it on a path change and drops slots no longer on the page. Before
   0.2.52 it lived as long as the tab, oldest first, so a new product in the
   same tab polished the previous one's images again (live, 2026-10-02).
+- **Notices (2026-10-06)**: a message from us to one seller, in table
+  `user_notices` (title, body, `dismissed_at`; added by hand in SQL, no
+  page). Body is plain text: `*word*` is bold, a blank line a new paragraph.
+  Shown in the extension panel from 0.2.57 (GET /api/extension/account ->
+  `notices`, a card with "Got it" -> POST /api/extension/notices/dismiss,
+  API key) and in the dashboard's notification bell, above the account
+  activity (layout.tsx -> ExtensionShell `notices`; its x posts
+  /api/extension/notifications/dismiss with `kind: "notice"`). Panels before
+  0.2.57 ignore `notices`, so a seller on one sees it on the dashboard only.
+  lib/notices.ts.
 - **FAQ (2026-10-02)**: public at `/faq` (app/faq/page.tsx, content in
   lib/marketing/faq.tsx with a plain-text copy of each answer for its
   FAQPage structured data), linked from the extension sidebar and the

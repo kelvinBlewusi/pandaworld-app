@@ -14,6 +14,7 @@ import { serializeCredits } from "@/lib/billing/credit-packs";
 import { isAdmin } from "@/lib/auth/is-admin";
 import { hasFeature } from "@/lib/billing/features";
 import { visitorJumiaCountry } from "@/lib/marketing/visitor-country";
+import { getUserNotices } from "@/lib/notices";
 
 export const runtime = "nodejs";
 
@@ -34,7 +35,7 @@ export async function GET(req: Request) {
   }
 
   const userId = authResult.userId;
-  const [balance, recentPack, imagePolish, feeCalculator, country] = await Promise.all([
+  const [balance, recentPack, imagePolish, feeCalculator, country, notices] = await Promise.all([
     getOrCreateCreditBalance(userId),
     getMostRecentCreditPack(userId),
     hasFeature(userId, "image_polish_extension"),
@@ -42,6 +43,8 @@ export async function GET(req: Request) {
     // The seller's Jumia connection, else where this request comes from:
     // the panel's calculator is for this one country only.
     visitorJumiaCountry(userId).catch(() => undefined),
+    // Messages from us, shown on the panel until dismissed (lib/notices.ts).
+    getUserNotices(userId),
   ]);
 
   // Same as the dashboard's Plan pill (app/extension/(app)/layout.tsx): the
@@ -55,9 +58,16 @@ export async function GET(req: Request) {
       plan,
       credits:          credits.value,
       unlimitedCredits: credits.unlimited,
-      // The panel's pack tools (Pro and up, lib/billing/features.ts). Panels
-      // before 0.2.53 show Polish images from isAdmin instead.
-      features:         { imagePolish, feeCalculator },
+      // The panel's pack tools (Pro and up, lib/billing/features.ts).
+      // imagePolish is always true: every seller sees the Polish images
+      // button (owner's request, 2026-10-06), including on panels 0.2.53 to
+      // 0.2.55, which show it only when this is true and then show the
+      // route's "Upgrade to use this feature" refusal on tap.
+      // imagePolishAllowed is whether this seller may use it; panels from
+      // 0.2.57 read it to ask for the upgrade without calling the route.
+      // Panels before 0.2.53 show Polish images from isAdmin instead.
+      features:         { imagePolish: true, imagePolishAllowed: imagePolish, feeCalculator },
+      notices,
       country:          { code: country?.code ?? "GH", name: country?.name ?? "Ghana" },
       isAdmin:          isAdmin(userId),
     },
