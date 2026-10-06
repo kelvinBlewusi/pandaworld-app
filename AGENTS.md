@@ -1245,6 +1245,13 @@ Listed by priority. Pick from here when looking for "what to do next".
       template's quick reply reopens the window, so everything after it
       (station, label PDF, Ready to ship) is normal messages for everyone.
       Same pattern for late QC results: `jumia_listing_update`.
+    - **Orders with several products** name them all. Our own message: one
+      line per product (name, price, "2 ×" when the same SKU appears as
+      several items), first product's photo as the header, "+N more" past
+      what 1,024 characters hold. Template: a parameter can't contain a new
+      line, so {{2}} is one line, e.g. "LGNT Tablet 4GB RAM, Pedestal Fan
+      5-Blade (+1 more)", names shortened, at most 3 named; the full list
+      comes in the normal message after the tap.
     - **Stations: live from the API, per seller, per order.** GET
       /orders/shipment-providers?orderItemId= runs with the seller's own
       token and returns the providers associated with THAT seller's shop
