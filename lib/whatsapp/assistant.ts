@@ -117,6 +117,7 @@ export interface EditPart {
 export type AssistantAction =
   | { type: "edit"; edits: EditPart[]; dropped: string[] }
   | { type: "submit"; seqs: number[] | "all" }
+  | { type: "list"; count: number }
   | { type: "restart" }
   | { type: "review" }
   | { type: "orders" }
@@ -154,7 +155,7 @@ function productLine(p: ProductFacts, currency: string): string {
 const STAGE_TEXT: Record<Stage, string> = {
   review: "The products below are drafted and waiting for the seller to check them and submit them to Jumia.",
   sent:   "The seller has just submitted the products below to Jumia. They can no longer be changed here: a product with Jumia is changed in Jumia Vendor Center.",
-  idle:   "The seller is between batches: no products are being listed right now.",
+  idle:   "The seller is between batches: no products are being listed right now. To start, they say how many products they're listing.",
 };
 
 /** What the bot does, for answering questions about it. Kept to what's true. */
@@ -195,6 +196,8 @@ export function buildPrompt(stage: Stage, products: ProductFacts[], currency: st
     '  "ask": true when the change is clear but their words fit more than one product and they did not say all of them: then "products"',
     "  lists every product it could be. With one product only, it is that one.",
     '{"type":"submit","products":"all" or [<numbers>]} - send drafts to Jumia',
+    '{"type":"list","count":<number>} - the seller wants to list new products now and says how many. Add up kinds:',
+    '  "2 shirts and a fridge" is 3. Without a number, use restart.',
     '{"type":"restart"} - start a new batch, list something else, or start over',
     '{"type":"review"} - see or open their drafts or listings',
     '{"type":"orders"} - their Jumia orders',
@@ -282,6 +285,27 @@ export function verifyChanges(
 
 const hasChanges = (c: Changes) => Object.keys(c).length > 0;
 
+const COUNT_WORDS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17,
+  eighteen: 18, nineteen: 19, twenty: 20,
+};
+
+/**
+ * Whether the message gives this many products: the number is in it (as
+ * digits or a word), or its numbers add up to it, counting "a"/"an" as
+ * one ("2 shirts and a fridge" is 3).
+ */
+export function countBacked(count: number, message: string): boolean {
+  const lower = message.toLowerCase();
+  const words = (lower.match(/[a-z]+/g) ?? []).filter((w) => w in COUNT_WORDS).map((w) => COUNT_WORDS[w]);
+  const values = [...messageNumbers(message).filter((n) => Number.isInteger(n)), ...words];
+  if (values.includes(count)) return true;
+  const sum = values.reduce((a, b) => a + b, 0);
+  const articles = (lower.match(/\b(?:an?|another)\s+(?!few\b|lot\b|bit\b|couple\b|number\b)[a-z]/g) ?? []).length;
+  return values.length + articles >= 1 && (sum === count || sum + articles === count);
+}
+
 /** The AI's reply as an action our code can carry out, or unclear. */
 export function parseAction(raw: string, message: string, products: ProductFacts[]): AssistantAction {
   const match = raw.match(/\{[\s\S]*\}/);
@@ -300,6 +324,10 @@ export function parseAction(raw: string, message: string, products: ProductFacts
       return typeof parsed.text === "string" && parsed.text.trim()
         ? { type: "answer", text: parsed.text.trim().slice(0, 700) }
         : { type: "unclear" };
+    case "list": {
+      const count = Number(parsed.count);
+      return Number.isInteger(count) && count >= 1 && countBacked(count, message) ? { type: "list", count } : { type: "unclear" };
+    }
     case "submit": {
       if (parsed.products === "all") return { type: "submit", seqs: "all" };
       const seqs = seqsOf(parsed.products);
@@ -592,9 +620,11 @@ async function creditsReply(userId: string, phone: string): Promise<void> {
 /**
  * handled: the assistant replied. default: nothing it should do here, so
  * the usual reply for this step goes out. failed: the AI couldn't be
- * reached or answered nonsense, so the usual handling runs instead.
+ * reached, so the usual handling runs instead. { list }: between batches,
+ * the seller wants to list this many products; the caller starts the
+ * batch the usual way (credits checked, then the photo flow).
  */
-export type AssistantOutcome = "handled" | "default" | "failed";
+export type AssistantOutcome = "handled" | "default" | "failed" | { list: number };
 
 /**
  * Understand `text` and act on it. `stage` says where the seller is (see
@@ -622,6 +652,11 @@ export async function runAssistant(
     return "failed";
   }
   console.info(`[assistant] ${userId} (${stage}): ${action.type}`);
+
+  if (action.type === "list" && stage !== "review") {
+    await logTurn(userId, stage, text, action, `list ${action.count}`);
+    return { list: action.count };
+  }
 
   const outcome = await carryOut(userId, phone, stage, batchId, products, action, text);
   await logTurn(userId, stage, text, action, outcome);
@@ -664,6 +699,7 @@ async function carryOut(
       ]);
       return "offered submit";
     }
+    case "list":   // in review: like starting over, offered as a tap
     case "restart": {
       if (stage === "review") {
         await sendButtonsIfConfigured(phone, "Start a new batch? Drafts you haven't sent stay on your review page.", [START_ANOTHER, REVIEW]);

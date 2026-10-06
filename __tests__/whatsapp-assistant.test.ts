@@ -45,7 +45,7 @@ jest.mock("@/lib/jumia/categories", () => ({
 }));
 
 import {
-  assistantEnabled, messageNumbers, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
+  assistantEnabled, countBacked, messageNumbers, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { parseVariations } from "@/lib/whatsapp/variation-question";
 import type { ListingRow } from "@/lib/supabase/types";
@@ -145,6 +145,24 @@ describe("reading the AI's reply", () => {
   });
 });
 
+describe("a count of products to list", () => {
+  it("must be in the message, as digits or a word, or add up from it", () => {
+    expect(countBacked(5, "I want to list 5 products")).toBe(true);
+    expect(countBacked(5, "can I list five things")).toBe(true);
+    expect(countBacked(3, "2 shirts and a fridge")).toBe(true);
+    expect(countBacked(4, "two shoes and two bags")).toBe(true);
+    expect(countBacked(1, "I want to list a fridge")).toBe(true);
+    expect(countBacked(3, "I want to list a few things")).toBe(false);
+    expect(countBacked(6, "I want to list 5 products")).toBe(false);
+  });
+
+  it("is read from the AI only when the message backs it", () => {
+    expect(parseAction('{"type":"list","count":3}', "2 shirts and a fridge please", [])).toEqual({ type: "list", count: 3 });
+    expect(parseAction('{"type":"list","count":4}', "a few shirts", [])).toEqual({ type: "unclear" });
+    expect(parseAction('{"type":"list","count":0}', "0 products", [])).toEqual({ type: "unclear" });
+  });
+});
+
 describe("when the usual edit is enough", () => {
   it("a price, stock or sale on its own", () => {
     expect(plainQuickEdit("price 150", true)).toBe(true);
@@ -188,6 +206,13 @@ describe("between batches", () => {
     aiReplies.push('{"type":"answer","text":"A WhatsApp listing costs 2 credits, charged only when it goes live."}');
     expect(await runAssistant("seller", "233", session(), "how much does a listing cost", "idle")).toBe("handled");
     expect(sent[0]).toEqual({ kind: "text", body: "A WhatsApp listing costs 2 credits, charged only when it goes live." });
+  });
+
+  it("hands a count back so the batch starts the usual way", async () => {
+    aiReplies.push('{"type":"list","count":3}');
+    expect(await runAssistant("seller", "233", session(), "I'd like to list 2 shirts and a fridge", "idle")).toEqual({ list: 3 });
+    expect(sent).toEqual([]);
+    expect(db.tables.whatsapp_assistant_log[0]).toMatchObject({ outcome: "list 3" });
   });
 
   it("offers to start listing", async () => {

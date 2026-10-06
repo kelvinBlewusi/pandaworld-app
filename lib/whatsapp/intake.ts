@@ -62,6 +62,8 @@ import { priceMinimumForUser, isBelowMinimum, belowMinimumText, money, type Pric
 import {
   parseProductCount,
   readProductCount,
+  plainCount,
+  type CountRejection,
   parseSubmitCommand,
   parseEditCommand,
   extractPrice,
@@ -1161,9 +1163,6 @@ async function describeStatus(
   }
 }
 
-/** A reply that is plainly a count ("3", "3 products"), not text that holds a number ("Quantity 20"). */
-const CLEAR_COUNT_RE = /^\s*\d{1,3}\s*(products?|items?)?\s*[.!]?\s*$/i;
-
 async function handleAwaitingCount(
   userId: string,
   phoneNumber: string,
@@ -1182,14 +1181,34 @@ async function handleAwaitingCount(
     return;
   }
 
+  const typed = content.text?.trim();
+  const plain = typed ? plainCount(typed) : null;
+  // 10 for sellers, 20 for admins (owner's call, 2026-10-03).
+  const max = isAdmin(userId) ? ADMIN_MAX_BATCH_SIZE : MAX_BATCH_SIZE;
+
+  // Up to the "Got it — N products" message, the chat can be a conversation
+  // (owner, 2026-10-06: "the fixed product upload flow should start from
+  // this message, so users can say i want to list 5 products and the bot
+  // should understand them"). On the assistant's pilot, words that aren't
+  // plainly a count go to it: "I'd like to list 2 shirts and a fridge"
+  // starts a batch of 3 below, a question is answered, and small talk
+  // never starts a batch from a stray number ("I have 2 questions"). If the
+  // AI can't be reached, the usual reading below runs.
+  let understood: number | null = null;
+  if (typed && plain == null && (await assistantEnabled(userId))) {
+    const outcome = await runAssistant(userId, phoneNumber, session, typed, session.lastSubmittedBatchId ? "sent" : "idle");
+    if (outcome === "handled") return;
+    if (typeof outcome === "object") understood = outcome.list;
+    else if (outcome === "default" && !session.lastSubmittedBatchId) {
+      await replyButtons(phoneNumber, `⚠️ I need a number to get started — reply with how many products you're listing today (1–${max}), e.g. *3*.`, COUNT_QUICK_PICKS);
+      return;
+    }
+  }
+
   // Straight after a batch went to Jumia, a reply that isn't plainly a
   // count is about those products. "Quantity 20" was read as a count and
   // started a 20-product batch (owner's report, 2026-10-03).
-  const typed = content.text?.trim();
-  if (session.lastSubmittedBatchId && typed && !CLEAR_COUNT_RE.test(typed)) {
-    // The assistant's pilot: a question about those products, the orders or
-    // the credits is answered; anything else gets the reply below.
-    if ((await assistantEnabled(userId)) && (await runAssistant(userId, phoneNumber, session, typed, "sent")) === "handled") return;
+  if (understood == null && session.lastSubmittedBatchId && typed && plain == null) {
     const sent = await getBatchListings(session.lastSubmittedBatchId);
     const one = sent.length === 1;
     const which = one && sent[0].title ? `"${sent[0].title}" is` : one ? "Your product is" : "Your products are";
@@ -1206,15 +1225,11 @@ async function handleAwaitingCount(
     return;
   }
 
-  // 10 for sellers, 20 for admins (owner's call, 2026-10-03).
-  const max = isAdmin(userId) ? ADMIN_MAX_BATCH_SIZE : MAX_BATCH_SIZE;
-  const parsed = content.text ? readProductCount(content.text, max) : { ok: false as const, reason: "no_number" as const };
+  const parsed: CountRejection = understood != null
+    ? (understood > max ? { ok: false, reason: "too_many", value: understood } : { ok: true, count: understood })
+    : content.text ? readProductCount(content.text, max) : { ok: false, reason: "no_number" };
 
   if (!parsed.ok) {
-    // Words rather than a count, on the assistant's pilot: understood if it
-    // can be ("how many credits do I have?"), else the reply below.
-    if (parsed.reason === "no_number" && typed && (await assistantEnabled(userId))
-      && (await runAssistant(userId, phoneNumber, session, typed, "idle")) === "handled") return;
     // Say which thing went wrong. Answering "50" with "I need a number"
     // reads as the bot not understanding, when the real answer is the
     // batch cap — a fact the seller can act on immediately.

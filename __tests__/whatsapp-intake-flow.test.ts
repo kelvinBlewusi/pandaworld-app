@@ -3683,4 +3683,79 @@ describe("the assistant, on the pilot's accounts", () => {
     expect(aiPrompts).toHaveLength(0);
     expect(sent[0].body).toBe(`Which product number is this for? e.g. "2: change the price to 150"`);
   });
+
+  describe("before the photo flow starts", () => {
+    function idle(patch: Record<string, unknown> = {}, pilot = true) {
+      seedSession({ state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null, listing_id: null, ...patch });
+      db.tables.jumia_connections = [{ user_id: USER, status: "active", access_token: "real-token" }];
+      db.tables.app_settings = pilot ? [{ key: "assistant_users", value: [USER] }] : [];
+      db.tables.whatsapp_assistant_log = [];
+      sent.length = 0;
+    }
+    afterEach(() => { db.tables.jumia_connections = []; });
+
+    it("starts the batch a seller describes in their own words", async () => {
+      idle();
+      aiReplies.push('{"type":"list","count":3}');
+
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "hello, I'd like to list 2 shirts and a fridge" });
+
+      expect(session()).toMatchObject({ state: "awaiting_photos", batch_size: 3, batch_seq: 1 });
+      expect(sent[0].body).toContain("Got it — 3 products. You can send all 3 in two ways.");
+    });
+
+    it("takes a plain count, in words too, with no AI call", async () => {
+      idle();
+
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "I want to list five products" });
+
+      expect(aiPrompts).toHaveLength(0);
+      expect(session()).toMatchObject({ state: "awaiting_photos", batch_size: 5 });
+    });
+
+    it("never starts a batch from a number in small talk", async () => {
+      idle();
+      aiReplies.push('{"type":"unclear"}');
+
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "I have 2 questions" });
+
+      expect(session().state).toBe("awaiting_count");
+      expect(sent[0].body).toBe("⚠️ I need a number to get started — reply with how many products you're listing today (1–10), e.g. *3*.");
+    });
+
+    it("still says the cap for a count above it", async () => {
+      idle();
+      aiReplies.push('{"type":"list","count":12}');
+
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "can I do 12 products today please" });
+
+      expect(session().state).toBe("awaiting_count");
+      expect(sent[0].body).toContain("12 is more than I can draft in one go — the most is 10 at a time.");
+    });
+
+    it("starts a new batch straight after one went to Jumia", async () => {
+      idle({ last_submitted_batch_id: "batch-0" });
+
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "I want to list 2 products" });
+
+      expect(session()).toMatchObject({ state: "awaiting_photos", batch_size: 2 });
+    });
+
+    it("reads a stray number the usual way when the AI can't be reached", async () => {
+      idle();
+
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "let me do 2 of them" });
+
+      expect(session()).toMatchObject({ state: "awaiting_photos", batch_size: 2 });
+    });
+
+    it("is unchanged for everyone else", async () => {
+      idle({}, false);
+
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "I have 2 questions" });
+
+      expect(aiPrompts).toHaveLength(0);
+      expect(session()).toMatchObject({ state: "awaiting_photos", batch_size: 2 });
+    });
+  });
 });

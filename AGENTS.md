@@ -927,8 +927,10 @@ only appear while billing is off.
   answers 402, and "Upgrade to use this feature." with See credit packs when
   it's the pack. The "🔒 Encrypted & stored locally on your device." line
   under the key field is gone (owner's request; the Privacy Policy link
-  stays, panel.js sets its href). After Google publishes it, set app_settings
-  extension_latest_version to "0.2.58" so older panels show the update bar.
+  stays, panel.js sets its href). Published by Google; app_settings
+  extension_latest_version set to "0.2.58" on 2026-10-06 (it had never been
+  set, so no panel showed the update bar). Only 0.2.57 panels have the bar;
+  0.2.56 and older update through Chrome on its own schedule.
 - **FAQ (2026-10-02)**: public at `/faq` (app/faq/page.tsx, content in
   lib/marketing/faq.tsx with a plain-text copy of each answer for its
   FAQPage structured data), linked from the extension sidebar and the
@@ -1188,11 +1190,24 @@ quantity of the fridge to 20" (ask which fridge if there are two) and
   - review step (`handleAwaitingBatchConfirmation`), after every exact
     command (photo, submit, review, edit: tap, price/value answers, a bare
     product number) and in place of the older `classifyBatchIntent`;
-  - just after a batch went to Jumia (`handleAwaitingCount`, the "already
-    with Jumia" branch);
-  - between batches, for words that aren't a count.
+  - just after a batch went to Jumia, and between batches
+    (`handleAwaitingCount`), for words that aren't plainly a count.
   Never in awaiting_photos (text is a product's notes there, as always),
   analyzing, or the Jumia connect steps.
+- **The fixed flow starts at "Got it — N products"** (owner, 2026-10-06:
+  "the fixed product upload flow should start from this message, so users
+  can say i want to list 5 products and the bot should understand them").
+  Before it:
+  - for everyone, `plainCount` (lib/whatsapp/batch.ts) reads a message that
+    is plainly a count, in digits or words: "3", "five products", "I want
+    to list 5 products", "I'm listing four today". It's also what starts a
+    new batch straight after one was sent (it replaced CLEAR_COUNT_RE);
+  - on the pilot, anything else goes to the assistant, whose `list` action
+    hands back a count. The count must be in the message, or add up from it
+    ("2 shirts and a fridge" is 3; `countBacked`), and starts the batch the
+    usual way (credits checked first, the cap said). Small talk with a
+    number in it ("I have 2 questions") no longer starts a batch on the
+    pilot; for everyone else the first digit still does, as before.
 - **The plain edit stays deterministic**: "2: price 150", "quantity 20",
   a sale with dates still go to `handleEdit` with no AI call
   (`plainQuickEdit`: handleEdit's extractors found something and the text
@@ -1225,7 +1240,8 @@ quantity of the fridge to 20" (ask which fridge if there are two) and
   `whatsapp_sessions.assistant_pending` for 30 minutes. A tap (`apick:N`,
   `apick:all`), a typed number (it applies, it does NOT submit that
   product), or "both"/"all" answers it. Anything else drops it.
-- **Never on the AI's word**: submit and start over come back as a button
+- **Never on the AI's word**: submit, start over, and "list more" during
+  review come back as a button
   to tap ("Send all 2 products to Jumia?" → "Yes, submit ✅" with id
   `submit all`). Orders go through `handleOrderMessage` with its own pack
   and credit gate. Credits reply with the real balance.
