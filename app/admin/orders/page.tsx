@@ -1,15 +1,17 @@
 import { auth } from "@clerk/nextjs/server";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { listOrders, type JumiaOrder } from "@/lib/jumia/orders";
+import { packAllowedNumbers } from "@/lib/jumia/pack-allowlist";
 
 export const dynamic = "force-dynamic";
 
 const day = (offsetDays: number) => new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10);
 
-function labelNote(o: JumiaOrder): string | null {
+/** Why an order has neither a label nor a Pack button. */
+function noActionNote(o: JumiaOrder): string {
   if (o.hasItemsFulfilledByJumia) return "Fulfilled by Jumia: no label";
   if (o.packedItems <= 0) return "Not packed yet";
-  return null;
+  return "";
 }
 
 export default async function AdminOrdersPage() {
@@ -18,6 +20,7 @@ export default async function AdminOrdersPage() {
   let store = "";
   let problem: string | null = null;
   let orders: JumiaOrder[] = [];
+  const packAllowed = await packAllowedNumbers();
   try {
     const creds = await getValidJumiaCredentials(userId as string);
     const result = await listOrders(creds.accessToken, {
@@ -38,8 +41,9 @@ export default async function AdminOrdersPage() {
       <h1 className="text-lg font-bold">Orders and shipping labels</h1>
       <p className="mt-1 max-w-3xl text-sm text-zinc-500">
         Your own shop&apos;s orders from the last 30 days{store ? ` (${store})` : ""}, read from Jumia. This is a
-        trial of the label flow: nothing is packed, shipped or changed from here. Get label asks Jumia for the label
-        of an order that is already packed (it has a tracking number) and opens the PDF.
+        trial of the label flow. Get label asks Jumia for the label of an order that is already packed (it has a
+        tracking number) and opens the PDF; it changes nothing. Pack… appears only on an order the owner has switched
+        on for packing, one at a time, because packing commits the order to a shipping provider and can&apos;t be undone.
       </p>
 
       {problem && <p className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">{problem}</p>}
@@ -62,7 +66,11 @@ export default async function AdminOrdersPage() {
             </thead>
             <tbody className="divide-y divide-zinc-100">
               {orders.map((o) => {
-                const note = labelNote(o);
+                const canLabel = !o.hasItemsFulfilledByJumia && o.packedItems > 0;
+                // Packing is switched on one order at a time by the owner (lib/jumia/pack-allowlist.ts).
+                const canPack =
+                  packAllowed.includes(o.number) && !o.hasItemsFulfilledByJumia &&
+                  o.status.toUpperCase() !== "CANCELED" && o.packedItems < o.totalItems;
                 return (
                   <tr key={o.id} className="align-top">
                     <td className="px-3 py-2">
@@ -82,16 +90,25 @@ export default async function AdminOrdersPage() {
                       {[o.shippingAddress?.firstName, o.shippingAddress?.city].filter(Boolean).join(", ")}
                     </td>
                     <td className="px-3 py-2">
-                      {note ? (
-                        <span className="text-xs text-zinc-400">{note}</span>
-                      ) : (
-                        <form method="post" action="/admin/orders/label" target="_blank">
-                          <input type="hidden" name="orderId" value={o.id} />
-                          <button type="submit" className="whitespace-nowrap rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-700">
-                            Get label
-                          </button>
-                        </form>
-                      )}
+                      <div className="flex flex-col items-start gap-2">
+                        {canLabel && (
+                          <form method="post" action="/admin/orders/label" target="_blank">
+                            <input type="hidden" name="orderId" value={o.id} />
+                            <button type="submit" className="whitespace-nowrap rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-700">
+                              Get label
+                            </button>
+                          </form>
+                        )}
+                        {canPack && (
+                          <a
+                            href={`/admin/orders/pack?orderId=${o.id}`}
+                            className="whitespace-nowrap rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-800 hover:bg-zinc-50"
+                          >
+                            Pack…
+                          </a>
+                        )}
+                        {!canLabel && !canPack && <span className="text-xs text-zinc-400">{noActionNote(o)}</span>}
+                      </div>
                     </td>
                   </tr>
                 );

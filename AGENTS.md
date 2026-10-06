@@ -1159,6 +1159,27 @@ Listed by priority. Pick from here when looking for "what to do next".
     items must be packed (have a trackingNumber), seller-shipped, and share
     country, provider and method.
 
+    **Result so far (2026-10-06)**: reading works. The owner's shop (GEM MALL,
+    Jumia GH) returned its orders to /admin/orders, so the Self Authorization
+    token has at least VC - Order Viewer; 3 orders that day, all "Pickup
+    Station", none packed. Print-labels (needs VC - Order Manager) is not yet
+    tried: it needs a packed order.
+
+    **Packing, built the same day for ONE named order** (owner: #388626919):
+    /admin/orders/pack (lib/jumia/orders.ts `getShipmentProviders`,
+    `packItems`). Off for every order by default: only numbers in app_settings
+    `orders_pack_allowed_numbers` (JSON array, set by hand, see
+    lib/jumia/pack-allowlist.ts) get a Pack… button; empty or malformed means
+    none. GET shows the items with the providers Jumia offers per item and
+    changes nothing; POST needs the item ticked, a provider Jumia lists for it
+    and the confirmation ticked, re-reads the order (each item must still be
+    pending, unpacked and seller-shipped), refuses a cross-site POST, and
+    sends one package per item as `{packages:[{orderItems:"<id>",
+    shipmentProviderId, trackingCode?}]}` to POST /v2/orders/pack: Jumia's own
+    code samples send a single item id string per package (the spec text
+    is ambiguous, so nothing is grouped on a guess). Packing has no undo in
+    the API. Several items in one package: pack them in Vendor Center.
+
     Before building: (a) confirm the seller's token has the **VC - Order
     Manager** role, which every order call needs (one read-only GET /orders
     with the owner's OK); (b) the owner submits a Meta **utility template**
