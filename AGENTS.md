@@ -925,7 +925,9 @@ only appear while billing is off.
   under the message (`buyCreditsLink`); Polish says "You're out of credits."
   with Buy credits when the account's `outOfCredits` is true or the route
   answers 402, and "Upgrade to use this feature." with See credit packs when
-  it's the pack. After Google publishes it, set app_settings
+  it's the pack. The "🔒 Encrypted & stored locally on your device." line
+  under the key field is gone (owner's request; the Privacy Policy link
+  stays, panel.js sets its href). After Google publishes it, set app_settings
   extension_latest_version to "0.2.58" so older panels show the update bar.
 - **FAQ (2026-10-02)**: public at `/faq` (app/faq/page.tsx, content in
   lib/marketing/faq.tsx with a plain-text copy of each answer for its
@@ -1364,6 +1366,13 @@ Listed by priority. Pick from here when looking for "what to do next".
       alert outside the 24 hours waits for the seller's next message.
       PACK_FEATURES still marks both features comingSoon: flip that after
       the owner's test.
+    - **The label comes INSIDE its message** (owner, 2026-10-06: "can the
+      pdf and its message be one message"): `sendButtonsWithDocument`
+      (lib/whatsapp/client.ts), a button message with the merged PDF as a
+      document header, "✅ Packed …" as its body and Ready to ship / Pick
+      orders as its buttons (`sendWithLabels` in lib/whatsapp/orders.ts).
+      Same for Get label(s). No label yet: the same text without the PDF,
+      saying so, with a Get label(s) button.
     - **Packing uses the OLDER call** (POST /orders/pack, one call per
       order): live on 2026-10-06 the first bot pack of #355926919 got
       "Jumia answered 400: Tracking Code should not be null" from

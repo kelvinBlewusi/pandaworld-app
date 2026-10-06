@@ -36,7 +36,10 @@ jest.mock("@/lib/whatsapp/client", () => ({
   sendButtonsIfConfigured: async (to: string, body: string, buttons: { id: string; title: string }[]) => { sent.push({ kind: "buttons", to, body, buttons }); },
   sendListIfConfigured: async (to: string, body: string, _b: string, rows: Sent["rows"]) => { sent.push({ kind: "list", to, body, rows }); },
   sendCtaUrlIfConfigured: async (to: string, body: string) => { sent.push({ kind: "cta", to, body }); },
-  sendDocumentIfConfigured: async (to: string, bytes: Uint8Array, filename: string, caption?: string) => { sent.push({ kind: "document", to, bytes, filename, caption }); },
+  // The label and its message as one: a button message with the PDF on top.
+  sendButtonsWithDocumentIfConfigured: async (to: string, bytes: Uint8Array, filename: string, body: string, buttons: { id: string; title: string }[]) => {
+    sent.push({ kind: "document", to, bytes, filename, body, buttons });
+  },
   sendTemplateIfConfigured: async (to: string, template: string, _lang: string, values: string[], payloads: string[]) => { sent.push({ kind: "template", to, template, values, payloads }); },
 }));
 
@@ -258,16 +261,15 @@ describe("the flow", () => {
     expect(calls.some((c) => c.path === "/v2/orders/pack")).toBe(false);
     expect(writes().filter((c) => c.path === "/orders/print-labels")).toHaveLength(1);
 
+    // ONE message: the PDF on top, "Packed …" and the buttons under it.
+    expect(sent.map((m) => m.kind)).toEqual(["document"]);
     const doc = last("document");
     expect(doc.filename).toMatch(/^Jumia-labels-2-orders-\d{4}-\d{2}-\d{2}\.pdf$/);
-    expect(doc.caption).toBe("Shipping labels for #355926919, #401233871");
     expect((await PDFDocument.load(doc.bytes!)).getPageCount()).toBe(2);
-
-    const summary = last("buttons");
-    expect(summary.body).toContain("✅ Packed 2 orders for East Legon VDO:");
-    expect(summary.body).toContain("#355926919 · DS-GKC-1");
-    expect(summary.body).toContain("#401233871 · DS-GKC-2");
-    expect(summary.buttons!.map((b) => b.id)).toEqual(["orders:rtsall", "orders:pick"]);
+    expect(doc.body).toContain("✅ Packed 2 orders for East Legon VDO:");
+    expect(doc.body).toContain("#355926919 · DS-GKC-1");
+    expect(doc.body).toContain("#401233871 · DS-GKC-2");
+    expect(doc.buttons!.map((b) => b.id)).toEqual(["orders:rtsall", "orders:pick"]);
     expect(calls.some((c) => /ready-to-ship|cancel/.test(c.path))).toBe(false);
   });
 
@@ -282,6 +284,22 @@ describe("the flow", () => {
     await say(`opackat:${O2}:${STATION_2}`);
     expect(writes().find((c) => c.path === "/orders/pack")!.body).toEqual({ orderItems: [{ id: I3, shipmentProviderId: STATION_2 }] });
     expect(last("document").filename).toBe("Jumia-label-401233871.pdf");
+  });
+
+  it("one order: 'Packed' and its label in one message; no label yet says so, with Get label", async () => {
+    await say(`opack:${O2}`);
+    expect(sent.map((m) => m.kind)).toEqual(["document"]);
+    expect(last("document").body).toBe("✅ Packed #401233871 for East Legon VDO · DS-GKC-1");
+    expect(last("document").buttons!.map((b) => b.id)).toEqual([`orts:${O2}`, "orders:pick"]);
+
+    sent.length = 0;
+    labelPdf = "not a pdf";
+    await say(`opack:${O1}`);
+    const msg = last("buttons");
+    expect(msg.body).toContain("✅ Packed #355926919");
+    expect(msg.body).toContain("The label isn't ready yet");
+    expect(msg.buttons!.map((b) => b.id)).toEqual([`orts:${O1}`, `olabel:${O1}`, "orders:pick"]);
+    labelPdf = await tinyPdf("label");
   });
 
   it("a refused order is reported, and never blocks the others' result", async () => {

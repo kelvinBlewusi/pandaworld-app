@@ -16,7 +16,7 @@
  */
 
 import {
-  sendButtonsIfConfigured, sendCtaUrlIfConfigured, sendDocumentIfConfigured, sendListIfConfigured,
+  sendButtonsIfConfigured, sendButtonsWithDocumentIfConfigured, sendCtaUrlIfConfigured, sendListIfConfigured,
   sendTemplateIfConfigured, sendTextIfConfigured, LIST_MAX_ROWS,
 } from "@/lib/whatsapp/client";
 import { appUrl } from "@/lib/whatsapp/app-url";
@@ -330,17 +330,24 @@ function labelFileName(orders: WaitingOrder[], country?: JumiaCountry): string {
   return `Jumia-labels-${orders.length}-orders-${date}.pdf`;
 }
 
-/** Send one PDF of these packed orders' labels. The reason when there's none yet. */
-async function sendLabels(ctx: Ctx, orders: WaitingOrder[]): Promise<string | null> {
+type Button = { id: string; title: string };
+
+/**
+ * One message: these packed orders' labels as ONE PDF on top, `body` and
+ * the buttons under it (owner, 2026-10-06: "can the pdf and its message be
+ * one message"). When Jumia has no label yet, the same message without the
+ * PDF, saying so, with `retry` added to the buttons. Every label is in the
+ * one PDF, one page per order.
+ */
+async function sendWithLabels(ctx: Ctx, orders: WaitingOrder[], body: string, buttons: Button[], retry: Button): Promise<void> {
   const r = await labelsPdf(ctx.token, orders.flatMap(packedItems));
-  if (!r.ok) return r.reason;
-  await sendDocumentIfConfigured(
-    ctx.phone,
-    r.pdf,
-    labelFileName(orders, ctx.country),
-    `Shipping label${orders.length === 1 ? "" : "s"} for ${orders.map((o) => `#${o.number}`).join(", ")}`.slice(0, 1000),
-  );
-  return null;
+  if (r.ok) {
+    await sendButtonsWithDocumentIfConfigured(ctx.phone, r.pdf, labelFileName(orders, ctx.country), body.slice(0, BODY_MAX), buttons.slice(0, 3));
+    return;
+  }
+  const one = orders.length === 1;
+  const note = `\n\nThe label${one ? " isn't" : "s aren't"} ready yet (${r.reason}). Tap ${retry.title} in a minute.`;
+  await sendButtonsIfConfigured(ctx.phone, (body.slice(0, BODY_MAX - note.length) + note).trim(), [buttons[0], retry, ...buttons.slice(1)].slice(0, 3));
 }
 
 /** The station list for orders Jumia offers several stations for. */
@@ -369,20 +376,22 @@ async function packAll(ctx: Ctx, stationId?: string): Promise<void> {
   }
   const out = await packOrders(ctx.token, targets, stationId);
   const lines: string[] = [];
-  let labelProblem: string | null = null;
   if (out.packed.length > 0) {
-    labelProblem = await sendLabels(ctx, out.packed.map((p) => p.order));
     const stations = Array.from(new Set(out.packed.map((p) => stationShortName(p.station))));
     lines.push(`✅ Packed ${out.packed.length} order${out.packed.length === 1 ? "" : "s"} for ${stations.join(", ")}:`);
     lines.push(...out.packed.map((p) => `#${p.order.number} · ${p.tracking}`));
-    if (labelProblem) lines.push("", `The labels aren't ready yet (${labelProblem}). Tap Get labels in a minute.`);
   }
   if (out.failed.length > 0) lines.push(...(lines.length ? [""] : []), "Not packed:", ...failedLines(out.failed));
-  if (lines.length > 0) {
-    const buttons = out.packed.length > 0
-      ? [{ id: "orders:rtsall", title: "Ready to ship all" }, ...(labelProblem ? [{ id: "orders:labels", title: "Get labels" }] : []), PICK]
-      : [PICK];
-    await sendButtonsIfConfigured(ctx.phone, fitLines(lines[0], lines.slice(1)), buttons);
+  if (out.packed.length > 0) {
+    await sendWithLabels(
+      ctx,
+      out.packed.map((p) => p.order),
+      fitLines(lines[0], lines.slice(1)),
+      [{ id: "orders:rtsall", title: "Ready to ship all" }, PICK],
+      { id: "orders:labels", title: "Get labels" },
+    );
+  } else if (lines.length > 0) {
+    await sendButtonsIfConfigured(ctx.phone, fitLines(lines[0], lines.slice(1)), [PICK]);
   }
   if (out.needStation.length > 0) await askStation(ctx, out.needStation, (s) => `orders:packat:${s.id}`);
 }
@@ -395,8 +404,13 @@ async function labelsAll(ctx: Ctx): Promise<void> {
     await sendTextIfConfigured(ctx.phone, "No packed order is waiting for a label. Type *orders* to see what's waiting.");
     return;
   }
-  const problem = await sendLabels(ctx, packed);
-  if (problem) await sendButtonsIfConfigured(ctx.phone, `The labels aren't ready yet (${problem}). Try again in a minute.`, [{ id: "orders:labels", title: "Get labels" }]);
+  await sendWithLabels(
+    ctx,
+    packed,
+    fitLines(`🏷️ Shipping label${packed.length === 1 ? "" : "s"} for:`, packed.map((o) => `#${o.number} · ${packedItems(o)[0]?.trackingNumber ?? ""}`)),
+    [{ id: "orders:rtsall", title: "Ready to ship all" }, PICK],
+    { id: "orders:labels", title: "Get labels" },
+  );
 }
 
 async function readyAll(ctx: Ctx): Promise<void> {
@@ -432,12 +446,12 @@ async function packOne(ctx: Ctx, orderId: string, stationId?: string): Promise<v
     await sendTextIfConfigured(ctx.phone, `#${o.number} wasn't packed: ${out.failed[0]?.reason ?? "Jumia didn't pack it"}.`);
     return;
   }
-  const problem = await sendLabels(ctx, [p.order]);
-  await sendButtonsIfConfigured(
-    ctx.phone,
-    `✅ Packed #${o.number} for ${stationShortName(p.station)} · ${p.tracking}` +
-      (problem ? `\n\nThe label isn't ready yet (${problem}). Tap Get label in a minute.` : ""),
-    [{ id: `orts:${o.id}`, title: "Ready to ship" }, ...(problem ? [{ id: `olabel:${o.id}`, title: "Get label" }] : []), PICK],
+  await sendWithLabels(
+    ctx,
+    [p.order],
+    `✅ Packed #${o.number} for ${stationShortName(p.station)} · ${p.tracking}`,
+    [{ id: `orts:${o.id}`, title: "Ready to ship" }, PICK],
+    { id: `olabel:${o.id}`, title: "Get label" },
   );
 }
 
@@ -448,8 +462,13 @@ async function labelOne(ctx: Ctx, orderId: string): Promise<void> {
     await viewOrder(ctx, orderId);
     return;
   }
-  const problem = await sendLabels(ctx, [o]);
-  if (problem) await sendButtonsIfConfigured(ctx.phone, `The label isn't ready yet (${problem}). Try again in a minute.`, [{ id: `olabel:${o.id}`, title: "Get label" }]);
+  await sendWithLabels(
+    ctx,
+    [o],
+    `🏷️ Shipping label for #${o.number} · ${packedItems(o)[0]?.trackingNumber ?? ""}`,
+    [{ id: `orts:${o.id}`, title: "Ready to ship" }, PICK],
+    { id: `olabel:${o.id}`, title: "Get label" },
+  );
 }
 
 async function readyOne(ctx: Ctx, orderId: string): Promise<void> {
