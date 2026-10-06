@@ -40,6 +40,8 @@ let orderItems: JumiaOrderItem[] = [];
 // reply claims: on 2026-10-06 the real items reply carried no order number.
 let listedOrders: { id: string; number: string }[] = [];
 let itemsReplyNumber: string | undefined;
+// The real items reply is a LIST of {orderId, orderNumber, items}; the spec shows one object.
+let itemsReplyAsObject = false;
 let providers: Record<string, { id: string; name: string; trackingCodeRequired?: boolean }[]> = {};
 let packAnswer: { status: number; body: unknown } = { status: 201, body: {} };
 const calls: { method: string; path: string; body?: unknown }[] = [];
@@ -53,6 +55,7 @@ beforeEach(() => {
   orderItems = [item(ITEM_A), item(ITEM_B)];
   listedOrders = [{ id: ORDER_ID, number: "388626919" }];
   itemsReplyNumber = undefined;
+  itemsReplyAsObject = false;
   providers = {
     [ITEM_A]: [{ id: PROVIDER, name: "Jumia Pickup Station" }, { id: PROVIDER_NEEDS_CODE, name: "Own courier", trackingCodeRequired: true }],
     [ITEM_B]: [{ id: PROVIDER, name: "Jumia Pickup Station" }],
@@ -66,12 +69,13 @@ beforeEach(() => {
     let body: unknown = {};
     if (url.pathname === "/orders") body = { orders: listedOrders, nextToken: null, isLastPage: true };
     else if (url.pathname === "/orders/items") {
-      body = {
+      const entry = {
         orderId: ORDER_ID,
         ...(itemsReplyNumber ? { orderNumber: itemsReplyNumber } : {}),
         shippingAddress: { firstName: "Emmanuel", city: "Takoradi" },
         items: orderItems,
       };
+      body = itemsReplyAsObject ? entry : [entry];
     }
     else if (url.pathname === "/orders/shipment-providers") {
       body = { orderItems: url.searchParams.getAll("orderItemId").map((id) => ({ id, shipmentProviders: providers[id] ?? [] })) };
@@ -140,6 +144,22 @@ describe("the confirmation page", () => {
     expect(await res.text()).toContain("Pack order #388626919");
   });
 
+  // The screenshot that found the real shape: "0: object with orderId, orderNumber, items".
+  it("reads the items from the real reply, a list with one entry per order", async () => {
+    itemsReplyAsObject = false;
+    const text = await (await get()).text();
+    expect(text).toContain("Pack order #388626919");
+    expect(text).toContain("Product aa");
+    expect(text).toContain("Product bb");
+  });
+
+  it("also reads the single object the spec shows", async () => {
+    itemsReplyAsObject = true;
+    const text = await (await get()).text();
+    expect(text).toContain("Pack order #388626919");
+    expect(text).toContain("Product aa");
+  });
+
   it("takes the number from the orders list, not from what the items reply claims", async () => {
     listedOrders = [{ id: ORDER_ID, number: "111111111" }];
     itemsReplyNumber = "388626919";
@@ -154,8 +174,9 @@ describe("the confirmation page", () => {
     expect(res.status).toBe(409);
     const text = await res.text();
     expect(text).toContain("couldn't confirm this order's number");
-    expect(text).toContain("items: list of 2");
-    expect(text).toContain("shippingAddress: object with firstName, city");
+    expect(text).toContain("reply: list of 1");
+    expect(text).toContain("[0].items: list of 2");
+    expect(text).toContain("[0].shippingAddress: object with firstName, city");
     expect(text).not.toContain("Emmanuel");
     expect(text).not.toContain("Takoradi");
     expect(packCalls()).toHaveLength(0);
@@ -292,6 +313,15 @@ describe("packing", () => {
 });
 
 describe("describeShape", () => {
+  it("describes a list reply by its first entry", () => {
+    const text = describeShape([{ orderId: "o1", orderNumber: "123", shippingAddress: { firstName: "Emmanuel" }, items: [{ id: "i1", status: "PENDING", product: { name: "Kettle" } }] }]);
+    expect(text).toContain("reply: list of 1");
+    expect(text).toContain('[0].orderNumber: "123"');
+    expect(text).toContain("[0].shippingAddress: object with firstName");
+    expect(text).toContain('[0].items[0].status: "PENDING"');
+    expect(text).not.toContain("Emmanuel");
+  });
+
   it("shows field names and types, values only for harmless fields, and objects as their field names", () => {
     const text = describeShape({
       orderId: "abc", shippingAddress: { firstName: "Emmanuel", address: "12 Some Road" },

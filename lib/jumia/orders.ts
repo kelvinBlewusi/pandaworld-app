@@ -171,21 +171,31 @@ export function pickOrderNumber(raw: Record<string, unknown> | null | undefined)
   return "";
 }
 
-/** GET /orders/items?orderId=…, with `raw` as Jumia sent it (for describeShape). */
+/**
+ * GET /orders/items?orderId=…, with `raw` as Jumia sent it (for describeShape).
+ *
+ * The spec shows one object, {orderId, orderNumber, items}. The real reply is
+ * a LIST of those, one per order asked for (seen 2026-10-06 on the owner's
+ * shop: "0: object with orderId, orderNumber, items"), so both are accepted
+ * and the entry for this order is picked.
+ */
 export async function getOrderItems(
   accessToken: string,
   orderId:     string,
-): Promise<JumiaCall<{ orderId: string; orderNumber: string; items: JumiaOrderItem[]; raw: Record<string, unknown> }>> {
-  const r = await call<Record<string, unknown>>(accessToken, "GET", "/orders/items", { query: { orderId } });
+): Promise<JumiaCall<{ orderId: string; orderNumber: string; items: JumiaOrderItem[]; raw: unknown }>> {
+  const r = await call<unknown>(accessToken, "GET", "/orders/items", { query: { orderId } });
   if (!r.ok) return r;
-  const raw = (r.data && typeof r.data === "object" ? r.data : {}) as Record<string, unknown>;
+  const entries = (Array.isArray(r.data) ? r.data : [r.data]).filter(
+    (e): e is Record<string, unknown> => !!e && typeof e === "object" && !Array.isArray(e),
+  );
+  const entry = entries.find((e) => e.orderId === orderId) ?? entries[0] ?? {};
   return {
     ok: true,
     data: {
-      orderId:     String(raw.orderId ?? orderId),
-      orderNumber: pickOrderNumber(raw),
-      items:       Array.isArray(raw.items) ? (raw.items as JumiaOrderItem[]) : [],
-      raw,
+      orderId:     String(entry.orderId ?? orderId),
+      orderNumber: pickOrderNumber(entry),
+      items:       Array.isArray(entry.items) ? (entry.items as JumiaOrderItem[]) : [],
+      raw:         r.data,
     },
   };
 }

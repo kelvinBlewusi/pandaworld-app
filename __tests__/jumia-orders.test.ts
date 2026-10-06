@@ -65,6 +65,28 @@ describe("the Jumia client", () => {
     expect(new URL(calls[0].url).searchParams.get("orderId")).toBe(ORDER_ID);
   });
 
+  it("reads the real items reply, a list with one entry per order, and picks this order's", async () => {
+    answer = () => ({
+      status: 200,
+      body: [
+        { orderId: "someone-else", orderNumber: "111", items: [item({ id: "x" })] },
+        { orderId: ORDER_ID, orderNumber: "388626919", items: [item()] },
+      ],
+    });
+    const r = await getOrderItems("tok", ORDER_ID);
+    expect(r.ok && r.data.orderNumber).toBe("388626919");
+    expect(r.ok && r.data.items.map((i) => i.id)).toEqual([item().id]);
+  });
+
+  it("copes with an items reply that has no items or isn't an object", async () => {
+    answer = () => ({ status: 200, body: [] });
+    const empty = await getOrderItems("tok", ORDER_ID);
+    expect(empty.ok && empty.data.items).toEqual([]);
+    answer = () => ({ status: 200, body: "nonsense" });
+    const odd = await getOrderItems("tok", ORDER_ID);
+    expect(odd.ok && odd.data.items).toEqual([]);
+  });
+
   it("prints labels with a POST of the item ids", async () => {
     answer = () => ({ status: 201, body: { success: { labels: [], total: 0 }, error: { orderItems: [], total: 0 } } });
     await printLabels("tok", ["a", "b"]);
