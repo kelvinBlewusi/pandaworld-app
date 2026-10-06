@@ -1,5 +1,7 @@
 /** Small HTML pages for the admin's order routes (app/admin/orders/*): what Jumia sends is escaped, never trusted. */
 
+import type { JumiaOrderItem } from "@/lib/jumia/orders";
+
 export const esc = (v: unknown) =>
   String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
@@ -9,6 +11,20 @@ export function htmlPage(body: string, status = 200): Response {
       `<title>Orders</title><body style="font:14px/1.5 system-ui,sans-serif;max-width:720px;margin:32px auto;padding:0 16px">` +
       `${body}<p style="margin-top:24px"><a href="/admin/orders">← Back to orders</a></p>`,
     { status, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
+  );
+}
+
+/** An order's items as Jumia has them: name, status, tracking number, who ships. No customer details. */
+export function itemsTable(items: JumiaOrderItem[]): string {
+  const rows = items
+    .map((i) =>
+      `<tr><td>${esc(i.product?.name ?? i.id)}</td><td>${esc(i.status)}</td>` +
+      `<td>${esc(i.trackingNumber ?? "not packed")}</td><td>${i.isFulfilledByJumia ? "Fulfilled by Jumia" : esc(i.shipmentType ?? "")}</td></tr>`,
+    )
+    .join("");
+  return (
+    `<table border="1" cellpadding="6" style="border-collapse:collapse;margin:12px 0;font-size:13px">` +
+    `<tr><th>Item</th><th>Status</th><th>Tracking</th><th>Shipped by</th></tr>${rows}</table>`
   );
 }
 

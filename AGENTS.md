@@ -1171,15 +1171,27 @@ Listed by priority. Pick from here when looking for "what to do next".
     `packItems`). Off for every order by default: only numbers in app_settings
     `orders_pack_allowed_numbers` (JSON array, set by hand, see
     lib/jumia/pack-allowlist.ts) get a Pack… button; empty or malformed means
-    none. GET shows the items with the providers Jumia offers per item and
-    changes nothing; POST needs the item ticked, a provider Jumia lists for it
-    and the confirmation ticked, re-reads the order (each item must still be
-    pending, unpacked and seller-shipped), refuses a cross-site POST, and
-    sends one package per item as `{packages:[{orderItems:"<id>",
-    shipmentProviderId, trackingCode?}]}` to POST /v2/orders/pack: Jumia's own
-    code samples send a single item id string per package (the spec text
-    is ambiguous, so nothing is grouped on a guess). Packing has no undo in
-    the API. Several items in one package: pack them in Vendor Center.
+    none. Packing has no undo in the API.
+
+    **Reworked the same day into "Pack order and get label"** (owner: "so we
+    can have a button like pack order and download label"), the test bench
+    for the WhatsApp button of that name. GET shows the items still to pack
+    and only the providers Jumia offers for EVERY one of them (one package
+    goes with one provider), and changes nothing. POST puts the whole order
+    in ONE package, as Vendor Center does: `{packages:[{orderItems:[id, id…],
+    shipmentProviderId, trackingCode?}]}` to POST /v2/orders/pack. The spec
+    types `orderItems` as one string (its samples are generated from that),
+    but its rules ("all Order Items in a package must belong to the same
+    order…") and its reply (each package's `orderItems` is a list) mean a
+    list. If Jumia refuses and nothing was packed, the page offers the older
+    POST /orders/pack `{orderItems:[{id, shipmentProviderId}]}` (no tracking
+    code field), whose sample reply shows 2 items in one package. Guards:
+    admin, same-origin, confirmation ticked, allow-listed number from the
+    orders list, and the items still to pack must be EXACTLY the ones the
+    page showed. After the call the order is read back and the page reports
+    what Jumia now has (packages = distinct tracking numbers, "Only 1 of 2
+    packed" when partial), then prints the label (download link + Open the
+    label). Never ready-to-ship or cancel.
 
     **What the real API and Vendor Center showed (2026-10-06, order
     #388626919, 2 items, Pickup Station):**
@@ -1198,11 +1210,9 @@ Listed by priority. Pick from here when looking for "what to do next".
       SHIP. "Shipping labels" downloads the label PDF; "Ready to ship" moved
       the order to Ready to Ship. These are two separate actions, so the
       bot should offer them as two buttons.
-    - Open: whether POST /v2/orders/pack takes several item ids in one
-      package (Vendor Center does it; the API samples send one id string per
-      package). Find out from Jumia's docs or support before the bot packs
-      multi-item orders; until then our route packs one item per package,
-      which gives a multi-item order several labels.
+    - Open: which pack shape Jumia really accepts for several items in one
+      package (v2 with a list, or the older call). Being tried with "Pack
+      order and get label" (above); record the result here.
     - ✅ print-labels works through our code: /admin/orders → Get label on
       #388626919 returned the label PDF (owner confirmed). So the Self
       Authorization token has **VC - Order Manager**, and reading items,

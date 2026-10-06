@@ -4,11 +4,11 @@
  *
  * Reading is free: list orders, read an order's items and their shipment
  * providers, fetch the label of items already packed. Packing
- * (POST /v2/orders/pack) commits a real customer's order to a shipping
- * provider and can't be undone through the API, so it is only ever called
- * from /admin/orders/pack, for an order the owner has named
- * (lib/jumia/pack-allowlist.ts), item by item, after a confirmation. Ready to
- * ship and cancel are deliberately NOT here.
+ * (POST /v2/orders/pack, or the older POST /orders/pack) commits a real
+ * customer's order to a shipping provider and can't be undone through the
+ * API, so it is only ever called from /admin/orders/pack, for an order the
+ * owner has named (lib/jumia/pack-allowlist.ts), after a confirmation. Ready
+ * to ship and cancel are deliberately NOT here.
  *
  * Roles: GET /orders and /orders/items need "VC - Order Viewer" or "VC - Order
  * Manager"; print-labels needs "VC - Order Manager". A Self Authorization app
@@ -65,9 +65,16 @@ export interface ShipmentProvider {
   trackingCodeRequired?: boolean;
 }
 
-/** One package: Jumia's samples send a single order item id per package. */
+/**
+ * One package for POST /v2/orders/pack. The spec types `orderItems` as one id
+ * string (and its generated samples send one), but its rules speak of "all
+ * Order Items in a package" (same order, same country, same method) and the
+ * reply lists each package's items, so a LIST of the order's item ids is what
+ * puts several items in one package, as Vendor Center does. Which one Jumia
+ * really accepts was being tried on 2026-10-06 (/admin/orders/pack).
+ */
 export interface PackPackage {
-  orderItems:         string;
+  orderItems:         string | string[];
   shipmentProviderId: string;
   /** Only when the provider requires one (ShipmentProvider.trackingCodeRequired). */
   trackingCode?:      string;
@@ -76,6 +83,12 @@ export interface PackPackage {
 export interface PackResult {
   success: { packages: { orderItems: string[]; trackingCode: string }[]; total?: number };
   error?:  { packages: { orderItems: string[]; error: string }[]; total?: number };
+}
+
+/** POST /orders/pack (the older call): items with their provider; Jumia groups them into packages. */
+export interface PackV1Result {
+  success: { packages: { orderItems: string[]; countryCode?: string; trackingNumber: string }[]; total?: number };
+  error?:  { orderItems: { id: string; response: { code: string; message: string } }[]; total?: number };
 }
 
 export interface PrintLabelsResult {
@@ -258,4 +271,18 @@ export function packItems(
   packages:    PackPackage[],
 ): Promise<JumiaCall<PackResult>> {
   return call(accessToken, "POST", "/v2/orders/pack", { body: { packages } });
+}
+
+/**
+ * POST /orders/pack, the older pack call: a list of {id, shipmentProviderId},
+ * which Jumia requires to share provider, country, method and payment type,
+ * and answers with the packages it made (its sample shows two items in one).
+ * No tracking code field. CHANGES THE ORDER, like packItems; only called from
+ * /admin/orders/pack when the owner chooses it after the v2 call was refused.
+ */
+export function packItemsV1(
+  accessToken: string,
+  items:       { id: string; shipmentProviderId: string }[],
+): Promise<JumiaCall<PackV1Result>> {
+  return call(accessToken, "POST", "/orders/pack", { body: { orderItems: items } });
 }
