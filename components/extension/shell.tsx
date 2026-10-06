@@ -204,8 +204,8 @@ export function ExtensionShell({
         </header>
 
         {/* Utility bar — page title + greeting on the left (changes per
-            page), Plan / Credits / notifications / Install on the right,
-            same order across every page in this shell. */}
+            page), Plan (a link to /pricing) / Credits / notifications /
+            Install on the right, same order across every page in this shell. */}
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-4 border-b bg-white px-4 py-4 sm:px-6">
           <div>
             <h1 className="text-xl font-bold text-zinc-900 sm:text-2xl">{pageTitle}</h1>
@@ -213,9 +213,13 @@ export function ExtensionShell({
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
-            <span className="rounded-full border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-600">
+            {/* Looks like the Credits pill beside it; tapping it opens the pricing page. */}
+            <Link
+              href="/pricing"
+              className="rounded-full border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900 active:bg-zinc-100"
+            >
               Plan: {planLabel}
-            </span>
+            </Link>
             <span className="flex items-center gap-1.5 rounded-full border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-600">
               <span className="h-1.5 w-1.5 rounded-full bg-orange-500" /> Credits: {creditsLabel}
             </span>
