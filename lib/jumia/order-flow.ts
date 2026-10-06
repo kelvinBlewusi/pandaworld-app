@@ -12,7 +12,7 @@
 
 import { PDFDocument } from "pdf-lib";
 import {
-  cancelItems, commonProviders, getItemsOfOrders, getShipmentProviders, listOrders, markReadyToShip, packItems,
+  cancelItems, commonProviders, getItemsOfOrders, getShipmentProviders, listOrders, markReadyToShip, packItemsV1,
   printLabels, type JumiaCall, type JumiaOrder, type JumiaOrderItem, type ShipmentProvider,
 } from "@/lib/jumia/orders";
 
@@ -92,8 +92,7 @@ export interface PackOutcome {
  * Pack each order as ONE package (AGENTS.md: one package per order, always)
  * at the station Jumia offers for all its items: the only one when there is
  * one (the usual case: the API offers the station linked to the shop), else
- * `stationId` when the seller picked it. All in one POST /v2/orders/pack, an
- * order's item ids as a list, then read back.
+ * `stationId` when the seller picked it. Then read back.
  */
 export async function packOrders(accessToken: string, orders: WaitingOrder[], stationId?: string): Promise<PackOutcome> {
   const out: PackOutcome = { packed: [], needStation: [], failed: [] };
@@ -122,15 +121,19 @@ export async function packOrders(accessToken: string, orders: WaitingOrder[], st
   }
   if (plan.length === 0) return out;
 
-  const r = await packItems(
-    accessToken,
-    plan.map(({ order, station }) => ({ orderItems: toPackItems(order).map((i) => i.id), shipmentProviderId: station.id })),
-  );
-  const refusals = r.ok ? r.data.error?.packages ?? [] : [];
-  console.info(
-    `[orders] packed ${plan.length} order(s) via the bot: ` +
-      (r.ok ? `${r.data.success?.packages?.length ?? 0} package(s), ${refusals.length} refused` : `refused (${r.message.slice(0, 160)})`),
-  );
+  // The older POST /orders/pack, one call per order: Jumia gives the package
+  // its tracking number, as Vendor Center does (DS-GKC-388626919-9965).
+  // POST /v2/orders/pack refused exactly that live on 2026-10-06, "Tracking
+  // Code should not be null", for a station that doesn't take one. A station
+  // that needs a code was turned away above (the bot has no way to ask for one).
+  const refusals = new Map<string, string>();
+  for (const { order, station } of plan) {
+    const r = await packItemsV1(accessToken, toPackItems(order).map((i) => ({ id: i.id, shipmentProviderId: station.id })));
+    const refused = r.ok ? r.data.error?.orderItems?.[0] : null;
+    if (!r.ok) refusals.set(order.id, r.message);
+    else if (refused) refusals.set(order.id, refused.response?.message ?? "Jumia refused it");
+  }
+  console.info(`[orders] packed ${plan.length} order(s) via the bot: ${refusals.size} refused`);
 
   const after = await readBack(accessToken, plan.map((p) => p.order));
   for (const { order, station } of plan) {
@@ -141,11 +144,10 @@ export async function packOrders(accessToken: string, orders: WaitingOrder[], st
       out.packed.push({ order: { ...order, items: after?.get(order.id) ?? order.items }, tracking, station: station.name });
       continue;
     }
-    const refused = refusals.find((p) => (p.orderItems ?? []).some((id) => ids.has(id)));
     out.failed.push({
       order,
       reason: !after ? "Jumia's answer couldn't be checked: look at it in Vendor Center"
-        : refused?.error ?? (r.ok ? "Jumia didn't pack it" : r.message),
+        : refusals.get(order.id) ?? "Jumia didn't pack it",
     });
   }
   return out;

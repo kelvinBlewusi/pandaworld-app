@@ -110,12 +110,17 @@ beforeEach(() => {
     } else if (url.pathname === "/orders/shipment-providers") {
       out = { orderItems: url.searchParams.getAll("orderItemId").map((id) => ({ id, shipmentProviders: providers[id] ?? [] })) };
     } else if (url.pathname === "/v2/orders/pack") {
+      // What Jumia answered live on 2026-10-06 for a station that takes no code.
+      status = 400;
+      out = { message: "Tracking Code should not be null." };
+    } else if (url.pathname === "/orders/pack") {
       status = 201;
-      const pkgs = (body as { packages: { orderItems: string[] }[] }).packages;
-      if (packRefused) out = { success: { packages: [], total: 0 }, error: { packages: pkgs.map((p) => ({ orderItems: p.orderItems, error: "Order items are not pending" })), total: 1 } };
+      const its = (body as { orderItems: { id: string; shipmentProviderId: string }[] }).orderItems;
+      const n = calls.filter((c) => c.path === "/orders/pack").length;
+      if (packRefused) out = { success: { packages: [], total: 0 }, error: { orderItems: its.map((i) => ({ id: i.id, response: { code: "not_allowed_status", message: "Order items are not pending" } })), total: its.length } };
       else {
-        pkgs.forEach((p, n) => p.orderItems.forEach((id) => { const it = all().find((i) => i.id === id); if (it) it.trackingNumber = `DS-GKC-${n + 1}`; }));
-        out = { success: { packages: pkgs.map((p, n) => ({ orderItems: p.orderItems, trackingCode: `DS-GKC-${n + 1}` })), total: pkgs.length }, error: { packages: [], total: 0 } };
+        for (const { id } of its) { const it = all().find((i) => i.id === id); if (it) it.trackingNumber = `DS-GKC-${n}`; }
+        out = { success: { packages: [{ orderItems: its.map((i) => i.id), countryCode: "GH", trackingNumber: `DS-GKC-${n}` }], total: its.length }, error: { orderItems: [], total: 0 } };
       }
     } else if (url.pathname === "/orders/print-labels") {
       status = 201;
@@ -230,16 +235,15 @@ describe("the flow", () => {
     expect(writes()).toHaveLength(0);
   });
 
-  it("Pack all: one package per order in ONE call, one PDF of every label, then Ready to ship all", async () => {
+  it("Pack all: one package per order, Jumia giving the tracking number, one PDF of every label, then Ready to ship all", async () => {
     await say("orders:packall");
-    const pack = writes().find((c) => c.path === "/v2/orders/pack")!;
-    expect(pack.body).toEqual({
-      packages: [
-        { orderItems: [I1, I2], shipmentProviderId: STATION },
-        { orderItems: [I3], shipmentProviderId: STATION },
-      ],
-    });
-    expect(writes().filter((c) => c.path === "/v2/orders/pack")).toHaveLength(1);
+    // The older pack call, one per order: v2 wants a tracking code the
+    // station doesn't take (live, 2026-10-06), and is never called.
+    expect(writes().filter((c) => c.path === "/orders/pack").map((c) => c.body)).toEqual([
+      { orderItems: [{ id: I1, shipmentProviderId: STATION }, { id: I2, shipmentProviderId: STATION }] },
+      { orderItems: [{ id: I3, shipmentProviderId: STATION }] },
+    ]);
+    expect(calls.some((c) => c.path === "/v2/orders/pack")).toBe(false);
     expect(writes().filter((c) => c.path === "/orders/print-labels")).toHaveLength(1);
 
     const doc = last("document");
@@ -250,6 +254,7 @@ describe("the flow", () => {
     const summary = last("buttons");
     expect(summary.body).toContain("✅ Packed 2 orders for East Legon VDO:");
     expect(summary.body).toContain("#355926919 · DS-GKC-1");
+    expect(summary.body).toContain("#401233871 · DS-GKC-2");
     expect(summary.buttons!.map((b) => b.id)).toEqual(["orders:rtsall", "orders:pick"]);
     expect(calls.some((c) => /ready-to-ship|cancel/.test(c.path))).toBe(false);
   });
@@ -263,7 +268,7 @@ describe("the flow", () => {
     expect(writes()).toHaveLength(0);
 
     await say(`opackat:${O2}:${STATION_2}`);
-    expect(writes().find((c) => c.path === "/v2/orders/pack")!.body).toEqual({ packages: [{ orderItems: [I3], shipmentProviderId: STATION_2 }] });
+    expect(writes().find((c) => c.path === "/orders/pack")!.body).toEqual({ orderItems: [{ id: I3, shipmentProviderId: STATION_2 }] });
     expect(last("document").filename).toBe("Jumia-label-401233871.pdf");
   });
 

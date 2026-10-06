@@ -1323,6 +1323,13 @@ Listed by priority. Pick from here when looking for "what to do next".
       alert outside the 24 hours waits for the seller's next message.
       PACK_FEATURES still marks both features comingSoon: flip that after
       the owner's test.
+    - **Packing uses the OLDER call** (POST /orders/pack, one call per
+      order): live on 2026-10-06 the first bot pack of #355926919 got
+      "Jumia answered 400: Tracking Code should not be null" from
+      POST /v2/orders/pack, for a station that takes no code. The older
+      call has no tracking-code field and Jumia assigns the number, as
+      Vendor Center does. v2 only for a station that needs a code (the
+      bot turns those away; the admin page asks for the code).
     - **One package per order, always**, and nothing said about it: the
       owner says one label serves all of an order's boxes and sellers
       already know to print it for each box.

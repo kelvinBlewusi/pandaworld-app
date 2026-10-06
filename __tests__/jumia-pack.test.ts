@@ -369,6 +369,19 @@ describe("packing", () => {
     expect(await res.text()).toContain("into <b>1 package</b>");
   });
 
+  it("the page's own choice: the older call (Jumia gives the tracking number) unless the station needs a code", async () => {
+    expect(await (await get()).text()).toContain('name="api" value="auto"');
+    packAnswer = { status: 201, body: { success: { packages: [{ orderItems: [ITEM_A, ITEM_B], countryCode: "GH", trackingNumber: "DS-TRACK-1" }], total: 2 }, error: { orderItems: [], total: 0 } } };
+    await post(validFields({ api: "auto" }));
+    expect(packCalls().map((c) => c.path)).toEqual(["/orders/pack"]);
+
+    calls.length = 0;
+    afterPack = null;
+    orderItems = [item(ITEM_A), item(ITEM_B)];
+    await post(validFields({ api: "auto", provider: PROVIDER_NEEDS_CODE, tracking: "E1" }));
+    expect(packCalls().map((c) => c.path)).toEqual(["/v2/orders/pack"]);
+  });
+
   it("the older call isn't used for a provider that needs a tracking code (it has no field for one)", async () => {
     const res = await post(validFields({ api: "v1", provider: PROVIDER_NEEDS_CODE, tracking: "E1" }));
     expect(res.status).toBe(400);
