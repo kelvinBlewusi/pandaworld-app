@@ -1278,6 +1278,26 @@ Listed by priority. Pick from here when looking for "what to do next".
       returns more than one. A seller who wants another station changes it
       in Vendor Center; how a shop gets linked to more stations for the API
       is not known yet.
+    - **Busy sellers: grouped alerts, one tap, one PDF** (agreed by the
+      owner 2026-10-06). Jumia has no order webhooks (the spec's /callback
+      is OAuth), so each seller's PENDING orders are polled about every 10
+      minutes. One new order since the last alert: the single-order alert.
+      Several: ONE message listing them ("🛒 4 new Jumia orders · GHS 812",
+      one line per order) with [Pack all & get labels] [Pick orders]. The
+      first order after a quiet spell alerts at once; after that at most
+      one alert per 30 minutes, later orders joining the next one. Orders
+      from 10pm to 7am in the seller's own country's timezone are held
+      for one morning message. About 10 orders per message, then "+N
+      more"; Pick orders pages a WhatsApp list (10 rows) and gives each
+      order its own Pack & get label / Ready to ship / Cancel. Pack all:
+      one POST /v2/orders/pack with one package per order, one
+      print-labels call, the PDFs MERGED into one document (one page per
+      order; needs a PDF library such as pdf-lib), sent as one WhatsApp
+      document, then [Ready to ship all] (one ready-to-ship call). A
+      failed order never blocks the rest ("3 of 4 packed: #… was cancelled
+      by the customer"). "orders" typed any time shows what's waiting.
+      **No afternoon or other reminders** (owner said no). Defaults (30
+      min, 10pm–7am) may become per-seller settings later.
     - **One package per order, always**, and nothing said about it: the
       owner says one label serves all of an order's boxes and sellers
       already know to print it for each box.
