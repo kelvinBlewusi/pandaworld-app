@@ -1191,7 +1191,21 @@ Listed by priority. Pick from here when looking for "what to do next".
     page showed. After the call the order is read back and the page reports
     what Jumia now has (packages = distinct tracking numbers, "Only 1 of 2
     packed" when partial), then prints the label (download link + Open the
-    label). Never ready-to-ship or cancel.
+    label).
+
+    **Ready to ship and Cancel, added the same day** (owner: "a button that
+    fires for moving order to ready to ship? and cancel order?"):
+    /admin/orders/ready-to-ship (POST /orders/ready-to-ship {orderItemIds};
+    items must be pending AND packed) and /admin/orders/cancel (PUT
+    /orders/cancel {orderItemIds}; items pending or ready to ship). Same
+    guards, shared in lib/jumia/order-admin.ts (`loadAllowedOrder`,
+    `sameOrigin`): admin, same site, an order switched on in
+    `orders_pack_allowed_numbers` (one switch now covers pack, ready to
+    ship and cancel), confirmation ticked, items exactly the ones the page
+    showed; Cancel also needs the order number typed. Both read the order
+    back and report the items' status as Jumia now has it. The cancel
+    request has NO reason field, so Jumia records its default reason; to
+    give one (out of stock…), cancel in Vendor Center.
 
     **What the real API and Vendor Center showed (2026-10-06, order
     #388626919, 2 items, Pickup Station):**

@@ -141,7 +141,7 @@ describe("the confirmation page", () => {
     db.tables.app_settings = [{ key: "orders_pack_allowed_numbers", value: ["111111111"] }];
     const res = await get();
     expect(res.status).toBe(403);
-    expect(await res.text()).toContain("Packing isn't switched on");
+    expect(await res.text()).toContain("Changes aren't switched on");
     expect(calls.map((c) => c.path)).toEqual(["/orders/items", "/orders"]);
   });
 
