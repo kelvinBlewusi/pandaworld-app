@@ -1157,7 +1157,8 @@ Listed by priority. Pick from here when looking for "what to do next".
     201 {success:{labels:[{orderItemIds, countryCode, trackingNumber, label}]},
     error:{orderItems:[{id, response:{code, message}}]}}, `label` a base64 PDF;
     items must be packed (have a trackingNumber), seller-shipped, and share
-    country, provider and method.
+    country, provider and method. (The real items reply is a list: see
+    below.)
 
     **Result so far (2026-10-06)**: reading works. The owner's shop (GEM MALL,
     Jumia GH) returned its orders to /admin/orders, so the Self Authorization
@@ -1179,6 +1180,31 @@ Listed by priority. Pick from here when looking for "what to do next".
     code samples send a single item id string per package (the spec text
     is ambiguous, so nothing is grouped on a guess). Packing has no undo in
     the API. Several items in one package: pack them in Vendor Center.
+
+    **What the real API and Vendor Center showed (2026-10-06, order
+    #388626919, 2 items, Pickup Station):**
+    - GET /orders/items?orderId= answers with a LIST, `[{orderId,
+      orderNumber, items}]`, not the single object the spec shows.
+      `getOrderItems` unwraps it and picks the entry for the order; the pack
+      route still takes the order number from the orders list
+      (`findOrderNumber`), the shape it was proven against.
+    - GET /orders/shipment-providers worked: both items were offered
+      "GH-VDO-OWN-East Legon-Station" (a Jumia VDO drop-off station).
+    - The owner then packed the order in **Vendor Center**, not through our
+      route. Vendor Center's flow: pick a provider from a map ("Select a
+      shipment provider close to you", Jumia VDO stations), then it packs
+      BOTH items into ONE package (2/2) with one tracking id,
+      `DS-GKC-388626919-9965`, and offers CLOSE / SHIPPING LABELS / READY TO
+      SHIP. "Shipping labels" downloads the label PDF; "Ready to ship" moved
+      the order to Ready to Ship. These are two separate actions, so the
+      bot should offer them as two buttons.
+    - Open: whether POST /v2/orders/pack takes several item ids in one
+      package (Vendor Center does it; the API samples send one id string per
+      package). Find out from Jumia's docs or support before the bot packs
+      multi-item orders; until then our route packs one item per package,
+      which gives a multi-item order several labels.
+    - Not yet tried through our code: print-labels (needs VC - Order
+      Manager) on the packed order (/admin/orders → Get label).
 
     Before building: (a) confirm the seller's token has the **VC - Order
     Manager** role, which every order call needs (one read-only GET /orders
