@@ -13,21 +13,10 @@ import { auth } from "@clerk/nextjs/server";
 import { isAdmin } from "@/lib/auth/is-admin";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { getOrderItems, labelableItems, printLabels, type JumiaOrderItem } from "@/lib/jumia/orders";
+import { esc, htmlPage as html } from "@/lib/jumia/order-pages";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const esc = (v: unknown) =>
-  String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-
-function html(body: string, status = 200): Response {
-  return new Response(
-    `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
-      `<title>Shipping label</title><body style="font:14px/1.5 system-ui,sans-serif;max-width:720px;margin:32px auto;padding:0 16px">` +
-      `${body}<p style="margin-top:24px"><a href="/admin/orders">← Back to orders</a></p>`,
-    { status, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
-  );
-}
 
 function itemsTable(items: JumiaOrderItem[]): string {
   const rows = items

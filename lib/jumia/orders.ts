@@ -2,11 +2,13 @@
  * Jumia orders and shipping labels, read-only (the GOP half of the Vendor API,
  * https://vendorcenter.jumia.com/api-docs/, openapi.yaml -> paths/orders/*.yaml).
  *
- * Only calls that change nothing about an order are here: list orders, read an
- * order's items, fetch the label of items already packed. Packing
- * (POST /v2/orders/pack) and Ready to ship are deliberately NOT here: they
- * commit a real customer's order to a shipping provider and can't be undone
- * through the API. Add them only with the seller's say-so, order by order.
+ * Reading is free: list orders, read an order's items and their shipment
+ * providers, fetch the label of items already packed. Packing
+ * (POST /v2/orders/pack) commits a real customer's order to a shipping
+ * provider and can't be undone through the API, so it is only ever called
+ * from /admin/orders/pack, for an order the owner has named
+ * (lib/jumia/pack-allowlist.ts), item by item, after a confirmation. Ready to
+ * ship and cancel are deliberately NOT here.
  *
  * Roles: GET /orders and /orders/items need "VC - Order Viewer" or "VC - Order
  * Manager"; print-labels needs "VC - Order Manager". A Self Authorization app
@@ -57,6 +59,25 @@ export interface JumiaLabel {
   label:          string;
 }
 
+export interface ShipmentProvider {
+  id:                   string;
+  name:                 string;
+  trackingCodeRequired?: boolean;
+}
+
+/** One package: Jumia's samples send a single order item id per package. */
+export interface PackPackage {
+  orderItems:         string;
+  shipmentProviderId: string;
+  /** Only when the provider requires one (ShipmentProvider.trackingCodeRequired). */
+  trackingCode?:      string;
+}
+
+export interface PackResult {
+  success: { packages: { orderItems: string[]; trackingCode: string }[]; total?: number };
+  error?:  { packages: { orderItems: string[]; error: string }[]; total?: number };
+}
+
 export interface PrintLabelsResult {
   success: { labels: JumiaLabel[]; total?: number };
   error?:  { orderItems: { id: string; response: { code: string; message: string } }[]; total?: number };
@@ -87,11 +108,12 @@ async function call<T>(
   accessToken: string,
   method:      "GET" | "POST",
   path:        string,
-  opts:        { query?: Record<string, string | number | undefined>; body?: unknown } = {},
+  opts:        { query?: Record<string, string | number | string[] | undefined>; body?: unknown } = {},
 ): Promise<JumiaCall<T>> {
   const url = new URL(`${JUMIA_API_BASE}${path}`);
   for (const [k, v] of Object.entries(opts.query ?? {})) {
-    if (v !== undefined && v !== "") url.searchParams.set(k, String(v));
+    if (Array.isArray(v)) for (const each of v) url.searchParams.append(k, each);
+    else if (v !== undefined && v !== "") url.searchParams.set(k, String(v));
   }
   let res: Response;
   try {
@@ -162,4 +184,24 @@ export function printLabels(
   orderItemIds: string[],
 ): Promise<JumiaCall<PrintLabelsResult>> {
   return call(accessToken, "POST", "/orders/print-labels", { body: { orderItemIds } });
+}
+
+/** GET /orders/shipment-providers: the providers each item can go with. */
+export function getShipmentProviders(
+  accessToken:  string,
+  orderItemIds: string[],
+): Promise<JumiaCall<{ orderItems: { id: string; shipmentProviders: ShipmentProvider[] }[] }>> {
+  return call(accessToken, "GET", "/orders/shipment-providers", { query: { orderItemId: orderItemIds } });
+}
+
+/**
+ * POST /v2/orders/pack. CHANGES THE ORDER and can't be undone through the API:
+ * each package gets a tracking number and the item is committed to its
+ * provider. Only called from /admin/orders/pack (see the file comment).
+ */
+export function packItems(
+  accessToken: string,
+  packages:    PackPackage[],
+): Promise<JumiaCall<PackResult>> {
+  return call(accessToken, "POST", "/v2/orders/pack", { body: { packages } });
 }
