@@ -206,11 +206,14 @@ describe("the confirmation page", () => {
     expect(calls.every((c) => c.method === "GET")).toBe(true);
   });
 
-  it("offers only the providers that take every item", async () => {
+  it("offers only the providers that take every item, and lists everything Jumia sent per item", async () => {
     providers[ITEM_B] = [{ id: PROVIDER, name: "GH-VDO-OWN-East Legon-Station" }];
     const text = await (await get()).text();
-    expect(text).toContain("GH-VDO-OWN-East Legon-Station");
-    expect(text).not.toContain("Own courier");
+    expect(text).toContain(`name="provider" value="${PROVIDER}"`);
+    expect(text).not.toContain(`name="provider" value="${PROVIDER_NEEDS_CODE}"`);
+    expect(text).toContain("Drop-off station: 1 that takes every item");
+    expect(text).toContain("Product aa: <b>2</b> stations: GH-VDO-OWN-East Legon-Station, Own courier (needs a tracking code)");
+    expect(text).toContain("Product bb: <b>1</b> station: GH-VDO-OWN-East Legon-Station");
   });
 
   it("sends the owner to Vendor Center when no provider takes every item", async () => {
