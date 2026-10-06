@@ -1235,6 +1235,50 @@ Listed by priority. Pick from here when looking for "what to do next".
       listed the order as PENDING with packedItems 2 of 2, so read the
       items' status, not the order's, to know where an order is.
 
+    **Agreed design for the WhatsApp order flow (owner, 2026-10-06):**
+    - **Alert: our own message OR the template.** The bot checks the seller's
+      last INBOUND message (whatsapp_message_log). Within 23 hours (a margin
+      under WhatsApp's 24): our normal interactive message (free, richer:
+      photo, items, buttons). Older: the `jumia_new_order` utility template.
+      If a normal message still fails with 131047 (lib/whatsapp/
+      delivery-status.ts sees it), resend as the template. Tapping the
+      template's quick reply reopens the window, so everything after it
+      (station, label PDF, Ready to ship) is normal messages for everyone.
+      Same pattern for late QC results: `jumia_listing_update`.
+    - **Stations: live from the API, per seller, per order.** GET
+      /orders/shipment-providers?orderItemId= runs with the seller's own
+      token and returns the providers associated with THAT seller's shop
+      that can take the item (COD-capable for COD orders, economy for
+      economy items), so each seller sees their own list, as in Vendor
+      Center. It gives only {id, name, trackingCodeRequired}; `name` is the
+      code Vendor Center prints under each station
+      (`GH-VDO-OWN-East Legon-Station`, `KE-VDO-3PL-Karen-Station`). The
+      friendly name, landmark, hours and map are NOT in the API: keep our
+      own station directory keyed by that code, filled from Jumia's public
+      VendorHub page per country (`vendorhub.jumia.<tld>/vdo-details-and-location/`,
+      seen for GH, EG, KE, CI, MA: address, hours, map link, phone) and
+      from Vendor Center. Those pages lag (GH's lacked "Agility VDO" and
+      "Industrial VDO", which Vendor Center offered), so a code missing
+      from the directory still shows, with a short name made from the code,
+      and is logged so it gets added. Last-used station first. WhatsApp
+      lists hold 10 rows (title 24 chars, description 72).
+    - **Every Jumia country, not just Ghana.** One Vendor API host for all
+      (lib/jumia/oauth.ts); the seller's token decides shop and country.
+      Nothing in lib/jumia/orders.ts, order-admin.ts or the admin pages is
+      Ghana-specific (checked 2026-10-06), and new code must stay that way:
+      station codes parsed for any `XX-` prefix; amounts from Jumia's own
+      `totalAmountLocal` with the country's formatting (lib/marketing/
+      countries.ts, `wholeUnits`); times in the seller's country's
+      timezone; Jumia's own text (delivery option, errors) passed through,
+      since it may be French or Arabic. Templates: one name, one
+      translation per language (WhatsApp allows several languages under a
+      name), chosen by the seller's country `marketLanguage` (French for
+      CI, SN, MA; Arabic for EG) once the bot speaks those; English
+      everywhere until then. Quick-reply payloads are set at send time, so
+      the button text's language never matters to the code. Meta's
+      template price differs by country (Nigeria and Egypt have their own
+      rates; the rest are "Rest of Africa").
+
     Before building: (a) each seller's own Self Authorization app needs the
     **VC - Order Manager** role, which labels and packing need (the owner's
     has it, proven 2026-10-06; another seller's may not, so the bot must
