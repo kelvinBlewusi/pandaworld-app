@@ -30,6 +30,27 @@ export async function getUserNotices(userId: string, limit = 3): Promise<UserNot
   return (data ?? []) as UserNotice[];
 }
 
+/**
+ * The seller's newest open notice marked to be shown at the dashboard's
+ * API-key card (show_on_key_card), or null. Shown above the Copy button and
+ * dismissed when they copy their key, so it is seen once.
+ */
+export async function getKeyCardNotice(userId: string): Promise<UserNotice | null> {
+  const { data, error } = await createServerClient()
+    .from("user_notices")
+    .select("id, title, body, created_at")
+    .eq("user_id", userId)
+    .eq("show_on_key_card", true)
+    .is("dismissed_at", null)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (error) {
+    console.error("[notices] getKeyCardNotice failed:", error.message);
+    return null;
+  }
+  return ((data ?? []) as UserNotice[])[0] ?? null;
+}
+
 /** Hide one notice for good. Scoped to the seller, so nobody dismisses another's. */
 export async function dismissUserNotice(userId: string, noticeId: string): Promise<void> {
   await createServerClient()

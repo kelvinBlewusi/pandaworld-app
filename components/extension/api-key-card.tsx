@@ -11,8 +11,10 @@
 import { useState, useTransition } from "react";
 import { Copy, Check, KeyRound, Eye, EyeOff, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RichText } from "./rich-text";
+import type { UserNotice } from "@/lib/notices";
 
-export function ApiKeyCard({ initialKey }: { initialKey: string }) {
+export function ApiKeyCard({ initialKey, notice }: { initialKey: string; notice?: UserNotice | null }) {
   const [fullKey, setFullKey] = useState(initialKey);
   const [revealed, setRevealed] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -24,6 +26,17 @@ export function ApiKeyCard({ initialKey }: { initialKey: string }) {
       await navigator.clipboard.writeText(fullKey);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+      // A message for this seller shown above the key (lib/notices.ts) is
+      // dismissed on the copy, so it is seen once. It stays on screen until
+      // the page is left, so they can still read it; the server ignores
+      // this when the owner is viewing as the seller.
+      if (notice) {
+        fetch("/api/extension/notifications/dismiss", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: notice.id, kind: "notice" }),
+        }).catch(() => {});
+      }
     } catch {
       // Clipboard API can fail in insecure contexts — the key is still
       // selectable text once revealed, so this is a soft failure.
@@ -64,6 +77,17 @@ export function ApiKeyCard({ initialKey }: { initialKey: string }) {
           </p>
         </div>
       </div>
+
+      {notice && (
+        <div className="mt-4 rounded-xl border border-orange-200 bg-orange-50 p-4">
+          <p className="text-sm font-semibold text-zinc-900">{notice.title}</p>
+          <div className="mt-2 space-y-2 text-sm leading-relaxed text-zinc-700">
+            {notice.body.split(/\n{2,}/).map((paragraph, i) => (
+              <p key={i}><RichText text={paragraph} /></p>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="mt-4 flex items-center gap-2">
         <div className="flex-1 truncate rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2.5 font-mono text-sm text-zinc-800">

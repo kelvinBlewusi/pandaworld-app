@@ -15,7 +15,7 @@ import { dismissUserNotice } from "@/lib/notices";
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
-  const { userId } = await auth();
+  const { userId, actor } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   let id: string | undefined;
@@ -29,7 +29,14 @@ export async function POST(req: Request) {
   }
   if (!id) return NextResponse.json({ error: "Missing notification id" }, { status: 400 });
 
-  if (kind === "notice") await dismissUserNotice(userId, id);
-  else await dismissNotification(userId, id);
+  if (kind === "notice") {
+    // Someone signed in AS the seller (the owner, from the Clerk dashboard's
+    // Impersonate user) must not use up a message meant for the seller: it
+    // was dismissed that way on 2026-10-06 before he had seen it. `actor`
+    // is only set for an impersonated session.
+    if (!actor) await dismissUserNotice(userId, id);
+  } else {
+    await dismissNotification(userId, id);
+  }
   return NextResponse.json({ success: true });
 }

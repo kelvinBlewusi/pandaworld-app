@@ -24,6 +24,7 @@ import { WhatsAppBotButton } from "@/components/whatsapp/whatsapp-bot-button";
 import { BuyCreditsModal } from "./buy-credits-modal";
 import type { CreditTransaction } from "@/lib/billing/extension-credits";
 import type { UserNotice } from "@/lib/notices";
+import { RichText } from "./rich-text";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -54,19 +55,6 @@ const TYPE_LABEL: Record<CreditTransaction["type"], string> = {
   deduction: "Credits used",
   refund: "Credits refunded",
 };
-
-/** *word* in a notice's text is shown bold; everything else is plain text. */
-function RichText({ text }: { text: string }) {
-  return (
-    <>
-      {text.split(/(\*[^*\n]+\*)/g).map((part, i) =>
-        /^\*[^*\n]+\*$/.test(part)
-          ? <strong key={i} className="font-semibold text-zinc-900">{part.slice(1, -1)}</strong>
-          : <span key={i}>{part}</span>,
-      )}
-    </>
-  );
-}
 
 function formatRelativeTime(iso: string): string {
   const minutes = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);

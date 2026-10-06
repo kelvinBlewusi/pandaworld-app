@@ -895,7 +895,14 @@ only appear while billing is off.
   activity (layout.tsx -> ExtensionShell `notices`; its x posts
   /api/extension/notifications/dismiss with `kind: "notice"`). Panels before
   0.2.57 ignore `notices`, so a seller on one sees it on the dashboard only.
-  lib/notices.ts.
+  lib/notices.ts. A notice with `show_on_key_card = true` is also shown above
+  the Copy button on the dashboard's API-key card (the one place a seller
+  signed out of the extension is sure to visit) and is dismissed when they
+  copy their key, so it is seen once. The dismiss route does nothing when the
+  session is Clerk's "Impersonate user" (`actor` is set): the owner looking
+  at a seller's dashboard must not use up the seller's message (it was
+  dismissed that way on 2026-10-06). To show it again:
+  `update user_notices set dismissed_at = null where id = '...'`.
 - **Update available (0.2.57, 2026-10-06)**: GET /api/extension/account
   returns `latestExtensionVersion`, the newest version on the Chrome Web
   Store, read from `app_settings` key `extension_latest_version`
