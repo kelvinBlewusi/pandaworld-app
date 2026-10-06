@@ -34,6 +34,7 @@ const FEATURE_LABEL: Record<string, string> = {
   extension_fill:  "Extension autofill",
   listing_draft:   "WhatsApp / web draft",
   category_refill: "Category change refill",
+  assistant:       "WhatsApp assistant (pilot)",
   other:           "Other AI calls (fixes, notes)",
 };
 

@@ -12,6 +12,20 @@ import { createServerClient } from "@/lib/supabase/server";
 /** A missing-value question the bot is waiting on (WhatsAppSession.awaitingValueFor). */
 export type ValueQuestion = { listingId: string; field: string; resubmit?: boolean };
 
+/**
+ * The assistant's "Which product do you mean?" question
+ * (WhatsAppSession.assistantPending; lib/whatsapp/assistant.ts): the change
+ * asked for, the products it could be about, and the message it came from
+ * (a sale price is read from it again when applied).
+ */
+export interface AssistantPending {
+  batchId: string;
+  seqs:    number[];
+  changes: Record<string, unknown>;
+  message: string;
+  at:      string;
+}
+
 export type WhatsAppSessionState =
   | "awaiting_jumia_credentials"
   | "awaiting_jumia_oauth"
@@ -115,6 +129,12 @@ export interface WhatsAppSession {
    * tapped. Null until one is picked.
    */
   preferredBatchQuiet: boolean | null;
+  /**
+   * The assistant's "Which product do you mean?" question, while it waits
+   * for the tap or the number. Null when none is outstanding; anything
+   * that isn't an answer drops it. See lib/whatsapp/assistant.ts.
+   */
+  assistantPending: AssistantPending | null;
 }
 
 /** What awaitingQcAnswer holds. */
@@ -146,6 +166,7 @@ function fromRow(row: Record<string, unknown>): WhatsAppSession {
     lastSubmittedBatchId: (row.last_submitted_batch_id as string | null) ?? null,
     batchQuiet: (row.batch_quiet as boolean | null) ?? null,
     preferredBatchQuiet: (row.preferred_batch_quiet as boolean | null) ?? null,
+    assistantPending: (row.assistant_pending as AssistantPending | null) ?? null,
   };
 }
 
@@ -214,6 +235,7 @@ export async function getOrCreateSession(
           awaiting_category_for: null,
           awaiting_qc_answer: null,
           awaiting_value_for: null,
+          assistant_pending: null,
           batch_quiet:     null,
           // The previous account's habit, not this one's.
           preferred_batch_quiet: null,
@@ -279,6 +301,7 @@ export async function updateSession(
     lastSubmittedBatchId: string | null;
     batchQuiet: boolean | null;
     preferredBatchQuiet: boolean | null;
+    assistantPending: AssistantPending | null;
   }>,
 ): Promise<void> {
   const db = createServerClient();
@@ -298,6 +321,7 @@ export async function updateSession(
   if (patch.lastSubmittedBatchId !== undefined) update.last_submitted_batch_id = patch.lastSubmittedBatchId;
   if (patch.batchQuiet !== undefined) update.batch_quiet = patch.batchQuiet;
   if (patch.preferredBatchQuiet !== undefined) update.preferred_batch_quiet = patch.preferredBatchQuiet;
+  if (patch.assistantPending !== undefined) update.assistant_pending = patch.assistantPending;
   await db.from("whatsapp_sessions").update(update).eq("phone_number", phoneNumber);
 }
 
@@ -386,6 +410,8 @@ export async function resetSession(phoneNumber: string): Promise<void> {
     awaitingQcAnswer: null,
     // And for a missing-value question about the abandoned batch.
     awaitingValueFor: null,
+    // And for the assistant's "which product?" question.
+    assistantPending: null,
     // A restart is a clear "list something new".
     lastSubmittedBatchId: null,
     // A mode choice belongs to the batch it was made for. Without this,
