@@ -22,6 +22,7 @@ jest.mock("@/lib/jumia/api", () => ({
 import { GET as packPage, POST as packRoute } from "@/app/admin/orders/pack/route";
 import { packAllowedNumbers, isPackAllowed } from "@/lib/jumia/pack-allowlist";
 import type { JumiaOrderItem } from "@/lib/jumia/orders";
+import { describeShape } from "@/lib/jumia/order-pages";
 
 const ORDER_ID = "41ea7c3b-20f0-466d-a095-e6e909298180";
 const ITEM_A = "aaaaaaaa-0000-4000-8000-000000000001";
@@ -35,6 +36,10 @@ const item = (id: string, over: Partial<JumiaOrderItem> = {}): JumiaOrderItem =>
 });
 
 let orderItems: JumiaOrderItem[] = [];
+// What GET /orders lists (the number is read from here), and what the items
+// reply claims: on 2026-10-06 the real items reply carried no order number.
+let listedOrders: { id: string; number: string }[] = [];
+let itemsReplyNumber: string | undefined;
 let providers: Record<string, { id: string; name: string; trackingCodeRequired?: boolean }[]> = {};
 let packAnswer: { status: number; body: unknown } = { status: 201, body: {} };
 const calls: { method: string; path: string; body?: unknown }[] = [];
@@ -46,6 +51,8 @@ beforeEach(() => {
   process.env.ADMIN_USER_IDS = "user_admin";
   calls.length = 0;
   orderItems = [item(ITEM_A), item(ITEM_B)];
+  listedOrders = [{ id: ORDER_ID, number: "388626919" }];
+  itemsReplyNumber = undefined;
   providers = {
     [ITEM_A]: [{ id: PROVIDER, name: "Jumia Pickup Station" }, { id: PROVIDER_NEEDS_CODE, name: "Own courier", trackingCodeRequired: true }],
     [ITEM_B]: [{ id: PROVIDER, name: "Jumia Pickup Station" }],
@@ -57,7 +64,15 @@ beforeEach(() => {
     calls.push({ method, path: url.pathname, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     let status = 200;
     let body: unknown = {};
-    if (url.pathname === "/orders/items") body = { orderId: ORDER_ID, orderNumber: "388626919", items: orderItems };
+    if (url.pathname === "/orders") body = { orders: listedOrders, nextToken: null, isLastPage: true };
+    else if (url.pathname === "/orders/items") {
+      body = {
+        orderId: ORDER_ID,
+        ...(itemsReplyNumber ? { orderNumber: itemsReplyNumber } : {}),
+        shippingAddress: { firstName: "Emmanuel", city: "Takoradi" },
+        items: orderItems,
+      };
+    }
     else if (url.pathname === "/orders/shipment-providers") {
       body = { orderItems: url.searchParams.getAll("orderItemId").map((id) => ({ id, shipmentProviders: providers[id] ?? [] })) };
     } else if (url.pathname === "/v2/orders/pack") ({ status, body } = packAnswer);
@@ -114,7 +129,36 @@ describe("the confirmation page", () => {
     const res = await get();
     expect(res.status).toBe(403);
     expect(await res.text()).toContain("Packing isn't switched on");
-    expect(calls.map((c) => c.path)).toEqual(["/orders/items"]);
+    expect(calls.map((c) => c.path)).toEqual(["/orders/items", "/orders"]);
+  });
+
+  // The screenshot that found it: "Order #" with no number, and packing refused.
+  it("works when the items reply carries no order number, reading it from the orders list", async () => {
+    itemsReplyNumber = undefined;
+    const res = await get();
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("Pack order #388626919");
+  });
+
+  it("takes the number from the orders list, not from what the items reply claims", async () => {
+    listedOrders = [{ id: ORDER_ID, number: "111111111" }];
+    itemsReplyNumber = "388626919";
+    expect((await get()).status).toBe(403);
+    expect((await post(validFields())).status).toBe(403);
+    expect(packCalls()).toHaveLength(0);
+  });
+
+  it("refuses when Jumia's list doesn't contain the order, and shows the shape of its reply without customer details", async () => {
+    listedOrders = [];
+    const res = await get();
+    expect(res.status).toBe(409);
+    const text = await res.text();
+    expect(text).toContain("couldn't confirm this order's number");
+    expect(text).toContain("items: list of 2");
+    expect(text).toContain("shippingAddress: object with firstName, city");
+    expect(text).not.toContain("Emmanuel");
+    expect(text).not.toContain("Takoradi");
+    expect(packCalls()).toHaveLength(0);
   });
 
   it("shows each item with the providers Jumia offers for it, and changes nothing", async () => {
@@ -132,7 +176,7 @@ describe("the confirmation page", () => {
     orderItems = [item(ITEM_A, { trackingNumber: "JG-1" })];
     const res = await get();
     expect(await res.text()).toContain("Nothing left to pack");
-    expect(calls.map((c) => c.path)).toEqual(["/orders/items"]);
+    expect(calls.map((c) => c.path)).toEqual(["/orders/items", "/orders"]);
   });
 });
 
@@ -244,5 +288,30 @@ describe("packing", () => {
     const text = await res.text();
     expect(text).toContain("VC - Order Manager");
     expect(text).not.toContain("tok_secret");
+  });
+});
+
+describe("describeShape", () => {
+  it("shows field names and types, values only for harmless fields, and objects as their field names", () => {
+    const text = describeShape({
+      orderId: "abc", shippingAddress: { firstName: "Emmanuel", address: "12 Some Road" },
+      items: [{ id: "i1", status: "PENDING", trackingNumber: null, itemPrice: 12.5, product: { name: "Kettle" }, customerPhone: "0240000000" }],
+    });
+    expect(text).toContain('orderId: "abc"');
+    expect(text).toContain("shippingAddress: object with firstName, address");
+    expect(text).toContain("items: list of 1");
+    expect(text).toContain('items[0].status: "PENDING"');
+    expect(text).toContain("items[0].trackingNumber: null");
+    expect(text).toContain("items[0].itemPrice: number");
+    expect(text).toContain("items[0].product: object with name");
+    expect(text).toContain("items[0].customerPhone: string");
+    expect(text).not.toContain("Emmanuel");
+    expect(text).not.toContain("12 Some Road");
+    expect(text).not.toContain("0240000000");
+  });
+
+  it("copes with an empty or odd reply", () => {
+    expect(describeShape(null)).toBe("");
+    expect(describeShape("text")).toBe("");
   });
 });

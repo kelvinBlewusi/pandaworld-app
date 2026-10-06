@@ -23,11 +23,11 @@ import { auth } from "@clerk/nextjs/server";
 import { isAdmin } from "@/lib/auth/is-admin";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import {
-  getOrderItems, getShipmentProviders, packItems,
+  findOrderNumber, getOrderItems, getShipmentProviders, packItems,
   type JumiaOrderItem, type PackPackage, type ShipmentProvider,
 } from "@/lib/jumia/orders";
 import { isPackAllowed } from "@/lib/jumia/pack-allowlist";
-import { esc, htmlPage as html } from "@/lib/jumia/order-pages";
+import { describeShape, esc, htmlPage as html } from "@/lib/jumia/order-pages";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,17 +47,30 @@ async function loadOrder(userId: string, orderId: string) {
   }
   const order = await getOrderItems(creds.accessToken, orderId);
   if (!order.ok) return { error: html(`<p><b>Couldn't read the order.</b> ${esc(order.message)}</p>`, 502) };
-  if (!(await isPackAllowed(order.data.orderNumber))) {
+  // The number comes from the orders LIST, where it is known to be what Jumia
+  // calls the order, not from the items reply (which didn't carry it on
+  // 2026-10-06), and never from the form.
+  const orderNumber = await findOrderNumber(creds.accessToken, orderId);
+  if (!orderNumber) {
     return {
       error: html(
-        `<h2>Order #${esc(order.data.orderNumber)}</h2>` +
+        `<h2>Order</h2><p>I couldn't confirm this order's number with Jumia, so packing stays off. ` +
+          `Jumia's items reply has these fields:</p><pre>${esc(describeShape(order.data.raw))}</pre>`,
+        409,
+      ),
+    };
+  }
+  if (!(await isPackAllowed(orderNumber))) {
+    return {
+      error: html(
+        `<h2>Order #${esc(orderNumber)}</h2>` +
           `<p>Packing isn't switched on for this order. It is allowed one order at a time, by the owner, because packing ` +
           `commits the order to a shipping provider and can't be undone.</p>`,
         403,
       ),
     };
   }
-  return { creds, orderNumber: order.data.orderNumber, items: order.data.items };
+  return { creds, orderNumber, items: order.data.items, raw: order.data.raw };
 }
 
 export async function GET(req: Request) {
@@ -69,11 +82,14 @@ export async function GET(req: Request) {
 
   const loaded = await loadOrder(userId, orderId);
   if ("error" in loaded) return loaded.error;
-  const { creds, orderNumber, items } = loaded;
+  const { creds, orderNumber, items, raw } = loaded;
 
   const todo = items.filter(packable);
   if (todo.length === 0) {
-    return html(`<h2>Order #${esc(orderNumber)}</h2><p>Nothing left to pack on this order: every item is packed, or not pending.</p>`);
+    return html(
+      `<h2>Order #${esc(orderNumber)}</h2><p>Nothing left to pack on this order: every item is packed, or not pending.</p>` +
+        `<p>What Jumia sent, without the customer's details:</p><pre>${esc(describeShape(raw))}</pre>`,
+    );
   }
 
   const providers = await getShipmentProviders(creds.accessToken, todo.map((i) => i.id));
@@ -103,7 +119,8 @@ export async function GET(req: Request) {
       `To put several items in one package, pack them in Vendor Center instead.</p>` +
       `<form method="post" action="/admin/orders/pack"><input type="hidden" name="orderId" value="${esc(orderId)}">${rows}` +
       `<p><label><input type="checkbox" name="confirm" value="yes"> I understand this commits the ticked items to the courier and can't be undone.</label></p>` +
-      `<button type="submit">Pack the ticked items</button></form>`,
+      `<button type="submit">Pack the ticked items</button></form>` +
+      `<details style="margin-top:20px"><summary>What Jumia sent (no customer details)</summary><pre>${esc(describeShape(raw))}</pre></details>`,
   );
 }
 
