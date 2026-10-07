@@ -536,6 +536,11 @@ read). It replaced the `FREE_FOR_ALL_MODE` constant.
   against what each run earns, and can top up low balances to the current
   welcome amount.
 
+**Prices changed 2026-10-07** (see "Pricing, 2026-10-07" under Outstanding
+work): Starter 80 credits, autofill 2, 12 free credits, listing price by
+country, WhatsApp services charged. The paragraph below is the 2026-10-01
+launch pricing it replaced.
+
 **Prices (launch pricing, 2026-10-01; `lib/billing/credit-packs.ts`).** 1
 credit = GHS 0.35 at the Starter price: a live WhatsApp/web listing 2
 credits (GHS 0.70), an extension autofill 1 (GHS 0.35), an AI image 4 (GHS
@@ -1453,6 +1458,119 @@ Wellington boot was applied. What went wrong, and what changed:
     times the cost) or "gemini-3.1-flash-lite" (AI Studio). Default
     "gemini-2.5-flash-lite".
   - Measured in the test: 32 calls, $0.0071, about $0.0002 a message.
+
+### Assistant round 3 and its limits (owner's second test, 2026-10-07)
+
+From the second session (whatsapp_assistant_log, 2026-10-07 02:14 to 03:27):
+- **A bare "10" after "What should its stock be?"** started a batch of 10.
+  The question is now kept in `whatsapp_sessions.assistant_pending` as
+  `{kind: "live_value", field, products, preferSid, at}` (`LiveValueAsk`,
+  10 minutes); intake checks it right after the shop taps
+  (`answerLiveValue`): a bare number (or "stock 10", "GHS 150") is the
+  answer and goes to `proposeLiveChange`; anything else drops it.
+- **Several products in one change**: `live_change` takes `products: [...]`
+  (`others` on the action) and `all` when the message says all/every.
+  `proposeLiveChange` with several queries → `groupTargets`: one match,
+  the product just changed, every match when "all" or when the matches are
+  one product's variations (same `setSid`); otherwise it says back which
+  word fits several products, and nothing is offered. One question with a
+  line per product, one tap (`lgrp:<groupId>` / `lgrpno:`), one feed
+  (`sendLiveChanges`, items in `products`), up to `MAX_GROUP` = 20. The
+  rows share `jumia_product_changes.group_id` (migration
+  2026-10-07_live-change-groups.sql, applied). An edit returned with no
+  drafts around becomes a live change (`splitProducts` on its `said`; "and"
+  splits only before the/my/also/a, so "Salt and Pepper Grinder" stays one).
+  A value missing from the message may come from the seller's own last 3
+  messages ("update those to 10 each" → "the freezer and the blender").
+- **The worker** reads each feed once (`checkSentChanges` groups rows by
+  feed) and refuses only the products Jumia refused (`feedItemResults`,
+  from `feedItems` by SKU or sid), in one message.
+- **"Is the drone live?"** → `product_info` (`answerProductInfo`): status,
+  QC, price, sale, stock, read fresh for up to 3 matches (`refreshProducts`:
+  GET /catalog/products?sellerSku= and /catalog/stock, saved back). A
+  live_change with `active` on a question (`isStateQuestion`) becomes
+  product_info, never a change.
+- **ON words** take typos ("tun on") and not "on sale"; `productBacked`
+  accepts a shared start of 4+ letters ("dron" for "drones").
+- **Whole shop at once** ("off all products", "turn off all the other
+  products") is explained (`namesAProduct`, BULK words), not attempted.
+- **Fees** → `fees` (`answerFees`, feature `fee_calc_whatsapp`, Pro): the
+  product's Jumia category path (jumia_categories) matched to the country's
+  fee table (`feeCategoryForPath` in lib/marketing/country-fees.ts: the
+  deepest path part holding every word of a table name), commission
+  (`commissionOn`), the per-item fee where it's by category (else the size
+  range, Nigeria), and what they receive, at the price they give, else its
+  running sale price, else its price; with the calculator button. A draft
+  in review is worked out from the draft. The AI's own "calculator" type is
+  read as fees.
+- **Sales**: `quarter` (90 days, Jumia's limit; "all"/"ever" map to it);
+  several statuses at once (each read on its own request; the worker's
+  comma-joined statuses are still unverified live). "returns" → returned.
+- **Prompt**: no promises for later; questions about a product are
+  product_info; greetings get the capabilities list; shop facts are answered
+  from About this seller; new examples for each of these.
+- **Starting a batch**: a reply carries "I'm still ready for product 1 of
+  N" in the same message (one message, not two).
+
+**Limits** (`lib/whatsapp/assistant-limits.ts`):
+- Daily allowance of AI turns (`whatsapp_assistant_log` rows with `raw`
+  since the seller's midnight): no pack 10, Starter 20, Standard 30, Pro
+  50, Business 100; Nigeria half, Morocco a quarter (`COUNTRY_FACTOR`);
+  none for admins or while billing is off. Past it: one message that day
+  (`ALLOWANCE_TOLD`), then `runAssistant` returns "failed" so the fixed
+  flow answers.
+- Kill switch: app_settings `assistant_enabled` = false turns the assistant
+  off for everyone, admins included (`assistantEnabled`).
+- Global ceiling: app_settings `assistant_daily_limit` (default 2,000 AI
+  turns a UTC day across sellers); past it, off for all but admins.
+
+### Pricing, 2026-10-07 (owner)
+
+All in `lib/billing/credit-packs.ts`; charged only while billing is on,
+never for admins.
+- Starter is 80 credits for GHS 35 (was 100; a purchase of 100 still reads
+  as Starter via `LEGACY_CREDIT_AMOUNTS`). An extension autofill is 2
+  credits (`LISTING_CREDIT_COST`). New sign-ups get 12 free credits (6
+  listings, `FREE_SIGNUP_CREDITS`); balances already given are unchanged.
+- **Listing price by country** (`COUNTRY_LISTING_CREDIT_COST`: Nigeria 3,
+  Morocco 5, else 2; `listingCostFor`, `listingCreditCost(userId)` from the
+  seller's jumia_connections country). Used for the hold/charge
+  (push-listing, auto-analyze), the WhatsApp messages, the credit gate and
+  status, the assistant. Public pages show 2; a signed-in seller from those
+  countries sees their own price on /pricing ("Prices for your shop in
+  Nigeria"), /settings/billing and the pack picker (`listingCost` prop on
+  BuyCreditsModal / BuyCreditsButton / ExtensionShell). The Terms (§4) say
+  the price can depend on the country.
+- **WhatsApp services, charged as used** (`chargeService` /
+  `refundService` in lib/billing/extension-credits.ts: once per ledger
+  reference, refused when available credits don't cover it):
+  - a shipping label 0.5 per order, the first time it's sent
+    (`label:<orderId>`; `sendWithLabels` checks before asking Jumia; not
+    enough credits → packed, the label waits with a Get labels button);
+  - a confirmed live change 0.5 per tap whatever the number of products
+    (`lchg:<id>` / `lgrp:<groupId>`), shown in the question; given back if
+    Jumia's POST fails or the worker finds all of it refused;
+  - an order-updates or payout message 0.2 (`notice:orders:…`,
+    `notice:payout:…`); one the seller can't cover waits for a top-up.
+  New-order alerts, the low-stock line and chatting stay free.
+- **Shipping labels from Standard** (`shipping_labels` minPack standard).
+  "orders" (the list, pick, view) opens with either `order_alerts` (Pro)
+  or `shipping_labels`, so Standard sellers can pack and label; new-order
+  alerts, order status and sales stay Pro.
+- `creditCosts(listingCost)` is the one list of what costs credits, used by
+  /pricing and /settings/billing.
+
+**Fewer messages per listing** (owner, 2026-10-07):
+- A single product's "✅ Product drafted" and its missing-value question
+  (variation, weight…) are one message (`askForNextMissingValue` with
+  `prefix`), as the price question already was.
+- For sellers with QC follow-up (Standard and up), Jumia's acceptance isn't
+  told (`acceptedQuietly` in push-listing): they hear "passed Jumia QC and
+  is live" or the rejection. A partly accepted product is still told.
+  Sellers without it still get "accepted", their last update.
+- Measured before: a guided single product took about 8 bot messages
+  (count, note ack, saving, drafted, question, answer, submitted, accepted,
+  then live); now 6 to 7. A captioned batch: 5 for the whole batch.
 
 ### Feature expansion (when relevant)
 9. **Cloud Vision OCR** (Tier 1.2 of GCP plan) — dedicated OCR for packaging text.

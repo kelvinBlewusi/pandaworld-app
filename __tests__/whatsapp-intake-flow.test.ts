@@ -879,7 +879,9 @@ describe("a field the category requires, filled or asked for in chat", () => {
     const ask = sent.find((m) => m.body.includes("Jumia needs its *Weight (kg)*"));
     expect(ask).toBeDefined();
     expect(ask!.rows).toEqual(["skip value"]);
-    expect(sent.some((m) => m.body.includes("Answer the question below"))).toBe(true);
+    // The draft and its question are one message (owner, 2026-10-07: fewer messages per listing).
+    expect(sent).toHaveLength(1);
+    expect(ask!.body.startsWith("✅ Product drafted: ")).toBe(true);
     expect(session().awaiting_value_for).toEqual({ listingId: "listing-1", field: "product_weight" });
 
     sent.length = 0;

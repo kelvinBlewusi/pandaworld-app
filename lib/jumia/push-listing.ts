@@ -702,6 +702,10 @@ export const AUTO_RESUBMITTED = "auto_resubmitted";
 /** Not a rejection: nothing to fix. */
 const isGoodNews = (status: string) => status === "live" || status === QC_APPROVED || status === AUTO_RESUBMITTED;
 
+/** Wholly accepted by Jumia (not yet through QC): for a seller with QC follow-up, nothing to tell yet. */
+const acceptedQuietly = (status: string, counts: ResolutionCounts) =>
+  status === "live" && !(counts.totalCount > counts.liveCount && counts.liveCount > 0);
+
 /**
  * Jumia refused the listing's category ("You can't list products in this
  * category…"): rather than "was rejected" and a Fix & resubmit tap that
@@ -774,7 +778,10 @@ async function notifyListingResolved(
 
     const name = (row.title as string | null) ?? "Your product";
     // Whether QC follow-up will run: by pack, whatever the balance (it runs at 0 too).
-    const text = resolutionLine(name, newStatus, errorMsg, counts, await hasFeature(row.user_id as string, "qc_fix", { ignoreBalance: true }));
+    const qcAlerts = await hasFeature(row.user_id as string, "qc_fix", { ignoreBalance: true });
+    // Accepted, with the QC verdict to follow: told then instead (see notifyBatchResolved).
+    if (qcAlerts && acceptedQuietly(newStatus, counts)) return;
+    const text = resolutionLine(name, newStatus, errorMsg, counts, qcAlerts);
 
     // A rejection gets a way out of it. Without this the message is a dead
     // end: Jumia's own wording ("The column [product_weight] is missing
@@ -891,6 +898,11 @@ export async function notifyBatchResolved(
   opts:        { qcAlerts?: boolean } = {},
 ): Promise<void> {
   const qcAlerts = opts.qcAlerts ?? true;
+  // Accepted with QC follow-up to come: not told now, "passed Jumia QC and
+  // is live" (or the rejection) comes later (owner, 2026-10-07: fewer
+  // messages per listing; Meta charges each one). A partly accepted one is
+  // still told: its rejected variants need fixing.
+  if (qcAlerts) items = items.filter((i) => !acceptedQuietly(i.newStatus, i.counts));
   if (items.length === 0) return;
   try {
     const { sendTextIfConfigured, sendButtonsIfConfigured, sendListIfConfigured, LIST_MAX_ROWS } = await import("@/lib/whatsapp/client");
