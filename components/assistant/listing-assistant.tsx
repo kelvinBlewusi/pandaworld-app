@@ -12,7 +12,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import { ArrowUp, ExternalLink, ImagePlus, Loader2, Sparkles, X } from "lucide-react";
+import Link from "next/link";
+import { ArrowUp, ChevronLeft, ExternalLink, ImagePlus, Loader2, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Message {
@@ -33,6 +34,8 @@ interface Attachment { key: string; file: File; preview: string }
 type Button = { id: string; title: string };
 type Row = { id: string; title: string; description?: string };
 
+/** Photos picked at once (owner): Jumia takes at most 8 per product. */
+const MAX_PHOTOS = 8;
 const POLL_MS = 2500;
 const POLL_WAITING_MS = 1200;
 /** How long "typing…" shows after a message with no reply yet. */
@@ -161,10 +164,15 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
       setError("Only photos can be sent here (JPEG, PNG or WebP).");
       return;
     }
-    setError(null);
+    const room = MAX_PHOTOS - attachments.length;
+    if (room <= 0) {
+      setError(`Up to ${MAX_PHOTOS} photos at a time. Send these first.`);
+      return;
+    }
+    setError(images.length > room ? `Up to ${MAX_PHOTOS} photos at a time, so only the first ${room} were added.` : null);
     setAttachments((prev) => [
       ...prev,
-      ...images.slice(0, 10 - prev.length).map((file) => ({ key: newId(), file, preview: URL.createObjectURL(file) })),
+      ...images.slice(0, MAX_PHOTOS - prev.length).map((file) => ({ key: newId(), file, preview: URL.createObjectURL(file) })),
     ]);
   }
 
@@ -239,22 +247,33 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
   const greeting = useMemo(() => (firstName ? `Hi ${firstName}! ` : "Hi! "), [firstName]);
 
   return (
+    // On a phone the chat is the whole screen (owner): it covers the app's top
+    // bar and title card, keeping one slim row with a way back. From sm up
+    // it's a card in the page.
     <div
       className={cn(
-        "relative flex h-[calc(100dvh-13rem)] min-h-[520px] flex-col overflow-hidden rounded-2xl border bg-white shadow-sm lg:h-[calc(100dvh-12rem)]",
-        dragging ? "border-orange-400 ring-2 ring-orange-200" : "border-zinc-200",
+        "fixed inset-0 z-30 flex flex-col overflow-hidden bg-white",
+        "sm:relative sm:inset-auto sm:z-auto sm:h-[calc(100dvh-13rem)] sm:min-h-[520px] sm:rounded-2xl sm:border sm:shadow-sm lg:h-[calc(100dvh-12rem)]",
+        dragging ? "sm:border-orange-400 sm:ring-2 sm:ring-orange-200" : "sm:border-zinc-200",
       )}
       onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
       onDragLeave={() => setDragging(false)}
       onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
     >
-      <div className="flex items-center gap-3 border-b border-zinc-100 px-4 py-3 sm:px-5">
-        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-orange-50 text-orange-500">
+      <div className="flex items-center gap-1 border-b border-zinc-100 px-2 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))] sm:gap-3 sm:px-5 sm:py-3">
+        <Link
+          href="/extension/dashboard"
+          aria-label="Back to the dashboard"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-zinc-600 hover:bg-zinc-100 sm:hidden"
+        >
+          <ChevronLeft className="h-5 w-5" />
+        </Link>
+        <span className="hidden h-9 w-9 items-center justify-center rounded-xl bg-orange-50 text-orange-500 sm:flex">
           <Sparkles className="h-4.5 w-4.5" />
         </span>
         <div className="min-w-0">
           <p className="font-semibold text-zinc-900">Jumia Listing Assistant</p>
-          <p className="truncate text-xs text-zinc-500">List from photos, edit and submit drafts, update live products, ask about your shop.</p>
+          <p className="hidden truncate text-xs text-zinc-500 sm:block">List from photos, edit and submit drafts, update live products, ask about your shop.</p>
         </div>
       </div>
 
@@ -309,7 +328,7 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
         </div>
       )}
 
-      <div className="border-t border-zinc-100 bg-white p-3 sm:p-4">
+      <div className="border-t border-zinc-100 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4">
         {attachments.length > 0 && (
           <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
             {attachments.map((a) => (
@@ -340,7 +359,7 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
           <button
             type="button"
             onClick={() => fileInput.current?.click()}
-            disabled={sending}
+            disabled={sending || attachments.length >= MAX_PHOTOS}
             className="flex h-11 shrink-0 items-center gap-2 rounded-xl border border-zinc-200 px-3 text-sm font-medium text-zinc-700 transition-colors hover:border-orange-300 hover:bg-orange-50 disabled:opacity-50"
             aria-label="Upload photos"
           >
@@ -363,7 +382,8 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
             }}
             rows={1}
             placeholder={attachments.length > 0 ? "Price and notes for these photos…" : "Type a message…"}
-            className="max-h-36 min-h-11 flex-1 resize-none rounded-xl border border-zinc-200 px-3.5 py-2.5 text-sm text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
+            // 16px on a phone: iOS zooms the page into a smaller field on focus.
+            className="max-h-36 min-h-11 flex-1 resize-none rounded-xl border border-zinc-200 px-3.5 py-2.5 text-base text-zinc-900 sm:text-sm outline-none placeholder:text-zinc-400 focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
           />
           <button
             type="button"

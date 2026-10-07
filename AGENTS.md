@@ -1611,10 +1611,13 @@ labels." It is the WhatsApp bot itself, not a copy:
   status by number, stock, live changes, payouts, fees all work.
 - **Page**: /extension/assistant (`components/assistant/listing-assistant.tsx`):
   bubbles with WhatsApp formatting, the bot's buttons as pills, list rows
-  inline, links as buttons, photos; Upload (several at once; the typed text
-  becomes the first photo's caption), drag-and-drop and paste; polls every
-  2.5 s (1.2 s while a message is being handled). Sidebar item "Listing
-  Assistant" under the dashboard.
+  inline, links as buttons, photos; Upload (up to 8 photos at a time, Jumia's
+  per-product maximum; the typed text becomes the first photo's caption),
+  drag-and-drop and paste; polls every 2.5 s (1.2 s while a message is being
+  handled). Sidebar item "Jumia Listing Assistant" under the dashboard. On a
+  phone (below `sm`) the chat is fixed full screen over the shell's top bar
+  and title card, with one slim row (back arrow to the dashboard + title);
+  from `sm` up it's a card in the page.
 - **Who**: the assistant's pilot (`assistantEnabled`: admins and
   app_settings `assistant_users`, `["*"]` for everyone; off with the kill
   switch). Others see "coming soon" with a link to WhatsApp. Its messages
