@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, ImagePlus, Loader2, RotateCw, Sparkles, X } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, ImagePlus, Loader2, RotateCw, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Message {
@@ -348,8 +348,9 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
         >
           <ChevronLeft className="h-5 w-5" />
         </Link>
-        <span className="hidden h-9 w-9 items-center justify-center rounded-xl bg-orange-50 text-orange-500 sm:flex">
-          <Sparkles className="h-4.5 w-4.5" />
+        {/* Our logo, not a generic sparkle (owner, 2026-10-07). */}
+        <span className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-orange-50 sm:flex">
+          <Image src="/brand/panda-p-logo-trimmed.png" alt="PandaWorld" width={634} height={562} className="h-6 w-auto" />
         </span>
         <div className="min-w-0">
           <p className="font-semibold text-zinc-900">Jumia Listing Assistant</p>
