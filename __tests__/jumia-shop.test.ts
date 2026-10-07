@@ -12,11 +12,12 @@ let db = new FakeDb();
 jest.mock("@/lib/supabase/server", () => ({ createServerClient: () => db }));
 jest.mock("@/lib/jumia/oauth", () => ({ JUMIA_API_BASE: "https://vendor-api.jumia.com" }));
 
-let feed: { status: string; failed: number; errors: unknown[] } | null = { status: "DONE", failed: 0, errors: [] };
+let feed: { status: string; failed: number; errors: unknown[]; raw?: unknown } | null = { status: "DONE", failed: 0, errors: [] };
+let feedReads = 0;
 jest.mock("@/lib/jumia/api", () => ({
   COUNTRY_CURRENCY: { GH: "GHS", NG: "NGN", KE: "KES" },
   getValidJumiaCredentials: async () => ({ accessToken: "tok_secret", shopId: "s", currency: "GHS", country: "GH" }),
-  getFeedStatus: async () => (feed ? { ...feed, total: 1, success: feed.failed ? 0 : 1, raw: {} } : null),
+  getFeedStatus: async () => { feedReads++; return feed ? { total: 1, success: feed.failed ? 0 : 1, raw: {}, ...feed } : null; },
 }));
 jest.mock("@/lib/jumia/credentials", () => ({ getJumiaConnectionKind: async () => "connected" }));
 jest.mock("@/lib/whatsapp/jumia-connect", () => ({ promptJumiaConnection: jest.fn() }));
@@ -42,12 +43,13 @@ jest.mock("@/lib/whatsapp/client", () => ({
 }));
 
 import {
-  findProducts, productsFromCatalog, sendLiveChange, statementsFrom, summarizeOrders, syncCatalog, type ShopProduct,
+  feedItemResults, findProducts, productsFromCatalog, sendLiveChange, sendLiveChanges, statementsFrom, summarizeOrders, syncCatalog, type ShopProduct,
 } from "@/lib/jumia/shop";
 import {
-  answerListings, answerOrderStatus, answerPayouts, answerProducts, answerSales, answerStock, handleShopTap, lowStockNote, parseShopTap,
-  periodStart, proposeLiveChange,
+  answerFees, answerListings, answerOrderStatus, answerPayouts, answerProductInfo, answerProducts, answerSales, answerStock, groupTargets,
+  handleShopTap, lowStockNote, parseShopTap, periodStart, proposeLiveChange,
 } from "@/lib/whatsapp/shop";
+import { COUNTRY_FEES, feeCategoryForPath } from "@/lib/marketing/country-fees";
 import { orderUpdatesText, runShopNotices } from "@/lib/whatsapp/shop-notices";
 import { parseAction, productBacked } from "@/lib/whatsapp/assistant";
 import { _resetPriceMinimumCache } from "@/lib/jumia/price-minimums";
@@ -88,6 +90,7 @@ beforeEach(() => {
   calls.length = 0;
   off.clear();
   feed = { status: "DONE", failed: 0, errors: [] };
+  feedReads = 0;
   _resetPriceMinimumCache();
   catalog = [
     set("f", "Hisense 205L Double Door Fridge", "Hisense", [{ id: FRIDGE, sku: "HIS-205" }]),
@@ -536,5 +539,141 @@ describe("asked in the live test (2026-10-07)", () => {
     ];
     await answerListings(USER, PHONE, "today");
     expect(last().body).toBe("🛍️ 2 products listed with PandaWorld today: 1 live on Jumia, 1 waiting for Jumia.");
+  });
+});
+
+describe("round 3: several products, product info, fees (owner's second test, 2026-10-07)", () => {
+  it("several products, one change: one question, one tap, one feed", async () => {
+    await proposeLiveChange(USER, PHONE, ["Hisense fridge", "blender"], { kind: "stock", stock: 10 });
+    expect(writes()).toHaveLength(0);
+    const offer = last();
+    expect(offer.kind).toBe("buttons");
+    expect(offer.body).toBe([
+      "Change these 2 products on Jumia?",
+      "• Hisense 205L Double Door Fridge: stock 3 → 10",
+      "• Nasco Blender 1.5L: stock 7 → 10",
+      "",
+      "One tap changes them all.",
+    ].join("\n"));
+    expect(offer.ids![0]).toMatch(/^lgrp:[0-9a-f-]{36}$/);
+    expect(db.tables.jumia_product_changes).toHaveLength(2);
+
+    await handleShopTap(USER, PHONE, offer.ids![0]);
+    expect(writes()).toHaveLength(1);
+    expect((writes()[0].body as { products: { sellerSku: string }[] }).products.map((p) => p.sellerSku)).toEqual(["HIS-205", "NAS-BL"]);
+    expect(db.tables.jumia_product_changes.map((r) => [r.status, r.feed_id])).toEqual([["sent", "feed-0001"], ["sent", "feed-0001"]]);
+    expect(last().body).toContain("✅ Sent to Jumia for 2 products (Hisense 205L Double Door Fridge, Nasco Blender 1.5L): stock to 10.");
+
+    await handleShopTap(USER, PHONE, offer.ids![0]);
+    expect(last().body).toBe("That change was already handled.");
+    expect(writes()).toHaveLength(1);
+  });
+
+  it("No on a group changes nothing", async () => {
+    await proposeLiveChange(USER, PHONE, ["Hisense fridge", "blender"], { kind: "status", active: false });
+    await handleShopTap(USER, PHONE, last().ids![1]);
+    expect(last().body).toBe("OK, nothing changed on Jumia.");
+    expect(db.tables.jumia_product_changes.every((r) => r.status === "cancelled")).toBe(true);
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("a word that fits several products is said back, and nothing is offered", async () => {
+    await proposeLiveChange(USER, PHONE, ["fridge", "blender", "kettle"], { kind: "stock", stock: 10 });
+    expect(last().body).toContain("I haven't changed anything yet:");
+    expect(last().body).toContain('"fridge" could be 2 products:');
+    expect(last().body).toContain("– LG 250L Top Freezer Fridge (SKU LG-250)");
+    expect(last().body).toContain('I couldn\'t find "kettle"');
+    expect(db.tables.jumia_product_changes ?? []).toHaveLength(0);
+  });
+
+  it("a product's sizes go together; \"all\" takes every fit", () => {
+    const products = productsFromCatalog({ products: catalog }, "GH");
+    expect(groupTargets(products, ["t-shirt", "blender"]).targets.map((p) => p.sellerSku)).toEqual(["TEE-M", "TEE-L", "NAS-BL"]);
+    expect(groupTargets(products, ["fridge"], { all: true }).targets.map((p) => p.sellerSku)).toEqual(["HIS-205", "LG-250"]);
+  });
+
+  it("the feed carries every product", async () => {
+    const products = productsFromCatalog({ products: catalog }, "GH");
+    await sendLiveChanges("t", products.slice(0, 2), { kind: "status", active: true }, { country: "GH", currency: "GHS" });
+    expect((writes()[0].body as { products: unknown[] }).products).toHaveLength(2);
+  });
+
+  it("the worker reads one feed once, and tells only the products Jumia refused", async () => {
+    db.tables.whatsapp_connections = [{ user_id: USER, phone_number: PHONE }];
+    const old = new Date(Date.now() - 5 * 60_000).toISOString();
+    const row = (id: string, sku: string, name: string) => ({
+      id, user_id: USER, group_id: "g1", product_sid: id, seller_sku: sku, name, change: { kind: "stock", stock: 10 }, status: "sent",
+      feed_id: "feed-0001", created_at: old, updated_at: old,
+    });
+    db.tables.jumia_product_changes = [row(FRIDGE, "HIS-205", "Hisense 205L Double Door Fridge"), row(BLENDER, "NAS-BL", "Nasco Blender 1.5L")];
+    db.tables.jumia_products = [];
+    feed = {
+      status: "FINISHED", failed: 1, errors: [],
+      raw: { feedItems: [{ status: "SUCCESS", sellerSKU: "HIS-205" }, { status: "FAILED", sellerSKU: "NAS-BL", errorMessage: "Stock can't be updated for a rejected product" }] },
+    };
+    expect(feedItemResults(feed.raw).get("NAS-BL")).toEqual({ failed: true, error: "Stock can't be updated for a rejected product" });
+    await runShopNotices(new Date());
+    expect(feedReads).toBe(1);
+    expect(db.tables.jumia_product_changes.map((r) => r.status)).toEqual(["done", "failed"]);
+    expect(sent.filter((m) => m.body.includes("didn't apply"))).toEqual([
+      { kind: "text", body: "⚠️ Jumia didn't apply the change to *Nasco Blender 1.5L* (stock to 10): Stock can't be updated for a rejected product" },
+    ]);
+  });
+
+  it("\"is the drone live?\": on or off, quality check, price, stock, read fresh", async () => {
+    await answerProductInfo(USER, PHONE, "blender");
+    expect(last().body).toBe([
+      "⚪ *Nasco Blender 1.5L* · SKU NAS-BL",
+      "• Status: on (shown on Jumia)",
+      "• Quality check: rejected: Poor image quality",
+      "• Price: GHS 4,500",
+      "• Stock: 7 left",
+    ].join("\n"));
+    expect(calls.some((c) => c.path === "/catalog/products" && c.query.get("sellerSku") === "NAS-BL")).toBe(true);
+    await answerProductInfo(USER, PHONE, "Hisense fridge");
+    expect(last().body.startsWith("🟢 *Hisense 205L Double Door Fridge*")).toBe(true);
+  });
+
+  it("fees: commission by its category, the shipping contribution, what they receive", async () => {
+    db.tables.jumia_categories = [{ code: 1004141, name: "Blenders", path: "Home & Office > Home & Kitchen > Kitchen & Dining > Small Appliances > Blenders" }];
+    await answerFees(USER, PHONE, "Hisense fridge", 300);
+    expect(last()).toMatchObject({ kind: "cta" });
+    expect(last().body).toContain("🧮 *Hisense 205L Double Door Fridge* sold at GHS 300:");
+    expect(last().body).toContain("• Jumia commission (Small Appliances, 12%): GHS 36");
+    expect(last().body).toContain("• Shipping contribution when you ship it yourself: GHS 18");
+    expect(last().body).toContain("• You receive about *GHS 246*");
+    // At its own price when none is given.
+    await answerFees(USER, PHONE, "Hisense fridge", null);
+    expect(last().body).toContain("sold at GHS 4,500:");
+  });
+
+  it("fees need their pack, and a category the table has", async () => {
+    db.tables.jumia_categories = [{ code: 1004141, name: "Hard Hats", path: "Industrial & Scientific > Hard Hats" }];
+    await answerFees(USER, PHONE, "blender", null);
+    expect(last().body).toContain("I couldn't match *Nasco Blender 1.5L*'s Jumia category (Hard Hats) to Jumia's fee table.");
+    off.add("fee_calc_whatsapp");
+    await answerFees(USER, PHONE, "blender", null);
+    expect(last().body).toBe("Jumia's fees on WhatsApp come with the Pro pack.");
+  });
+
+  it("a Jumia category to the fee table's", () => {
+    const gh = COUNTRY_FEES.GH;
+    expect(feeCategoryForPath(gh, "Home & Office > Home & Kitchen > Kitchen & Dining > Small Appliances > Coffee, Tea & Espresso Appliances > Electric Kettles")?.name).toBe("Kettles");
+    expect(feeCategoryForPath(gh, "Phones & Tablets > Tablets > Android Tablets")?.name).toBe("Tablets");
+    expect(feeCategoryForPath(gh, "Fashion > Men's Fashion > Shoes > Athletic > Sport Sandals & Slides")?.name).toBe("Fashion");
+    expect(feeCategoryForPath(gh, "Industrial & Scientific > Material Handling Products > Casters")).toBeNull();
+  });
+
+  it("several statuses, each read on its own", async () => {
+    orders = [{ id: "o1", number: 355926919, status: "CANCELED", createdAt: "2026-10-06 10:00:00", totalAmountLocal: { value: "120", currency: "GHS" } }];
+    await answerSales(USER, PHONE, "yesterday", ["READY_TO_SHIP", "CANCELED"]);
+    const reads = calls.filter((c) => c.path === "/orders").map((c) => c.query.get("status"));
+    expect(reads).toEqual(["READY_TO_SHIP", "CANCELED"]);
+    expect(last().body).toContain("📦 1 ready to ship Jumia order yesterday");
+    expect(last().body).toContain("📦 1 cancelled Jumia order yesterday");
+  });
+
+  it("the last 90 days", () => {
+    expect(periodStart("quarter", "Africa/Accra", new Date("2026-10-07T10:00:00Z"))).toBe("2026-07-10");
   });
 });

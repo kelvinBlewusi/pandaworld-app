@@ -60,12 +60,14 @@ import { jumiaCountryByCode } from "@/lib/marketing/countries";
 import { sellerCountry } from "@/lib/jumia/unlistable-categories";
 import { currentPack, featureAccess, featureMinPackName, type FeatureId } from "@/lib/billing/features";
 import {
-  answerListings, answerOrderStatus, answerPayouts, answerProducts, answerSales, answerStock, proposeLiveChange,
+  MAX_GROUP, answerFees, answerListings, answerOrderStatus, answerPayouts, answerProductInfo, answerProducts, answerSales, answerStock,
+  proposeLiveChange,
 } from "@/lib/whatsapp/shop";
 import type { LiveChange } from "@/lib/jumia/shop";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
+import { ALLOWANCE_TOLD, allowanceText, assistantGate, assistantSwitchedOn } from "@/lib/whatsapp/assistant-limits";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
-import { resetSession, updateSession, type AssistantPending, type WhatsAppSession } from "@/lib/whatsapp/session";
+import { resetSession, updateSession, type AssistantPending, type LiveValueAsk, type WhatsAppSession } from "@/lib/whatsapp/session";
 import { parseVariations, saveVariations, variationOptions } from "@/lib/whatsapp/variation-question";
 import { carryPriceToVariants, carryStockToVariants, chatPrice, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import type { ListingRow } from "@/lib/supabase/types";
@@ -86,6 +88,8 @@ const EDITABLE = new Set(["draft", "awaiting_review", "failed"]);
  * `["*"]` there switches it on for every seller.
  */
 export async function assistantEnabled(userId: string): Promise<boolean> {
+  // The kill switch (lib/whatsapp/assistant-limits.ts): off for everyone.
+  if (!(await assistantSwitchedOn())) return false;
   if (isAdmin(userId)) return true;
   try {
     const { data } = await createServerClient().from("app_settings").select("value").eq("key", "assistant_users").maybeSingle();
@@ -145,25 +149,32 @@ export type AssistantAction =
   | { type: "orders" }
   | { type: "credits" }
   | { type: "help" }
-  | { type: "reply"; text: string; link: string | null }
-  | { type: "live_change"; product: string; change: LiveChange; fromContext?: boolean }
+  /** `awaiting`: the reply asks for a live product's new stock or price, so a bare number next answers it. */
+  | { type: "reply"; text: string; link: string | null; awaiting?: { field: "stock" | "price"; products: string[]; fromContext?: boolean } }
+  /** `others`: more products for the same change (one tap, one feed); `all`: every product their words fit. */
+  | { type: "live_change"; product: string; change: LiveChange; fromContext?: boolean; others?: string[]; all?: boolean }
+  | { type: "product_info"; product: string }
+  | { type: "fees"; product: string; price: number | null }
   | { type: "stock"; product: string | null; filter: "out" | "low" | null }
   | { type: "shop"; filter: "all" | "inactive" | "rejected" }
   | { type: "order_status"; number: string }
-  | { type: "sales"; period: Period; status: string | null }
+  /** One status ("CANCELED"), or several (["READY_TO_SHIP", "CANCELED"]). */
+  | { type: "sales"; period: Period; status: string | string[] | null }
   | { type: "listings"; period: Period }
   | { type: "payouts" }
   | { type: "note" }
   | { type: "unclear" };
 
-export type Period = "today" | "yesterday" | "week" | "month";
-const PERIODS = new Set<Period>(["today", "yesterday", "week", "month"]);
+/** "quarter" is the last 90 days: as far back as Jumia's orders go. */
+export type Period = "today" | "yesterday" | "week" | "month" | "quarter";
+const PERIODS = new Set<Period>(["today", "yesterday", "week", "month", "quarter"]);
 const asPeriod = (v: unknown, fallback: Period): Period => (PERIODS.has(v as Period) ? (v as Period) : fallback);
 
 /** The order statuses a seller can ask about, as Jumia names them. */
 const ORDER_STATUSES: Record<string, string> = {
-  cancelled: "CANCELED", canceled: "CANCELED", delivered: "DELIVERED", returned: "RETURNED", failed: "FAILED",
-  pending: "PENDING", shipped: "SHIPPED", ready_to_ship: "READY_TO_SHIP",
+  cancelled: "CANCELED", canceled: "CANCELED", cancel: "CANCELED", delivered: "DELIVERED", returned: "RETURNED", returns: "RETURNED",
+  return: "RETURNED", failed: "FAILED", failed_delivery: "FAILED", pending: "PENDING", shipped: "SHIPPED", ready_to_ship: "READY_TO_SHIP",
+  ready: "READY_TO_SHIP", rts: "READY_TO_SHIP",
 };
 
 const STATUS_WORDS: Record<string, string> = {
@@ -211,8 +222,9 @@ function capabilities(): string {
     "- Edit drafts in chat before they're submitted: price, quantity, variations or sizes, name, brand, colour, a sale price with its dates. Anything else in the editor on the review page.",
     "- Submit to Jumia and report back when each product goes live or is rejected; fix common rejections itself (banned words, restricted brands) and guide the seller through the rest with Fix & resubmit (QC fixes: Standard pack and up).",
     "- Orders on WhatsApp (Pro pack and up): alerts for new Jumia orders, grouped and quiet at night; \"orders\" shows orders waiting to be packed; pack them and get the shipping label PDF, mark them ready to ship, or cancel; where any order is, by its number; orders and sales for today, the week or the month; a message when orders are delivered, returned, fail delivery or are cancelled.",
-    "- Their live Jumia products (Pro pack and up), found by name among everything in their shop: change a product's stock, price, a sale price with its dates, or turn it on or off, with one tap to confirm; how many are left; what's out of stock or low; which products are turned off or rejected by Jumia's quality check; a low-stock warning with new orders.",
+    `- Their live Jumia products (Pro pack and up), found by name among everything in their shop: change a product's stock, price, a sale price with its dates, or turn it on or off, with one tap to confirm, for one product or several named together (up to ${MAX_GROUP} at a time, never their whole shop at once); where a product is (on or off, Jumia's quality check, price, sale, stock); how many are left; what's out of stock or low; which products are turned off or rejected by Jumia's quality check; a low-stock warning with new orders.`,
     "- Payouts (Pro pack and up): the last Jumia payout and the statement not yet paid; a message when Jumia pays.",
+    "- Fees (Pro pack and up): what Jumia takes when one of their products sells (commission for its category, the per-item shipping contribution) and what they receive, at its price or a price they give.",
     `- Credits: tell the balance; a WhatsApp listing costs ${LIVE_LISTING_CREDIT_COST} credits, charged only when it goes live on Jumia; warn when running low. Credits are bought on the dashboard.`,
     "- The PandaWorld Chrome extension fills Jumia's Vendor Center product form on a laptop; image polish and a fee calculator in it on Pro.",
     "- A free Jumia price calculator, Jumia commission rates, how-to guides and an FAQ on the website.",
@@ -276,6 +288,7 @@ export async function sellerFacts(userId: string): Promise<{ lines: string[]; co
     };
     lines.push(`- Orders and shipping labels on WhatsApp: ${await access("shipping_labels")}`);
     lines.push(`- Live products, stock and payouts on WhatsApp: ${await access("shop_whatsapp")}`);
+    lines.push(`- Jumia fees on WhatsApp: ${await access("fee_calc_whatsapp")}`);
     lines.push(`- QC rejection fixes: ${await access("qc_fix")}`);
     const credits = Math.max(0, Math.round((await availableCredits(userId)) * 100) / 100);
     lines.push(`- Credits: ${credits} available, ${creditReach(credits)}`);
@@ -320,8 +333,11 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     "Rules:",
     "- Read the new message with the recent conversation: a short reply (\"yes\", \"five\", \"do it\", \"why?\", \"the 43 one\") answers the bot's last message.",
     "- If one of the actions below does what they ask, return it. Never reply that you can or will check or do something: do it with the action.",
-    "- A product they name that isn't one of the drafts above is a product already in their Jumia shop: use live_change or stock for it, never edit.",
-    "- Sellers make typos (\"ordrs\" is orders, \"payed\" is paid) and write in many languages.",
+    "- Never promise anything for later (to remember, to message them, to make sure, to look into it): you only do the actions here, now. If something went wrong, say plainly what you can do now.",
+    "- A product they name that isn't one of the drafts above is a product already in their Jumia shop: use live_change, product_info, stock or fees for it, never edit.",
+    "- A question about a product (is it live, on, active, approved, in stock, on sale?) is product_info, never live_change: only change a product when they ask for the change.",
+    `- Changing every product in their shop at once ("turn off all products") isn't possible: reply that you change products they name, up to ${MAX_GROUP} at a time, and that Vendor Center has bulk tools.`,
+    "- Sellers make typos (\"ordrs\" is orders, \"payed\" is paid, \"tun on\" is turn on) and write in many languages.",
     "",
     "Reply with ONLY one JSON object, no markdown, one of:",
     '{"type":"edit","edits":[{"products":[<numbers>],"said":"<their words for the product, or null>","changes":{...},"ask":false}]} - change drafts above. One entry per different change.',
@@ -342,18 +358,26 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '{"type":"live_change","product":"<their words for the product>","stock":<number>} - change a product already in their Jumia shop',
     '  (never one of the drafts above). Instead of "stock", exactly one of: "price":<number>, "sale_price":<number> (put it on sale at',
     '  that price; the dates are read from the message), "sale":"end" (end its sale), "active":true or false (turn it on or off).',
-    '  Values from the message only. "product" may come from the recent conversation when the message says "it" or nothing.',
+    '  The same change to several products: "products":["<words for one>","<words for another>"] instead of "product". "all":true',
+    '  when they say all or every one of something ("all the hard hats").',
+    '  Values from the message, or from the seller\'s own recent messages when this one names the products. "product" may come from the',
+    '  recent conversation when the message says "it", "them" or nothing.',
+    '{"type":"product_info","product":"<their words>"} - where one of their Jumia products is: on or off, quality check, price, sale, stock',
+    '{"type":"fees","product":"<their words>","price":<number from the message> or null} - what Jumia takes and what they receive when it sells',
     '{"type":"stock","product":"<their words>" or null,"filter":"out" or "low" or null} - how many are left of a product, or what is out of stock or low',
     '{"type":"shop","filter":"all" or "inactive" or "rejected"} - their Jumia products: an overview, the ones turned off, or the ones rejected',
     '{"type":"order_status","number":"<the order number from the message>"} - where one order is',
-    '{"type":"sales","period":"today" or "yesterday" or "week" or "month","status":"cancelled" or "delivered" or "returned" or "failed" or "pending" or "shipped" or null} - their Jumia orders and sales; with a status, those orders',
-    '{"type":"listings","period":"today" or "yesterday" or "week" or "month"} - how many products they listed with PandaWorld',
+    '{"type":"sales","period":"today" or "yesterday" or "week" or "month" or "quarter","status":null or one or a list of "cancelled", "delivered",',
+    '  "returned", "failed", "pending", "ready_to_ship", "shipped"} - their Jumia orders and sales; with statuses, those orders. "quarter" is',
+    '  the last 90 days, the furthest back Jumia goes: use it for "3 months", "90 days" or "ever".',
+    '{"type":"listings","period":"today" or "yesterday" or "week" or "month" or "quarter"} - how many products they listed with PandaWorld',
     '{"type":"payouts"} - money from Jumia: the last payout, what\'s not paid yet, statements',
     '{"type":"credits"} - their credit balance (sent with a Buy credits button)',
     ...(stage === "starting" ? ['{"type":"note"} - their message is information about the product they are about to send (price, sizes, colours, condition)'] : []),
     '{"type":"reply","text":"<your message>","link":"<a key above, or null>"} - everything else. You write the message:',
-    "  - \"What can you do\", a first hello, or something you can't match: in your own words (vary it, never a set script), a",
-    "    short numbered list of what you can do for them, and end by asking what they'd like to do for their Jumia shop.",
+    "  - \"What can you do\", a hello (\"hi\", \"hello there\"), or something you can't match: in your own words (vary it, never a set",
+    "    script), a short numbered list (4 to 6 lines) of what you can do for them, and end by asking what they'd like to do for their Jumia shop.",
+    "  - A question about them (their shop's name, country, pack, what's on): answer it from About this seller.",
     "  - Thanks or ok: a short, friendly line; no list.",
     "  - Greet only if they greeted you in this message. Mention a pack only for a feature their pack doesn't have (see About this seller).",
     "  - A question about selling on Jumia, their shop or PandaWorld: answer it from what's above. Don't state fees, commission",
@@ -368,7 +392,19 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '"has jumia paid me?" or "shop statement" → {"type":"payouts"}',
     '"any orders cancelled today?" → {"type":"sales","period":"today","status":"cancelled"}',
     '"check cancelled orders yesterday" → {"type":"sales","period":"yesterday","status":"cancelled"}',
+    '"check for ready to ship and cancelled orders yesterday" → {"type":"sales","period":"yesterday","status":["ready_to_ship","cancelled"]}',
     '"how many orders did I get this week" → {"type":"sales","period":"week","status":null}',
+    '"did I have orders today?" → {"type":"sales","period":"today","status":null}',
+    '"how much has my shop made in 90 days" → {"type":"sales","period":"quarter","status":null}',
+    '"returns" or "did I have returns" → {"type":"sales","period":"month","status":"returned"}',
+    '"orders to pack" or "show my orders" → {"type":"orders"}',
+    '"is the drone live?" or "is the dron active" → {"type":"product_info","product":"drone"}',
+    '"how much will I receive if the creatine sells?" → {"type":"fees","product":"creatine","price":null}',
+    '"what does jumia charge if I sell the boot at 120" → {"type":"fees","product":"boot","price":120}',
+    '"set the stock of the freezer, the blender and the chainsaw to 10" → {"type":"live_change","products":["freezer","blender","chainsaw"],"stock":10}',
+    '"also tun on the drone" → {"type":"live_change","product":"drone","active":true}',
+    '"hi there" → {"type":"reply","text":"Hi! 👋 Here\'s what I can do for your shop:\\n1. …\\n2. …\\n…\\nWhat would you like to do today?","link":null}',
+    '"what\'s my shop name?" → {"type":"reply","text":"Your Jumia shop is <the name in About this seller>.","link":null}',
     '"how many listings have I done today?" → {"type":"listings","period":"today"}',
     '"check if I have stock for creatine" → {"type":"stock","product":"creatine","filter":null}',
     '"what is out of stock" → {"type":"stock","product":null,"filter":"out"}',
@@ -541,12 +577,128 @@ export function saleWindow(message: string, now: Date): { start: string; end: st
 
 const END_SALE_WORDS = /\b(end|ends|stop|remove|cancel|no longer|take off|turn off)\b[^.?!]*\b(sale|discount|promo)|\b(sale|discount|promo)\b[^.?!]*\b(end|ended|off|over|stop)\b/i;
 const OFF_WORDS = /\b(off|deactivate|disable|hide|unpublish|inactive|pause|stop selling|unlist)\b/i;
-const ON_WORDS = /\b(turn|switch|put|set)\b[^.?!]*\bon\b|\b(activate|enable|unhide|publish|republish|reactivate|resume|active again|back on)\b/i;
+/** Typos included: "also tun on the drone" was refused (live, 2026-10-07). Not "on sale". */
+const ON_WORDS = /\b(turn|tun|trun|tur|switch|put|set|get|bring)\b[^.?!]*\bon\b(?!\s+(sale|discount|promo))|\b(back on|on again)\b|\b(activate|enable|unhide|publish|republish|reactivate|resume|unpause)\b|\b(active|live|visible) again\b|\bmake (it |them )?(active|live|visible)\b|\bgo live\b/i;
 
-/** Whether the seller's message names the product: at least one of its words is in it. */
+/**
+ * A question about a product's state ("is the drone live?", "is the dron
+ * active"), not a request to change it: answered with product_info. "Can you
+ * turn on the drone?" is a request.
+ */
+export function isStateQuestion(text: string): boolean {
+  const t = text.trim();
+  if (/^(is|are|was|were|has|have|does|do|did|check if|check whether)\b/i.test(t)) return true;
+  return /\?\s*$/.test(t) && !/^(can|could|would|will|please|pls|kindly)\b/i.test(t)
+    && !/\b(turn|tun|switch|activate|enable|deactivate|disable|put|set|make|change)\b/i.test(t);
+}
+
+/**
+ * Whether the seller's message names the product: at least one of its words
+ * is in it, or starts the same for 4 letters or more ("dron" for "drones").
+ */
 export function productBacked(product: string, message: string): boolean {
   const said = new Set(message.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 2));
-  return product.toLowerCase().split(/[^a-z0-9]+/).some((w) => w.length >= 2 && (said.has(w) || said.has(w.replace(/s$/, "")) || said.has(`${w}s`)));
+  const typed = Array.from(said).filter((s) => s.length >= 4);
+  return product.toLowerCase().split(/[^a-z0-9]+/).some((w) => w.length >= 2 && (
+    said.has(w) || said.has(w.replace(/s$/, "")) || said.has(`${w}s`)
+    || (w.length >= 4 && typed.some((s) => w.startsWith(s) || s.startsWith(w)))));
+}
+
+/** Words that name no product: "those products", "all of them", "the other ones". */
+const FILLER = new Set([
+  "the", "my", "a", "an", "of", "those", "these", "that", "this", "them", "it", "its", "they", "their", "products", "product", "items",
+  "item", "listings", "listing", "ones", "one", "shop", "store", "jumia", "on", "in", "all", "every", "everything", "other", "others",
+  "rest", "apart", "from", "except", "each", "both", "stuff", "things", "thing", "remaining",
+]);
+const BULK_WORDS = /\b(all|every|everything|other|others|rest|remaining)\b/i;
+/** Whether the words name a product at all. */
+export function namesAProduct(words: string): boolean {
+  return words.toLowerCase().split(/[^a-z0-9]+/).some((w) => w.length >= 2 && !FILLER.has(w));
+}
+
+/**
+ * "the freezer and the blender, chainsaw": each product of a list the AI gave
+ * as one. "And" splits only before "the"/"my"/"also", so "Salt and Pepper
+ * Grinder" stays one product.
+ */
+export const splitProducts = (s: string) =>
+  s.split(/\s*[,;]\s*|\s+and\s+(?=(?:the|my|also|a|an)\b)/i).map((x) => x.replace(/^(?:and|also)\s+/i, "").trim()).filter((x) => namesAProduct(x));
+
+/** The seller's own last few messages in the conversation ("Seller: …" lines). */
+const sellerLines = (context: string, n = 3) =>
+  context.split("\n").filter((l) => l.startsWith("Seller:")).slice(-n).map((l) => l.slice(7)).join("\n");
+
+/**
+ * A live change, checked: the products (named in the message, or in the
+ * conversation when it says "it"/"them"), and the value, from the message,
+ * or from the seller's own recent messages when this one only names the
+ * products ("update those to 10 each", then "the freezer and the blender").
+ */
+function liveChangeAction(
+  parsed: Record<string, unknown>, message: string, context: string, now: Date, currency: string,
+): AssistantAction {
+  const ask = (text: string, awaiting?: { field: "stock" | "price"; products: string[]; fromContext?: boolean }): AssistantAction =>
+    ({ type: "reply", text, link: null, ...(awaiting ? { awaiting } : {}) });
+  const raw = [
+    ...(Array.isArray(parsed.products) ? parsed.products : []),
+    ...(typeof parsed.product === "string" ? [parsed.product] : []),
+  ].filter((p): p is string => typeof p === "string").map((p) => p.trim().slice(0, 120)).filter(Boolean);
+  const named = Array.from(new Set(raw.flatMap((p) => (namesAProduct(p) ? [p] : []))));
+  const all = parsed.all === true || BULK_WORDS.test(message);
+
+  // "off all products", "turn off all the other products": the whole shop.
+  if (named.length === 0) {
+    if (all || raw.some((p) => BULK_WORDS.test(p))) {
+      return ask(`I can't change every product in your shop at once. Name the ones to change, up to ${MAX_GROUP} at a time, e.g. "turn off the blender, the kettle and the drill". For your whole shop, Jumia Vendor Center has bulk tools.`);
+    }
+    return ask("Which products do you mean? Tell me their names as they show on Jumia, e.g. \"set the stock of the freezer and the blender to 10\".");
+  }
+  const inMessage = named.filter((p) => productBacked(p, message));
+  const inContext = named.filter((p) => !inMessage.includes(p) && productBacked(p, context));
+  const products = [...inMessage, ...inContext];
+  const fromContext = inMessage.length === 0 && inContext.length > 0;
+  if (products.length === 0) return ask("Which product do you mean? Tell me its name as it shows on Jumia, e.g. \"set the Hisense fridge's stock to 20\".");
+  const [product, ...others] = products;
+  const live = (change: LiveChange): AssistantAction => ({
+    type: "live_change", product, change,
+    ...(fromContext ? { fromContext } : {}),
+    ...(others.length > 0 ? { others } : {}),
+    // "all the hard hats": every product it fits. Said in the message, not only the AI's word.
+    ...(/\b(all|every)\b/i.test(message) ? { all: true } : {}),
+  });
+  const own = messageNumbers(message);
+  const numbers = own.length > 0 ? own : messageNumbers(sellerLines(context));
+  const awaiting = (field: "stock" | "price") => ({ field, products, ...(fromContext ? { fromContext } : {}) });
+  const it = products.length > 1 ? "their" : "its";
+
+  if (parsed.stock != null) {
+    const n = Number(parsed.stock);
+    const outWords = /\b(out of stock|sold out|none left|finished|no more)\b/i.test(message);
+    return Number.isInteger(n) && n >= 0 && (numbers.includes(n) || (n === 0 && outWords))
+      ? live({ kind: "stock", stock: n }) : ask(`What should ${it} stock be? Send the number, e.g. "10".`, awaiting("stock"));
+  }
+  if (parsed.price != null) {
+    const n = Number(parsed.price);
+    return n > 0 && numbers.includes(n) ? live({ kind: "price", price: n }) : ask(`What should ${it} price be? Send the number, e.g. "150".`, awaiting("price"));
+  }
+  if (parsed.sale === "end") {
+    return END_SALE_WORDS.test(message) ? live({ kind: "sale", sale: null }) : { type: "unclear" };
+  }
+  if (parsed.sale_price != null || parsed.sale === true) {
+    const n = Number(parsed.sale_price);
+    const price = n > 0 && numbers.includes(n) ? n : extractSalePrice(message, now, currency)?.salePrice ?? null;
+    if (price == null) return ask("What sale price? e.g. \"put it on sale at 80 from 10 Oct to 20 Oct\".");
+    const window = saleWindow(message, now) ?? (own.length === 0 ? saleWindow(sellerLines(context, 2), now) : null);
+    if (!window) return ask(`A sale on Jumia needs its dates. Send them with the price, e.g. "sale ${price} from 10 Oct to 20 Oct", or say "sale ${price} this month".`);
+    return live({ kind: "sale", sale: { price, start: window.start, end: window.end } });
+  }
+  if (parsed.active === true || parsed.active === false) {
+    // "is the drone live?": a question, answered, nothing changed.
+    if (isStateQuestion(message)) return { type: "product_info", product };
+    if (parsed.active === false) return OFF_WORDS.test(message) ? live({ kind: "status", active: false }) : { type: "unclear" };
+    return ON_WORDS.test(message) ? live({ kind: "status", active: true }) : { type: "unclear" };
+  }
+  return ask("What should I change on it? Its stock, price, a sale price with dates, or turning it on or off.");
 }
 
 /** The AI's reply as an action our code can carry out, or unclear. */
@@ -576,37 +728,24 @@ export function parseAction(
       if (!text) return link ? { type: "reply", text: `Here's the ${links[link].label.toLowerCase()}:`, link } : { type: "unclear" };
       return { type: "reply", text, link };
     }
-    case "live_change": {
+    case "live_change":
+      return liveChangeAction(parsed, message, context, now, currency);
+    case "product_info":
+    case "info": {
       const product = typeof parsed.product === "string" ? parsed.product.trim().slice(0, 120) : "";
-      const inMessage = !!product && productBacked(product, message);
-      const fromContext = !inMessage && !!product && productBacked(product, context);
-      if (!inMessage && !fromContext) return ask("Which product do you mean? Tell me its name as it shows on Jumia, e.g. \"set the Hisense fridge's stock to 20\".");
-      const live = (change: LiveChange): AssistantAction => ({ type: "live_change", product, change, ...(fromContext ? { fromContext } : {}) });
-      const numbers = messageNumbers(message);
-      if (parsed.stock != null) {
-        const n = Number(parsed.stock);
-        const outWords = /\b(out of stock|sold out|none left|finished|no more)\b/i.test(message);
-        return Number.isInteger(n) && n >= 0 && (numbers.includes(n) || (n === 0 && outWords))
-          ? live({ kind: "stock", stock: n }) : ask("What should its stock be? Send the number, e.g. \"stock 20\".");
+      if (!namesAProduct(product)) return ask("Which product? Tell me its name as it shows on Jumia, e.g. \"is the Hisense fridge live?\".");
+      return productBacked(product, message) || productBacked(product, context)
+        ? { type: "product_info", product } : ask("Which product? Tell me its name as it shows on Jumia, e.g. \"is the Hisense fridge live?\".");
+    }
+    case "fees":
+    case "calculator": {
+      const product = typeof parsed.product === "string" ? parsed.product.trim().slice(0, 120) : "";
+      const n = Number(parsed.price);
+      const price = n > 0 && messageNumbers(message).includes(n) ? n : null;
+      if (!namesAProduct(product) || !(productBacked(product, message) || productBacked(product, context))) {
+        return ask("Which product? Tell me its name, e.g. \"how much do I get if the creatine sells\", or send its price and category to the calculator.");
       }
-      if (parsed.price != null) {
-        const n = Number(parsed.price);
-        return n > 0 && numbers.includes(n) ? live({ kind: "price", price: n }) : ask("What price? Send the number, e.g. \"price 150\".");
-      }
-      if (parsed.sale === "end") {
-        return END_SALE_WORDS.test(message) ? live({ kind: "sale", sale: null }) : { type: "unclear" };
-      }
-      if (parsed.sale_price != null || parsed.sale === true) {
-        const n = Number(parsed.sale_price);
-        const price = n > 0 && numbers.includes(n) ? n : extractSalePrice(message, now, currency)?.salePrice ?? null;
-        if (price == null) return ask("What sale price? e.g. \"put it on sale at 80 from 10 Oct to 20 Oct\".");
-        const window = saleWindow(message, now);
-        if (!window) return ask(`A sale on Jumia needs its dates. Send them with the price, e.g. "sale ${price} from 10 Oct to 20 Oct", or say "sale ${price} this month".`);
-        return live({ kind: "sale", sale: { price, start: window.start, end: window.end } });
-      }
-      if (parsed.active === false) return OFF_WORDS.test(message) ? live({ kind: "status", active: false }) : { type: "unclear" };
-      if (parsed.active === true) return ON_WORDS.test(message) ? live({ kind: "status", active: true }) : { type: "unclear" };
-      return ask("What should I change on it? Its stock, price, a sale price with dates, or turning it on or off.");
+      return { type: "fees", product, price };
     }
     case "stock": {
       const product = typeof parsed.product === "string" && parsed.product.trim() && productBacked(parsed.product, message) ? parsed.product.trim().slice(0, 120) : null;
@@ -622,8 +761,11 @@ export function parseAction(
         ? { type: "order_status", number } : ask("Which order? Send its number, e.g. \"where is order 355926919\".");
     }
     case "sales": {
-      const status = typeof parsed.status === "string" ? ORDER_STATUSES[parsed.status.toLowerCase().replace(/[\s-]+/g, "_")] ?? null : null;
-      return { type: "sales", period: asPeriod(parsed.period, "week"), status };
+      const asStatus = (v: unknown) => (typeof v === "string" ? ORDER_STATUSES[v.toLowerCase().trim().replace(/[\s-]+/g, "_")] ?? null : null);
+      const list = Array.from(new Set((Array.isArray(parsed.status) ? parsed.status : [parsed.status]).map(asStatus).filter((s): s is string => !!s)));
+      // "past time", "ever": as far back as Jumia goes.
+      const period = parsed.period === "all" || parsed.period === "ever" || parsed.period === "90days" ? "quarter" : asPeriod(parsed.period, "week");
+      return { type: "sales", period, status: list.length === 0 ? null : list.length === 1 ? list[0] : list };
     }
     case "listings":
       return { type: "listings", period: asPeriod(parsed.period, "today") };
@@ -641,7 +783,17 @@ export function parseAction(
       return seqs.length > 0 ? { type: "submit", seqs: seqs.sort((a, b) => a - b) } : { type: "unclear" };
     }
     case "edit": {
-      if (products.length === 0 || !Array.isArray(parsed.edits)) return { type: "unclear" };
+      if (!Array.isArray(parsed.edits)) return { type: "unclear" };
+      if (products.length === 0) {
+        // No drafts here: "the stock of the freezer, the blender and the
+        // chainsaw should be made 10" came back as an edit (live,
+        // 2026-10-07). It's about products in their Jumia shop.
+        const e = (parsed.edits as Record<string, unknown>[]).find((x) => x && typeof x.said === "string" && x.changes && typeof x.changes === "object");
+        if (!e) return { type: "unclear" };
+        const c = e.changes as Record<string, unknown>;
+        const value = c.quantity != null ? { stock: c.quantity } : c.price != null ? { price: c.price } : null;
+        return value ? liveChangeAction({ products: splitProducts(String(e.said)), ...value }, message, context, now, currency) : { type: "unclear" };
+      }
       const edits: EditPart[] = [];
       const dropped = new Set<string>();
       const misnamed: { said: string; changes: unknown }[] = [];
@@ -970,6 +1122,7 @@ async function logTurn(userId: string, stage: Stage, message: string, action: As
   try {
     await createServerClient().from("whatsapp_assistant_log").insert({
       user_id: userId, stage, message: message.slice(0, 1000), action, outcome, ...(raw != null ? { raw: raw.slice(0, 2000) } : {}),
+      created_at: new Date().toISOString(),
     });
   } catch (e) {
     console.warn(`[assistant] log failed: ${(e as Error).message}`);
@@ -1024,6 +1177,21 @@ export async function runAssistant(
 ): Promise<AssistantOutcome> {
   // A button id from an older message ("apick:2", "value:3") isn't words to understand.
   if (/^[a-z_]+:\S+$/i.test(text.trim())) return "default";
+
+  // The day's allowance and the global ceiling (lib/whatsapp/assistant-limits.ts):
+  // past them, the fixed flow answers ("failed" runs the usual handling).
+  // The seller is told once a day; that message is the whole reply.
+  const gate = await assistantGate(userId).catch(() => ({ ok: true }) as const);
+  if (!gate.ok) {
+    if (gate.reason === "allowance" && !gate.told) {
+      await sendTextIfConfigured(phone, allowanceText(gate.allowance));
+      await logTurn(userId, stage, text, null, ALLOWANCE_TOLD);
+      return "handled";
+    }
+    console.info(`[assistant] ${userId}: ${gate.reason === "ceiling" ? "daily ceiling reached" : "over daily allowance"}, fixed flow`);
+    return "failed";
+  }
+
   const batchId = stage === "review" ? session.batchId : stage === "sent" ? session.lastSubmittedBatchId : null;
   let action: AssistantAction;
   let links: Record<string, AssistantLink>;
@@ -1047,9 +1215,9 @@ export async function runAssistant(
 
   const outcome = await carryOut(userId, phone, stage, batchId, products, action, text, links, session);
   await logTurn(userId, stage, text, action, outcome, raw);
-  // Starting a batch: after answering, where they are.
-  if (stage === "starting" && outcome !== "default" && outcome !== "stopped batch") {
-    await sendTextIfConfigured(phone, `📸 I'm still ready for product ${session.batchSeq ?? 1} of ${session.batchSize ?? 1}: send its photos when you're ready, or say *restart* to stop.`);
+  // Starting a batch: after answering, where they are (a reply carries it already).
+  if (stage === "starting" && action.type !== "reply" && outcome !== "default" && outcome !== "stopped batch" && outcome !== "kept batch") {
+    await sendTextIfConfigured(phone, startingNudge(session));
   }
   return outcome === "default" ? "default" : "handled";
 }
@@ -1136,7 +1304,19 @@ async function carryOut(
       ]);
       return "sent help";
     case "live_change":
-      return proposeLiveChange(userId, phone, action.product, action.change, { preferSid: action.fromContext ? await lastChangedSid(userId) : null });
+      return proposeLiveChange(userId, phone, action.others ? [action.product, ...action.others] : action.product, action.change, {
+        preferSid: action.fromContext ? await lastChangedSid(userId) : null,
+        ...(action.all ? { all: true } : {}),
+      });
+    case "product_info":
+      return answerProductInfo(userId, phone, action.product);
+    case "fees": {
+      // A draft here ("what will I get for the wig?") is worked out from the draft.
+      const draft = products.find((p) => fitsDraft(action.product, p.listing.title) && namesAProduct(action.product) && draftWords(action.product).length > 0);
+      return answerFees(userId, phone, action.product, action.price, draft ? {
+        name: draft.listing.title ?? "Your product", price: draft.listing.selling_price ?? null, categoryPath: draft.listing.category_path ?? null,
+      } : undefined);
+    }
     case "stock":
       return answerStock(userId, phone, action.product, action.filter);
     case "shop":
@@ -1149,16 +1329,56 @@ async function carryOut(
       return answerPayouts(userId, phone);
     case "reply": {
       // The AI's own words. With a link, it's the button; in review, the
-      // reply keeps the step's own two buttons.
+      // reply keeps the step's own two buttons. Starting a batch, where
+      // they are goes in the same message (one message, not two).
       const link = action.link ? links[action.link] : null;
-      if (link) await sendCtaUrlIfConfigured(phone, action.text, link.label, link.url);
-      else if (stage === "review") await sendButtonsIfConfigured(phone, action.text, [SUBMIT_ALL, REVIEW]);
-      else await sendTextIfConfigured(phone, action.text);
-      return link ? `replied with ${action.link}` : "replied";
+      const text = stage === "starting" ? `${action.text}\n\n${startingNudge(session)}` : action.text;
+      if (action.awaiting) {
+        const ask: LiveValueAsk = {
+          kind: "live_value", field: action.awaiting.field, products: action.awaiting.products,
+          preferSid: action.awaiting.fromContext ? await lastChangedSid(userId) : null, at: new Date().toISOString(),
+        };
+        await updateSession(phone, { assistantPending: ask });
+      }
+      if (link) await sendCtaUrlIfConfigured(phone, text, link.label, link.url);
+      else if (stage === "review") await sendButtonsIfConfigured(phone, text, [SUBMIT_ALL, REVIEW]);
+      else await sendTextIfConfigured(phone, text);
+      return link ? `replied with ${action.link}` : action.awaiting ? `asked for ${action.awaiting.field}` : "replied";
     }
     case "unclear":
       return "default";
   }
+  return "default";
+}
+
+const startingNudge = (session: WhatsAppSession) =>
+  `📸 I'm still ready for product ${session.batchSeq ?? 1} of ${session.batchSize ?? 1}: send its photos when you're ready, or say *restart* to stop.`;
+
+/** A "What should its stock be?" older than this is no longer what a number answers. */
+const LIVE_VALUE_TTL_MS = 10 * 60_000;
+
+/**
+ * The answer to the assistant's "What should its stock be?" about live
+ * products: a bare number ("10", "stock 10", "GHS 150"). The change is then
+ * offered for its tap as usual. Anything else drops the question (false):
+ * the message is handled as usual. A bare "10" used to start a batch of 10
+ * here (owner's second test, 2026-10-07).
+ */
+export async function answerLiveValue(userId: string, phone: string, session: WhatsAppSession, text: string | undefined): Promise<boolean> {
+  const pending = session.assistantPending;
+  if (!pending || !("kind" in pending) || pending.kind !== "live_value") return false;
+  const fresh = Date.now() - new Date(pending.at).getTime() < LIVE_VALUE_TTL_MS;
+  const m = (text ?? "").trim().match(/^(?:(?:stock|qty|quantity|price|make it|set it to|to|it'?s|=)\s*:?\s*)?(?:[a-z]{3}|gh₵|₦|₵)?\s*(\d[\d,]*(?:\.\d+)?)\s*(?:pcs|pieces|units|each|cedis|naira)?\s*[.!]?$/i);
+  await updateSession(phone, { assistantPending: null });
+  if (!fresh || !m) return false;
+  const n = parseFloat(m[1].replace(/,/g, ""));
+  const change: LiveChange | null = pending.field === "stock"
+    ? (Number.isInteger(n) && n >= 0 ? { kind: "stock", stock: n } : null)
+    : (n > 0 ? { kind: "price", price: n } : null);
+  if (!change) return false;
+  const outcome = await proposeLiveChange(userId, phone, pending.products.length === 1 ? pending.products[0] : pending.products, change, { preferSid: pending.preferSid });
+  await logTurn(userId, "idle", text ?? "", null, `answered ${pending.field}: ${outcome}`);
+  return true;
 }
 
 /**
@@ -1170,7 +1390,7 @@ export async function answerPendingQuestion(
   userId: string, phone: string, session: WhatsAppSession, text: string,
 ): Promise<boolean> {
   const pending = session.assistantPending;
-  if (!pending) return false;
+  if (!pending || "kind" in pending) return false;
   if (pending.batchId !== session.batchId || Date.now() - new Date(pending.at).getTime() > PENDING_TTL_MS) return false;
 
   const t = text.trim();

@@ -48,6 +48,9 @@ jest.mock("@/lib/whatsapp/shop", () => ({
   answerOrderStatus: async (...a: unknown[]) => { shopCalls.push(["answerOrderStatus", ...a.slice(2)]); return "order"; },
   answerSales:       async (...a: unknown[]) => { shopCalls.push(["answerSales", ...a.slice(2)]); return "sales"; },
   answerPayouts:     async (...a: unknown[]) => { shopCalls.push(["answerPayouts", ...a.slice(2)]); return "payouts"; },
+  answerProductInfo: async (...a: unknown[]) => { shopCalls.push(["answerProductInfo", ...a.slice(2)]); return "info"; },
+  answerFees:        async (...a: unknown[]) => { shopCalls.push(["answerFees", ...a.slice(2)]); return "fees"; },
+  MAX_GROUP: 20,
 }));
 
 const SIZES = ["S", "M", "L", "XL", "XXL"];
@@ -57,8 +60,10 @@ jest.mock("@/lib/jumia/categories", () => ({
 }));
 
 import {
-  assistantEnabled, assistantLinks, cleanReply, countBacked, fitsDraft, looksLikeQuestion, messageNumbers, recentConversation, saleWindow, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
+  answerLiveValue, assistantEnabled, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
+  namesAProduct, recentConversation, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
+import { ALLOWANCE_TOLD, DAILY_ALLOWANCE, assistantGate, dailyAllowance, dayStart } from "@/lib/whatsapp/assistant-limits";
 import { parseVariations } from "@/lib/whatsapp/variation-question";
 import type { ListingRow } from "@/lib/supabase/types";
 import type { WhatsAppSession } from "@/lib/whatsapp/session";
@@ -441,5 +446,194 @@ describe("what the owner's live test showed (2026-10-07)", () => {
     expect(await runAssistant("seller", "233", session, "Has JUMIA payed me ?", "starting")).toBe("handled");
     expect(shopCalls).toEqual([["answerPayouts"]]);
     expect(sent.at(-1)!.body).toBe("📸 I'm still ready for product 1 of 2: send its photos when you're ready, or say *restart* to stop.");
+    // A reply carries it in the same message.
+    sent.length = 0;
+    aiReplies.push('{"type":"reply","text":"Fashion > Shoes fits boots.","link":null}');
+    await runAssistant("seller", "233", session, "what category should we use?", "starting");
+    expect(sent).toEqual([{ kind: "text", body: "Fashion > Shoes fits boots.\n\n📸 I'm still ready for product 1 of 2: send its photos when you're ready, or say *restart* to stop." }]);
+  });
+});
+
+describe("what the owner's second test showed (2026-10-07, round 3)", () => {
+  const ctx = (lines: string[]) => lines.join("\n");
+  const idle = () => ({ phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null }) as WhatsAppSession;
+
+  it("several products, one change: one action for all of them", () => {
+    expect(parseAction('{"type":"live_change","products":["Mounted freezer","blender","chainsaw"],"stock":10}',
+      "change the stock of the Mounted freezer and the blender and the chainsaw on my shop to 10", []))
+      .toEqual({ type: "live_change", product: "Mounted freezer", others: ["blender", "chainsaw"], change: { kind: "stock", stock: 10 } });
+    // A product the AI added that the seller never named is left out.
+    expect(parseAction('{"type":"live_change","products":["freezer","kettle"],"stock":10}', "set the freezer to 10", []))
+      .toEqual({ type: "live_change", product: "freezer", change: { kind: "stock", stock: 10 } });
+    // "All the hard hats": every product it fits.
+    expect(parseAction('{"type":"live_change","product":"hard hats","stock":0,"all":true}', "set all the hard hats to 0", []))
+      .toEqual({ type: "live_change", product: "hard hats", change: { kind: "stock", stock: 0 }, all: true });
+  });
+
+  it("the value from the seller's own last message, when this one only names the products", () => {
+    const context = ctx(["Seller: update the stock of those products to 10 each", "Bot: Which products do you mean?"]);
+    expect(parseAction('{"type":"live_change","product":"Mounted freezer - 65 Ltrs","stock":10}', "okay the Mounted freezer and the blender and the chainsaw", [], {}, "GHS", { context }))
+      .toEqual({ type: "live_change", product: "Mounted freezer - 65 Ltrs", change: { kind: "stock", stock: 10 } });
+    // Not a number the bot said.
+    expect(parseAction('{"type":"live_change","product":"freezer","stock":43}', "okay the freezer", [], {}, "GHS", { context: "Bot: the boot has 43 left" }))
+      .toMatchObject({ type: "reply", awaiting: { field: "stock", products: ["freezer"] } });
+  });
+
+  it("an edit with no drafts around is a change to their Jumia products", () => {
+    expect(parseAction('{"type":"edit","edits":[{"products":[1,2,3],"said":"Mounted freezer and the blender and the chainsaw","changes":{"quantity":10},"ask":false}]}',
+      "i meant the stock of the Mounted freezer and the blender and the chainsaw should be made 10", []))
+      .toEqual({ type: "live_change", product: "Mounted freezer", others: ["the blender", "the chainsaw"], change: { kind: "stock", stock: 10 } });
+    expect(splitProducts("Salt and Pepper Grinder")).toEqual(["Salt and Pepper Grinder"]);
+    expect(splitProducts("the kettle, the drill and the boot")).toEqual(["the kettle", "the drill", "the boot"]);
+  });
+
+  it("\"is the drone live?\" is a question, never a change", () => {
+    expect(parseAction('{"type":"live_change","product":"drone","active":true}', "is the drone live?", [])).toEqual({ type: "product_info", product: "drone" });
+    expect(parseAction('{"type":"live_change","product":"drones","active":true}', "is the dron active", [])).toEqual({ type: "product_info", product: "drones" });
+    expect(parseAction('{"type":"product_info","product":"drone"}', "is the drone live?", [])).toEqual({ type: "product_info", product: "drone" });
+    expect(isStateQuestion("can you turn on the drone?")).toBe(false);
+    expect(isStateQuestion("the drone is on?")).toBe(true);
+  });
+
+  it("\"tun on\" and other ways of saying on; not \"on sale\"", () => {
+    const on = (msg: string) => parseAction('{"type":"live_change","product":"drone","active":true}', msg, []);
+    for (const msg of ["also tun on the drone", "turn the drone back on", "activate the drone", "make the drone live again"]) {
+      expect(on(msg)).toEqual({ type: "live_change", product: "drone", change: { kind: "status", active: true } });
+    }
+    expect(on("put the drone on sale")).toEqual({ type: "unclear" });
+  });
+
+  it("the whole shop at once is explained, not attempted", () => {
+    expect(parseAction('{"type":"live_change","product":null,"active":false}', "off all products", []))
+      .toMatchObject({ type: "reply", text: expect.stringContaining("I can't change every product in your shop at once") });
+    expect(parseAction('{"type":"live_change","product":"other products","active":false}', "off all other products apart from the ones i asked you turn on", []))
+      .toMatchObject({ type: "reply", text: expect.stringContaining("Jumia Vendor Center has bulk tools") });
+    expect(parseAction('{"type":"live_change","product":"those products","stock":10}', "update the stock of those products to 10 each", []))
+      .toMatchObject({ type: "reply", text: expect.stringContaining("Which products do you mean?") });
+    expect(namesAProduct("the other ones")).toBe(false);
+    expect(namesAProduct("the blender")).toBe(true);
+  });
+
+  it("several statuses, and as far back as Jumia goes", () => {
+    expect(parseAction('{"type":"sales","period":"yesterday","status":["ready_to_ship","cancelled"]}', "check for ready to ship and cancelled order yesterday", []))
+      .toEqual({ type: "sales", period: "yesterday", status: ["READY_TO_SHIP", "CANCELED"] });
+    expect(parseAction('{"type":"sales","period":"all","status":"delivered"}', "any delivered orders past time?", []))
+      .toEqual({ type: "sales", period: "quarter", status: "DELIVERED" });
+    expect(parseAction('{"type":"sales","period":"quarter","status":null}', "how much has my shop made in 90days", []))
+      .toEqual({ type: "sales", period: "quarter", status: null });
+    expect(parseAction('{"type":"sales","period":"month","status":"returns"}', "returns", []))
+      .toEqual({ type: "sales", period: "month", status: "RETURNED" });
+  });
+
+  it("fees: for a product they name, at a price from their message only", () => {
+    expect(parseAction('{"type":"fees","product":"creatine","price":null}', "my creatine product how much will i recieve if it is sold?", []))
+      .toEqual({ type: "fees", product: "creatine", price: null });
+    expect(parseAction('{"type":"fees","product":"boot","price":120}', "what does jumia charge if I sell the boot at 120", []))
+      .toEqual({ type: "fees", product: "boot", price: 120 });
+    expect(parseAction('{"type":"fees","product":"boot","price":99}', "what does jumia charge for the boot", []))
+      .toEqual({ type: "fees", product: "boot", price: null });
+    // The AI's own name for it, seen live.
+    expect(parseAction('{"type":"calculator","product":"creatine"}', "how much will I get for the creatine", [])).toEqual({ type: "fees", product: "creatine", price: null });
+  });
+
+  it("the prompt says: no promises, questions are product_info, the new examples", async () => {
+    aiReplies.push('{"type":"reply","text":"Hi!","link":null}');
+    await runAssistant("seller", "233", idle(), "hi there", "idle");
+    expect(aiPrompts[0]).toContain("Never promise anything for later");
+    expect(aiPrompts[0]).toContain('"did I have orders today?" → {"type":"sales","period":"today","status":null}');
+    expect(aiPrompts[0]).toContain('{"type":"product_info"');
+    expect(aiPrompts[0]).toContain('{"type":"fees"');
+    expect(aiPrompts[0]).toContain("- Jumia fees on WhatsApp: not on their pack (Pro and up)");
+  });
+
+  it("a bare number answers \"What should its stock be?\"", async () => {
+    db.tables.whatsapp_sessions = [{ phone_number: "233", user_id: "seller", state: "awaiting_count" }];
+    aiReplies.push('{"type":"live_change","product":"freezer","stock":7}');
+    await runAssistant("seller", "233", idle(), "and the freezer", "idle");
+    expect(sent.at(-1)!.body).toBe('What should its stock be? Send the number, e.g. "10".');
+    const asked = db.tables.whatsapp_sessions[0].assistant_pending as Record<string, unknown>;
+    expect(asked).toMatchObject({ kind: "live_value", field: "stock", products: ["freezer"] });
+
+    const withAsk = { ...idle(), assistantPending: asked } as unknown as WhatsAppSession;
+    expect(await answerLiveValue("seller", "233", withAsk, "10")).toBe(true);
+    expect(shopCalls.at(-1)).toEqual(["proposeLiveChange", "freezer", { kind: "stock", stock: 10 }, { preferSid: null }]);
+    expect(db.tables.whatsapp_sessions[0].assistant_pending).toBeNull();
+    // Anything else drops the question.
+    expect(await answerLiveValue("seller", "233", withAsk, "what about the kettle")).toBe(false);
+    // A stale one is no longer an answer.
+    const stale = { ...withAsk, assistantPending: { ...asked, at: "2026-01-01T00:00:00Z" } } as unknown as WhatsAppSession;
+    expect(await answerLiveValue("seller", "233", stale, "10")).toBe(false);
+  });
+
+  it("hands several products and \"all\" to the shop module", async () => {
+    aiReplies.push('{"type":"live_change","products":["freezer","blender"],"stock":10}');
+    await runAssistant("seller", "233", idle(), "set the freezer and the blender to 10", "idle");
+    aiReplies.push('{"type":"product_info","product":"drone"}');
+    await runAssistant("seller", "233", idle(), "is the drone live?", "idle");
+    aiReplies.push('{"type":"fees","product":"creatine","price":null}');
+    await runAssistant("seller", "233", idle(), "how much do I get when the creatine sells", "idle");
+    expect(shopCalls).toEqual([
+      ["proposeLiveChange", ["freezer", "blender"], { kind: "stock", stock: 10 }, { preferSid: null }],
+      ["answerProductInfo", "drone"],
+      ["answerFees", "creatine", null, undefined],
+    ]);
+  });
+});
+
+describe("the assistant's daily allowance (owner, 2026-10-07)", () => {
+  const session = () => ({ phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null }) as WhatsAppSession;
+  const turns = (n: number, userId = "seller") => {
+    db.tables.whatsapp_assistant_log = Array.from({ length: n }, (_, i) => ({
+      id: i + 1, user_id: userId, stage: "idle", message: "hi", raw: "{}", outcome: "replied", created_at: new Date().toISOString(),
+    }));
+  };
+
+  it("by pack, smaller where WhatsApp costs more; none for admins or when billing is off", async () => {
+    expect(await dailyAllowance("seller")).toBe(DAILY_ALLOWANCE.none);
+    db.tables.extension_credit_transactions = [{ user_id: "seller", type: "purchase", amount: 440, created_at: "2026-10-01T00:00:00Z" }];
+    expect(await dailyAllowance("seller")).toBe(DAILY_ALLOWANCE.pro);
+    db.tables.jumia_connections = [{ user_id: "seller", country: "NG" }];
+    expect(await dailyAllowance("seller")).toBe(DAILY_ALLOWANCE.pro / 2);
+    expect(await dailyAllowance("admin")).toBeNull();
+    billingOn = false;
+    expect(await dailyAllowance("seller")).toBeNull();
+  });
+
+  it("past it: told once, then the fixed flow, with no AI call", async () => {
+    turns(DAILY_ALLOWANCE.none);
+    expect(await runAssistant("seller", "233", session(), "what can you do", "idle")).toBe("handled");
+    expect(sent[0].body).toContain(`You've used today's ${DAILY_ALLOWANCE.none} chat replies on your pack`);
+    expect(db.tables.whatsapp_assistant_log.at(-1)).toMatchObject({ outcome: ALLOWANCE_TOLD });
+    sent.length = 0;
+    expect(await runAssistant("seller", "233", session(), "what else", "idle")).toBe("failed");
+    expect(sent).toEqual([]);
+    expect(aiCalls).toBe(0);
+  });
+
+  it("yesterday's turns don't count", async () => {
+    turns(DAILY_ALLOWANCE.none);
+    for (const r of db.tables.whatsapp_assistant_log) r.created_at = "2026-01-01T10:00:00Z";
+    expect(await assistantGate("seller")).toEqual({ ok: true });
+  });
+
+  it("the global ceiling rests it for everyone but admins", async () => {
+    db.tables.app_settings = [{ key: "assistant_daily_limit", value: 3 }];
+    turns(3, "someone-else");
+    expect(await assistantGate("seller")).toEqual({ ok: false, reason: "ceiling" });
+    expect(await assistantGate("admin")).toEqual({ ok: true });
+  });
+
+  it("the kill switch turns it off, admins included", async () => {
+    db.tables.app_settings = [{ key: "assistant_enabled", value: false }];
+    expect(await assistantEnabled("admin")).toBe(false);
+    db.tables.app_settings = [];
+    expect(await assistantEnabled("admin")).toBe(true);
+  });
+
+  it("a day starts at the seller's own midnight", () => {
+    const now = new Date("2026-10-07T23:30:00Z");
+    expect(dayStart("Africa/Accra", now)).toBe("2026-10-07T00:00:00.000Z");
+    expect(dayStart("Africa/Lagos", now)).toBe("2026-10-07T23:00:00.000Z");
+    expect(dayStart("Africa/Nairobi", new Date("2026-10-07T10:00:00Z"))).toBe("2026-10-06T21:00:00.000Z");
   });
 });

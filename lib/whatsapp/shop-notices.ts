@@ -31,7 +31,7 @@ import { formatAmount } from "@/lib/whatsapp/orders";
 import { inQuietHours, lastInboundAt, WINDOW_MS } from "@/lib/whatsapp/order-alerts";
 import { describeLiveChange, recordApplied } from "@/lib/whatsapp/shop";
 import {
-  fetchPayouts, markNoticed, noticed, orderStatusWord, ordersChangedSince, type LiveChange, type PayoutStatement,
+  feedItemResults, fetchPayouts, markNoticed, noticed, orderStatusWord, ordersChangedSince, type LiveChange, type PayoutStatement,
 } from "@/lib/jumia/shop";
 import type { JumiaOrder } from "@/lib/jumia/orders";
 
@@ -63,35 +63,61 @@ const feedError = (errors: unknown[]): string => {
   return first ? first.slice(0, 200) : "Jumia didn't say why";
 };
 
-/** Changes sent to Jumia: applied (noted), refused (told), or no answer after a day (told). */
+/**
+ * Changes sent to Jumia: applied (noted), refused (told), or no answer after
+ * a day (told). The rows of one feed (several products changed with one tap)
+ * are read with one call, and only the products Jumia refused are refused:
+ * one message names them all.
+ */
 async function checkSentChanges(now: Date, deadline: number, run: ShopNoticesRun): Promise<void> {
   const db = createServerClient();
-  const { data } = await db.from("jumia_product_changes").select("*").eq("status", "sent").limit(20);
+  const { data } = await db.from("jumia_product_changes").select("*").eq("status", "sent").limit(60);
   const rows = ((data ?? []) as Record<string, unknown>[]).filter((r) => now.getTime() - new Date(String(r.updated_at)).getTime() > 60_000);
+  const feeds = new Map<string, Record<string, unknown>[]>();
   for (const r of rows) {
+    const key = `${String(r.user_id)}|${String(r.feed_id)}`;
+    feeds.set(key, [...(feeds.get(key) ?? []), r]);
+  }
+  for (const group of Array.from(feeds.values()).slice(0, 20)) {
     if (Date.now() > deadline) break;
-    const userId = String(r.user_id);
+    const first = group[0];
+    const userId = String(first.user_id);
     try {
       const creds = await getValidJumiaCredentials(userId);
-      const feed = await getFeedStatus(creds.accessToken, String(r.feed_id));
+      const feed = await getFeedStatus(creds.accessToken, String(first.feed_id));
       const done = feed && (feed.status === "DONE" || feed.status === "FINISHED" || feed.status === "COMPLETED");
-      const refused = feed && (feed.status === "ERROR" || feed.status === "FAILED" || feed.failed > 0);
-      const age = now.getTime() - new Date(String(r.created_at)).getTime();
-      if (refused || (!done && age > FEED_GIVE_UP_MS)) {
-        const reason = refused ? feedError(feed!.errors) : "Jumia didn't confirm it within a day";
-        await db.from("jumia_product_changes").update({ status: "failed", error: reason, updated_at: now.toISOString() }).eq("id", String(r.id));
+      const errored = feed && (feed.status === "ERROR" || feed.status === "FAILED");
+      const age = now.getTime() - new Date(String(first.created_at)).getTime();
+      if (!feed && age <= FEED_GIVE_UP_MS) continue;
+      const items = feed ? feedItemResults(feed.raw) : new Map<string, { failed: boolean; error: string | null }>();
+      const refusedLines: string[] = [];
+      for (const r of group) {
+        const item = items.get(String(r.seller_sku)) ?? items.get(String(r.product_sid));
+        // Without a line per product, a failure in the feed is everyone's.
+        const refused = errored || (item ? item.failed : !!feed && feed.failed > 0 && done);
+        if (refused || (!done && age > FEED_GIVE_UP_MS)) {
+          const reason = refused ? (item?.error ?? feedError(feed!.errors)) : "Jumia didn't confirm it within a day";
+          await db.from("jumia_product_changes").update({ status: "failed", error: reason, updated_at: now.toISOString() }).eq("id", String(r.id));
+          const what = describeLiveChange(r.change as LiveChange, null, { currency: creds.currency });
+          refusedLines.push(`*${String(r.name ?? r.seller_sku)}* (${what}): ${reason}`);
+          run.changes++;
+        } else if (done) {
+          await db.from("jumia_product_changes").update({ status: "done", updated_at: now.toISOString() }).eq("id", String(r.id));
+          if (r.product_sid) await recordApplied(userId, String(r.product_sid), r.change as LiveChange);
+          run.changes++;
+        }
+      }
+      if (refusedLines.length > 0) {
         const phone = await phoneOf(userId);
-        const what = describeLiveChange(r.change as LiveChange, null, { currency: creds.currency });
-        if (phone) await sendTextIfConfigured(phone, `⚠️ Jumia didn't apply the change to *${String(r.name ?? r.seller_sku)}* (${what}): ${reason}`);
-        run.changes++;
-      } else if (done) {
-        await db.from("jumia_product_changes").update({ status: "done", updated_at: now.toISOString() }).eq("id", String(r.id));
-        if (r.product_sid) await recordApplied(userId, String(r.product_sid), r.change as LiveChange);
-        run.changes++;
+        if (phone) {
+          await sendTextIfConfigured(phone, refusedLines.length === 1
+            ? `⚠️ Jumia didn't apply the change to ${refusedLines[0]}`
+            : ["⚠️ Jumia didn't apply these changes:", ...refusedLines.slice(0, 15).map((l) => `• ${l}`), ...(refusedLines.length > 15 ? [`+${refusedLines.length - 15} more`] : [])].join("\n"));
+        }
       }
     } catch (e) {
       run.failed++;
-      console.warn(`[shop notices] change ${String(r.id)}: ${(e as Error).message}`);
+      console.warn(`[shop notices] feed ${String(first.feed_id)}: ${(e as Error).message}`);
     }
   }
 }

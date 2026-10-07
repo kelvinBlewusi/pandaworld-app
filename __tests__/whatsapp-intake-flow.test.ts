@@ -3750,6 +3750,27 @@ describe("the assistant, on the pilot's accounts", () => {
       expect(session()).toMatchObject({ state: "awaiting_photos", batch_size: 2 });
     });
 
+    it("a bare number after \"What should its stock be?\" is the stock, not a batch (round 3)", async () => {
+      idle({ assistant_pending: { kind: "live_value", field: "stock", products: ["freezer"], preferSid: null, at: new Date().toISOString() } });
+
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "10" });
+
+      // Handed to the live change (here it stops at the Jumia connection this fixture lacks).
+      expect(session().state).not.toBe("awaiting_photos");
+      expect(session().batch_size ?? null).toBeNull();
+      expect(session().assistant_pending ?? null).toBeNull();
+      expect(sent.some((m) => m.body.includes("Got it — 10 products"))).toBe(false);
+      expect(db.tables.whatsapp_assistant_log.at(-1)).toMatchObject({ outcome: expect.stringMatching(/^answered stock: /) });
+    });
+
+    it("once the question has moved on, a number is a count again", async () => {
+      idle({ assistant_pending: { kind: "live_value", field: "stock", products: ["freezer"], preferSid: null, at: "2026-01-01T00:00:00Z" } });
+
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "2" });
+
+      expect(session()).toMatchObject({ state: "awaiting_photos", batch_size: 2 });
+    });
+
     it("is unchanged for everyone else", async () => {
       idle({}, false);
 
@@ -3773,9 +3794,9 @@ describe("the assistant, on the pilot's accounts", () => {
       starting();
       aiReplies.push('{"type":"reply","text":"Not yet: no payout in the last week.","link":null}');
       await handleLinkedMessage(USER, PHONE, "m1", { text: "Has JUMIA payed me ?" });
+      // One message: the answer, then where they are (round 3: one WhatsApp message, not two).
       expect(sent.map((m) => m.body)).toEqual([
-        "Not yet: no payout in the last week.",
-        "📸 I'm still ready for product 1 of 2: send its photos when you're ready, or say *restart* to stop.",
+        "Not yet: no payout in the last week.\n\n📸 I'm still ready for product 1 of 2: send its photos when you're ready, or say *restart* to stop.",
       ]);
       expect(session().pending_notes ?? null).toBeNull();
     });

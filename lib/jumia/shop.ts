@@ -158,6 +158,36 @@ export async function fetchStock(accessToken: string, deadline: number, sids?: s
   return { ok: true, data: stock };
 }
 
+/**
+ * These products read fresh from Jumia (GET /catalog/products by SKU, and
+ * their stock), for "is the drone live?": the local copy can be hours old.
+ * A product Jumia doesn't return keeps its local copy.
+ */
+export async function refreshProducts(
+  accessToken: string, country: string | null, products: ShopProduct[], deadline = Date.now() + 8_000,
+): Promise<ShopProduct[]> {
+  const fresh = new Map<string, ShopProduct>();
+  for (const sku of Array.from(new Set(products.map((p) => p.sellerSku))).slice(0, 5)) {
+    if (Date.now() > deadline) break;
+    const r = await call<unknown>(accessToken, "GET", "/catalog/products", { query: { sellerSku: sku, size: 10 } });
+    if (r.ok) for (const p of productsFromCatalog(r.data, country)) fresh.set(p.sid, p);
+    await sleep(PACE_MS);
+  }
+  const stock = await fetchStock(accessToken, deadline, products.map((p) => p.sid));
+  return products.map((old) => {
+    const p = { ...(fresh.get(old.sid) ?? old) };
+    p.stock = stock.ok ? stock.data.get(p.sid) ?? old.stock : old.stock;
+    return p;
+  });
+}
+
+/** Write these products back to the local copy, as read just now. */
+export async function saveProducts(userId: string, products: ShopProduct[]): Promise<void> {
+  if (products.length === 0) return;
+  const at = new Date().toISOString();
+  await createServerClient().from("jumia_products").upsert(products.map((p) => toRow(userId, p, at)), { onConflict: "user_id,product_sid" });
+}
+
 // ─── The local copy ──────────────────────────────────────────────────────────
 
 const toRow = (userId: string, p: ShopProduct, at: string) => ({
@@ -265,55 +295,93 @@ export type LiveChange =
   | { kind: "sale"; sale: { price: number; start: string; end: string } | null }
   | { kind: "status"; active: boolean };
 
-/** A feed Jumia will apply, by its id. */
-export async function sendLiveChange(
-  accessToken: string,
-  product: ShopProduct,
-  change: LiveChange,
-  ctx: { country: string; currency: string },
-): Promise<JumiaCall<{ feedId: string }>> {
+const FEED_PATH: Record<LiveChange["kind"], string> = {
+  stock: "/feeds/products/stock", price: "/feeds/products/price", sale: "/feeds/products/price", status: "/feeds/products/status",
+};
+
+/** One product's item in a feed, or why it can't be. */
+function feedItem(product: ShopProduct, change: LiveChange, ctx: { country: string; currency: string }): Record<string, unknown> | string {
   const base = { sellerSku: product.sellerSku, id: product.sid };
   const client = businessClientCode(ctx.country);
   const currency = product.currency ?? ctx.currency;
-  let path: string;
-  let item: Record<string, unknown>;
   switch (change.kind) {
     case "stock":
-      path = "/feeds/products/stock";
-      item = { ...base, stock: change.stock };
-      break;
+      return { ...base, stock: change.stock };
     case "price":
     case "sale": {
-      path = "/feeds/products/price";
       const value = change.kind === "price" ? change.price : product.price;
-      if (value == null) return { ok: false, status: 0, message: "I don't know this product's price on Jumia yet, so I can't set a sale on it" };
+      if (value == null) return "I don't know this product's price on Jumia yet, so I can't set a sale on it";
       const salePrice = change.kind === "price"
         ? undefined
         : change.sale
           ? { value: change.sale.price, startAt: `${change.sale.start} 00:00`, endAt: `${change.sale.end} 23:59` }
           : { value: null, startAt: null, endAt: null };
       const price = { currency, value, ...(salePrice !== undefined ? { salePrice } : {}) };
-      item = {
+      return {
         ...base,
         ...(product.categoryCode ? { category: Number(product.categoryCode) } : {}),
         price,
         businessClients: [{ businessClientCode: client, price }],
       };
-      break;
     }
     case "status":
-      path = "/feeds/products/status";
-      item = {
+      return {
         ...base,
         createdAt: (product.createdAt ?? new Date().toISOString()).slice(0, 10),
         businessClients: [{ businessClientCode: client, status: change.active ? "ACTIVE" : "INACTIVE" }],
       };
-      break;
   }
-  const r = await call<{ feedId?: string }>(accessToken, "POST", path, { body: { products: [item] } });
+}
+
+/**
+ * The same change to one or more products, as one feed Jumia will apply, by
+ * its id ("set the freezer, the blender and the chainsaw to 10": one tap,
+ * one feed; owner's second test, 2026-10-07).
+ */
+export async function sendLiveChanges(
+  accessToken: string,
+  products: ShopProduct[],
+  change: LiveChange,
+  ctx: { country: string; currency: string },
+): Promise<JumiaCall<{ feedId: string }>> {
+  const items: Record<string, unknown>[] = [];
+  for (const p of products) {
+    const item = feedItem(p, change, ctx);
+    if (typeof item === "string") return { ok: false, status: 0, message: products.length > 1 ? `${p.name}: ${item}` : item };
+    items.push(item);
+  }
+  if (items.length === 0) return { ok: false, status: 0, message: "no product to change" };
+  const r = await call<{ feedId?: string }>(accessToken, "POST", FEED_PATH[change.kind], { body: { products: items } });
   if (!r.ok) return r;
   const feedId = str(r.data?.feedId);
   return feedId ? { ok: true, data: { feedId } } : { ok: false, status: 200, message: "Jumia didn't give a feed id back" };
+}
+
+/** One product's change, as a feed. */
+export function sendLiveChange(
+  accessToken: string,
+  product: ShopProduct,
+  change: LiveChange,
+  ctx: { country: string; currency: string },
+): Promise<JumiaCall<{ feedId: string }>> {
+  return sendLiveChanges(accessToken, [product], change, ctx);
+}
+
+/**
+ * Per product of a finished feed (GET /feeds/{id}'s feedItems), by SKU and
+ * by sid: whether Jumia refused it, and why.
+ */
+export function feedItemResults(raw: unknown): Map<string, { failed: boolean; error: string | null }> {
+  const out = new Map<string, { failed: boolean; error: string | null }>();
+  const items = ((raw as { feedItems?: unknown[] } | null)?.feedItems ?? []) as Record<string, unknown>[];
+  for (const i of items) {
+    const failed = String(i.status ?? "").toUpperCase() === "FAILED";
+    const nested = ((i.errors as Record<string, unknown> | undefined)?.globalMessages as unknown[] | undefined) ?? [];
+    const first = [i.errorMessage, ...nested].map((e) => (typeof e === "string" ? e : e && typeof e === "object" ? String((e as Record<string, unknown>).message ?? "") : "")).find(Boolean);
+    const result = { failed, error: first ? first.slice(0, 200) : null };
+    for (const key of [str(i.sellerSKU) ?? str(i.sellerSku), str(i.productSid)]) if (key) out.set(key, result);
+  }
+  return out;
 }
 
 /** The jumia_products columns a change sets, once Jumia has it. */
@@ -419,12 +487,12 @@ export async function findOrderByNumber(
   return { ok: true, data: null };
 }
 
-/** Orders whose items moved to `status` between two days (YYYY-MM-DD, the second exclusive), newest first. */
-export async function ordersWithStatus(accessToken: string, status: string, after: string, before: string): Promise<JumiaCall<JumiaOrder[]>> {
+/** Orders whose items moved to `status` (one or several) between two days (YYYY-MM-DD, the second exclusive), newest first. */
+export async function ordersWithStatus(accessToken: string, status: string | string[], after: string, before: string): Promise<JumiaCall<JumiaOrder[]>> {
   const orders: JumiaOrder[] = [];
   let token: string | undefined;
   for (let page = 0; page < 5; page++) {
-    const r = await listOrders(accessToken, { status: [status], updatedAfter: after, updatedBefore: before, size: 100, sort: "DESC", token });
+    const r = await listOrders(accessToken, { status: Array.isArray(status) ? status : [status], updatedAfter: after, updatedBefore: before, size: 100, sort: "DESC", token });
     if (!r.ok) return r;
     orders.push(...(r.data.orders ?? []));
     if (r.data.isLastPage || !r.data.nextToken) break;
