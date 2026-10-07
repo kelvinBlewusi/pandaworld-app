@@ -14,11 +14,11 @@ jest.mock("@/lib/auth/is-admin", () => ({ isAdmin: (id: string) => id === "admin
 let billingOn = true;
 jest.mock("@/lib/billing/mode", () => ({ isBillingEnabled: async () => billingOn }));
 
-const sent: { kind: string; body: string; rows?: string[]; button?: string }[] = [];
+const sent: { kind: string; body: string; rows?: string[]; button?: string; url?: string }[] = [];
 jest.mock("@/lib/whatsapp/client", () => ({
   sendTextIfConfigured:    async (_to: string, body: string) => { sent.push({ kind: "text", body }); },
   sendButtonsIfConfigured: async (_to: string, body: string, b: { id: string }[]) => { sent.push({ kind: "buttons", body, rows: b.map((x) => x.id) }); },
-  sendCtaUrlIfConfigured:  async (_to: string, body: string, button: string) => { sent.push({ kind: "cta", body, button }); },
+  sendCtaUrlIfConfigured:  async (_to: string, body: string, button: string, url: string) => { sent.push({ kind: "cta", body, button, url }); },
   sendListIfConfigured:    async (_to: string, body: string, _b: string, r: { id: string }[]) => { sent.push({ kind: "list", body, rows: r.map((x) => x.id) }); },
 }));
 
@@ -28,10 +28,12 @@ jest.mock("@/lib/whatsapp/orders", () => ({
 }));
 
 const aiReplies: string[] = [];
+const aiPrompts: string[] = [];
 let aiCalls = 0;
 jest.mock("@/lib/ai/gemini-client", () => ({
-  callGeminiBackend: async (model: string) => {
+  callGeminiBackend: async (model: string, parts: { text?: string }[]) => {
     aiCalls++;
+    aiPrompts.push(parts.map((p) => p.text ?? "").join("\n"));
     const text = aiReplies.shift();
     if (text == null) throw new Error("no AI reply scripted");
     return { text, model, backend: "vertex" };
@@ -45,7 +47,7 @@ jest.mock("@/lib/jumia/categories", () => ({
 }));
 
 import {
-  assistantEnabled, countBacked, messageNumbers, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
+  assistantEnabled, assistantLinks, cleanReply, countBacked, messageNumbers, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { parseVariations } from "@/lib/whatsapp/variation-question";
 import type { ListingRow } from "@/lib/supabase/types";
@@ -63,6 +65,7 @@ beforeEach(() => {
   sent.length = 0;
   orderCalls.length = 0;
   aiReplies.length = 0;
+  aiPrompts.length = 0;
   aiCalls = 0;
 });
 
@@ -193,7 +196,7 @@ describe("between batches", () => {
     db.tables.extension_credits = [{ user_id: "seller", balance: 9 }];
     aiReplies.push('{"type":"credits"}');
     expect(await runAssistant("seller", "233", session(), "how many credits do i have left", "idle")).toBe("handled");
-    expect(sent).toEqual([{ kind: "cta", body: "You have 9 credits: enough for about 4 WhatsApp listings. A listing costs 2 credits when it goes live on Jumia.", button: "Buy credits" }]);
+    expect(sent).toEqual([{ kind: "cta", body: "You have 9 credits: enough for about 4 WhatsApp listings. A listing costs 2 credits when it goes live on Jumia.", button: "Buy credits", url: "https://pandaworld.gh/extension/dashboard" }]);
   });
 
   it("shows the orders", async () => {
@@ -202,8 +205,8 @@ describe("between batches", () => {
     expect(orderCalls).toEqual(["orders"]);
   });
 
-  it("answers from what the bot does", async () => {
-    aiReplies.push('{"type":"answer","text":"A WhatsApp listing costs 2 credits, charged only when it goes live."}');
+  it("answers from what the bot does, in its own words", async () => {
+    aiReplies.push('{"type":"reply","text":"A WhatsApp listing costs 2 credits, charged only when it goes live.","link":null}');
     expect(await runAssistant("seller", "233", session(), "how much does a listing cost", "idle")).toBe("handled");
     expect(sent[0]).toEqual({ kind: "text", body: "A WhatsApp listing costs 2 credits, charged only when it goes live." });
   });
@@ -229,7 +232,7 @@ describe("between batches", () => {
     expect(db.tables.listings[0].quantity).toBeUndefined();
   });
 
-  it("leaves small talk to the usual reply", async () => {
+  it("leaves a reply it can't read to the usual one", async () => {
     aiReplies.push('{"type":"unclear"}');
     expect(await runAssistant("seller", "233", session(), "good morning", "idle")).toBe("default");
     expect(db.tables.whatsapp_assistant_log[0]).toMatchObject({ stage: "idle", message: "good morning", outcome: "default" });
@@ -245,3 +248,67 @@ describe("between batches", () => {
     expect(sent).toEqual([]);
   });
 });
+
+describe("its own replies (owner, 2026-10-06)", () => {
+  const session = (patch: Partial<WhatsAppSession> = {}) =>
+    ({ phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null, ...patch }) as WhatsAppSession;
+
+  it("is told what PandaWorld does, and what this seller's pack and credits give them", async () => {
+    db.tables.extension_credits = [{ user_id: "seller", balance: 9 }];
+    db.tables.jumia_connections = [{ user_id: "seller", country: "GH" }];
+    aiReplies.push('{"type":"reply","text":"Hi! I can list your products on Jumia, edit your drafts and tell you your credits. What would you like to do for your Jumia shop?","link":null}');
+
+    expect(await runAssistant("seller", "233", session(), "hello", "idle")).toBe("handled");
+
+    const prompt = aiPrompts[0];
+    expect(prompt).toContain("- List products on Jumia from WhatsApp");
+    expect(prompt).toContain("- Orders on WhatsApp (Pro pack and up)");
+    expect(prompt).toContain("- Country: Ghana");
+    expect(prompt).toContain("- No pack bought yet: on their free sign-up credits.");
+    expect(prompt).toContain("- Orders and shipping labels on WhatsApp: not on their pack (Pro and up)");
+    expect(prompt).toContain("- Credits: 9 available, enough for about 4 WhatsApp listings");
+    expect(prompt).toContain("- home: PandaWorld's home page");
+    expect(prompt).toContain("- country: selling on Jumia in their country");
+    expect(prompt).toContain("Reply in the language the seller wrote in.");
+    expect(sent).toEqual([{ kind: "text", body: "Hi! I can list your products on Jumia, edit your drafts and tell you your credits. What would you like to do for your Jumia shop?" }]);
+  });
+
+  it("knows the pack bought last", async () => {
+    db.tables.extension_credit_transactions = [{ user_id: "seller", type: "purchase", amount: 440, created_at: "2026-10-01T00:00:00Z" }];
+    db.tables.extension_credits = [{ user_id: "seller", balance: 400 }];
+    aiReplies.push('{"type":"reply","text":"Hello!","link":null}');
+    await runAssistant("seller", "233", session(), "hi", "idle");
+    expect(aiPrompts[0]).toContain("- Pack: Pro (the last one they bought)");
+    expect(aiPrompts[0]).toContain("- Orders and shipping labels on WhatsApp: on");
+  });
+
+  it("an account that isn't charged has everything on", async () => {
+    aiReplies.push('{"type":"reply","text":"Hello!","link":null}');
+    await runAssistant("admin", "233", session({ userId: "admin" }), "hi", "idle");
+    expect(aiPrompts[0]).toContain("- Not charged credits: every feature is on for them.");
+  });
+
+  it("sends a page it's asked for as a button", async () => {
+    aiReplies.push('{"type":"reply","text":"Here\'s our home page 🐼","link":"home"}');
+    await runAssistant("seller", "233", session(), "send me the link to your home page", "idle");
+    expect(sent).toEqual([{ kind: "cta", body: "Here's our home page 🐼", button: "Home page", url: "https://pandaworld.gh/" }]);
+  });
+
+  it("removes a web address it made up, and keeps ours", () => {
+    const links = assistantLinks();
+    expect(cleanReply("See https://jumia-fees.example.com/ghana or https://pandaworld.gh/pricing.", links))
+      .toBe("See or https://pandaworld.gh/pricing.");
+    expect(parseAction('{"type":"reply","text":"Try www.madeup.com","link":"nope"}', "link?", [], links))
+      .toEqual({ type: "reply", text: "Try", link: null });
+    expect(parseAction('{"type":"reply","text":"","link":"faq"}', "faq?", [], links))
+      .toEqual({ type: "reply", text: "Here's the faq:", link: "faq" });
+  });
+
+  it("keeps the review step's buttons under a reply there", async () => {
+    db.tables.listings = [{ id: "l1", user_id: "seller", whatsapp_batch_id: "b1", whatsapp_seq: 1, title: "Hisense 205L Fridge", status: "draft" }];
+    aiReplies.push('{"type":"reply","text":"Sorry, I can\'t book deliveries. I can change your fridge\'s price, quantity or size, or submit it.","link":null}');
+    await runAssistant("seller", "233", session({ state: "awaiting_confirmation", batchId: "b1" }), "book me a delivery truck", "review");
+    expect(sent).toEqual([{ kind: "buttons", body: "Sorry, I can't book deliveries. I can change your fridge's price, quantity or size, or submit it.", rows: ["submit all", "review"] }]);
+  });
+});
+

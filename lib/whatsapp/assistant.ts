@@ -24,6 +24,14 @@
  *     and the tap or the number applies it (answerPendingQuestion).
  *   - Submitting and starting over are offered as a button to tap, never
  *     done on the AI's word alone.
+ *   - Anything else gets the AI's own reply, not a set message (owner,
+ *     2026-10-06): what it can do for this seller (from capabilities() and
+ *     their pack, credits and country), an answer to a question about
+ *     Jumia or PandaWorld, or "I don't understand that, try something
+ *     different" for what's outside them. It ends by asking what they'd like
+ *     to do for their shop. Links come only from assistantLinks, as a
+ *     button; a web address it writes itself is removed. The fixed flow
+ *     starts only when the seller says they want to list.
  *
  * Every message it reads goes in whatsapp_assistant_log with what it made
  * of it, to see where it misunderstands. Calls are counted in ai_usage as
@@ -46,6 +54,11 @@ import {
   COUNT_QUICK_PICKS, MAX_BATCH_SIZE, buyCreditsUrl, extractSalePrice, focusedEditorUrl, whatsappListingsUrl,
 } from "@/lib/whatsapp/batch";
 import { helpMessage } from "@/lib/whatsapp/onboarding";
+import { appUrl } from "@/lib/whatsapp/app-url";
+import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
+import { jumiaCountryByCode } from "@/lib/marketing/countries";
+import { sellerCountry } from "@/lib/jumia/unlistable-categories";
+import { currentPack, featureAccess, featureMinPackName, type FeatureId } from "@/lib/billing/features";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
 import { updateSession, type AssistantPending, type WhatsAppSession } from "@/lib/whatsapp/session";
@@ -123,7 +136,7 @@ export type AssistantAction =
   | { type: "orders" }
   | { type: "credits" }
   | { type: "help" }
-  | { type: "answer"; text: string }
+  | { type: "reply"; text: string; link: string | null }
   | { type: "unclear" };
 
 const STATUS_WORDS: Record<string, string> = {
@@ -158,29 +171,110 @@ const STAGE_TEXT: Record<Stage, string> = {
   idle:   "The seller is between batches: no products are being listed right now. To start, they say how many products they're listing.",
 };
 
-/** What the bot does, for answering questions about it. Kept to what's true. */
-function facts(): string {
+/**
+ * What PandaWorld does, for the AI's replies: every line is something the
+ * code does (lib/whatsapp/intake.ts, orders.ts, credit-gate.ts, the
+ * extension), so the AI never promises what isn't there.
+ */
+function capabilities(): string {
   return [
-    `- To list: the seller says how many products they're listing (1 to ${MAX_BATCH_SIZE}), sends each product's photos with the price and any notes (sizes, colours, quantity) as the caption, then the product number or "done". The bot drafts every product, then the seller checks them and submits.`,
-    "- While the drafts are being checked, a product's price, quantity, variations, name, brand, colour and sale price (with start and end dates) can be changed here in chat; anything else in the editor on the review page.",
-    "- Submitting sends drafts to Jumia. Jumia reviews each one, and the bot messages here when it goes live or if Jumia rejects it (with a Fix & resubmit button).",
-    `- A WhatsApp listing costs ${LIVE_LISTING_CREDIT_COST} credits, charged only when it goes live on Jumia. Credits are bought on the PandaWorld dashboard.`,
-    "- \"orders\" shows the seller's Jumia orders waiting to be packed, with buttons to pack them, get the shipping label and mark them ready to ship (Pro pack and up).",
-    "- Products already with Jumia are changed in Jumia Vendor Center.",
-    "- \"status\" says where the seller is, \"restart\" starts over, \"disconnect\" disconnects Jumia, \"help\" lists what the bot understands.",
+    `- List products on Jumia from WhatsApp: the seller says how many (1 to ${MAX_BATCH_SIZE}), sends each product's photos with the price and notes as the caption, and AI drafts each listing (name, description, category, details) for them to check and submit. Two ways to send: all at once, or guided step by step.`,
+    "- Ask for what Jumia needs that the photos don't show: a missing price, weight or other required detail, the variation, the category when unsure.",
+    "- Edit drafts in chat before they're submitted: price, quantity, variations or sizes, name, brand, colour, a sale price with its dates. Anything else in the editor on the review page.",
+    "- Submit to Jumia and report back when each product goes live or is rejected; fix common rejections itself (banned words, restricted brands) and guide the seller through the rest with Fix & resubmit (QC fixes: Standard pack and up).",
+    "- Orders on WhatsApp (Pro pack and up): alerts for new Jumia orders, grouped and quiet at night; \"orders\" shows orders waiting to be packed; pack them and get the shipping label PDF, mark them ready to ship, or cancel.",
+    `- Credits: tell the balance; a WhatsApp listing costs ${LIVE_LISTING_CREDIT_COST} credits, charged only when it goes live on Jumia; warn when running low. Credits are bought on the dashboard.`,
+    "- The PandaWorld Chrome extension fills Jumia's Vendor Center product form on a laptop; image polish and a fee calculator in it on Pro.",
+    "- A free Jumia price calculator, Jumia commission rates, how-to guides and an FAQ on the website.",
+    "- Words the bot always knows: \"status\" (where they are), \"restart\", \"help\", \"orders\", \"disconnect\" (Jumia).",
+    "- Products already with Jumia are changed in Jumia Vendor Center, not here.",
   ].join("\n");
 }
 
-export function buildPrompt(stage: Stage, products: ProductFacts[], currency: string, message: string, hintSeq?: number): string {
+/** A page the assistant can send as a button. */
+export interface AssistantLink { label: string; url: string; what: string }
+
+/**
+ * The only links the assistant sends ("send me the link to your home
+ * page", owner 2026-10-06). It picks one by key and the seller gets a
+ * button; a web address it writes itself is removed (cleanReply).
+ */
+export function assistantLinks(opts: { batchId?: string | null; countrySlug?: string | null } = {}): Record<string, AssistantLink> {
+  const base = appUrl();
+  return {
+    home:            { label: "Home page",         url: `${base}/`, what: "PandaWorld's home page" },
+    pricing:         { label: "Credit packs",      url: `${base}/pricing`, what: "credit packs and what each one includes" },
+    dashboard:       { label: "Dashboard",         url: buyCreditsUrl(), what: "their dashboard: credits, buying credits, notices" },
+    listings:        { label: "My listings",       url: `${base}/extension/listings`, what: "all their PandaWorld listings" },
+    review:          { label: "Review listings",   url: whatsappListingsUrl(opts.batchId ?? undefined), what: opts.batchId ? "this batch's drafts, to check and edit" : "their WhatsApp drafts" },
+    settings:        { label: "Settings",          url: `${base}/extension/settings`, what: "account settings, the Jumia connection" },
+    faq:             { label: "FAQ",               url: `${base}/faq`, what: "frequently asked questions" },
+    guides:          { label: "How-to guides",     url: `${base}/how-to`, what: "all the step-by-step guides" },
+    guide_whatsapp:  { label: "WhatsApp guide",    url: `${base}/how-to/list-on-jumia-from-whatsapp`, what: "how to list from WhatsApp, with an example" },
+    guide_connect:   { label: "Connect guide",     url: `${base}/how-to/connect-jumia-vendor-center`, what: "how to connect Jumia Vendor Center" },
+    guide_extension: { label: "Extension guide",   url: `${base}/how-to/chrome-extension-autofill`, what: "how to list from a laptop with the extension" },
+    extension:       { label: "Get the extension", url: CHROME_WEB_STORE_URL, what: "the PandaWorld Chrome extension on the Chrome Web Store" },
+    calculator:      { label: "Price calculator",  url: `${base}/jumia-price-calculator`, what: "Jumia selling price and fee calculator" },
+    commission:      { label: "Commission rates",  url: `${base}/jumia-commission-rates`, what: "Jumia's commission rates by category" },
+    ...(opts.countrySlug ? { country: { label: "Selling on Jumia", url: `${base}/sell-on-jumia/${opts.countrySlug}`, what: "selling on Jumia in their country" } } : {}),
+    vendor_center:   { label: "Vendor Center",     url: "https://vendorcenter.jumia.com", what: "Jumia Vendor Center, where products already with Jumia are changed" },
+    privacy:         { label: "Privacy policy",    url: `${base}/privacy`, what: "privacy policy" },
+    terms:           { label: "Terms",             url: `${base}/terms`, what: "terms of service" },
+  };
+}
+
+/** What's true for this seller: their pack, what it gives them, their credits and country. Best-effort. */
+export async function sellerFacts(userId: string): Promise<{ lines: string[]; countrySlug: string | null }> {
+  const lines: string[] = [];
+  let countrySlug: string | null = null;
+  try {
+    const country = jumiaCountryByCode(await sellerCountry(userId).catch(() => null));
+    if (country) { lines.push(`- Country: ${country.name}`); countrySlug = country.slug; }
+    if (await isUnmetered(userId)) {
+      lines.push("- Not charged credits: every feature is on for them.");
+      return { lines, countrySlug };
+    }
+    const pack = await currentPack(userId).catch(() => null);
+    lines.push(pack ? `- Pack: ${capitalise(pack.id)} (the last one they bought)` : "- No pack bought yet: on their free sign-up credits.");
+    const access = async (f: FeatureId) => {
+      const a = await featureAccess(userId, f).catch(() => ({ ok: false as const, blockedBy: "pack" as const }));
+      return a.ok ? "on" : a.blockedBy === "credits" ? "paused until they buy credits" : `not on their pack (${featureMinPackName(f)} and up)`;
+    };
+    lines.push(`- Orders and shipping labels on WhatsApp: ${await access("shipping_labels")}`);
+    lines.push(`- QC rejection fixes: ${await access("qc_fix")}`);
+    const credits = Math.max(0, Math.round((await availableCredits(userId)) * 100) / 100);
+    lines.push(`- Credits: ${credits} available, ${creditReach(credits)}`);
+  } catch (e) {
+    console.warn(`[assistant] seller facts for ${userId}: ${(e as Error).message}`);
+  }
+  return { lines, countrySlug };
+}
+
+const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+export interface PromptContext {
+  products: ProductFacts[];
+  currency: string;
+  seller:   string[];
+  links:    Record<string, AssistantLink>;
+  hintSeq?: number;
+}
+
+export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): string {
+  const { products, currency, seller, links, hintSeq } = ctx;
   return [
-    "You are the understanding part of PandaWorld's WhatsApp bot, which lists a seller's products on Jumia.",
-    "You never act yourself: you choose ONE action as JSON, and PandaWorld's code checks it and carries it out.",
+    "You are PandaWorld's assistant on WhatsApp. PandaWorld lists sellers' products on Jumia (Africa's online marketplace) and helps them run their Jumia shop.",
+    "You choose ONE action as JSON, and PandaWorld's code checks it and carries it out.",
     "",
     `Where the seller is: ${STAGE_TEXT[stage]}`,
     ...(products.length > 0 ? ["", "Products (the number is the product number):", ...products.map((p) => productLine(p, currency))] : []),
+    ...(seller.length > 0 ? ["", "About this seller:", ...seller] : []),
     "",
-    "What the bot does:",
-    facts(),
+    "What PandaWorld can do (all true; never claim anything else):",
+    capabilities(),
+    "",
+    "Links you can send (put the key in \"link\"; the seller gets a button):",
+    ...Object.entries(links).map(([key, l]) => `- ${key}: ${l.what}`),
     "",
     `The seller's message: "${message.replace(/"/g, "'").slice(0, 600)}"`,
     ...(hintSeq != null ? [`(They started it with product number ${hintSeq}.)`] : []),
@@ -198,13 +292,21 @@ export function buildPrompt(stage: Stage, products: ProductFacts[], currency: st
     '{"type":"submit","products":"all" or [<numbers>]} - send drafts to Jumia',
     '{"type":"list","count":<number>} - the seller wants to list new products now and says how many. Add up kinds:',
     '  "2 shirts and a fridge" is 3. Without a number, use restart.',
-    '{"type":"restart"} - start a new batch, list something else, or start over',
+    '{"type":"restart"} - they want to list something (no number given), start a new batch, or start over',
     '{"type":"review"} - see or open their drafts or listings',
     '{"type":"orders"} - their Jumia orders',
-    '{"type":"credits"} - their credit balance',
-    '{"type":"help"} - how the bot works or what they can say',
-    '{"type":"answer","text":"<one or two short sentences>"} - a question that "What the bot does" or the products above answer. Nothing else.',
-    '{"type":"unclear"} - greetings, thanks, small talk, or anything you can\'t match to one of these',
+    '{"type":"credits"} - their credit balance (sent with a Buy credits button)',
+    '{"type":"reply","text":"<your message>","link":"<a key above, or null>"} - everything else. You write the message:',
+    "  - Greetings, thanks, small talk, \"what can you do\", or something you can't match: in your own words (vary it, never a set",
+    "    script), greet them back if they greeted, give a short numbered list of what you can do for them, tailored to their pack",
+    "    (say when a feature needs a pack they don't have), and end by asking what they'd like to do for their Jumia shop.",
+    "  - A question about selling on Jumia, their shop or PandaWorld: answer it from what's above. Don't state fees, commission",
+    "    rates, prices, dates or Jumia rules that aren't given above: send the link that has them instead.",
+    "  - A request for a page or link: one short line, with \"link\" set. Never write a web address in the text.",
+    "  - Anything outside Jumia, their shop and PandaWorld, or something PandaWorld can't do: say plainly that you don't understand",
+    "    that or can't help with it, suggest something you can do, and ask them to try something different.",
+    "  Write for WhatsApp: short and warm, at most 600 characters, *bold* with single asterisks, numbered lists as \"1.\" lines.",
+    "  Reply in the language the seller wrote in.",
   ].join("\n");
 }
 
@@ -306,8 +408,28 @@ export function countBacked(count: number, message: string): boolean {
   return values.length + articles >= 1 && (sum === count || sum + articles === count);
 }
 
+/**
+ * The AI's own message, made safe to send: any web address that isn't one
+ * of our links is removed (it could be made up), and it's cut to fit a
+ * WhatsApp message with a button.
+ */
+export function cleanReply(text: string, links: Record<string, AssistantLink>): string {
+  const allowed = new Set(Object.values(links).map((l) => l.url.replace(/\/$/, "")));
+  const cleaned = text
+    .replace(/\b(?:https?:\/\/|www\.)[^\s)]+/gi, (u) => {
+      const bare = u.replace(/[.,!?;:]+$/, "");
+      return allowed.has(bare.replace(/\/$/, "")) ? u : "";
+    })
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\s+([.,!?])/g, "$1")
+    .trim();
+  return cleaned.length > 900 ? `${cleaned.slice(0, 899).replace(/\s+\S*$/, "")}…` : cleaned;
+}
+
 /** The AI's reply as an action our code can carry out, or unclear. */
-export function parseAction(raw: string, message: string, products: ProductFacts[]): AssistantAction {
+export function parseAction(
+  raw: string, message: string, products: ProductFacts[], links: Record<string, AssistantLink> = {},
+): AssistantAction {
   const match = raw.match(/\{[\s\S]*\}/);
   if (!match) return { type: "unclear" };
   let parsed: Record<string, unknown>;
@@ -320,10 +442,13 @@ export function parseAction(raw: string, message: string, products: ProductFacts
   switch (parsed.type) {
     case "restart": case "review": case "orders": case "credits": case "help":
       return { type: parsed.type as "restart" | "review" | "orders" | "credits" | "help" };
-    case "answer":
-      return typeof parsed.text === "string" && parsed.text.trim()
-        ? { type: "answer", text: parsed.text.trim().slice(0, 700) }
-        : { type: "unclear" };
+    case "reply":
+    case "answer": {
+      const link = typeof parsed.link === "string" && parsed.link in links ? parsed.link : null;
+      const text = typeof parsed.text === "string" ? cleanReply(parsed.text, links) : "";
+      if (!text) return link ? { type: "reply", text: `Here's the ${links[link].label.toLowerCase()}:`, link } : { type: "unclear" };
+      return { type: "reply", text, link };
+    }
     case "list": {
       const count = Number(parsed.count);
       return Number.isInteger(count) && count >= 1 && countBacked(count, message) ? { type: "list", count } : { type: "unclear" };
@@ -398,13 +523,14 @@ export async function interpret(
   stage: Stage,
   products: ProductFacts[],
   message: string,
-  hintSeq?: number,
-): Promise<AssistantAction> {
-  const currency = await shopCurrencyForUser(userId);
-  const prompt = buildPrompt(stage, products, currency, message, hintSeq);
+  opts: { batchId?: string | null; hintSeq?: number } = {},
+): Promise<{ action: AssistantAction; links: Record<string, AssistantLink> }> {
+  const [currency, seller] = await Promise.all([shopCurrencyForUser(userId), sellerFacts(userId)]);
+  const links = assistantLinks({ batchId: opts.batchId, countrySlug: seller.countrySlug });
+  const prompt = buildPrompt(stage, message, { products, currency, seller: seller.lines, links, hintSeq: opts.hintSeq });
   const { text } = await withAiUsageContext({ feature: "assistant", userId }, () =>
     callGeminiBackend(ASSISTANT_MODEL, [{ text: prompt }]));
-  return parseAction(text, message, products);
+  return { action: parseAction(text, message, products, links), links };
 }
 
 // ─── Carrying it out ──────────────────────────────────────────────────────
@@ -642,10 +768,11 @@ export async function runAssistant(
   if (/^[a-z_]+:\S+$/i.test(text.trim())) return "default";
   const batchId = stage === "review" ? session.batchId : stage === "sent" ? session.lastSubmittedBatchId : null;
   let action: AssistantAction;
+  let links: Record<string, AssistantLink>;
   let products: ProductFacts[] = [];
   try {
     products = batchId ? await productFacts(await batchListings(batchId, userId)) : [];
-    action = await interpret(userId, stage, products, text, hintSeq);
+    ({ action, links } = await interpret(userId, stage, products, text, { batchId, hintSeq }));
   } catch (e) {
     console.warn(`[assistant] interpreting for ${userId} failed: ${(e as Error).message}`);
     await logTurn(userId, stage, text, null, `failed: ${(e as Error).message}`);
@@ -658,13 +785,14 @@ export async function runAssistant(
     return { list: action.count };
   }
 
-  const outcome = await carryOut(userId, phone, stage, batchId, products, action, text);
+  const outcome = await carryOut(userId, phone, stage, batchId, products, action, text, links);
   await logTurn(userId, stage, text, action, outcome);
   return outcome === "default" ? "default" : "handled";
 }
 
 async function carryOut(
   userId: string, phone: string, stage: Stage, batchId: string | null, products: ProductFacts[], action: AssistantAction, text: string,
+  links: Record<string, AssistantLink>,
 ): Promise<string> {
   switch (action.type) {
     case "edit": {
@@ -725,9 +853,15 @@ async function carryOut(
         { id: "disconnect", title: "Disconnect" },
       ]);
       return "sent help";
-    case "answer":
-      await sendTextIfConfigured(phone, action.text);
-      return "answered";
+    case "reply": {
+      // The AI's own words. With a link, it's the button; in review, the
+      // reply keeps the step's own two buttons.
+      const link = action.link ? links[action.link] : null;
+      if (link) await sendCtaUrlIfConfigured(phone, action.text, link.label, link.url);
+      else if (stage === "review") await sendButtonsIfConfigured(phone, action.text, [SUBMIT_ALL, REVIEW]);
+      else await sendTextIfConfigured(phone, action.text);
+      return link ? `replied with ${action.link}` : "replied";
+    }
     case "unclear":
       return "default";
   }

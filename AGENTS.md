@@ -1212,8 +1212,30 @@ quantity of the fridge to 20" (ask which fridge if there are two) and
   a sale with dates still go to `handleEdit` with no AI call
   (`plainQuickEdit`: handleEdit's extractors found something and the text
   names no other field). Anything else goes to the assistant.
-- **The AI only chooses** (gemini-2.5-flash-lite, JSON): edit / submit /
-  restart / review / orders / credits / help / answer / unclear. Our code
+- **Its own replies for everything else** (owner, 2026-10-06: "users that
+  say anything that our system don't know should get a response from the AI
+  telling them what it is capable of ... this messages should not be fixed",
+  "restricted to jumia related and our systems", "only enter into fix mode
+  when the user signals it wants to list", "users can even say send me the
+  link to your home page"). The `reply` action is the AI's own message:
+  - greetings, small talk, "what can you do" and anything unmatched get a
+    numbered list of what it can do, tailored to the seller, ending with
+    what they'd like to do for their Jumia shop;
+  - Jumia and PandaWorld questions are answered from what it's told;
+  - anything outside them gets "I don't understand that, try something
+    different".
+  What it's told: `capabilities()` (each line is something the code does)
+  and `sellerFacts` (their country; pack bought last, or not charged; orders
+  and labels and QC fixes on, paused, or "needs Pro"; available credits).
+  Links: only `assistantLinks` (home, pricing, dashboard, listings, review,
+  settings, faq, guides, the extension on the Chrome Web Store, calculator,
+  commission rates, their country page, Vendor Center, privacy, terms),
+  chosen by key and sent as a CTA button. `cleanReply` strips any other web
+  address and caps it at 900 characters. In review a reply keeps the Submit
+  all / Review listings buttons. It answers in the seller's language. The
+  fixed "help"/"status" commands are unchanged.
+- **The AI only chooses actions** (gemini-2.5-flash-lite, JSON): edit /
+  submit / list / restart / review / orders / credits / reply. Our code
   checks each part (`parseAction`, `verifyChanges`):
   - a price or quantity must be a number written in the message;
   - a name, brand or colour must be written in the message;
