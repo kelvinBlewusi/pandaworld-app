@@ -63,10 +63,10 @@ jest.mock("@/lib/jumia/categories", () => ({
 }));
 
 import {
-  answerLiveValue, assistantEnabled, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
+  answerLiveValue, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
   namesAProduct, recentConversation, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
-import { ALLOWANCE_TOLD, DAILY_ALLOWANCE, assistantGate, dailyAllowance, dayStart } from "@/lib/whatsapp/assistant-limits";
+import { assistantGate } from "@/lib/whatsapp/assistant-limits";
 import { parseVariations } from "@/lib/whatsapp/variation-question";
 import type { ListingRow } from "@/lib/supabase/types";
 import type { WhatsAppSession } from "@/lib/whatsapp/session";
@@ -202,12 +202,14 @@ describe("when the usual edit is enough", () => {
 });
 
 describe("who has it", () => {
-  it("admins, and the user ids in app_settings assistant_users", async () => {
+  // Owner, 2026-10-07: "AI for all sellers".
+  it("every seller, on WhatsApp and the web, unless the kill switch is off", async () => {
     expect(await assistantEnabled("admin")).toBe(true);
-    expect(await assistantEnabled("seller")).toBe(false);
-    db.tables.app_settings = [{ key: "assistant_users", value: ["seller"] }];
     expect(await assistantEnabled("seller")).toBe(true);
-    expect(await assistantEnabled("other")).toBe(false);
+    expect(await assistantFor("seller", "233200000000")).toBe(true);
+    expect(await assistantFor("seller", "web:seller")).toBe(true);
+    db.tables.app_settings = [{ key: "assistant_enabled", value: false }];
+    expect(await assistantFor("seller", "233200000000")).toBe(false);
   });
 });
 
@@ -393,8 +395,7 @@ describe("the live shop, through the assistant (owner, 2026-10-07)", () => {
     expect(aiPrompts[0]).toContain('{"type":"live_change"');
   });
 
-  it("everyone, when assistant_users is [\"*\"]", async () => {
-    db.tables.app_settings = [{ key: "assistant_users", value: ["*"] }];
+  it("everyone", async () => {
     expect(await assistantEnabled("anyone")).toBe(true);
   });
 });
@@ -472,7 +473,7 @@ describe("what the owner's live test showed (2026-10-07)", () => {
   it("starting a batch: a note stays a note; a question is answered with where they are", async () => {
     const session = { phoneNumber: "233", userId: "seller", state: "awaiting_photos", batchId: "b1", batchSize: 2, batchSeq: 1, lastSubmittedBatchId: null } as WhatsAppSession;
     aiReplies.push('{"type":"note"}');
-    expect(await runAssistant("seller", "233", session, "is it ok if the price is 200?", "starting")).toBe("default");
+    expect(await runAssistant("seller", "233", session, "is it ok if the price is 200?", "starting")).toBe("step");
     expect(sent).toEqual([]);
     aiReplies.push('{"type":"payouts"}');
     expect(await runAssistant("seller", "233", session, "Has JUMIA payed me ?", "starting")).toBe("handled");
@@ -612,7 +613,7 @@ describe("what the owner's second test showed (2026-10-07, round 3)", () => {
   });
 });
 
-describe("the assistant's daily allowance (owner, 2026-10-07)", () => {
+describe("no daily limit per seller (owner, 2026-10-07: \"remove daily limit\")", () => {
   const session = () => ({ phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null }) as WhatsAppSession;
   const turns = (n: number, userId = "seller") => {
     db.tables.whatsapp_assistant_log = Array.from({ length: n }, (_, i) => ({
@@ -620,39 +621,19 @@ describe("the assistant's daily allowance (owner, 2026-10-07)", () => {
     }));
   };
 
-  it("by pack, smaller where WhatsApp costs more; none for admins or when billing is off", async () => {
-    expect(await dailyAllowance("seller")).toBe(DAILY_ALLOWANCE.none);
-    db.tables.extension_credit_transactions = [{ user_id: "seller", type: "purchase", amount: 440, created_at: "2026-10-01T00:00:00Z" }];
-    expect(await dailyAllowance("seller")).toBe(DAILY_ALLOWANCE.pro);
-    db.tables.jumia_connections = [{ user_id: "seller", country: "NG" }];
-    expect(await dailyAllowance("seller")).toBe(DAILY_ALLOWANCE.pro / 2);
-    expect(await dailyAllowance("admin")).toBeNull();
-    billingOn = false;
-    expect(await dailyAllowance("seller")).toBeNull();
-  });
-
-  it("past it: told once, then the fixed flow, with no AI call", async () => {
-    turns(DAILY_ALLOWANCE.none);
-    expect(await runAssistant("seller", "233", session(), "what can you do", "idle")).toBe("handled");
-    expect(sent[0].body).toContain(`You've used today's ${DAILY_ALLOWANCE.none} chat replies on your pack`);
-    expect(db.tables.whatsapp_assistant_log.at(-1)).toMatchObject({ outcome: ALLOWANCE_TOLD });
-    sent.length = 0;
-    expect(await runAssistant("seller", "233", session(), "what else", "idle")).toBe("limited");
-    expect(sent).toEqual([]);
-    expect(aiCalls).toBe(0);
-  });
-
-  it("yesterday's turns don't count", async () => {
-    turns(DAILY_ALLOWANCE.none);
-    for (const r of db.tables.whatsapp_assistant_log) r.created_at = "2026-01-01T10:00:00Z";
+  it("a seller with hundreds of turns today still has it", async () => {
+    turns(500);
     expect(await assistantGate("seller")).toEqual({ ok: true });
   });
 
-  it("the global ceiling rests it for everyone but admins", async () => {
+  it("the global ceiling rests it for everyone but admins, with no AI call", async () => {
     db.tables.app_settings = [{ key: "assistant_daily_limit", value: 3 }];
     turns(3, "someone-else");
     expect(await assistantGate("seller")).toEqual({ ok: false, reason: "ceiling" });
     expect(await assistantGate("admin")).toEqual({ ok: true });
+    expect(await runAssistant("seller", "233", session(), "what else", "idle")).toBe("limited");
+    expect(sent).toEqual([]);
+    expect(aiCalls).toBe(0);
   });
 
   it("the kill switch turns it off, admins included", async () => {
@@ -662,12 +643,6 @@ describe("the assistant's daily allowance (owner, 2026-10-07)", () => {
     expect(await assistantEnabled("admin")).toBe(true);
   });
 
-  it("a day starts at the seller's own midnight", () => {
-    const now = new Date("2026-10-07T23:30:00Z");
-    expect(dayStart("Africa/Accra", now)).toBe("2026-10-07T00:00:00.000Z");
-    expect(dayStart("Africa/Lagos", now)).toBe("2026-10-07T23:00:00.000Z");
-    expect(dayStart("Africa/Nairobi", new Date("2026-10-07T10:00:00Z"))).toBe("2026-10-06T21:00:00.000Z");
-  });
 });
 
 describe("more of the Jumia API (owner, 2026-10-07: \"do all\")", () => {

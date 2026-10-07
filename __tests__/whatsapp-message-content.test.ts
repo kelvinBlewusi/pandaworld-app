@@ -26,7 +26,7 @@ describe("contentOf", () => {
   it("surfaces a tapped reply-button's id as text", () => {
     expect(
       contentOf(msg({ type: "interactive", interactive: { button_reply: { id: "done", title: "Done ✅" } } })),
-    ).toEqual({ text: "done" });
+    ).toEqual({ text: "done", tapped: true });
   });
 
   // A list row and a button carry the same contract — the id IS the
@@ -38,7 +38,7 @@ describe("contentOf", () => {
         type: "interactive",
         interactive: { list_reply: { id: "submit 7", title: "Submit product 7", description: "Sony Headphones" } },
       })),
-    ).toEqual({ text: "submit 7" });
+    ).toEqual({ text: "submit 7", tapped: true });
   });
 
   // An order alert sent outside the 24 hours is a template; its quick-reply
@@ -46,7 +46,7 @@ describe("contentOf", () => {
   it("surfaces a template quick-reply's payload as text, like a button id", () => {
     expect(
       contentOf(msg({ type: "button", button: { text: "Pack & get label", payload: "orders:packall" } })),
-    ).toEqual({ text: "orders:packall" });
+    ).toEqual({ text: "orders:packall", tapped: true });
   });
 
   // This used to return {} for anything unreadable, and the message then
@@ -75,8 +75,9 @@ describe("contentOf", () => {
   it("still reads everything it CAN read, unchanged", () => {
     expect(contentOf(msg({ type: "text", text: { body: "hello" } }))).toEqual({ text: "hello" });
     expect(contentOf(msg({ type: "image", image: { id: "m1" } }))).toEqual({ imageMediaId: "m1", text: undefined });
+    // A tap is marked so the AI doesn't read it: it means one thing (2026-10-07).
     expect(contentOf(msg({ type: "interactive", interactive: { button_reply: { id: "done", title: "Done" } } })))
-      .toEqual({ text: "done" });
+      .toEqual({ text: "done", tapped: true });
   });
   // Meta's OWN "unsupported" container is not a media type the seller
   // chose — it is WhatsApp saying it could not represent the message at

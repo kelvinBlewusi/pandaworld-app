@@ -1,19 +1,22 @@
 /**
- * The WhatsApp assistant: free text understood by AI, carried out by our
- * own code (owner, 2026-10-06; piloted on admin accounts and the user ids
- * in app_settings `assistant_users`).
+ * The assistant: free text understood by AI, carried out by our own code.
+ * Since 2026-10-07 it reads every typed message first, for every seller, on
+ * WhatsApp and the website (owner: "any reply or text to the bot is taken
+ * afresh and the previous context is taken into consideration too";
+ * lib/whatsapp/intake.ts handleLinkedMessage). So:
  *
- * The owner's spec: "we will maintain the way the images are sent ... but
- * anything else can be a conversation where the intent of the user is
- * understood and the AI executes the right code", and "the current flow
- * will be maintained and the conversational flow will only come to play if
- * users try to talk to it like they did not know the current flow". So:
- *
- *   - Never while photos are being collected: there, text is a product's
- *     notes, as it always was.
- *   - Only for text the usual flow doesn't recognise. The buttons, "submit
- *     all", a product number, the answer to a question the bot asked, and
- *     a plain "2: price 150" all work as before (lib/whatsapp/intake.ts).
+ *   - It's told where the seller is (Stage), the bot's open question, the
+ *     batch's products, the seller's facts, the last 20 messages and what it
+ *     remembers of them (lib/whatsapp/seller-memory.ts), as context, never
+ *     as a limit: a message may be about the current step, a draft, an
+ *     earlier product, a live product, the shop, PandaWorld or something new.
+ *   - What carries on the current step (an answer to the bot's question, a
+ *     product's notes while its photos come in) it hands back as "step",
+ *     and the usual handling takes it, as before. So does anything when the
+ *     AI can't be reached.
+ *   - Taps, plain numbers, a command's own words, "done" and a plain "2:
+ *     price 150" never reach it (aiReadable in intake.ts): they mean one
+ *     thing. Nor do messages while connecting Jumia (codes).
  *   - The AI only picks an action (interpret): our code checks every part
  *     of it and does the work, with the same rules as the rest of the bot.
  *     Every price, quantity and word it sets must be in the seller's own
@@ -22,16 +25,14 @@
  *   - When a change could be about more than one product ("change the
  *     quantity of the fridge to 20" with two fridges), it asks which,
  *     and the tap or the number applies it (answerPendingQuestion).
- *   - Submitting and starting over are offered as a button to tap, never
- *     done on the AI's word alone.
- *   - Anything else gets the AI's own reply, not a set message (owner,
- *     2026-10-06): what it can do for this seller (from capabilities() and
- *     their pack, credits and country), an answer to a question about
- *     Jumia or PandaWorld, or "I don't understand that, try something
- *     different" for what's outside them. It ends by asking what they'd like
- *     to do for their shop. Links come only from assistantLinks, as a
- *     button; a web address it writes itself is removed. The fixed flow
- *     starts only when the seller says they want to list.
+ *   - Submitting, starting over and changing live products are offered as a
+ *     button to tap, never done on the AI's word alone.
+ *   - Anything else gets the AI's own reply, not a set message: what it can
+ *     do for this seller (from capabilities() and their pack, credits and
+ *     country), an answer to a question about Jumia or PandaWorld, or "I
+ *     don't understand that, try something different" for what's outside
+ *     them. Links come only from assistantLinks, as a button; a web address
+ *     it writes itself is removed.
  *
  * Every message it reads goes in whatsapp_assistant_log with what it made
  * of it, to see where it misunderstands. Calls are counted in ai_usage as
@@ -74,7 +75,8 @@ import {
 } from "@/lib/whatsapp/shop-insights";
 import type { LiveChange } from "@/lib/jumia/shop";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
-import { ALLOWANCE_TOLD, allowanceText, assistantGate, assistantSwitchedOn } from "@/lib/whatsapp/assistant-limits";
+import { assistantGate, assistantSwitchedOn } from "@/lib/whatsapp/assistant-limits";
+import { blankCodes, noteSellerMessage, sellerMemory } from "@/lib/whatsapp/seller-memory";
 import { isWebAddress } from "@/lib/whatsapp/channel";
 import { chatClearedAt } from "@/lib/whatsapp/chat-clear";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
@@ -95,44 +97,30 @@ const EDITABLE = new Set(["draft", "awaiting_review", "failed"]);
 // ─── Who has it ───────────────────────────────────────────────────────────
 
 /**
- * The pilot: admins, and the user ids in app_settings `assistant_users`.
- * `["*"]` there switches it on for every seller.
+ * Every seller, on WhatsApp and the website (owner, 2026-10-07: "AI for all
+ * sellers"; the pilot list, app_settings `assistant_users`, is gone). Only
+ * the kill switch (lib/whatsapp/assistant-limits.ts) turns it off, for
+ * everyone, admins included.
  */
-export async function assistantEnabled(userId: string): Promise<boolean> {
-  // The kill switch (lib/whatsapp/assistant-limits.ts): off for everyone.
-  if (!(await assistantSwitchedOn())) return false;
-  if (isAdmin(userId)) return true;
-  try {
-    const { data } = await createServerClient().from("app_settings").select("value").eq("key", "assistant_users").maybeSingle();
-    const ids = data?.value;
-    return Array.isArray(ids) && (ids.includes("*") || ids.includes(userId));
-  } catch {
-    return false;
-  }
+export async function assistantEnabled(_userId: string): Promise<boolean> {
+  return assistantSwitchedOn();
 }
 
-/**
- * Whether the conversational assistant answers this message: in the Jumia
- * Listing Assistant on the website, every seller (owner, 2026-10-07: "the
- * conversational style should only be for the chat"); on WhatsApp, the
- * pilot only ("let's not make it chatty or conversational for users"), and
- * everyone else gets the WhatsApp flow and its commands. The kill switch
- * turns both off.
- */
-export async function assistantFor(userId: string, phone: string): Promise<boolean> {
-  if (isWebAddress(phone)) return assistantSwitchedOn();
+/** Whether the assistant reads this message (both channels, everyone, unless switched off). */
+export async function assistantFor(userId: string, _phone: string): Promise<boolean> {
   return assistantEnabled(userId);
 }
 
 // ─── What the AI is told ──────────────────────────────────────────────────
 
 /**
- * Where the seller is. review: drafts waiting to be submitted. sent: the
- * whole batch just went to Jumia. idle: between batches. starting: a batch
- * was just started and no photo has come yet (a question asked there is
- * answered; anything else is the first product's notes, as always).
+ * Where the seller is: context for the AI, never a limit on what a message
+ * can be about. review: drafts waiting to be submitted. sent: the whole
+ * batch just went to Jumia. idle: between batches. starting: a batch was
+ * just started and no photo has come yet. collecting: a batch's photos and
+ * notes are coming in. drafting: the batch is being drafted.
  */
-export type Stage = "review" | "sent" | "idle" | "starting";
+export type Stage = "review" | "sent" | "idle" | "starting" | "collecting" | "drafting";
 
 export interface ProductFacts {
   seq:        number;
@@ -247,7 +235,9 @@ const STAGE_TEXT: Record<Stage, string> = {
   review: "The products below are drafted and waiting for the seller to check them and submit them to Jumia.",
   sent:   "The seller has just submitted the products below to Jumia. They're no longer drafts: once live, their stock, price, sale and on/off are changed with live_change, and their name, description, highlights or brand with content_change.",
   idle:   "The seller is between batches: no products are being listed right now. To start, they say how many products they're listing.",
-  starting: "The seller has just started listing a batch and hasn't sent any photo yet. A message here is normally information about the first product (price, sizes, colours, condition): for that, answer note.",
+  starting: "The seller has just started listing a batch and hasn't sent any photo yet. A message about the first product (price, sizes, colours, condition) is step.",
+  collecting: "The seller is in the middle of sending a batch's photos and notes. A message describing the product they're on (price, sizes, colours, material, stock, brand, condition, category, a sale) is its notes: step. Anything else (a question, a greeting, something about another product, a live product, their shop or PandaWorld) is not a note: handle it.",
+  drafting: "The seller's batch is being drafted by AI right now (about a minute; each product is sent to them as it's ready). A detail for those products (a price, a size, a category) is step; anything else, handle it.",
 };
 
 /**
@@ -380,10 +370,16 @@ export interface PromptContext {
   listingCost?: number;
   /** The Listing Assistant on the website (lib/whatsapp/channel.ts), not WhatsApp. */
   web?: boolean;
+  /** Which product of the batch they're on ("product 2 of 3"). */
+  position?: string;
+  /** The bot's question still waiting for an answer, if any. */
+  waitingFor?: string;
+  /** What the assistant remembers about the seller from before (lib/whatsapp/seller-memory.ts). */
+  memory?: string;
 }
 
 export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): string {
-  const { products, currency, seller, links, hintSeq, conversation = [], listingCost, web } = ctx;
+  const { products, currency, seller, links, hintSeq, conversation = [], listingCost, web, position, waitingFor, memory } = ctx;
   return [
     web
       ? "You are PandaWorld's Jumia Listing Assistant, a chat on the PandaWorld website. PandaWorld lists sellers' products on Jumia (Africa's online marketplace) and helps them run their Jumia shop."
@@ -394,9 +390,11 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     ] : []),
     "You choose ONE action as JSON, and PandaWorld's code checks it and carries it out.",
     "",
-    `Where the seller is: ${STAGE_TEXT[stage]}`,
-    ...(products.length > 0 ? ["", "Products (the number is the product number):", ...products.map((p) => productLine(p, currency))] : []),
+    `Where the seller is (context, not a limit on what the message is about): ${STAGE_TEXT[stage]}${position ? ` They're on ${position}.` : ""}`,
+    ...(waitingFor ? [`The bot's last question is still open: it asked for ${waitingFor}. A message that answers it (even just a number or a word) is step.`] : []),
+    ...(products.length > 0 ? ["", "Products in this batch (the number is the product number):", ...products.map((p) => productLine(p, currency))] : []),
     ...(seller.length > 0 ? ["", "About this seller:", ...seller] : []),
+    ...(memory ? ["", "What you remember about this seller from earlier (use it to understand them; never quote it as notes):", memory] : []),
     "",
     "What PandaWorld can do (all true; never claim anything else):",
     capabilities(listingCost),
@@ -411,7 +409,8 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     ...(hintSeq != null ? [`(They started it with product number ${hintSeq}.)`] : []),
     "",
     "Rules:",
-    "- Read the new message with the recent conversation: a short reply (\"yes\", \"five\", \"do it\", \"why?\", \"the 43 one\") answers the bot's last message.",
+    "- Read every message afresh, for what the seller wants now. It may carry on the current step, be about a draft, an earlier product, a live product, their orders or shop, PandaWorld, or something new. Where they are and the bot's last question are context, not a limit: never force a message into the current step.",
+    "- Read the new message with the recent conversation and what you remember: a short reply (\"yes\", \"five\", \"do it\", \"why?\", \"the 43 one\") answers the bot's last message.",
     "- If one of the actions below does what they ask, return it. Never reply that you can or will check or do something: do it with the action.",
     "- Never promise anything for later (to remember, to message them, to make sure, to look into it): you only do the actions here, now. If something went wrong, say plainly what you can do now.",
     "- A product they name that isn't one of the drafts above is a product already in their Jumia shop: use live_change, product_info, stock or fees for it, never edit.",
@@ -476,7 +475,8 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '{"type":"credits"} - their credit balance (sent with a Buy credits button)',
     `{"type":"polish","product":<the product number from the message> or null} - polish a product's photos: ${PRODUCT_SHOT_COUNT} new product photos made from theirs (main on white, angle, lifestyle, detail), ${POLISH_CREDIT_COST} credits each`,
     `{"type":"health_report"} - a full health check of their whole shop from live Jumia data: what's working, what isn't, what to do (${REPORT_CREDIT_COST} credits). "How is my shop doing?" is this; best sellers or returns alone are "report".`,
-    ...(stage === "starting" ? ['{"type":"note"} - their message is information about the product they are about to send (price, sizes, colours, condition)'] : []),
+    '{"type":"step"} - the message carries on what the seller is doing right now: it answers the bot\'s open question (a price, a size, a category,',
+    '  a yes or no), or, while they send a product, it describes that product (its notes). PandaWorld\'s usual steps take it.',
     '{"type":"reply","text":"<your message>","link":"<a key above, or null>"} - everything else. You write the message:',
     "  - \"What can you do\", a hello (\"hi\", \"hello there\"), or something you can't match: in your own words (vary it, never a set",
     "    script), a short numbered list (4 to 6 lines) of what you can do for them, and end by asking what they'd like to do for their Jumia shop.",
@@ -1017,7 +1017,8 @@ function parseActionRaw(
     case "listings":
       return { type: "listings", period: asPeriod(parsed.period, "today") };
     case "note":
-      return opts.stage === "starting" ? { type: "note" } : { type: "unclear" };
+    case "step":
+      return { type: "note" };
     case "payouts":
       return { type: "payouts" };
     case "payout_detail": {
@@ -1194,9 +1195,12 @@ export async function assistantModel(): Promise<string> {
 
 /**
  * The last messages with this seller, oldest first, as "Seller: …" / "Bot:
- * …" lines, without the one being answered. Taps on buttons read as such.
+ * …" lines, without the one being answered. Taps on buttons read as such;
+ * a pasted code (Client ID, token, key) as "[a code]". Twenty since the
+ * assistant reads every message (owner, 2026-10-07), with what came before
+ * in the seller's memory (lib/whatsapp/seller-memory.ts).
  */
-export async function recentConversation(phone: string, current: string, max = 8): Promise<string[]> {
+export async function recentConversation(phone: string, current: string, max = 20): Promise<string[]> {
   try {
     // A cleared web chat starts its conversation again (lib/whatsapp/chat-clear.ts).
     const cleared = await chatClearedAt(phone);
@@ -1215,7 +1219,7 @@ export async function recentConversation(phone: string, current: string, max = 8
     return rows.slice(-max).map((r) => {
       const body = (r.body_text ?? "").trim();
       const shown = !body ? (r.message_type === "image" ? "[a photo]" : "[a message]")
-        : /^[a-z_]+:\S+$/i.test(body) ? "[tapped a button]" : body.replace(/\s+/g, " ").slice(0, 300);
+        : /^[a-z_]+:\S+$/i.test(body) ? "[tapped a button]" : blankCodes(body.replace(/\s+/g, " ").slice(0, 300));
       return `${r.direction === "inbound" ? "Seller" : "Bot"}: ${shown}`;
     });
   } catch {
@@ -1228,14 +1232,18 @@ export async function interpret(
   stage: Stage,
   products: ProductFacts[],
   message: string,
-  opts: { batchId?: string | null; hintSeq?: number; conversation?: string[]; web?: boolean } = {},
+  opts: { batchId?: string | null; hintSeq?: number; conversation?: string[]; web?: boolean; position?: string; waitingFor?: string } = {},
 ): Promise<{ action: AssistantAction; links: Record<string, AssistantLink>; raw: string }> {
-  const [currency, seller, model, listingCost] = await Promise.all([
+  const [currency, seller, model, listingCost, memory] = await Promise.all([
     shopCurrencyForUser(userId), sellerFacts(userId), assistantModel(), listingCreditCost(userId).catch(() => LIVE_LISTING_CREDIT_COST),
+    sellerMemory(userId),
   ]);
   const links = assistantLinks({ batchId: opts.batchId, countrySlug: seller.countrySlug });
   const conversation = opts.conversation ?? [];
-  const prompt = buildPrompt(stage, message, { products, currency, seller: seller.lines, links, hintSeq: opts.hintSeq, conversation, listingCost, web: opts.web });
+  const prompt = buildPrompt(stage, message, {
+    products, currency, seller: seller.lines, links, hintSeq: opts.hintSeq, conversation, listingCost, web: opts.web,
+    position: opts.position, waitingFor: opts.waitingFor, memory,
+  });
   const { text } = await withAiUsageContext({ feature: "assistant", userId }, () =>
     callGeminiBackend(model, [{ text: prompt }], model.startsWith("gemini-3") ? { preferBackend: "ai-studio" } : {}));
   const action = parseAction(text, message, products, links, currency, { context: conversation.join("\n"), stage });
@@ -1474,13 +1482,15 @@ export async function creditsReply(userId: string, phone: string): Promise<void>
 /**
  * handled: the assistant replied. default: nothing it should do here, so
  * the usual reply for this step goes out. failed: the AI couldn't be
- * reached, so the usual handling runs instead. limited: past the day's
- * allowance or the global ceiling, so the usual handling runs, saying the
- * commands still work where it has nothing else to say. { list }: between batches,
+ * reached, so the usual handling runs instead. step: the message carries
+ * on what the seller is doing (an answer to the bot's question, a product's
+ * notes), so the usual handling takes it. limited: past the day's global
+ * ceiling, so the usual handling runs, saying the commands still work
+ * where it has nothing else to say. { list }: between batches,
  * the seller wants to list this many products; the caller starts the
  * batch the usual way (credits checked, then the photo flow).
  */
-export type AssistantOutcome = "handled" | "default" | "failed" | "limited" | { list: number };
+export type AssistantOutcome = "handled" | "default" | "step" | "failed" | "limited" | { list: number };
 
 /**
  * Understand `text` and act on it. `stage` says where the seller is (see
@@ -1493,26 +1503,23 @@ export async function runAssistant(
   text: string,
   stage: Stage,
   hintSeq?: number,
+  opts: { position?: string; waitingFor?: string } = {},
 ): Promise<AssistantOutcome> {
   // A button id from an older message ("apick:2", "value:3") isn't words to understand.
   if (/^[a-z_]+:\S+$/i.test(text.trim())) return "default";
 
-  // The day's allowance and the global ceiling (lib/whatsapp/assistant-limits.ts):
-  // past them, the fixed flow answers ("limited" runs the usual handling,
-  // which says the commands still work where it has nothing else to say).
-  // The seller is told once a day; that message is the whole reply.
+  // The day's ceiling for everyone (lib/whatsapp/assistant-limits.ts): past
+  // it, the fixed flow answers ("limited" runs the usual handling, which
+  // says the commands still work where it has nothing else to say).
   const gate = await assistantGate(userId).catch(() => ({ ok: true }) as const);
   if (!gate.ok) {
-    if (gate.reason === "allowance" && !gate.told) {
-      await sendTextIfConfigured(phone, allowanceText(gate.allowance, isWebAddress(phone)));
-      await logTurn(userId, stage, text, null, ALLOWANCE_TOLD);
-      return "handled";
-    }
-    console.info(`[assistant] ${userId}: ${gate.reason === "ceiling" ? "daily ceiling reached" : "over daily allowance"}, fixed flow`);
+    console.info(`[assistant] ${userId}: daily ceiling reached, fixed flow`);
     return "limited";
   }
+  // Every few messages, what it remembers of the seller is brought up to date.
+  await noteSellerMessage(userId);
 
-  const batchId = stage === "review" ? session.batchId : stage === "sent" ? session.lastSubmittedBatchId : null;
+  const batchId = stage === "sent" ? session.lastSubmittedBatchId : stage === "idle" ? null : session.batchId;
   let action: AssistantAction;
   let links: Record<string, AssistantLink>;
   let raw: string;
@@ -1520,7 +1527,9 @@ export async function runAssistant(
   try {
     const conversation = await recentConversation(phone, text);
     products = batchId ? await productFacts(await batchListings(batchId, userId)) : [];
-    ({ action, links, raw } = await interpret(userId, stage, products, text, { batchId, hintSeq, conversation, web: isWebAddress(phone) }));
+    ({ action, links, raw } = await interpret(userId, stage, products, text, {
+      batchId, hintSeq, conversation, web: isWebAddress(phone), position: opts.position, waitingFor: opts.waitingFor,
+    }));
   } catch (e) {
     console.warn(`[assistant] interpreting for ${userId} failed: ${(e as Error).message}`);
     await logTurn(userId, stage, text, null, `failed: ${(e as Error).message}`);
@@ -1528,7 +1537,7 @@ export async function runAssistant(
   }
   console.info(`[assistant] ${userId} (${stage}): ${action.type}`);
 
-  if (action.type === "list" && stage !== "review" && stage !== "starting") {
+  if (action.type === "list" && (stage === "idle" || stage === "sent")) {
     await logTurn(userId, stage, text, action, `list ${action.count}`, raw);
     return { list: action.count };
   }
@@ -1536,10 +1545,10 @@ export async function runAssistant(
   const outcome = await carryOut(userId, phone, stage, batchId, products, action, text, links, session);
   await logTurn(userId, stage, text, action, outcome, raw);
   // Starting a batch: after answering, where they are (a reply carries it already).
-  if (stage === "starting" && action.type !== "reply" && outcome !== "default" && outcome !== "stopped batch" && outcome !== "kept batch") {
+  if (stage === "starting" && action.type !== "reply" && outcome !== "default" && outcome !== "step" && outcome !== "stopped batch" && outcome !== "kept batch") {
     await sendTextIfConfigured(phone, startingNudge(session));
   }
-  return outcome === "default" ? "default" : "handled";
+  return outcome === "default" ? "default" : outcome === "step" ? "step" : "handled";
 }
 
 async function carryOut(
@@ -1548,7 +1557,7 @@ async function carryOut(
 ): Promise<string> {
   switch (action.type) {
     case "note":
-      return "default";
+      return "step";
     case "listings":
       return answerListings(userId, phone, action.period);
     case "edit": {
@@ -1590,6 +1599,14 @@ async function carryOut(
     }
     case "list":   // in review: like starting over, offered as a tap
     case "restart": {
+      // Mid-batch, asked before anything stops (the photos so far stay with their products).
+      if (stage === "collecting" || stage === "drafting") {
+        await sendButtonsIfConfigured(phone, "Stop this batch and start over? Anything already drafted stays on the review page.", [
+          { id: "restart", title: "Yes, start over" },
+          { id: "status", title: "No, keep going" },
+        ]);
+        return "offered restart";
+      }
       if (stage === "starting") {
         if (action.type === "list") {
           await sendTextIfConfigured(phone, `You're set up for ${session.batchSize ?? 1} product${session.batchSize === 1 ? "" : "s"}. Say *restart* to change the number.`);
@@ -1677,7 +1694,8 @@ async function carryOut(
       // reply keeps the step's own two buttons. Starting a batch, where
       // they are goes in the same message (one message, not two).
       const link = action.link ? links[action.link] : null;
-      const text = stage === "starting" ? `${action.text}\n\n${startingNudge(session)}` : action.text;
+      const text = stage === "starting" ? `${action.text}\n\n${startingNudge(session)}`
+        : stage === "collecting" ? `${action.text}\n\n${collectingNudge(session)}` : action.text;
       if (action.awaiting) {
         const ask: LiveValueAsk = {
           kind: "live_value", field: action.awaiting.field, products: action.awaiting.products,
@@ -1694,6 +1712,14 @@ async function carryOut(
       return "default";
   }
   return "default";
+}
+
+/** While a batch's photos come in: where they are, after an answer to something else. */
+function collectingNudge(session: WhatsAppSession): string {
+  const seq = session.batchSeq ?? 1;
+  const size = session.batchSize ?? 1;
+  const quiet = session.batchQuiet ?? (size > 1 ? session.preferredBatchQuiet : null) ?? false;
+  return `_Still on product ${seq}${size > 1 ? ` of ${size}` : ""}: send its photos and details, then ${quiet ? `*${seq}*` : "*done*"}._`;
 }
 
 const startingNudge = (session: WhatsAppSession) =>

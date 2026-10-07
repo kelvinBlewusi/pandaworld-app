@@ -121,8 +121,7 @@ export default function TermsPage() {
             change to your live Jumia products that you confirm (returned
             if Jumia refuses all of it), and the order-update messages we
             send you unasked also use credits. New-order alerts, payout
-            messages and chatting with the bot don&apos;t; chat replies have a daily
-            limit that depends on your pack. The credits a listing uses can
+            messages and chatting with the bot don&apos;t. The credits a listing uses can
             depend on the country your Jumia account is connected from: your
             own price is shown on the pricing and billing pages when you are
             signed in.

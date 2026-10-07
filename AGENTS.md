@@ -616,8 +616,8 @@ lines: the chat's shop features, label PDFs, alerts.
   still connected (autofillBlock, a 403 the panel shows as text); free
   credits and Starter autofill with nothing connected.
 - The web Listing Assistant is every seller's (listingAssistantFor: only
-  the kill switch); the conversational AI on WhatsApp stays the pilot's
-  (assistantFor in lib/whatsapp/assistant.ts: web address → everyone).
+  the kill switch), and since 2026-10-07 so is the conversational AI on
+  WhatsApp (assistantFor: everyone, both channels, unless switched off).
 
 **Pay when live** (WhatsApp and web listings). Drafts are free; a seller
 only needs enough available credits to draft. `pushListingToJumia` checks
@@ -1255,6 +1255,11 @@ low" warning on the same message. The notes below describe the old line.
 
 ### WhatsApp assistant: the conversational layer (pilot, owner 2026-10-06)
 
+> Superseded on 2026-10-07: the assistant is on for every seller, reads
+> every typed message first, and has no daily allowance or pilot list. See
+> "The AI reads every typed message, for every seller" below. The rest of
+> this section is the history and still describes the actions and checks.
+
 The owner: "we will maintain the way the images are sent ... but anything
 else can be a conversation where the intent of the user is understood and
 the AI executes the right code", "the conversational flow will only come to
@@ -1810,9 +1815,8 @@ labels." It is the WhatsApp bot itself, not a copy:
   linked and its number, Jumia connected, the pack ("none bought yet").
   Rules: answer about themselves only from those lines; asked about their
   pack, name it and list what's on and off.
-- **Daily chat replies** tripled (30/40/60/100/200). Past them runAssistant
-  returns `limited`; at the count step a question then gets limitedText
-  (the commands still work) instead of "I need a number".
+- **Daily chat replies**: replaced the same day by no per-seller limit at
+  all (next section).
 - **Fixed-flow fixes**: credits words ("remaining credit", "credits left",
   "how many credits…"); "dine"/"dne"/… alone are done (draft.ts
   isDoneWord, never mid-caption); "submit it" while asked for a price
@@ -1843,6 +1847,57 @@ labels." It is the WhatsApp bot itself, not a copy:
 - **Model**: the assistant runs gemini-2.5-flash-lite (about $0.0004 a
   turn). app_settings `assistant_model` switches it (MODELS): what went
   wrong in these tests was flow and facts, not the model.
+
+### The AI reads every typed message, for every seller (owner, 2026-10-07)
+
+"Any reply or text to the bot is taken afresh and the previous context is
+taken into consideration too ... like this message ... about our entire
+journey" — then "AI for all sellers and remove daily limit".
+
+- **Router** (lib/whatsapp/intake.ts handleLinkedMessage, after the taps
+  for orders, live changes, fix:/recat:/category: and a live value's
+  answer, before the commands and the per-state handlers): `aiReadable`
+  picks the typed text the AI reads first; `runAssistant` gets the stage
+  (`aiStage`: idle, sent, starting, collecting, drafting, review), the
+  batch position ("product 2 of 3"), the bot's open question
+  (`openQuestion`: price, value/variation, category, QC, which product)
+  and the review edit's product number. "handled" ends it; anything else
+  rides on as `content.aiRead` and the usual handling runs, reusing it
+  instead of asking the AI again (handleAwaitingCount: `{list}`, "default"
+  → "didn't catch that"; review: "default" → the review reply). The old
+  starting-stage question check is gone (the router does it), and the old
+  classifyBatchIntent fallback runs only when the assistant is switched off.
+- **Skips the AI**: taps (`tapped`, set by contentOf for button/list/
+  template taps and by the web page for a tap with a label), button ids,
+  plain numbers with or without a currency (PLAIN_NUMBER_RE), exact submit
+  words, a command's own words (parseGlobalCommand, except the fuzzy
+  stop_ask/edit_help, which go to the AI and stay as the fallback), a count
+  in words between batches, "done" (and typos) while sending photos, a
+  plain "2: price 150" in review (plainQuickEdit), and every message while
+  connecting Jumia (codes) or in the error state.
+- **"step"** (the AI's `{"type":"step"}`, old `note`): the message carries
+  on the current step: an answer to the open question, or the product's
+  notes while photos come in. Mid-batch, anything else is answered with the
+  position appended (collectingNudge); "start over" asks first (Yes / No,
+  keep going).
+- **Memory** (lib/whatsapp/seller-memory.ts, table seller_memory,
+  2026-10-07_seller-memory.sql): a running summary per seller (what they
+  sell, how they work, what's unfinished, what went wrong), refreshed by
+  the AI after their 4th message and then every MEMORY_EVERY (12), from the
+  previous summary and their last 60 messages on WhatsApp and the web. In
+  the prompt as "What you remember about this seller". `blankCodes` hides
+  Client IDs, tokens, keys and LINK codes in what reaches the AI (memory
+  and the 20-message recent conversation alike), and the summary is
+  blanked again before it's saved.
+- **Everyone, no allowance** (lib/whatsapp/assistant-limits.ts): the pilot
+  list (`assistant_users`) and the per-seller daily allowance are gone. Left:
+  the kill switch (`assistant_enabled` false: the fixed flow alone, for
+  everyone) and the all-sellers daily ceiling (`assistant_daily_limit`, else
+  DEFAULT_DAILY_CEILING 20,000 turns ≈ $20). Past the ceiling runAssistant
+  returns `limited` and limitedText says the commands still work.
+- **Cost**: about $0.001 a typed message (gemini-2.5-flash-lite, ~5-8k
+  tokens with the site guide, memory and conversation), plus a memory
+  refresh every 12 messages; about 1-2 seconds more per typed reply.
 
 ### The chat knows the website (owner, 2026-10-07)
 

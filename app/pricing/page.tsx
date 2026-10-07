@@ -23,7 +23,6 @@ import {
 import { listingCreditCost } from "@/lib/billing/extension-credits";
 import { sellerCountry } from "@/lib/jumia/unlistable-categories";
 import { jumiaCountryByCode } from "@/lib/marketing/countries";
-import { COUNTRY_FACTOR, DAILY_ALLOWANCE } from "@/lib/whatsapp/assistant-limits";
 
 // ─── Public pricing: credit packs ─────────────────────────────────────────────
 //
@@ -72,8 +71,6 @@ export default async function PricingPage() {
   const countryCode = userId ? (await sellerCountry(userId).catch(() => null))?.toUpperCase() ?? null : null;
   const listingCost = userId ? await listingCreditCost(userId).catch(() => LIVE_LISTING_CREDIT_COST) : LIVE_LISTING_CREDIT_COST;
   const ownCountry = listingCost !== LIVE_LISTING_CREDIT_COST ? jumiaCountryByCode(countryCode)?.name ?? null : null;
-  // Chat replies a day, as this seller gets them (fewer where WhatsApp costs more).
-  const replies = (pack: keyof typeof DAILY_ALLOWANCE) => Math.max(1, Math.floor(DAILY_ALLOWANCE[pack] * (COUNTRY_FACTOR[countryCode ?? ""] ?? 1)));
 
   const signInHref = `/sign-in?redirect_url=${DASHBOARD_REDIRECT}`;
   const signUpHref = `/sign-up?redirect_url=${DASHBOARD_REDIRECT}`;
@@ -263,8 +260,8 @@ export default async function PricingPage() {
               a="With the extension you submit the product on Vendor Center yourself, so we can't see whether it went live. Each autofill is charged instead."
             />
             <FAQ
-              q="Is chatting with the WhatsApp bot charged?"
-              a={`No. Each day your pack includes chat replies: ${replies("none")} on free credits, ${replies("starter")} on Starter, ${replies("standard")} on Standard, ${replies("pro")} on Pro and ${replies("business")} on Business. After that the bot keeps to its usual steps until the next day: listing from photos, your orders and the buttons all still work.`}
+              q="Is chatting with the assistant charged?"
+              a="No. Chatting is free and unlimited, on WhatsApp and in the Jumia Listing Assistant, on every pack and on free credits. Only what's listed above costs credits."
             />
             <FAQ
               q="Do the same credits work on WhatsApp and the Chrome extension?"

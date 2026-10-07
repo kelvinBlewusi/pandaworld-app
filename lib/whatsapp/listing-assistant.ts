@@ -5,7 +5,7 @@
  *
  * Who has it: every signed-in seller since 2026-10-07 (the pilot before),
  * never while the assistant's kill switch is off. The conversational AI on
- * WhatsApp stays the pilot's (assistantFor in lib/whatsapp/assistant.ts).
+ * on WhatsApp too since 2026-10-07 (assistantFor in lib/whatsapp/assistant.ts).
  */
 
 import { createServerClient } from "@/lib/supabase/server";
@@ -236,7 +236,8 @@ export async function receiveAssistantMessage(
   // Jumia first, as on WhatsApp: until it's connected, the message goes to the connect flow.
   await jumiaGate(userId).catch(() => false);
   const [before, repliesBefore] = await Promise.all([collecting(address), replyCount(address)]);
-  await handleLinkedMessage(userId, address, id, { ...(text ? { text } : {}), ...(mediaId ? { imageMediaId: mediaId } : {}) });
+  // A tap (it carries the button's words) means one thing: the AI doesn't read it.
+  await handleLinkedMessage(userId, address, id, { ...(text ? { text } : {}), ...(mediaId ? { imageMediaId: mediaId } : {}), ...(label ? { tapped: true } : {}) });
   if (before) await sayWhereWeAre(userId, address, before, repliesBefore, { photo: Boolean(mediaId), lastPhoto: input.last !== false, text: text ?? null });
   return { ok: true };
 }
