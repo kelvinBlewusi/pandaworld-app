@@ -358,6 +358,20 @@ describe("its own replies (owner, 2026-10-06)", () => {
       .toEqual({ type: "reply", text: "Here's the faq:", link: "faq" });
   });
 
+  it("writes the model's markdown the WhatsApp way: one asterisk for bold, no headings", () => {
+    const links = assistantLinks();
+    expect(cleanReply("## Your shop\nI can show **orders** and **sales**.", links)).toBe("Your shop\nI can show *orders* and *sales*.");
+  });
+
+  it("asks for choices as bullets, never numbered, and sends vague insight to the free overview", async () => {
+    aiReplies.push('{"type":"reply","text":"Hi!","link":null}');
+    await runAssistant("seller", "233", session(), "what can you do?", "idle");
+    const prompt = aiPrompts.at(-1)!;
+    expect(prompt).toContain("never numbered");
+    expect(prompt).toContain("Insight, stats, analytics or how their shop is performing");
+    expect(prompt).not.toContain("a short numbered list");
+  });
+
   it("keeps the review step's buttons under a reply there", async () => {
     db.tables.listings = [{ id: "l1", user_id: "seller", whatsapp_batch_id: "b1", whatsapp_seq: 1, title: "Hisense 205L Fridge", status: "draft" }];
     aiReplies.push('{"type":"reply","text":"Sorry, I can\'t book deliveries. I can change your fridge\'s price, quantity or size, or submit it.","link":null}');

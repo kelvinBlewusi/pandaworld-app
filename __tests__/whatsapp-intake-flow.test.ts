@@ -4092,6 +4092,39 @@ describe("the AI reads every typed message first", () => {
     expect(aiPrompts[0]).not.toContain("c9758cb3");
   });
 
+  // Owner's test, 2026-10-07: the AI listed what it can do as "1." to "5."
+  // and asked what they'd like; "4" (shop insight) became "4 products".
+  it("a number picking one of the bot's numbered options goes to the AI, not taken as a count", async () => {
+    seedSession({ state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null });
+    db.tables.jumia_connections = [{ user_id: USER, status: "active", access_token: "tok", refresh_token: "ref" }];
+    db.tables.whatsapp_message_log = [
+      { phone_number: PHONE, direction: "outbound", message_type: "text", created_at: new Date(Date.now() - 30_000).toISOString(),
+        body_text: "I can help you manage your Jumia shop:\n1. List new products\n2. Track your orders and sales\n3. Update prices and stock\n4. Insights into your shop's performance\nWhat would you like to do today?" },
+      { phone_number: PHONE, direction: "inbound", message_type: "text", body_text: "4", created_at: new Date().toISOString() },
+    ];
+    aiReplies.push('{"type":"reply","text":"Here is how your shop is doing.","link":null}');
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "4" });
+    db.tables.jumia_connections = [];
+    db.tables.whatsapp_message_log = [];
+    expect(aiPrompts).toHaveLength(1);
+    expect(aiPrompts[0]).toContain("4. Insights into your shop's performance");
+    expect(session().batch_size ?? null).toBeNull();
+  });
+
+  it("a number after any other message is still a count, with no AI", async () => {
+    seedSession({ state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null });
+    db.tables.whatsapp_message_log = [
+      { phone_number: PHONE, direction: "outbound", message_type: "button", created_at: new Date(Date.now() - 30_000).toISOString(),
+        body_text: "🎉 Jumia connected!\n\nHow many products are you listing today?" },
+    ];
+    db.tables.jumia_connections = [{ user_id: USER, status: "active", access_token: "tok", refresh_token: "ref" }];
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "4" });
+    db.tables.jumia_connections = [];
+    db.tables.whatsapp_message_log = [];
+    expect(aiPrompts).toHaveLength(0);
+    expect(session().batch_size).toBe(4);
+  });
+
   it("switched off, the usual flow answers with no AI", async () => {
     db.tables.app_settings = [{ key: "assistant_enabled", value: false }];
     seedSession({ state: "awaiting_photos", batch_size: 1, batch_seq: 1, listing_id: "listing-1" });

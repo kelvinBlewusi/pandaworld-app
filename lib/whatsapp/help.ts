@@ -2,7 +2,7 @@
  * "help", for this seller's own pack (owner, 2026-10-07: "anyone types help
  * get a standard message or they get a tailored one for their current
  * package?" — tailored from now on). The commands every plan has, then what
- * their pack adds and what it doesn't have yet, then their credits.
+ * their pack adds and what bigger packs add, then their credits.
  *
  * No astral-plane emoji in these lines: an array of strings with an
  * interpolation can be folded into one template literal by the minifier,
@@ -20,7 +20,7 @@ import { sendButtonsIfConfigured } from "@/lib/whatsapp/client";
 const PACK_LINES: Partial<Record<FeatureId, string>> = {
   shop_changes:       "Change live products: e.g. *set the stock of the blue kettle to 10*, *put the iron on sale at 150 till Friday*, *turn off the fan*",
   qc_fix:             "Jumia QC rejections: I tell you why, return the credits and help you fix and resubmit",
-  shipping_labels:    "Shipping label PDFs here on WhatsApp",
+  shipping_labels:    "Shipping label PDFs on WhatsApp: *orders*, then *Pack & get label*",
   order_alerts:       "Order alerts on WhatsApp: new orders and payouts",
   fee_calc_extension: "Jumia fee calculator on the Chrome extension panel",
 };
@@ -54,7 +54,6 @@ export async function helpFor(userId: string, phone: string): Promise<string> {
     const off: string[] = [];
     for (const f of extra) {
       const access = await featureAccess(userId, f.id as FeatureId, { ignoreBalance: true }).catch(() => ({ ok: false as const }));
-      if (f.comingSoon) continue;
       if (access.ok) on.push("- " + PACK_LINES[f.id as FeatureId]);
       else off.push("- " + f.short + ": " + cap(f.minPack) + " pack and up");
     }

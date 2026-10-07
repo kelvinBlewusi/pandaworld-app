@@ -580,11 +580,16 @@ const EXACT_SUBMIT_RE = /^submit(?:\s+all|\s+\d{1,2}(?:\s*(?:,|and|&)?\s*\d{1,2}
  */
 async function aiReadable(
   userId: string,
+  phoneNumber: string,
   session: WhatsAppSession,
   content: Incoming & { unsupported?: string },
 ): Promise<{ text: string; hintSeq?: number } | null> {
   const text = content.text?.trim();
   if (!text || content.imageMediaId || content.unsupported || content.tapped || !aiStage(session)) return null;
+  // A number picking from the bot's own numbered lines (owner's test,
+  // 2026-10-07: "4" after a list whose 4th line was shop insight became
+  // "4 products") is the AI's to read, with that list in its conversation.
+  if (PLAIN_NUMBER_RE.test(text) && session.state === "awaiting_count" && (await pickedFromList(phoneNumber, text))) return { text };
   if (/^[a-z_]+:\S+$/i.test(text) || PLAIN_NUMBER_RE.test(text) || EXACT_SUBMIT_RE.test(text)) return null;
   const cmd = parseGlobalCommand(text);
   // Sentences the commands only guess at go to the AI; the regexes stay as the fallback.
@@ -602,6 +607,32 @@ async function aiReadable(
   }
   const lead = text.match(/^\s*(?:product\s*)?#?(\d{1,2})\s*[:\-–.)]\s*\S/i);
   return { text, ...(lead ? { hintSeq: Number(lead[1]) } : {}) };
+}
+
+/**
+ * Whether `text` ("4", "4.") picks a line of the bot's last message, when
+ * that message offered numbered options and asked which (a text ending in
+ * a question).
+ */
+async function pickedFromList(phoneNumber: string, text: string): Promise<boolean> {
+  const n = text.match(/^(\d)\.?$/)?.[1];
+  if (!n) return false;
+  try {
+    const { data } = await createServerClient()
+      .from("whatsapp_message_log")
+      .select("direction, message_type, body_text")
+      .eq("phone_number", phoneNumber)
+      .order("created_at", { ascending: false })
+      .limit(2);
+    const rows = (data ?? []) as { direction: string; message_type: string | null; body_text: string | null }[];
+    // The newest row can be this very message, logged as it arrived.
+    const bot = rows[0]?.direction === "outbound" ? rows[0] : rows[0]?.direction === "inbound" ? rows[1] : undefined;
+    if (!bot || bot.direction !== "outbound" || bot.message_type !== "text") return false;
+    const body = (bot.body_text ?? "").trim();
+    return body.endsWith("?") && new RegExp(`(^|\\n)\\s*${n}[.)]\\s+\\S`).test(body);
+  } catch {
+    return false;
+  }
 }
 
 /** "product 2 of 3", while a batch's photos come in. */
@@ -763,7 +794,7 @@ export async function handleLinkedMessage(
   // which also runs whenever the AI can't be reached. Taps, plain numbers,
   // a command's own words and "done" skip it (aiReadable): they mean one
   // thing already. Never while connecting Jumia: those messages are codes.
-  const readable = await aiReadable(userId, session, content);
+  const readable = await aiReadable(userId, phoneNumber, session, content);
   if (readable && (await assistantFor(userId, phoneNumber))) {
     const stage = aiStage(session)!;
     const outcome = await runAssistant(userId, phoneNumber, session, readable.text, stage, stage === "review" ? readable.hintSeq : undefined, {

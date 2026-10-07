@@ -160,16 +160,14 @@ describe("at 0 credits", () => {
 
 describe("what each pack lists", () => {
   // The chat's features are on every plan (everyoneFeatures) and no pack lists them.
-  it("Standard adds QC fixes, live product changes and labels; Pro the extension's calculator and the alerts to come", () => {
+  it("Standard adds QC fixes, live product changes and labels; Pro the alerts and the extension's calculator", () => {
     expect(packFeatures("starter")).toEqual([]);
     // Labels from Standard since 2026-10-07: each one is charged.
     expect(packFeatures("standard").map((f) => f.id)).toEqual(["qc_fix", "shipping_labels", "shop_changes"]);
+    // Every listed feature is available (2026-10-07: none is "not available yet").
     const pro = packFeatures("pro");
-    expect(pro.filter((f) => !f.comingSoon).map((f) => f.id)).toEqual(["qc_fix", "shop_changes", "fee_calc_extension"]);
-    expect(pro.filter((f) => f.comingSoon).map((f) => f.label)).toEqual([
-      "Order alerts on WhatsApp",
-      "Shipping labels on WhatsApp",
-    ]);
+    expect(pro.map((f) => f.id)).toEqual(["qc_fix", "order_alerts", "shipping_labels", "shop_changes", "fee_calc_extension"]);
+    expect(pro.some((f) => "comingSoon" in f)).toBe(false);
     expect(packFeatures("business")).toEqual(pro);
   });
 });

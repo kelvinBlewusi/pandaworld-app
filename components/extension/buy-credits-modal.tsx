@@ -32,10 +32,12 @@ interface Tier {
   price: string;
   reach: string;
   popular?: boolean;
-  /** What the pack unlocks now (short labels), and what it will. */
+  /** What the pack unlocks (short labels). */
   unlocks: string[];
-  soon: string[];
 }
+
+/** Chips on a pack's row; the rest are counted, and named under the list for the chosen pack. */
+const CHIPS = 3;
 
 const TIERS: Tier[] = CREDIT_PACKS.map((p) => {
   const { listings } = packReach(p.credits);
@@ -47,8 +49,7 @@ const TIERS: Tier[] = CREDIT_PACKS.map((p) => {
     // Listings only, as "50+" (owner's call, 2026-10-01).
     reach: `${listings}+ listings`,
     popular: p.id === POPULAR_PACK_ID,
-    unlocks: packFeatures(p.id).filter((f) => !f.comingSoon).map((f) => f.short),
-    soon:    packFeatures(p.id).filter((f) => f.comingSoon).map((f) => f.short),
+    unlocks: packFeatures(p.id).map((f) => f.short),
   };
 });
 
@@ -171,16 +172,16 @@ export function BuyCreditsModal({
                   <span className="shrink-0 text-sm font-semibold text-zinc-900">{t.price}</span>
                 </span>
                 <span className="mt-0.5 block text-xs text-zinc-500">About {listingCost === LIVE_LISTING_CREDIT_COST ? t.reach : `${packReach(t.credits, listingCost).listings}+ listings`}</span>
-                {(t.unlocks.length > 0 || t.soon.length > 0) && (
+                {t.unlocks.length > 0 && (
                   <span className="mt-2 flex flex-wrap gap-1.5">
-                    {t.unlocks.map((u) => (
+                    {t.unlocks.slice(0, CHIPS).map((u) => (
                       <span key={u} className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
                         <Check className="h-3 w-3" /> {u}
                       </span>
                     ))}
-                    {t.soon.length > 0 && (
+                    {t.unlocks.length > CHIPS && (
                       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
-                        <Check className="h-3 w-3" /> {t.soon.length} more {t.soon.length === 1 ? "tool" : "tools"}
+                        <Check className="h-3 w-3" /> {t.unlocks.length - CHIPS} more {t.unlocks.length - CHIPS === 1 ? "tool" : "tools"}
                       </span>
                     )}
                   </span>
@@ -190,9 +191,9 @@ export function BuyCreditsModal({
           ))}
         </div>
 
-        {tier.soon.length > 0 && (
+        {tier.unlocks.length > CHIPS && (
           <p className="mt-3 rounded-lg bg-zinc-50 px-3 py-2 text-[11px] leading-relaxed text-zinc-600">
-            With {tier.name}: {tier.soon.join(" · ")}
+            With {tier.name}: {tier.unlocks.join(" · ")}
           </p>
         )}
 
