@@ -244,6 +244,21 @@ export async function sendImageIfConfigured(to: string, link: string, caption?: 
 }
 
 /**
+ * Several images at once: on the Listing Assistant's page one album the
+ * page shows together (owner, 2026-10-07: "sent at a go, currently they are
+ * sent one after the other"); on WhatsApp, which has no albums for a
+ * business, each image in turn, the caption on the first.
+ */
+export async function sendImagesIfConfigured(to: string, links: string[], caption?: string): Promise<void> {
+  if (links.length === 0) return;
+  if (isWebAddress(to)) {
+    await callGraphApi({ to, type: "image", image: { link: links[0], ...(caption ? { caption } : {}), album: links } });
+    return;
+  }
+  for (let i = 0; i < links.length; i++) await sendImageIfConfigured(to, links[i], i === 0 ? caption : undefined);
+}
+
+/**
  * Up to 10 tappable rows in ONE message (Meta's interactive "list" type),
  * against sendButtons' three.
  *

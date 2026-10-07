@@ -1899,6 +1899,34 @@ journey" — then "AI for all sellers and remove daily limit".
   tokens with the site guide, memory and conversation), plus a memory
   refresh every 12 messages; about 1-2 seconds more per typed reply.
 
+### Photos at once in the web chat; what's billed and what fires (2026-10-07)
+
+- **Albums** (owner: "images to the web chat should be ... sent at a go"):
+  the page uploads all picked photos at once and posts them as one message
+  (`mediaIds`, up to 8, MAX_ALBUM); receiveAssistantMessage records one
+  inbound row (payload `links`) and hands each photo to the bot in turn
+  (`<id>:<n>`, the words as the first one's caption, as a WhatsApp album
+  arrives), then one "Your product: N photos" reply. The bot's own photos
+  go the same way on the web: sendImagesIfConfigured records one outbound
+  image with `album` → payload `links` (chat polish uses it; WhatsApp still
+  gets the main photo only). The page draws an album as a grid; every photo
+  opens full size.
+- **Billed, as on the pricing page** (creditCosts): a listing when it goes
+  live, an extension autofill, a shipping label (first time, Standard+), a
+  confirmed live change, an order-updates message (0.2), image polish (per
+  image back), the health report. Free: new-order alerts, payout messages,
+  chatting. All of these were checked in code on 2026-10-07.
+- **Order alerts and labels are built but still flagged `comingSoon`**
+  (PACK_FEATURES), so the pricing page and the Buy credits window call them
+  "not available yet" and help leaves them out. Order alerts run every 10
+  minutes for Pro and up and send inside WhatsApp's 24 hours; outside it
+  they wait for app_settings `order_alert_template` (not set: Meta's
+  `jumia_new_order` was still in review). When Meta approves it: set
+  `{"name":"jumia_new_order","language":"en"}`, send one test, then flip
+  `comingSoon` off for order_alerts. Order-update messages have no template
+  and only go inside the 24 hours. Labels: flip after one real order's
+  label has gone through on the owner's shop.
+
 ### The chat knows the website (owner, 2026-10-07)
 
 "Let the chat know our site very well ... connect WhatsApp, use extension,

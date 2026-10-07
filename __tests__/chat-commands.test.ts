@@ -12,13 +12,14 @@ let billingOn = true;
 jest.mock("@/lib/billing/mode", () => ({ isBillingEnabled: async () => billingOn }));
 jest.mock("@/lib/auth/is-admin", () => ({ isAdmin: () => false }));
 
-type Sent = { kind: string; to: string; body?: string; link?: string; rows?: { id: string }[] };
+type Sent = { kind: string; to: string; body?: string; link?: string; links?: string[]; rows?: { id: string }[] };
 const sent: Sent[] = [];
 jest.mock("@/lib/whatsapp/client", () => ({
   LIST_MAX_ROWS: 10,
   sendTextIfConfigured: async (to: string, body: string) => { sent.push({ kind: "text", to, body }); },
   sendCtaUrlIfConfigured: async (to: string, body: string) => { sent.push({ kind: "cta", to, body }); },
   sendImageIfConfigured: async (to: string, link: string, body?: string) => { sent.push({ kind: "image", to, link, body }); },
+  sendImagesIfConfigured: async (to: string, links: string[], body?: string) => { sent.push({ kind: "image", to, link: links[0], body, links }); },
   sendListIfConfigured: async (to: string, body: string, _b: string, rows: { id: string }[]) => { sent.push({ kind: "list", to, body, rows }); },
   sendButtonsIfConfigured: async (to: string, body: string) => { sent.push({ kind: "buttons", to, body }); },
 }));
@@ -214,7 +215,10 @@ describe("help, for the seller's own pack (owner, 2026-10-07)", () => {
     } finally {
       push.chatAddressFor = before;
     }
-    const caption = sent.find((m) => m.kind === "image" && m.body)?.body ?? "";
+    const album = sent.find((m) => m.kind === "image" && m.body);
+    // On the web, every new photo in one message, an album.
+    expect(album?.links).toEqual(["https://cdn.test/main.png", "https://cdn.test/angle.png", "https://cdn.test/detail.png"]);
+    const caption = album?.body ?? "";
     expect(caption).toContain("3 polished photos (main image, angle, detail). They replace your own photos");
     expect(caption).not.toContain("credits");
   });

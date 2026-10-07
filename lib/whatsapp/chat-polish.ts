@@ -32,7 +32,7 @@ import { generateProductShots, isGeminiImageEnabled, PRODUCT_SHOTS } from "@/lib
 import { resolveOneImage } from "@/lib/extension/harvested-images";
 import { chatAddressFor } from "@/lib/jumia/push-listing";
 import { isWebAddress } from "@/lib/whatsapp/channel";
-import { sendCtaUrlIfConfigured, sendImageIfConfigured, sendTextIfConfigured } from "@/lib/whatsapp/client";
+import { sendCtaUrlIfConfigured, sendImagesIfConfigured, sendTextIfConfigured } from "@/lib/whatsapp/client";
 import { buyCreditsUrl } from "@/lib/whatsapp/batch";
 import { appUrl } from "@/lib/whatsapp/app-url";
 
@@ -191,9 +191,9 @@ export async function polishListing(listingId: string, phone: string | null = nu
     const spent = isWebAddress(to) ? "" : `, ${cost} credits`;
     const caption = `✨ ${name}: ${made.length} polished photo${made.length === 1 ? "" : "s"} (${made.map((s) => s.label.toLowerCase()).join(", ")})${spent}. ` +
       `They replace your own photos on its listing.`;
-    // Each photo is a paid message on WhatsApp: the main one there, all of them here.
+    // Each photo is a paid message on WhatsApp: the main one there; all of them here, as one album.
     const shown = isWebAddress(to) ? made : made.slice(0, 1);
-    for (let i = 0; i < shown.length; i++) await sendImageIfConfigured(to, shown[i].url, i === 0 ? caption : undefined);
+    await sendImagesIfConfigured(to, shown.map((s) => s.url), caption);
   }
   return "done";
 }

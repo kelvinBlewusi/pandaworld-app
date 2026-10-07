@@ -102,8 +102,11 @@ export function describeOutboundMessage(
   }
 
   if (type === "image") {
-    const image = body.image as { link?: string; caption?: string } | undefined;
-    return { phoneNumber: to, direction: "outbound", messageType: "image", bodyText: image?.caption ?? null, payload: { link: image?.link } };
+    const image = body.image as { link?: string; caption?: string; album?: string[] } | undefined;
+    return {
+      phoneNumber: to, direction: "outbound", messageType: "image", bodyText: image?.caption ?? null,
+      payload: { link: image?.link, ...(Array.isArray(image?.album) && image.album.length > 1 ? { links: image.album } : {}) },
+    };
   }
 
   if (type === "interactive") {

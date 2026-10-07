@@ -120,6 +120,30 @@ describe("a message from the page", () => {
   });
 });
 
+// Owner, 2026-10-07: "images to the web chat should be ... sent at a go".
+describe("several photos sent at once", () => {
+  it("are one message in the chat, an album, and reach the bot one by one with the words on the first", async () => {
+    const ids = ["web:user_web1/a.jpg", "web:user_web1/b.jpg", "web:user_web1/c.jpg"];
+    const r = await receiveAssistantMessage(USER, { id: "web-album001", mediaIds: ids, text: "price 150" });
+    expect(r).toEqual({ ok: true });
+    const inbound = log().filter((m) => m.direction === "inbound");
+    expect(inbound).toHaveLength(1);
+    expect(inbound[0]).toMatchObject({ message_type: "image", body_text: "price 150" });
+    expect((inbound[0].payload as { links: string[] }).links).toHaveLength(3);
+    expect(handled.map((h) => [h[2], h[3]])).toEqual([
+      ["web-album001:0", { imageMediaId: ids[0], text: "price 150" }],
+      ["web-album001:1", { imageMediaId: ids[1] }],
+      ["web-album001:2", { imageMediaId: ids[2] }],
+    ]);
+  });
+
+  it("refuses the lot when one isn't the seller's own", async () => {
+    const r = await receiveAssistantMessage(USER, { id: "web-album002", mediaIds: ["web:user_web1/a.jpg", "web:someone/b.jpg"] });
+    expect(r).toEqual({ ok: false, error: "That photo isn't yours to send." });
+    expect(handled).toHaveLength(0);
+  });
+});
+
 describe("the conversation the page reads", () => {
   it("is this seller's, oldest first, with the page's own ids", async () => {
     db.tables.whatsapp_message_log = [
