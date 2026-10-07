@@ -78,7 +78,8 @@ const feedError = (errors: unknown[]): string => {
  */
 async function checkSentChanges(now: Date, deadline: number, run: ShopNoticesRun): Promise<void> {
   const db = createServerClient();
-  const { data } = await db.from("jumia_product_changes").select("*").eq("status", "sent").limit(60);
+  // A rule's group can be up to BULK_MAX rows (lib/whatsapp/shop.ts): enough to take whole groups.
+  const { data } = await db.from("jumia_product_changes").select("*").eq("status", "sent").limit(1000);
   const rows = ((data ?? []) as Record<string, unknown>[]).filter((r) => now.getTime() - new Date(String(r.updated_at)).getTime() > 60_000);
   const feeds = new Map<string, Record<string, unknown>[]>();
   for (const r of rows) {

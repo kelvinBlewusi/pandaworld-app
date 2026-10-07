@@ -130,10 +130,10 @@ describe("the conversation the page reads", () => {
   });
 });
 
-describe("orders and labels", () => {
-  it("stay on WhatsApp: the web chat says so and reads nothing from Jumia", async () => {
-    expect(await handleOrderMessage(USER, ADDRESS, "orders")).toBe(true);
-    expect(log()[0].body_text).toContain("orders, packing and shipping labels are on WhatsApp");
+describe("orders", () => {
+  // Packing, ready to ship and cancel work here; labels and alerts stay on
+  // WhatsApp (owner, 2026-10-07). The flow itself: whatsapp-orders.test.ts.
+  it("a message that isn't an order command is left to the bot", async () => {
     expect(await handleOrderMessage(USER, ADDRESS, "list 3 products")).toBe(false);
     expect(global.fetch).not.toHaveBeenCalled();
   });

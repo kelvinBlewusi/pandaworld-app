@@ -50,7 +50,10 @@ jest.mock("@/lib/whatsapp/shop", () => ({
   answerPayouts:     async (...a: unknown[]) => { shopCalls.push(["answerPayouts", ...a.slice(2)]); return "payouts"; },
   answerProductInfo: async (...a: unknown[]) => { shopCalls.push(["answerProductInfo", ...a.slice(2)]); return "info"; },
   answerFees:        async (...a: unknown[]) => { shopCalls.push(["answerFees", ...a.slice(2)]); return "fees"; },
+  proposeBulkChange: async (...a: unknown[]) => { shopCalls.push(["proposeBulkChange", ...a.slice(2)]); return "bulk"; },
+  proposeContentChange: async (...a: unknown[]) => { shopCalls.push(["proposeContentChange", ...a.slice(2)]); return "content"; },
   MAX_GROUP: 20,
+  BULK_MAX: 200,
 }));
 
 const SIZES = ["S", "M", "L", "XL", "XXL"];
@@ -282,7 +285,8 @@ describe("its own replies (owner, 2026-10-06)", () => {
 
     const prompt = aiPrompts[0];
     expect(prompt).toContain("- List products on Jumia from WhatsApp");
-    expect(prompt).toContain("(Standard pack and up). Pro and up also: alerts for new Jumia orders");
+    expect(prompt).toContain("(Standard pack and up), here or on WhatsApp. Shipping label PDFs only on WhatsApp. Pro and up also: alerts for new Jumia orders on WhatsApp");
+    expect(prompt).toContain("up to 200 products");
     expect(prompt).toContain("- Country: Ghana");
     expect(prompt).toContain("- No pack bought yet: on their free sign-up credits.");
     expect(prompt).toContain("- Orders and shipping labels on WhatsApp: not on their pack (Standard and up)");
@@ -505,11 +509,11 @@ describe("what the owner's second test showed (2026-10-07, round 3)", () => {
     expect(on("put the drone on sale")).toEqual({ type: "unclear" });
   });
 
-  it("the whole shop at once is explained, not attempted", () => {
+  it("the whole shop at once by live_change is asked as a rule, not attempted", () => {
     expect(parseAction('{"type":"live_change","product":null,"active":false}', "off all products", []))
-      .toMatchObject({ type: "reply", text: expect.stringContaining("I can't change every product in your shop at once") });
+      .toMatchObject({ type: "reply", text: expect.stringContaining("Say it as a rule") });
     expect(parseAction('{"type":"live_change","product":"other products","active":false}', "off all other products apart from the ones i asked you turn on", []))
-      .toMatchObject({ type: "reply", text: expect.stringContaining("Jumia Vendor Center has bulk tools") });
+      .toMatchObject({ type: "reply", text: expect.stringContaining("I'll show you the list before anything changes") });
     expect(parseAction('{"type":"live_change","product":"those products","stock":10}', "update the stock of those products to 10 each", []))
       .toMatchObject({ type: "reply", text: expect.stringContaining("Which products do you mean?") });
     expect(namesAProduct("the other ones")).toBe(false);
@@ -637,5 +641,71 @@ describe("the assistant's daily allowance (owner, 2026-10-07)", () => {
     expect(dayStart("Africa/Accra", now)).toBe("2026-10-07T00:00:00.000Z");
     expect(dayStart("Africa/Lagos", now)).toBe("2026-10-07T23:00:00.000Z");
     expect(dayStart("Africa/Nairobi", new Date("2026-10-07T10:00:00Z"))).toBe("2026-10-06T21:00:00.000Z");
+  });
+});
+
+describe("more of the Jumia API (owner, 2026-10-07: \"do all\")", () => {
+  const NOW = new Date("2026-10-07T10:00:00Z"); // a Wednesday
+  const parse = (json: string, msg: string) => parseAction(json, msg, [], {}, "GHS", { now: NOW });
+
+  it("on/off counts go to the overview, whatever the AI picked", () => {
+    expect(parse('{"type":"product_info","product":"Vintage Radio"}', "How many of my products are on")).toEqual({ type: "shop", filter: "all" });
+    expect(parse('{"type":"reply","text":"I can\'t tell","link":null}', "How many of my products live on JUMIA is on and off")).toEqual({ type: "shop", filter: "all" });
+    expect(parse('{"type":"listings","period":"today"}', "how many listings have I done today")).toEqual({ type: "listings", period: "today" });
+  });
+
+  it("rules for many products: the scope and every number from the message", () => {
+    expect(parse('{"type":"bulk","scope":"all","price_pct":5}', "raise all my prices by 5%"))
+      .toEqual({ type: "bulk", scope: "all", words: null, change: { kind: "price_pct", pct: 5 } });
+    expect(parse('{"type":"bulk","scope":"all","price_pct":10}', "reduce all prices by 10%"))
+      .toEqual({ type: "bulk", scope: "all", words: null, change: { kind: "price_pct", pct: -10 } });
+    expect(parse('{"type":"bulk","scope":"matching","words":"perfumes","sale_pct":10}', "10% off all perfumes this weekend"))
+      .toEqual({ type: "bulk", scope: "matching", words: "perfumes", change: { kind: "sale_pct", pct: 10, start: "2026-10-10", end: "2026-10-11" } });
+    expect(parse('{"type":"bulk","scope":"out_of_stock","active":false}', "turn off everything that's out of stock"))
+      .toEqual({ type: "bulk", scope: "out_of_stock", words: null, change: { kind: "status", active: false } });
+    expect(parse('{"type":"bulk","scope":"all","sale":"end"}', "end the sale on all products"))
+      .toEqual({ type: "bulk", scope: "all", words: null, change: { kind: "sale", sale: null } });
+  });
+
+  it("a rule the message doesn't back isn't carried out", () => {
+    // No "all" or percentage: not a rule.
+    expect(parse('{"type":"bulk","scope":"all","price_pct":5}', "raise the kettle price")).toEqual({ type: "unclear" });
+    // A percentage that isn't in the message.
+    expect(parse('{"type":"bulk","scope":"all","price_pct":5}', "raise all my prices a bit")).toMatchObject({ type: "reply", text: expect.stringContaining("By what percentage") });
+    // A sale with no dates is asked for them.
+    expect(parse('{"type":"bulk","scope":"all","sale_pct":10}', "10% off everything")).toMatchObject({ type: "reply", text: expect.stringContaining("needs its dates") });
+    // "out of stock" the AI made up becomes all, the words being the products'.
+    expect(parse('{"type":"bulk","scope":"out_of_stock","active":true}', "turn on all products")).toMatchObject({ type: "bulk", scope: "all" });
+    // Products it can't name from the message.
+    expect(parse('{"type":"bulk","scope":"matching","words":"shoes","price_pct":5}', "raise all prices by 5%")).toMatchObject({ type: "reply" });
+  });
+
+  it("content: copied from the message, or a rewrite they asked for", () => {
+    expect(parse('{"type":"content_change","product":"blender","name":"Silver Crest 3 in 1 Blender 1.5L","rewrite":[]}', "change the blender's name to Silver Crest 3 in 1 Blender 1.5L"))
+      .toEqual({ type: "content_change", product: "blender", request: { name: "Silver Crest 3 in 1 Blender 1.5L" } });
+    expect(parse('{"type":"content_change","product":"wellington boot","rewrite":["description"]}', "rewrite the description of the wellington boot"))
+      .toEqual({ type: "content_change", product: "wellington boot", request: { rewrite: ["description"], instructions: "rewrite the description of the wellington boot" } });
+    // A name it made up is left out, and with nothing left it asks.
+    expect(parse('{"type":"content_change","product":"blender","name":"Best Blender Ever","rewrite":[]}', "change the blender's name"))
+      .toMatchObject({ type: "reply", text: expect.stringContaining("What should I change on it?") });
+  });
+
+  it("reports, payouts in detail, brands, categories, shops and the warehouse", () => {
+    expect(parse('{"type":"report","kind":"best_sellers","period":"month"}', "my best sellers")).toEqual({ type: "report", kind: "best_sellers", period: "month" });
+    expect(parse('{"type":"report","kind":"top"}', "top")).toEqual({ type: "unclear" });
+    expect(parse('{"type":"payout_detail","mode":"breakdown","statement":"GH11-20261005"}', "fees on statement GH11-20261005"))
+      .toEqual({ type: "payout_detail", mode: "breakdown", statement: "GH11-20261005" });
+    expect(parse('{"type":"payout_detail","mode":"breakdown","statement":"X99"}', "fees on my last statement"))
+      .toEqual({ type: "payout_detail", mode: "breakdown", statement: null });
+    expect(parse('{"type":"brand_check","brand":"Lattafa","product":null}', "is Lattafa a brand on jumia?")).toEqual({ type: "brand_check", brand: "Lattafa", product: null });
+    expect(parse('{"type":"category_info","product":"perfume"}', "what does jumia need to list a perfume")).toEqual({ type: "category_info", product: "perfume" });
+    expect(parse('{"type":"shops"}', "which shops do I have")).toEqual({ type: "shops" });
+    expect(parse('{"type":"warehouse_order","items":[{"product":"kettle","quantity":50}]}', "send 50 of the kettle to jumia warehouse on 20 Oct"))
+      .toEqual({ type: "warehouse_order", items: [{ product: "kettle", quantity: 50 }], date: "2026-10-20" });
+    expect(parse('{"type":"warehouse_order","items":[{"product":"kettle","quantity":60}]}', "send 50 of the kettle to jumia warehouse"))
+      .toMatchObject({ type: "reply" });
+    expect(parse('{"type":"warehouse_shipped","po":"123AB","tracking":"DHL998877","carrier":null}', "PO 123AB shipped, tracking DHL998877"))
+      .toEqual({ type: "warehouse_shipped", po: "123AB", tracking: "DHL998877", carrier: null });
+    expect(parse('{"type":"warehouse_shipped","po":"123AB","tracking":"XYZ"}', "PO 123AB shipped")).toMatchObject({ type: "reply" });
   });
 });

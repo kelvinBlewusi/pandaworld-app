@@ -465,3 +465,57 @@ describe("labels cost credits when billing is on (owner, 2026-10-07)", () => {
     (featureAccess as jest.Mock).mockImplementation(async () => (featureOn ? { ok: true } : { ok: false, blockedBy }));
   });
 });
+
+describe("in the Jumia Listing Assistant on the website", () => {
+  // Owner, 2026-10-07: "the label and alerts for orders should be on WhatsApp
+  // only ... we can do all other order actions".
+  const WEB = "web:user_seller";
+  const web = (text: string) => handleOrderMessage("user_seller", WEB, text);
+  const labelCalls = () => calls.filter((c) => c.path === "/orders/print-labels");
+
+  it("shows the waiting orders with Pack all (no labels) and Pick orders", async () => {
+    await web("orders");
+    const msg = last("buttons");
+    expect(msg.to).toBe(WEB);
+    expect(msg.body).toContain("To pack (2)");
+    expect(msg.buttons!.map((b) => [b.id, b.title])).toEqual([["orders:packall", "Pack all"], ["orders:pick", "Pick orders"]]);
+  });
+
+  it("packs every order without printing or charging a label, and says where labels are printed", async () => {
+    await web("orders:packall");
+    expect(writes().filter((c) => c.path === "/orders/pack")).toHaveLength(2);
+    expect(labelCalls()).toHaveLength(0);
+    expect(sent.some((s) => s.kind === "document")).toBe(false);
+    const msg = last("buttons");
+    expect(msg.body).toContain("✅ Packed 2 orders");
+    expect(msg.body).toContain("Shipping labels are printed on WhatsApp");
+    expect(msg.buttons!.map((b) => b.id)).toEqual(["orders:rtsall", "orders:pick"]);
+    expect(((db.tables.extension_credit_transactions ?? []) as unknown[])).toHaveLength(0);
+  });
+
+  it("one order: Pack order and Cancel; once packed, Ready to ship and Cancel, no Get label", async () => {
+    await web(`order:${O1}`);
+    expect(last("buttons").buttons!.map((b) => b.title)).toEqual(["Pack order", "Cancel order"]);
+    await web(`opack:${O1}`);
+    expect(labelCalls()).toHaveLength(0);
+    await web(`order:${O1}`);
+    expect(last("buttons").buttons!.map((b) => b.title)).toEqual(["Ready to ship", "Cancel order"]);
+    await web(`orts:${O1}`);
+    expect(last("text").body).toBe("✅ #355926919 is ready to ship.");
+  });
+
+  it("cancels only after the confirm tap", async () => {
+    await web(`ocancel:${O2}`);
+    expect(writes().filter((c) => c.path === "/orders/cancel")).toHaveLength(0);
+    expect(last("buttons").buttons![0]).toEqual({ id: `ocancelyes:${O2}`, title: "Yes, cancel order" });
+    await web(`ocancelyes:${O2}`);
+    expect(writes().filter((c) => c.path === "/orders/cancel")).toHaveLength(1);
+  });
+
+  it("a label asked for here is sent to WhatsApp, and Jumia isn't asked for it", async () => {
+    await web("orders:labels");
+    await web(`olabel:${O1}`);
+    expect(labelCalls()).toHaveLength(0);
+    expect(sent.every((s) => s.kind === "buttons" && s.body!.includes("printed on WhatsApp"))).toBe(true);
+  });
+});

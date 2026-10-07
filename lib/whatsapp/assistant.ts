@@ -51,7 +51,7 @@ import {
   sendButtonsIfConfigured, sendCtaUrlIfConfigured, sendListIfConfigured, sendTextIfConfigured,
 } from "@/lib/whatsapp/client";
 import {
-  COUNT_QUICK_PICKS, MAX_BATCH_SIZE, buyCreditsUrl, extractDateRange, extractSalePrice, focusedEditorUrl, whatsappListingsUrl,
+  COUNT_QUICK_PICKS, MAX_BATCH_SIZE, buyCreditsUrl, extractDateRange, extractSalePrice, findDateIn, focusedEditorUrl, whatsappListingsUrl,
 } from "@/lib/whatsapp/batch";
 import { helpMessage } from "@/lib/whatsapp/onboarding";
 import { appUrl } from "@/lib/whatsapp/app-url";
@@ -60,9 +60,13 @@ import { jumiaCountryByCode } from "@/lib/marketing/countries";
 import { sellerCountry } from "@/lib/jumia/unlistable-categories";
 import { currentPack, featureAccess, featureMinPackName, type FeatureId } from "@/lib/billing/features";
 import {
-  MAX_GROUP, answerFees, answerListings, answerOrderStatus, answerPayouts, answerProductInfo, answerProducts, answerSales, answerStock,
-  proposeLiveChange,
+  BULK_MAX, MAX_GROUP, answerFees, answerListings, answerOrderStatus, answerPayouts, answerProductInfo, answerProducts, answerSales, answerStock,
+  proposeBulkChange, proposeContentChange, proposeLiveChange, type BulkScope, type ContentRequest,
 } from "@/lib/whatsapp/shop";
+import {
+  answerBrand, answerCategoryNeeds, answerLinkedShops, answerPayoutDetail, answerReport, answerWarehouseStock, proposeWarehouseOrder,
+  proposeWarehouseShipped, type ReportKind,
+} from "@/lib/whatsapp/shop-insights";
 import type { LiveChange } from "@/lib/jumia/shop";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { ALLOWANCE_TOLD, allowanceText, assistantGate, assistantSwitchedOn } from "@/lib/whatsapp/assistant-limits";
@@ -163,6 +167,19 @@ export type AssistantAction =
   | { type: "sales"; period: Period; status: string | string[] | null }
   | { type: "listings"; period: Period }
   | { type: "payouts" }
+  /** Their statements one line each, or one in detail (fees, refunds). */
+  | { type: "payout_detail"; mode: "history" | "breakdown"; statement: string | null }
+  | { type: "report"; kind: ReportKind; period: Period }
+  /** One change to every product a rule picks ("10% off all perfumes"). */
+  | { type: "bulk"; scope: BulkScope; words: string | null; change: LiveChange }
+  /** A live product's name, description, highlights or brand. */
+  | { type: "content_change"; product: string; request: ContentRequest }
+  | { type: "brand_check"; brand: string; product: string | null }
+  | { type: "category_info"; product: string }
+  | { type: "shops" }
+  | { type: "warehouse_stock"; product: string }
+  | { type: "warehouse_order"; items: { product: string; quantity: number }[]; date: string | null }
+  | { type: "warehouse_shipped"; po: string; tracking: string; carrier: string | null }
   | { type: "note" }
   | { type: "unclear" };
 
@@ -206,7 +223,7 @@ function productLine(p: ProductFacts, currency: string): string {
 
 const STAGE_TEXT: Record<Stage, string> = {
   review: "The products below are drafted and waiting for the seller to check them and submit them to Jumia.",
-  sent:   "The seller has just submitted the products below to Jumia. They're no longer drafts: once live, their stock, price, sale and on/off can be changed with live_change; anything else in Jumia Vendor Center.",
+  sent:   "The seller has just submitted the products below to Jumia. They're no longer drafts: once live, their stock, price, sale and on/off are changed with live_change, and their name, description, highlights or brand with content_change.",
   idle:   "The seller is between batches: no products are being listed right now. To start, they say how many products they're listing.",
   starting: "The seller has just started listing a batch and hasn't sent any photo yet. A message here is normally information about the first product (price, sizes, colours, condition): for that, answer note.",
 };
@@ -222,15 +239,19 @@ function capabilities(listingCost = LIVE_LISTING_CREDIT_COST): string {
     "- Ask for what Jumia needs that the photos don't show: a missing price, weight or other required detail, the variation, the category when unsure.",
     "- Edit drafts in chat before they're submitted: price, quantity, variations or sizes, name, brand, colour, a sale price with its dates. Anything else in the editor on the review page.",
     "- Submit to Jumia and report back when each product goes live or is rejected; fix common rejections itself (banned words, restricted brands) and guide the seller through the rest with Fix & resubmit (QC fixes: Standard pack and up).",
-    "- Orders on WhatsApp: \"orders\" shows orders waiting to be packed; pack them and get the shipping label PDF, mark them ready to ship, or cancel (Standard pack and up). Pro and up also: alerts for new Jumia orders, grouped and quiet at night; where any order is, by its number; orders and sales for today, the week, the month or 90 days; a message when orders are delivered, returned, fail delivery or are cancelled.",
-    `- Their live Jumia products (Pro pack and up), found by name among everything in their shop: change a product's stock, price, a sale price with its dates, or turn it on or off, with one tap to confirm, for one product or several named together (up to ${MAX_GROUP} at a time, never their whole shop at once); where a product is (on or off, Jumia's quality check, price, sale, stock); how many are left; what's out of stock or low; which products are turned off or rejected by Jumia's quality check; a low-stock warning with new orders.`,
-    "- Payouts (Pro pack and up): the last Jumia payout and the statement not yet paid; a message when Jumia pays.",
+    "- Orders: \"orders\" shows orders waiting to be packed; pack them, mark them ready to ship, or cancel (Standard pack and up), here or on WhatsApp. Shipping label PDFs only on WhatsApp. Pro and up also: alerts for new Jumia orders on WhatsApp, grouped and quiet at night; where any order is, by its number; orders and sales for today, the week, the month or 90 days; a message when orders are delivered, returned, fail delivery or are cancelled.",
+    `- Their live Jumia products (Pro pack and up), found by name among everything in their shop: change a product's stock, price, a sale price with its dates, or turn it on or off, with one tap to confirm, for one product or several named together (up to ${MAX_GROUP}); where a product is (on or off, Jumia's quality check, price, sale, stock); how many are left; what's out of stock or low; which products are turned off or rejected by Jumia's quality check; a low-stock warning with new orders.`,
+    `- Rules for many products at once (Pro and up), shown in full before one tap: prices up or down by a percentage, a sale a percentage off (with dates), a stock or price, ending sales, turning on or off; for all their products, the ones out of stock, low, off or on, or all that match words ("all perfumes"); up to ${BULK_MAX} products.`,
+    "- A live product's name, description, highlights or brand (Pro and up): the seller's own text, or rewritten by AI from what Jumia has now, shown before one tap. Jumia checks content changes again. Photos and category of live products are changed in Vendor Center.",
+    "- Reports (Pro and up): best sellers, products with no sale, what runs out soon at the rate it sells, returns and failed deliveries, for the last 7, 30 or 90 days.",
+    "- Payouts (Pro pack and up): the last Jumia payout and the statement not yet paid; every statement of the last 90 days; one statement's fees, refunds and balances; a message when Jumia pays.",
+    "- Before listing (everyone): whether a brand is on Jumia and allowed in a category; what a kind of product needs on Jumia (its category, the details asked, variation options, commission).",
+    "- The shops under their Jumia account. Jumia's warehouse (Pro and up, for sellers who stock it): what it holds of a product, a delivery order into it (products and quantities, with a tap), and telling Jumia one has shipped with its tracking number.",
     "- Fees (Pro pack and up): what Jumia takes when one of their products sells (commission for its category, the per-item shipping contribution) and what they receive, at its price or a price they give.",
     `- Credits: tell the balance; a WhatsApp listing or an extension autofill costs ${listingCost} credits for this seller, a listing charged only when it goes live on Jumia; a shipping label ${LABEL_CREDIT_COST} credits (the same label again is free), a confirmed change to live products ${LIVE_CHANGE_CREDIT_COST} (back if Jumia refuses it), an order-updates or payout message ${NOTICE_CREDIT_COST}; new-order alerts and chatting are free (chat replies have a daily limit by pack); warn when running low. Credits are bought on the dashboard.`,
     "- The PandaWorld Chrome extension fills Jumia's Vendor Center product form on a laptop; image polish and a fee calculator in it on Pro.",
     "- A free Jumia price calculator, Jumia commission rates, how-to guides and an FAQ on the website.",
     "- Words the bot always knows: \"status\" (where they are), \"restart\", \"help\", \"orders\", \"disconnect\" (Jumia).",
-    "- Other changes to products already on Jumia (name, photos, description, category) are made in Jumia Vendor Center.",
   ].join("\n");
 }
 
@@ -324,7 +345,7 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
       : "You are PandaWorld's assistant on WhatsApp. PandaWorld lists sellers' products on Jumia (Africa's online marketplace) and helps them run their Jumia shop.",
     ...(web ? [
       "This chat works like the WhatsApp bot: the seller uploads product photos with the image button, adds the price and notes as text, and you draft, edit and submit them to Jumia.",
-      "Here, NOT available: orders waiting to be packed, new-order alerts and shipping labels. Those are on WhatsApp only: for them, say so in a reply (never the orders action).",
+      "Orders work here too: the orders action shows the ones waiting, with buttons to pack them, mark them ready to ship or cancel them. Here, NOT available: shipping labels and new-order alerts, which are on WhatsApp only (or labels in Vendor Center): for those, say so in a reply.",
     ] : []),
     "You choose ONE action as JSON, and PandaWorld's code checks it and carries it out.",
     "",
@@ -348,7 +369,8 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     "- Never promise anything for later (to remember, to message them, to make sure, to look into it): you only do the actions here, now. If something went wrong, say plainly what you can do now.",
     "- A product they name that isn't one of the drafts above is a product already in their Jumia shop: use live_change, product_info, stock or fees for it, never edit.",
     "- A question about a product (is it live, on, active, approved, in stock, on sale?) is product_info, never live_change: only change a product when they ask for the change.",
-    `- Changing every product in their shop at once ("turn off all products") isn't possible: reply that you change products they name, up to ${MAX_GROUP} at a time, and that Vendor Center has bulk tools.`,
+    "- A change to many products by a rule (all, every, everything, a percentage) is bulk; to products they name one by one, live_change.",
+    "- \"How many products are on / off / live\" is shop (the overview), never product_info.",
     "- Sellers make typos (\"ordrs\" is orders, \"payed\" is paid, \"tun on\" is turn on) and write in many languages.",
     "",
     "Reply with ONLY one JSON object, no markdown, one of:",
@@ -383,7 +405,25 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '  "returned", "failed", "pending", "ready_to_ship", "shipped"} - their Jumia orders and sales; with statuses, those orders. "quarter" is',
     '  the last 90 days, the furthest back Jumia goes: use it for "3 months", "90 days" or "ever".',
     '{"type":"listings","period":"today" or "yesterday" or "week" or "month" or "quarter"} - how many products they listed with PandaWorld',
-    '{"type":"payouts"} - money from Jumia: the last payout, what\'s not paid yet, statements',
+    '{"type":"payouts"} - money from Jumia: the last payout, what\'s not paid yet',
+    '{"type":"payout_detail","mode":"history" or "breakdown","statement":"<a statement number from the message>" or null} - every statement of',
+    '  the last 90 days (history), or one statement\'s fees, refunds and balances (breakdown; the newest when no number)',
+    '{"type":"report","kind":"best_sellers" or "slow_movers" or "restock" or "returns","period":"week" or "month" or "quarter"} - best sellers;',
+    '  products with no sale; what runs out soon and needs restocking; returns and failed deliveries',
+    '{"type":"bulk","scope":"all" or "out_of_stock" or "low_stock" or "inactive" or "active" or "matching","words":"<their words for the',
+    '  products, for matching>" or null, plus exactly one of: "price_pct":<+/- number> (prices up or down by that %), "sale_pct":<number>',
+    '  (a sale that % off; dates from the message), "stock":<number>, "price":<number>, "sale_price":<number>, "sale":"end", "active":true or false}',
+    '  - one change to many products by a rule. "matching" with "words" for "all the perfumes".',
+    '{"type":"content_change","product":"<their words>","name":"<new name copied from the message>" or null,"description":"<copied>" or',
+    '  null,"highlights":"<copied>" or null,"brand":"<copied>" or null,"rewrite":["name","description","highlights"] or []} - a live product\'s',
+    '  name, description, highlights or brand. "rewrite" lists what they ask you to write or improve for them.',
+    '{"type":"brand_check","brand":"<the brand from the message>","product":"<the kind of product>" or null} - is a brand on Jumia, allowed?',
+    '{"type":"category_info","product":"<the kind of product>"} - what Jumia needs to list it: category, details, variations, commission',
+    '{"type":"shops"} - the shops under their Jumia account',
+    '{"type":"warehouse_stock","product":"<their words>"} - what Jumia\'s warehouse holds of a product',
+    '{"type":"warehouse_order","items":[{"product":"<their words>","quantity":<number>}]} - send stock to Jumia\'s warehouse (a delivery order)',
+    '{"type":"warehouse_shipped","po":"<purchase order number from the message>","tracking":"<tracking number from the message>","carrier":"<from',
+    '  the message>" or null} - tell Jumia a delivery order to its warehouse has shipped',
     '{"type":"credits"} - their credit balance (sent with a Buy credits button)',
     ...(stage === "starting" ? ['{"type":"note"} - their message is information about the product they are about to send (price, sizes, colours, condition)'] : []),
     '{"type":"reply","text":"<your message>","link":"<a key above, or null>"} - everything else. You write the message:',
@@ -428,6 +468,23 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '(no draft is a gold medal) "set the gold medal to 25" → {"type":"live_change","product":"gold medal","price":25}',
     '(the bot just said the most is 20 at a time) "let\'s do five then" → {"type":"list","count":5}',
     '"thanks" → {"type":"reply","text":"You\'re welcome! 🙌","link":null}',
+    '"how many of my products are on and off" → {"type":"shop","filter":"all"}',
+    '"what are my best sellers this month" → {"type":"report","kind":"best_sellers","period":"month"}',
+    '"which products haven\'t sold" → {"type":"report","kind":"slow_movers","period":"month"}',
+    '"what should I restock" → {"type":"report","kind":"restock","period":"month"}',
+    '"show my payout history" → {"type":"payout_detail","mode":"history","statement":null}',
+    '"what fees did jumia take on my last statement" → {"type":"payout_detail","mode":"breakdown","statement":null}',
+    '"raise all my prices by 5%" → {"type":"bulk","scope":"all","words":null,"price_pct":5}',
+    '"10% off all perfumes this weekend" → {"type":"bulk","scope":"matching","words":"perfumes","sale_pct":10}',
+    '"turn off everything that\'s out of stock" → {"type":"bulk","scope":"out_of_stock","words":null,"active":false}',
+    '"end the sale on all products" → {"type":"bulk","scope":"all","words":null,"sale":"end"}',
+    '"rewrite the description of the wellington boot" → {"type":"content_change","product":"wellington boot","name":null,"description":null,"highlights":null,"brand":null,"rewrite":["description"]}',
+    '"change the blender\'s name to Silver Crest 3 in 1 Blender 1.5L" → {"type":"content_change","product":"blender","name":"Silver Crest 3 in 1 Blender 1.5L","description":null,"highlights":null,"brand":null,"rewrite":[]}',
+    '"is Lattafa a brand on jumia?" → {"type":"brand_check","brand":"Lattafa","product":null}',
+    '"what does jumia need to list a perfume" → {"type":"category_info","product":"perfume"}',
+    '"how many kettles are in jumia\'s warehouse" → {"type":"warehouse_stock","product":"kettles"}',
+    '"send 50 of the kettle to jumia warehouse on 20 Oct" → {"type":"warehouse_order","items":[{"product":"kettle","quantity":50}]}',
+    '"PO 123AB shipped, tracking DHL998877" → {"type":"warehouse_shipped","po":"123AB","tracking":"DHL998877","carrier":null}',
   ].join("\n");
 }
 
@@ -572,6 +629,7 @@ export function fitsDraft(said: string, title: string | null): boolean {
 /** "this month", "you choose the dates": a sale window the seller leaves to us. */
 const DELEGATED_MONTH = /\b(this|the|current)\s+month\b|\bend of (the )?month\b|\byou (can )?(choose|pick|decide|set)\b|\bany dates?\b|\bchoose (your own|the|any)\b/i;
 const DELEGATED_WEEK = /\b(this|the|current)\s+week\b|\bfor (a|one) week\b/i;
+const WEEKEND = /\b(this|the|coming|next)\s+weekend\b|\bover the weekend\b/i;
 
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
 
@@ -580,6 +638,13 @@ export function saleWindow(message: string, now: Date): { start: string; end: st
   const r = extractDateRange(message, now);
   if (r.startDate && r.endDate) return { start: r.startDate, end: r.endDate };
   if (r.endDate && r.endDate >= isoDay(now)) return { start: isoDay(now), end: r.endDate };
+  if (WEEKEND.test(message)) {
+    // Saturday to Sunday; from today when it's already the weekend.
+    const day = now.getUTCDay();
+    const toSat = day === 6 || day === 0 ? 0 : 6 - day;
+    const toSun = day === 0 ? 0 : 7 - day;
+    return { start: isoDay(new Date(now.getTime() + toSat * 86_400_000)), end: isoDay(new Date(now.getTime() + toSun * 86_400_000)) };
+  }
   if (DELEGATED_WEEK.test(message)) return { start: isoDay(now), end: isoDay(new Date(now.getTime() + 6 * 86_400_000)) };
   if (DELEGATED_MONTH.test(message)) {
     return { start: isoDay(now), end: isoDay(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0))) };
@@ -661,7 +726,7 @@ function liveChangeAction(
   // "off all products", "turn off all the other products": the whole shop.
   if (named.length === 0) {
     if (all || raw.some((p) => BULK_WORDS.test(p))) {
-      return ask(`I can't change every product in your shop at once. Name the ones to change, up to ${MAX_GROUP} at a time, e.g. "turn off the blender, the kettle and the drill". For your whole shop, Jumia Vendor Center has bulk tools.`);
+      return ask(`Which products? Say it as a rule, e.g. "turn off everything out of stock", "raise all prices by 5%" or "10% off all perfumes this weekend", and I'll show you the list before anything changes.`);
     }
     return ask("Which products do you mean? Tell me their names as they show on Jumia, e.g. \"set the stock of the freezer and the blender to 10\".");
   }
@@ -713,8 +778,122 @@ function liveChangeAction(
   return ask("What should I change on it? Its stock, price, a sale price with dates, or turning it on or off.");
 }
 
+const PCT_RE = /(\d+(?:\.\d+)?)\s*(?:%|percent|per cent|pct)/i;
+const DOWN_WORDS = /\b(reduce|lower|cut|decrease|drop|down|less|slash|minus)\b/i;
+const UP_WORDS = /\b(raise|increase|up|more|add|higher|hike|plus)\b/i;
+const RULE_WORDS = /\b(all|every|everything|whole|entire|each)\b|%|\bpercent\b/i;
+const BULK_SCOPES = new Set<BulkScope>(["all", "out_of_stock", "low_stock", "inactive", "active", "matching"]);
+/** What a scope must be backed by in the message (the AI's word alone isn't enough). */
+const SCOPE_WORDS_RE: Partial<Record<BulkScope, RegExp>> = {
+  out_of_stock: /\b(out of stock|sold out|no stock|zero stock|0 stock|finished)\b/i,
+  low_stock:    /\blow\b/i,
+  inactive:     /\b(off|inactive|disabled|hidden|deactivated|paused)\b/i,
+  active:       /\b(on|active|live|enabled|visible)\b/i,
+};
+
+/**
+ * A rule for many products ("10% off all perfumes this weekend"), checked:
+ * the message must say it's for many (all, every, a percentage), its scope
+ * must be in the message, and every number and date must be written in it.
+ */
+export function bulkAction(parsed: Record<string, unknown>, message: string, now: Date, currency: string): AssistantAction {
+  const ask = (text: string): AssistantAction => ({ type: "reply", text, link: null });
+  if (!RULE_WORDS.test(message)) return { type: "unclear" };
+  let scope: BulkScope = BULK_SCOPES.has(parsed.scope as BulkScope) ? (parsed.scope as BulkScope) : "all";
+  const words = typeof parsed.words === "string" && parsed.words.trim() ? parsed.words.trim().slice(0, 80) : null;
+  if (scope === "matching") {
+    if (!words || !namesAProduct(words) || !productBacked(words, message)) {
+      return ask("Which products? Say it as a rule, e.g. \"10% off all perfumes\" or \"turn off everything out of stock\".");
+    }
+  } else {
+    const backed = SCOPE_WORDS_RE[scope];
+    if (backed && !backed.test(message)) scope = "all";
+  }
+  const numbers = messageNumbers(message);
+  const pctMatch = message.match(PCT_RE);
+  const pctValue = pctMatch ? parseFloat(pctMatch[1]) : null;
+  let change: LiveChange | null = null;
+
+  if (parsed.price_pct != null) {
+    if (pctValue == null || !(pctValue > 0) || pctValue > 90) return ask("By what percentage? e.g. \"raise all prices by 5%\".");
+    const sign = DOWN_WORDS.test(message) ? -1 : UP_WORDS.test(message) ? 1 : Math.sign(Number(parsed.price_pct)) || 1;
+    change = { kind: "price_pct", pct: sign * pctValue };
+  } else if (parsed.sale_pct != null) {
+    if (pctValue == null || !(pctValue > 0) || pctValue > 90) return ask("How much off? e.g. \"10% off all perfumes this weekend\".");
+    const window = saleWindow(message, now);
+    if (!window) return ask(`A sale on Jumia needs its dates. Say them with it, e.g. "${pctValue}% off ${words ? `all ${words}` : "everything"} from 10 Oct to 20 Oct", or "this weekend".`);
+    change = { kind: "sale_pct", pct: pctValue, start: window.start, end: window.end };
+  } else if (parsed.stock != null) {
+    const n = Number(parsed.stock);
+    const outWords = /\b(out of stock|sold out|none left|finished|no more)\b/i.test(message);
+    if (!(Number.isInteger(n) && n >= 0 && (numbers.includes(n) || (n === 0 && outWords)))) return ask("What should their stock be? Send it with the rule, e.g. \"set all the kettles' stock to 10\".");
+    change = { kind: "stock", stock: n };
+  } else if (parsed.price != null) {
+    const n = Number(parsed.price);
+    if (!(n > 0 && numbers.includes(n)) || pctValue != null) return ask("What price? e.g. \"set all the phone cases to 50\".");
+    change = { kind: "price", price: n };
+  } else if (parsed.sale_price != null) {
+    const n = Number(parsed.sale_price);
+    const price = n > 0 && numbers.includes(n) ? n : extractSalePrice(message, now, currency)?.salePrice ?? null;
+    if (price == null) return ask("What sale price? e.g. \"all the phone cases on sale at 40 this weekend\".");
+    const window = saleWindow(message, now);
+    if (!window) return ask(`A sale on Jumia needs its dates, e.g. "sale ${price} from 10 Oct to 20 Oct".`);
+    change = { kind: "sale", sale: { price, start: window.start, end: window.end } };
+  } else if (parsed.sale === "end") {
+    if (!END_SALE_WORDS.test(message)) return { type: "unclear" };
+    change = { kind: "sale", sale: null };
+  } else if (parsed.active === true || parsed.active === false) {
+    if (parsed.active === false ? !OFF_WORDS.test(message) : !ON_WORDS.test(message)) return { type: "unclear" };
+    change = { kind: "status", active: parsed.active };
+  }
+  if (!change) return ask("What should change on them? e.g. \"raise all prices by 5%\", \"turn off everything out of stock\", \"10% off all perfumes this weekend\".");
+  return { type: "bulk", scope, words: scope === "matching" ? words : null, change };
+}
+
+const REWRITE_WORDS = /\b(rewrite|re-write|improve|better|write|redo|re-do|optimi[sz]e|polish|fix|make (it|the \w+) (better|nicer|attractive|catchy|professional))\b/i;
+
+/** A live product's content change, checked: its text copied from the message, or a rewrite they asked for. */
+export function contentAction(parsed: Record<string, unknown>, message: string, context: string): AssistantAction {
+  const ask = (text: string): AssistantAction => ({ type: "reply", text, link: null });
+  const product = typeof parsed.product === "string" ? parsed.product.trim().slice(0, 120) : "";
+  if (!namesAProduct(product) || !(productBacked(product, message) || productBacked(product, context))) {
+    return ask("Which product? Tell me its name as it shows on Jumia, e.g. \"rewrite the description of the Hisense fridge\".");
+  }
+  const request: ContentRequest = {};
+  for (const key of ["name", "description", "highlights", "brand"] as const) {
+    const v = parsed[key];
+    if (typeof v === "string" && v.trim() && saidInMessage(v, message)) request[key] = v.trim();
+  }
+  const rewrite = (Array.isArray(parsed.rewrite) ? parsed.rewrite : [])
+    .filter((f): f is "name" | "description" | "highlights" => f === "name" || f === "description" || f === "highlights")
+    .filter((f) => !request[f]);
+  if (rewrite.length > 0 && REWRITE_WORDS.test(message)) { request.rewrite = Array.from(new Set(rewrite)); request.instructions = message.slice(0, 400); }
+  if (Object.keys(request).length === 0) {
+    return ask("What should I change on it? Write the new name, or say \"rewrite its description\", e.g. \"change the blender's name to Silver Crest 3 in 1 Blender 1.5L\".");
+  }
+  return { type: "content_change", product, request };
+}
+
+/** "How many of my products are on", "...live on Jumia, on and off": the shop's overview. */
+const SHOP_COUNT = /\bhow many\b[^.?!]*\b(products?|items?|listings?)\b[^.?!]*\b(on|off|live|active|inactive|turned|deactivated|enabled|disabled)\b|\bhow many\b[^.?!]*\b(products?|items?)\b[^.?!]*\b(do i have|have i got|in my (shop|store)|on jumia)\b/i;
+
 /** The AI's reply as an action our code can carry out, or unclear. */
 export function parseAction(
+  raw: string, message: string, products: ProductFacts[], links: Record<string, AssistantLink> = {}, currency = "GHS",
+  opts: { context?: string; stage?: Stage; now?: Date } = {},
+): AssistantAction {
+  const action = parseActionRaw(raw, message, products, links, currency, opts);
+  // Owner's test, 2026-10-07: "How many of my products are on" went to a
+  // product search, and "...live on JUMIA is on and off" was answered "I
+  // can't tell you". The overview has those counts.
+  if (SHOP_COUNT.test(message) && !/\b(out of stock|low|sold|orders?|listed|list(ed)? (today|this))\b/i.test(message)
+    && (action.type === "product_info" || action.type === "reply" || action.type === "unclear" || action.type === "stock")) {
+    return { type: "shop", filter: "all" };
+  }
+  return action;
+}
+
+function parseActionRaw(
   raw: string, message: string, products: ProductFacts[], links: Record<string, AssistantLink> = {}, currency = "GHS",
   opts: { context?: string; stage?: Stage; now?: Date } = {},
 ): AssistantAction {
@@ -785,6 +964,58 @@ export function parseAction(
       return opts.stage === "starting" ? { type: "note" } : { type: "unclear" };
     case "payouts":
       return { type: "payouts" };
+    case "payout_detail": {
+      const statement = typeof parsed.statement === "string" && parsed.statement.trim() && saidInMessage(parsed.statement, message)
+        ? parsed.statement.trim().slice(0, 40) : null;
+      return { type: "payout_detail", mode: parsed.mode === "history" ? "history" : "breakdown", statement };
+    }
+    case "report": {
+      const kinds = new Set<ReportKind>(["best_sellers", "slow_movers", "restock", "returns"]);
+      if (!kinds.has(parsed.kind as ReportKind)) return { type: "unclear" };
+      return { type: "report", kind: parsed.kind as ReportKind, period: asPeriod(parsed.period, "month") };
+    }
+    case "bulk":
+      return bulkAction(parsed, message, now, currency);
+    case "content_change":
+      return contentAction(parsed, message, context);
+    case "brand_check": {
+      const brand = typeof parsed.brand === "string" ? parsed.brand.trim().slice(0, 60) : "";
+      if (!brand || !saidInMessage(brand, message)) return ask("Which brand? e.g. \"is Lattafa a brand on Jumia?\".");
+      const product = typeof parsed.product === "string" && parsed.product.trim() && productBacked(parsed.product, message) ? parsed.product.trim().slice(0, 80) : null;
+      return { type: "brand_check", brand, product };
+    }
+    case "category_info": {
+      const product = typeof parsed.product === "string" ? parsed.product.trim().slice(0, 80) : "";
+      return product && productBacked(product, message) ? { type: "category_info", product } : ask("What kind of product? e.g. \"what does Jumia need to list a perfume?\".");
+    }
+    case "shops":
+      return { type: "shops" };
+    case "warehouse_stock": {
+      const product = typeof parsed.product === "string" ? parsed.product.trim().slice(0, 120) : "";
+      return namesAProduct(product) && productBacked(product, message)
+        ? { type: "warehouse_stock", product } : ask("Which product? e.g. \"how many kettles are in Jumia's warehouse?\".");
+    }
+    case "warehouse_order": {
+      const numbers = messageNumbers(message);
+      const items = (Array.isArray(parsed.items) ? parsed.items : []).flatMap((i) => {
+        const r = (i && typeof i === "object" ? i : {}) as Record<string, unknown>;
+        const product = typeof r.product === "string" ? r.product.trim().slice(0, 120) : "";
+        const quantity = Number(r.quantity);
+        return namesAProduct(product) && productBacked(product, message) && Number.isInteger(quantity) && quantity > 0 && numbers.includes(quantity)
+          ? [{ product, quantity }] : [];
+      });
+      if (items.length === 0) return ask("Which products, and how many of each? e.g. \"send 50 of the kettle to Jumia's warehouse on 20 Oct\".");
+      return { type: "warehouse_order", items, date: findDateIn(message, now) };
+    }
+    case "warehouse_shipped": {
+      const po = typeof parsed.po === "string" ? parsed.po.trim().slice(0, 40) : "";
+      const tracking = typeof parsed.tracking === "string" ? parsed.tracking.trim().slice(0, 60) : "";
+      if (!po || !tracking || !saidInMessage(po, message) || !saidInMessage(tracking, message)) {
+        return ask("Send the delivery order's number and its tracking number, e.g. \"PO 123AB shipped, tracking DHL998877\".");
+      }
+      const carrier = typeof parsed.carrier === "string" && parsed.carrier.trim() && saidInMessage(parsed.carrier, message) ? parsed.carrier.trim().slice(0, 60) : null;
+      return { type: "warehouse_shipped", po, tracking, carrier };
+    }
     case "list": {
       const count = Number(parsed.count);
       return Number.isInteger(count) && count >= 1 && countBacked(count, message) ? { type: "list", count } : { type: "unclear" };
@@ -1347,6 +1578,26 @@ async function carryOut(
       return answerSales(userId, phone, action.period, action.status);
     case "payouts":
       return answerPayouts(userId, phone);
+    case "payout_detail":
+      return answerPayoutDetail(userId, phone, action.mode, action.statement);
+    case "report":
+      return answerReport(userId, phone, action.kind, action.period);
+    case "bulk":
+      return proposeBulkChange(userId, phone, action.scope, action.words, action.change);
+    case "content_change":
+      return proposeContentChange(userId, phone, action.product, action.request);
+    case "brand_check":
+      return answerBrand(userId, phone, action.brand, action.product);
+    case "category_info":
+      return answerCategoryNeeds(userId, phone, action.product);
+    case "shops":
+      return answerLinkedShops(userId, phone);
+    case "warehouse_stock":
+      return answerWarehouseStock(userId, phone, action.product);
+    case "warehouse_order":
+      return proposeWarehouseOrder(userId, phone, action.items, action.date);
+    case "warehouse_shipped":
+      return proposeWarehouseShipped(userId, phone, action.po, action.tracking, action.carrier);
     case "reply": {
       // The AI's own words. With a link, it's the button; in review, the
       // reply keeps the step's own two buttons. Starting a batch, where

@@ -1655,6 +1655,85 @@ labels." It is the WhatsApp bot itself, not a copy:
   app_settings `assistant_users`, `["*"]` for everyone; off with the kill
   switch). Others see "coming soon" with a link to WhatsApp. Its messages
   cost no WhatsApp fees; the AI turns count against the same daily allowance.
+- **Orders on the web (owner, 2026-10-07)**: "the label and alerts for orders
+  should be on WhatsApp only ... we can do all other order actions". The
+  web chat runs the WhatsApp order flow (lib/whatsapp/orders.ts, `Ctx.web`):
+  waiting orders, Pick orders, Pack all / Pack order, Ready to ship, Cancel
+  with its confirm. Packing there prints and charges no label: the message
+  says labels are printed on WhatsApp ("orders") or in Vendor Center, and
+  `orders:labels` / `olabel:` there answer the same without asking Jumia.
+  New-order alerts still only go to whatsapp_connections numbers.
+- **Scroll down**: a round down-arrow over the composer shows once the chat is
+  scrolled up from the bottom; tapping it goes back to the newest message.
+
+### More of the Jumia API in chat (owner, 2026-10-07: "do all")
+
+Everything below is an assistant action (lib/whatsapp/assistant.ts:
+`parseAction` checks it, `carryOut` runs it), on WhatsApp and in the web
+chat alike. Gated by `shop_whatsapp` (Pro and up) except brands and
+categories, which are for everyone.
+
+- **Routing fix**: "How many of my products are on / off / live" is the
+  overview (`shop`), whatever the AI picked (`SHOP_COUNT` in parseAction).
+  Live, the owner got a product search and "I can't tell you".
+- **Rules for many products** (`bulk`, `proposeBulkChange` in
+  lib/whatsapp/shop.ts): scope all / out_of_stock / low_stock / inactive /
+  active / matching words, and one change: stock, price, `price_pct` (each
+  product's own price up or down, `pctPrice`: whole prices stay whole),
+  `sale_pct` (a sale that % off, with dates; "this weekend" is understood),
+  a sale price, ending sales, on/off. `bulkTargets` leaves out what wouldn't
+  change (already off, not on sale, price unknown, below Jumia's minimum,
+  a sale not below the price) and says how many. Up to `BULK_MAX` (200)
+  products, said in full, one `lgrp:` tap, one feed, charged once
+  (LIVE_CHANGE_CREDIT_COST). The message must say it's a rule (all, every,
+  a percentage); the scope must be in it, and every number. handleGroupTap
+  reads and updates in chunks of 100; the worker takes up to 1,000 sent rows.
+- **A live product's content** (`content_change`, `proposeContentChange`):
+  name, description, highlights (the `short_description` attribute) or
+  brand, as the seller wrote it (copied from the message) or rewritten by
+  AI (`rewriteContent`, gemini-2.5-flash, only from what Jumia has now,
+  restricted words removed), shown before the tap. A brand must be in
+  jumia_brands (its code is sent) and not forbidden in the category. The
+  tap sends POST /feeds/products/update: the feed takes the WHOLE product,
+  so `contentItems` reads the set (GET /catalog/products?sellerSku=) and
+  sends every variation with only those fields changed; no price or stock
+  (Jumia doesn't take them in an update), and the main image can't change.
+  LiveChange kind `content`, so the tap, charge, refund and refusal notice
+  are the live-change ones. **Not yet tried live**: the update feed's `id`
+  is sent as the variation's id (like the other feeds); Jumia's own example
+  repeats one id for two variations, which may mean the set's id.
+- **Reports** (`report`, lib/whatsapp/shop-insights.ts `answerReport`):
+  best sellers, products with no sale (on, approved, older than the period,
+  with stock), restock (runs out within 14 days at its 30-day rate), returns
+  and failed deliveries. From the newest 500 orders' items (paced, 35 s
+  budget), said when partial.
+- **Payouts in detail** (`payout_detail`): every statement of the last 90
+  days, or one line by line (`statementLines`). Jumia's statements don't
+  list their orders: Vendor Center has those.
+- **Before listing** (`brand_check`, `category_info`): a brand in Jumia's
+  list (or the close ones), and forbidden / closely checked in the product's
+  category; what a kind of product needs (category, required details,
+  variation options, commission in their country, a country ban).
+- **Shops** (`shops`): GET /shops-of-master-shop. The chat works on the
+  connected shop only.
+- **Jumia's warehouse** (`warehouse_stock`, `warehouse_order`,
+  `warehouse_shipped`): GET /consignment-stock by Jumia's own SKU (new
+  `jumia_products.jumia_sku`, read from businessClients[].sku; refreshed
+  when missing); POST /consignment-order (shopId, business client, shipping
+  date, products by Jumia SKU) and PATCH /consignment-order/{po} (shipped,
+  tracking), each offered and recorded in jumia_warehouse_orders and sent on
+  the `wh:<id>` tap (`handleWarehouseTap`, routed in intake after the shop
+  taps). Jumia has no call to read a delivery order back. Not charged.
+- **QC brand answer** (intake.ts `handleQcAnswer`): live, asked "What brand
+  is on the product?", the owner asked "what was the old one used" and that
+  went to Jumia as the brand. Now a question back (`isQcQuestion`) is
+  answered with the brand it was sent with and the question stays; "stop"
+  leaves it; a brand not in jumia_brands is said with the close ones and
+  not sent (Jumia's own spelling is used when it is).
+- Migration 2026-10-07_shop-more.sql (applied). Tests:
+  __tests__/jumia-shop-more.test.ts, plus parse tests in
+  whatsapp-assistant.test.ts and the web order tests in
+  whatsapp-orders.test.ts.
 
 ### Feature expansion (when relevant)
 9. **Cloud Vision OCR** (Tier 1.2 of GCP plan) — dedicated OCR for packaging text.

@@ -380,8 +380,8 @@ export async function sendButtonsWithDocument(
   if (buttons.length === 0 || buttons.length > 3) {
     throw new Error(`sendButtonsWithDocument: expected 1-3 buttons, got ${buttons.length}`);
   }
-  // Labels stay on WhatsApp (lib/whatsapp/orders.ts refuses orders on the web);
-  // should one get here, the words and buttons go without the PDF.
+  // Labels stay on WhatsApp (lib/whatsapp/orders.ts never prints one on the
+  // web); should one get here, the words and buttons go without the PDF.
   if (isWebAddress(to)) {
     await sendButtons(to, `${bodyText}\n\n(The label PDF is sent on WhatsApp.)`.slice(0, 1024), buttons);
     return;

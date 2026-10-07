@@ -395,6 +395,24 @@ function parseDatePhrase(raw: string, now: Date): string | null {
   return `${year}-${pad2(month + 1)}-${pad2(m.day)}`;
 }
 
+/**
+ * The first date written anywhere in the text ("on 20 Oct", "2026-10-20",
+ * "October 20", "tomorrow"), as YYYY-MM-DD, or null. For one date on its own
+ * (a warehouse delivery's shipping day); a sale window is extractDateRange.
+ */
+export function findDateIn(text: string, now: Date = new Date()): string | null {
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  if (/\btomorrow\b/i.test(text)) return iso(new Date(now.getTime() + 86_400_000));
+  if (/\btoday\b/i.test(text)) return iso(now);
+  const re = /\d{4}-\d{1,2}-\d{1,2}|\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\.?(?:\s+\d{4})?|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s*\d{4})?/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const d = parseDatePhrase(m[0], now);
+    if (d) return d;
+  }
+  return null;
+}
+
 /** "sale price 120", "discount to 100 from 20 September to 30 September",
  *  "sale price is 80 until 2026-10-01" → { salePrice, startDate?, endDate? }.
  *  Null if no sale price is stated at all. A stated price with a date
