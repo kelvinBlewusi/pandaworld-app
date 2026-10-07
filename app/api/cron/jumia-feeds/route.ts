@@ -109,7 +109,7 @@ export async function GET(req: NextRequest) {
   let updated = 0;
 
   for (const [userId, listings] of Array.from(byUser)) {
-    // QC follow-up is on every plan since 2026-10-07 (lib/billing/
+    // QC follow-up comes with the Standard pack and up (lib/billing/
     // features.ts). Without it nothing is checked: the listings are paced
     // like a check that found nothing, so pg_cron doesn't call back for
     // them every minute. Listings accepted before the gate went live keep

@@ -3,15 +3,18 @@
  * every message from a linked number before anything else
  * (lib/whatsapp/intake.ts handleLinkedMessage):
  *
- *   - Below BOT_MIN_CREDITS (what one WhatsApp listing costs): ONE reply
- *     about their credits, then silence (no reply, no "typing…") until they
- *     can afford a listing again: a purchase, or a refund when Jumia's
- *     quality check rejects a listing. The owner, after a test seller with
- *     1 credit sent a whole product's photos only to be refused at drafting:
- *     "after the first message that their balance is low, the bot is left
- *     quiet". Disconnecting Jumia still answers. Linking a number is handled
- *     before this (the webhook), and listing updates are sent, not
- *     answered, so both carry on. Order alerts stop too (order-alerts.ts).
+ *   - At 0 credits or below (chatLocked): ONE reply saying to top up, then
+ *     the chat is locked: on WhatsApp silence (no reply, no "typing…"), on
+ *     the web the page locks its composer (lib/whatsapp/listing-assistant.ts
+ *     creditLock). Only the balance going above 0 unlocks it: a purchase, or
+ *     a refund when Jumia's quality check rejects a listing (owner,
+ *     2026-10-07: "at zero credit the chat should tell the user they need to
+ *     top up and lock after that"). Disconnecting Jumia still answers.
+ *     Linking a number is handled before this (the webhook), and listing
+ *     updates are sent, not answered, so both carry on. Order alerts stop
+ *     too (order-alerts.ts). Above 0 and below a listing's cost the chat
+ *     works; a listing it can't cover is refused before any photo
+ *     (batchCreditRefusal), the test seller of 2026-10-06 who had 1 credit.
  *   - From there up to LOW_CREDITS: one "running low" warning, sent with the
  *     reply to their next message (inside WhatsApp's 24 hours, so it arrives).
  *   - At the start of a batch, a count their credits can't cover is refused
@@ -23,24 +26,24 @@
 import { availableCredits, getOrCreateCreditBalance, isUnmetered, listingCreditCost, storedBalance } from "@/lib/billing/extension-credits";
 import { LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
 import {
-  BOT_MIN_CREDITS, LOW_CREDITS, claimLowWhatsAppWarning, claimOutOfCreditsReply, creditReach, onBalanceSeen, outOfCreditsReplied,
+  LOW_CREDITS, chatLocked, claimLowWhatsAppWarning, claimOutOfCreditsReply, creditReach, onBalanceSeen, outOfCreditsReplied,
 } from "@/lib/billing/credit-status";
 import { parseGlobalCommand } from "@/lib/whatsapp/commands";
 import { buyCreditsUrl } from "@/lib/whatsapp/batch";
 import { sendCtaUrlIfConfigured } from "@/lib/whatsapp/client";
+import { isWebAddress } from "@/lib/whatsapp/channel";
 
 /** What still answers when the bot is quiet: disconnecting Jumia, and its "keep it" reply. */
 const STILL_ANSWERED = new Set(["disconnect", "confirm_disconnect", "keep_connected"]);
 
 const credits = (n: number) => `${n} credit${n === 1 ? "" : "s"}`;
 
-/** The one reply when the seller can't afford a listing. */
-export function outOfCreditsMessage(balance: number, listingCost = LIVE_LISTING_CREDIT_COST): string {
-  const why = balance <= 0
-    ? "You've used all your PandaWorld credits"
-    : `You have ${credits(balance)} left, and a WhatsApp listing needs ${listingCost}`;
-  return `${why}, so I'll stay quiet until you top up. Buy credits on your dashboard, then send me a message to carry on.\n\n` +
-    "Updates about listings already with Jumia will still come here.";
+/** The one reply when the chat locks at 0. */
+export function outOfCreditsMessage(web = false): string {
+  return "🔒 You've used all your PandaWorld credits, so this chat is locked until you top up. " +
+    `Buy credits on your dashboard and it unlocks straight away${web ? "" : ": then send me a message to carry on"}. ` +
+    "A refund from Jumia's quality check unlocks it too.\n\n" +
+    `Updates about listings already with Jumia will still come ${web ? "to you" : "here"}.`;
 }
 
 export function lowCreditsMessage(balance: number, listingCost = LIVE_LISTING_CREDIT_COST): string {
@@ -48,10 +51,10 @@ export function lowCreditsMessage(balance: number, listingCost = LIVE_LISTING_CR
     `(a listing costs ${listingCost} credits when it goes live on Jumia). Top up to keep listing.`;
 }
 
-/** Whether the bot is paused for this seller: they can't afford one WhatsApp listing. */
+/** Whether the chat is locked for this seller: 0 credits or below. */
 export async function botPausedForCredits(userId: string): Promise<boolean> {
   if (await isUnmetered(userId)) return false;
-  return (await storedBalance(userId)) < BOT_MIN_CREDITS;
+  return chatLocked(await storedBalance(userId));
 }
 
 /** "go": handle the message as usual. "stop": the bot is quiet for this seller; nothing more is said. */
@@ -62,9 +65,14 @@ export async function creditGate(userId: string, phoneNumber: string, text: stri
   // forgets what was said, so the next drop is told again.
   await onBalanceSeen(userId, balance);
 
-  if (balance >= BOT_MIN_CREDITS) {
-    if (balance < LOW_CREDITS && (await claimLowWhatsAppWarning(userId))) {
-      await sendCtaUrlIfConfigured(phoneNumber, lowCreditsMessage(balance, await listingCreditCost(userId)), "Buy credits", buyCreditsUrl());
+  if (!chatLocked(balance)) {
+    if (balance < LOW_CREDITS) {
+      const listingCost = await listingCreditCost(userId);
+      // A batch count they can't cover gets batchCreditRefusal's answer: one message, not two.
+      const refusedCount = balance < listingCost && /^\s*\d{1,3}\s*$/.test(text ?? "");
+      if (!refusedCount && (await claimLowWhatsAppWarning(userId))) {
+        await sendCtaUrlIfConfigured(phoneNumber, lowCreditsMessage(balance, listingCost), "Buy credits", buyCreditsUrl());
+      }
     }
     return "go";
   }
@@ -72,7 +80,7 @@ export async function creditGate(userId: string, phoneNumber: string, text: stri
   const cmd = text ? parseGlobalCommand(text) : null;
   if (cmd && STILL_ANSWERED.has(cmd.type)) return "go";
   if (await claimOutOfCreditsReply(userId)) {
-    await sendCtaUrlIfConfigured(phoneNumber, outOfCreditsMessage(balance, await listingCreditCost(userId)), "Buy credits", buyCreditsUrl());
+    await sendCtaUrlIfConfigured(phoneNumber, outOfCreditsMessage(isWebAddress(phoneNumber)), "Buy credits", buyCreditsUrl());
   }
   return "stop";
 }
@@ -85,7 +93,7 @@ export async function isCreditQuiet(userId: string): Promise<boolean> {
   try {
     if (await isUnmetered(userId)) return false;
     if (!(await outOfCreditsReplied(userId))) return false;
-    return (await storedBalance(userId)) < BOT_MIN_CREDITS;
+    return chatLocked(await storedBalance(userId));
   } catch {
     return false;
   }

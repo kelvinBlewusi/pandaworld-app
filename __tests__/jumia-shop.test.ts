@@ -462,6 +462,19 @@ describe("told without asking", () => {
     expect(last().body).toBe("💰 Jumia paid you *GHS 2,020* (ref PAY-91).\nStatement GH1-1006. Ask me \"my payouts\" for the details.");
   });
 
+  it("the payout message is free (owner, 2026-10-07: \"let us not bill payout message\")", async () => {
+    seed();
+    db.tables.app_settings = [{ key: "billing_enabled", value: true }];
+    db.tables.extension_credits = [{ user_id: USER, balance: 5 }];
+    _resetBillingModeCache();
+    statements = [];
+    await runShopNotices(at("2026-10-07T10:00:00Z"));
+    statements = [{ statementNumber: "GH1-1006", createdAt: "2026-10-06 03:00:00", paid: true, paymentReference: "PAY-91", payout: { amount: 2020, currency: "GHS" } }];
+    await runShopNotices(at("2026-10-07T16:01:00Z"));
+    expect(last().body).toContain("💰 Jumia paid you");
+    expect(Number(db.tables.extension_credits[0].balance)).toBe(5);
+  });
+
   // The alerts stay with the Pro pack when the chat's features opened to every plan (2026-10-07).
   it("without the alerts' pack, neither order updates nor payouts are told, or read", async () => {
     seed();

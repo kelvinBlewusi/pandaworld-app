@@ -9,6 +9,9 @@
 
 export const SUPPORT_EMAIL = "help.pandaworldai@gmail.com";
 
+/** The PandaWorld WhatsApp bot's number, as sellers see it (the guides, the dashboard). */
+export const BOT_NUMBER_DISPLAY = "+233548534323";
+
 /** `mailto:` ready-to-use href. */
 export const SUPPORT_MAILTO = `mailto:${SUPPORT_EMAIL}`;
 

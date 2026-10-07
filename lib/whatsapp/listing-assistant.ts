@@ -15,6 +15,7 @@ import { sendButtonsIfConfigured, sendTextIfConfigured } from "@/lib/whatsapp/cl
 import { recordInboundMessage } from "@/lib/whatsapp/message-log";
 import { WEB_MEDIA_PREFIX } from "@/lib/whatsapp/media";
 import { handleLinkedMessage } from "@/lib/whatsapp/intake";
+import { botPausedForCredits, creditGate } from "@/lib/whatsapp/credit-gate";
 
 /** One message as the page shows it. */
 export interface AssistantMessage {
@@ -46,6 +47,18 @@ export async function assistantMessages(userId: string, opts: { after?: string |
       id: String(r.id), clientId: r.wamid ?? null, direction: r.direction === "inbound" ? "inbound" : "outbound", type: r.message_type ?? "text",
       text: r.body_text, payload: r.payload, at: r.created_at,
     }));
+}
+
+/**
+ * Whether the chat is locked at 0 credits (lib/whatsapp/credit-gate.ts): the
+ * page then locks its composer until the balance is above 0 again. The
+ * first time, the bot's one "top up" reply is put in the conversation, so a
+ * seller who opens the page at 0 is told why before it locks.
+ */
+export async function creditLock(userId: string): Promise<boolean> {
+  if (!(await botPausedForCredits(userId))) return false;
+  await creditGate(userId, webAddress(userId), undefined); // sends the one reply, once
+  return true;
 }
 
 /** A photo's media id from the page, if it's this seller's own upload. */

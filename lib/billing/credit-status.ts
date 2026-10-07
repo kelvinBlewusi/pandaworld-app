@@ -4,9 +4,9 @@
  *   - Below LOW_CREDITS (6): one "running low" notice in the dashboard bell
  *     and the extension panel when a charge takes them there, and one
  *     WhatsApp warning at their next message to the bot.
- *   - At 0 or below: one "out of credits" notice. Below BOT_MIN_CREDITS (one
- *     listing's cost): one WhatsApp reply, then the bot stays quiet until
- *     they can afford a listing again (lib/whatsapp/credit-gate.ts).
+ *   - At 0 or below: one "out of credits" notice, and in the chat one reply
+ *     saying to top up, then it's locked until the balance is above 0 again
+ *     (lib/whatsapp/credit-gate.ts; owner, 2026-10-07).
  *
  * Each is remembered in credit_notices and forgotten when the balance
  * recovers (a purchase, a refund, a top-up, or a balance seen above the
@@ -23,10 +23,16 @@ import { sellerCountry } from "@/lib/jumia/unlistable-categories";
 export const LOW_CREDITS = 6;
 
 /**
- * Below this the WhatsApp bot goes quiet after one reply: the seller can't
- * afford one listing (lib/whatsapp/credit-gate.ts; owner, 2026-10-06).
+ * The chat (WhatsApp and the Jumia Listing Assistant) locks at 0 credits
+ * after one reply, until a purchase or a refund takes the balance above 0
+ * (lib/whatsapp/credit-gate.ts). Owner, 2026-10-07: "at zero credit the
+ * chat should tell the user they need to top up and lock after that". It
+ * used to lock below one listing's cost (2026-10-06); since the chat's
+ * features are charged per use, a seller with less than a listing can still
+ * use them, and a listing they can't cover is refused before any photo
+ * (batchCreditRefusal).
  */
-export const BOT_MIN_CREDITS = LIVE_LISTING_CREDIT_COST;
+export const chatLocked = (balance: number) => balance <= 0;
 
 type Flag = "low_warned_at" | "low_whatsapp_at" | "out_noticed_at" | "out_replied_at";
 type Row = Record<Flag, string | null>;
@@ -102,7 +108,7 @@ export async function onBalanceDropped(userId: string, balance: number): Promise
         userId,
         "credits_out",
         "You're out of credits",
-        "Your WhatsApp bot, order alerts and pack features are paused until you buy credits. " +
+        "Your chat (WhatsApp and the Jumia Listing Assistant), order alerts and pack features are locked until you buy credits. " +
           "Updates on listings already with Jumia still come through, and a refund from Jumia's quality check " +
           "brings everything back.\n\n*Buy credits* from your dashboard to carry on.",
       );
@@ -115,7 +121,6 @@ export async function onBalanceDropped(userId: string, balance: number): Promise
       "credits_low",
       "You're running low on credits",
       `You have *${plural(balance)}* left: ${creditReach(balance, listingCostFor(await sellerCountry(userId).catch(() => null)))}.` +
-        (balance < BOT_MIN_CREDITS ? " Your WhatsApp bot is paused until you top up." : "") +
         `\n\n*Buy credits* from your dashboard to keep listing.`,
     );
     await setFlags(userId, { low_warned_at: new Date().toISOString() });
@@ -135,8 +140,8 @@ export async function onBalanceSeen(userId: string, balance: number): Promise<vo
     if (!row) return;
     const patch: Partial<Row> = {};
     if (balance > 0 && row.out_noticed_at) patch.out_noticed_at = null;
-    // The bot's one reply is forgotten once they can afford a listing again.
-    if (balance >= BOT_MIN_CREDITS && row.out_replied_at) patch.out_replied_at = null;
+    // The chat's one reply is forgotten once it unlocks (above 0), so the next lock is told again.
+    if (!chatLocked(balance) && row.out_replied_at) patch.out_replied_at = null;
     if (balance >= LOW_CREDITS) {
       if (row.low_warned_at) patch.low_warned_at = null;
       if (row.low_whatsapp_at) patch.low_whatsapp_at = null;

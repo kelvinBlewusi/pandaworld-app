@@ -11,7 +11,7 @@
  *     the QC follow-up that refunds a rejected listing (which is what lets
  *     a seller at 0 carry on), and the wording of listing updates.
  *
- * Features for EVERYONE (the chat's: the live shop, fees, QC fixes) need no
+ * Features for EVERYONE (the chat's: the live shop, orders, fees) need no
  * pack, only credits above 0 (owner, 2026-10-07).
  *
  * The owner can also give one seller a feature without the pack

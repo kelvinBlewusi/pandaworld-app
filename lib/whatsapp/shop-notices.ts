@@ -14,9 +14,10 @@
  *     pack that has them, owner 2026-10-07), checked every
  *     PAYOUT_CHECK_MS.
  *
- * Each order-updates or payout message costs NOTICE_CREDIT_COST (owner,
- * 2026-10-07: "charge for alerts the bot sends on its own"; new-order alerts
- * stay free); a refused change is told free, and its credits given back when
+ * Each order-updates message costs NOTICE_CREDIT_COST (owner, 2026-10-07:
+ * "charge for alerts the bot sends on its own"); new-order alerts and the
+ * payout message are free (owner, 2026-10-07: "let us not bill payout
+ * message"); a refused change is told free, and its credits given back when
  * none of it applied.
  *
  * The same rules as order alerts: only sellers with WhatsApp linked and Jumia
@@ -206,8 +207,8 @@ async function payoutUpdates(userId: string, phone: string, token: string, count
     for (const s of fresh) await markNoticed(userId, "payout", s.number);
     return;
   }
+  // Free (owner, 2026-10-07).
   for (const s of fresh) {
-    if (!(await chargeService(userId, NOTICE_CREDIT_COST, `notice:payout:${userId}:${s.number}`, "Payout notice on WhatsApp")).ok) return;
     await sendTextIfConfigured(phone, payoutText(s, country));
     await markNoticed(userId, "payout", s.number);
     run.payouts++;

@@ -2421,11 +2421,20 @@ describe("credits, at the start of a batch", () => {
     expect(session().state).toBe("awaiting_photos");
   });
 
-  it("with 1 credit: one message that a listing needs 2, then nothing at all", async () => {
+  // The chat locks at 0 since 2026-10-07; above it, a count it can't cover is refused, in one message.
+  it("with 1 credit: one message that a listing needs 2, and no batch is started", async () => {
     credits(1);
     await handleLinkedMessage(USER, PHONE, "m1", { text: "3" });
     expect(sent).toHaveLength(1);
-    expect(sent[0].body).toContain("You have 1 credit left, and a WhatsApp listing needs 2, so I'll stay quiet until you top up");
+    expect(sent[0].body).toContain("You have 1 credit available: not enough to list a product (2 credits each when it goes live on Jumia).");
+    expect(session().state).toBe("awaiting_count");
+  });
+
+  it("at 0 credits: one message to top up, then nothing at all", async () => {
+    credits(0);
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "3" });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body).toContain("this chat is locked until you top up");
     await handleLinkedMessage(USER, PHONE, "m2", { text: "hello?" });
     await handleLinkedMessage(USER, PHONE, "m3", { imageMediaId: "media-1" });
     expect(sent).toHaveLength(1);
