@@ -34,7 +34,7 @@ interface Message {
 }
 
 /** A message as the page sends it; a photo that never uploaded keeps its file. */
-interface Retry { text?: string; mediaId?: string; label?: string; last?: boolean; file?: File }
+interface Retry { text?: string; mediaId?: string; mediaIds?: string[]; label?: string; last?: boolean; file?: File }
 
 interface Attachment { key: string; file: File; preview: string }
 
@@ -283,27 +283,32 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
         setText("");
         setAttachments([]);
       }
-      // Photos first, one by one like a WhatsApp album, the words as the
-      // first one's caption. One that doesn't go stays in the chat, its
-      // preview kept, with Resend under it; the rest still go.
-      const unsent = new Set<string>();
-      for (let i = 0; i < photos.length; i++) {
-        const caption = i === 0 && typed ? typed : undefined;
-        // `last` marks the end of the upload: the bot answers it with the product's photo count.
-        const last = i === photos.length - 1;
-        const up = await upload(photos[i].file);
-        if ("error" in up) {
-          unsent.add(photos[i].key);
-          unsentPhoto(photos[i], { text: caption, last, file: photos[i].file });
-          setError(up.error ?? `Photo ${i + 1} didn't upload. Check your connection, then tap Resend under it.`);
-          continue;
-        }
-        const body = { mediaId: up.mediaId, last, ...(caption ? { text: caption } : {}) };
-        await post(body, { type: "image", text: caption ?? null, payload: { link: up.url ?? photos[i].preview } });
+      // Photos all upload at once and go as one message, an album, the
+      // words as its caption (owner, 2026-10-07: "sent at a go, currently
+      // they are sent one after the other"). One that doesn't upload stays
+      // in the chat, its preview kept, with Resend under it; the rest still go.
+      const ups = await Promise.all(photos.map((p) => upload(p.file)));
+      const good: { photo: Attachment; mediaId: string; url?: string }[] = [];
+      const unsent: Attachment[] = [];
+      photos.forEach((photo, i) => {
+        const up = ups[i];
+        if ("error" in up) unsent.push(photo);
+        else good.push({ photo, mediaId: up.mediaId, url: up.url });
+      });
+      if (good.length > 0) {
+        const links = good.map((g) => g.url ?? g.photo.preview);
+        await post(
+          { mediaIds: good.map((g) => g.mediaId), ...(typed ? { text: typed } : {}) },
+          { type: "image", text: typed || null, payload: links.length > 1 ? { link: links[0], links } : { link: links[0] } },
+        );
+      }
+      unsent.forEach((photo, i) => unsentPhoto(photo, { file: photo.file, last: true, ...(good.length === 0 && i === 0 && typed ? { text: typed } : {}) }));
+      if (unsent.length > 0) {
+        const failed = ups.find((u): u is { error: string | null } => "error" in u);
+        setError(failed?.error ?? `${unsent.length === 1 ? "A photo" : `${unsent.length} photos`} didn't upload. Check your connection, then tap Resend under ${unsent.length === 1 ? "it" : "them"}.`);
       }
       // The page already has these files; the previews go once they're sent.
-      const sent = photos.filter((p) => !unsent.has(p.key));
-      setTimeout(() => release(sent), 60_000);
+      setTimeout(() => release(good.map((g) => g.photo)), 60_000);
       if (typed && photos.length === 0) {
         await post(
           { text: typed, ...(override?.label ? { label: override.label } : {}) },
@@ -696,6 +701,7 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
   const mine = m.direction === "inbound";
   const p = m.payload ?? {};
   const link = typeof p.link === "string" ? p.link : null;
+  const album = Array.isArray(p.links) ? (p.links as unknown[]).filter((u): u is string => typeof u === "string") : [];
   const buttons = m.type === "button" && Array.isArray(p.buttons) ? (p.buttons as (Button | null)[]).filter((b): b is Button => !!b?.id) : [];
   const rows = m.type === "list" && Array.isArray(p.rows) ? (p.rows as Row[]).filter((r) => r?.id) : [];
   const cta = m.type === "cta_url" && typeof p.url === "string" ? { url: p.url, label: typeof p.buttonText === "string" ? p.buttonText : "Open" } : null;
@@ -713,9 +719,21 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
           m.failed && "opacity-60",
         )}
       >
-        {link && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={link} alt="" className="max-h-64 w-full object-cover" onLoad={onMedia} />
+        {album.length > 1 ? (
+          // Several photos at once: one message, a grid; each opens full size.
+          <div className="grid w-72 max-w-full grid-cols-2 gap-0.5">
+            {album.map((url, i) => (
+              <a key={`${url}-${i}`} href={url} target="_blank" rel="noopener noreferrer" className={cn(album.length % 2 === 1 && i === 0 && "col-span-2")}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={url} alt={`Photo ${i + 1}`} className={cn("w-full object-cover", album.length % 2 === 1 && i === 0 ? "aspect-[2/1]" : "aspect-square")} onLoad={onMedia} />
+              </a>
+            ))}
+          </div>
+        ) : link && (
+          <a href={link} target="_blank" rel="noopener noreferrer">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={link} alt="" className="max-h-64 w-full object-cover" onLoad={onMedia} />
+          </a>
         )}
         {shown && (
           <div className={cn("whitespace-pre-wrap break-words px-3.5 py-2.5", link && "pt-2")}>

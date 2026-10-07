@@ -210,34 +210,55 @@ async function sayWhereWeAre(
   );
 }
 
+/** Photos one message may carry: Jumia takes at most 8 per product. */
+export const MAX_ALBUM = 8;
+
 /**
- * A message from the page: recorded (a photo with its link, a tap with the
- * button's words), then handled by the bot exactly as one from WhatsApp.
- * `id` is the page's own id for it, so a resend isn't handled twice.
- * `last` is false on every photo of an upload but the final one.
+ * A message from the page: recorded (photos with their links, a tap with
+ * the button's words), then handled by the bot exactly as one from
+ * WhatsApp. `id` is the page's own id for it, so a resend isn't handled
+ * twice. Several photos (`mediaIds`, owner 2026-10-07: "sent at a go") are
+ * one message in the chat, an album, and reach the bot one by one, the
+ * words as the first one's caption, as a WhatsApp album does. `last` is
+ * false on an upload sent in parts, on all but the final part.
  */
 export async function receiveAssistantMessage(
   userId: string,
-  input: { id: string; text?: string | null; mediaId?: string | null; label?: string | null; last?: boolean | null },
+  input: { id: string; text?: string | null; mediaId?: string | null; mediaIds?: string[] | null; label?: string | null; last?: boolean | null },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const address = webAddress(userId);
   const text = (input.text ?? "").trim().slice(0, 2000) || undefined;
-  const mediaId = ownMedia(userId, input.mediaId);
-  if (input.mediaId && !mediaId) return { ok: false, error: "That photo isn't yours to send." };
-  if (!text && !mediaId) return { ok: false, error: "Nothing to send." };
+  const asked = [...(input.mediaIds ?? []), ...(input.mediaId ? [input.mediaId] : [])].slice(0, MAX_ALBUM);
+  const mediaIds = asked.map((m) => ownMedia(userId, m));
+  if (mediaIds.some((m) => !m)) return { ok: false, error: "That photo isn't yours to send." };
+  const photos = mediaIds as string[];
+  if (!text && photos.length === 0) return { ok: false, error: "Nothing to send." };
   const id = input.id.slice(0, 80);
 
-  const link = mediaId ? createServerClient().storage.from("product-images").getPublicUrl(mediaId.slice(WEB_MEDIA_PREFIX.length)).data.publicUrl : null;
+  const storage = createServerClient().storage.from("product-images");
+  const links = photos.map((m) => storage.getPublicUrl(m.slice(WEB_MEDIA_PREFIX.length)).data.publicUrl);
   const label = input.label?.trim().slice(0, 80) || null;
   await recordInboundMessage(
-    address, id, mediaId ? "image" : label ? "interactive" : "text", text ?? null,
-    mediaId ? { imageMediaId: mediaId, link } : label ? { label } : undefined,
+    address, id, photos.length > 0 ? "image" : label ? "interactive" : "text", text ?? null,
+    photos.length === 1 ? { imageMediaId: photos[0], link: links[0] }
+      : photos.length > 1 ? { imageMediaIds: photos, link: links[0], links }
+      : label ? { label } : undefined,
   );
   // Jumia first, as on WhatsApp: until it's connected, the message goes to the connect flow.
   await jumiaGate(userId).catch(() => false);
   const [before, repliesBefore] = await Promise.all([collecting(address), replyCount(address)]);
-  // A tap (it carries the button's words) means one thing: the AI doesn't read it.
-  await handleLinkedMessage(userId, address, id, { ...(text ? { text } : {}), ...(mediaId ? { imageMediaId: mediaId } : {}), ...(label ? { tapped: true } : {}) });
-  if (before) await sayWhereWeAre(userId, address, before, repliesBefore, { photo: Boolean(mediaId), lastPhoto: input.last !== false, text: text ?? null });
+  if (photos.length <= 1) {
+    // A tap (it carries the button's words) means one thing: the AI doesn't read it.
+    await handleLinkedMessage(userId, address, id, {
+      ...(text ? { text } : {}), ...(photos[0] ? { imageMediaId: photos[0] } : {}), ...(label ? { tapped: true } : {}),
+    });
+  } else {
+    for (let i = 0; i < photos.length; i++) {
+      await handleLinkedMessage(userId, address, `${id}:${i}`, { imageMediaId: photos[i], ...(i === 0 && text ? { text } : {}) });
+    }
+  }
+  if (before) {
+    await sayWhereWeAre(userId, address, before, repliesBefore, { photo: photos.length > 0, lastPhoto: input.last !== false, text: text ?? null });
+  }
   return { ok: true };
 }

@@ -5,8 +5,9 @@ import { listingAssistantFor, receiveAssistantMessage } from "@/lib/whatsapp/lis
 import { logAppError } from "@/lib/observability/errors";
 
 /**
- * A message to the Listing Assistant: text, a photo (its media id from
- * /api/listing-assistant/upload, with an optional caption), or a tap on one
+ * A message to the Listing Assistant: text, photos (their media ids from
+ * /api/listing-assistant/upload, up to 8 as one album, with an optional
+ * caption), or a tap on one
  * of the bot's buttons (the button's id as text, its words as `label`).
  * Handled by the WhatsApp bot under the seller's web address; its replies
  * appear in GET /api/listing-assistant/messages.
@@ -22,7 +23,7 @@ export async function POST(req: NextRequest) {
   const blocked = checkRateLimit(`assistant-message:${userId}`, RATE_LIMITS.assistantMessage);
   if (blocked) return blocked;
 
-  const body = (await req.json().catch(() => null)) as { id?: unknown; text?: unknown; mediaId?: unknown; label?: unknown; last?: unknown } | null;
+  const body = (await req.json().catch(() => null)) as { id?: unknown; text?: unknown; mediaId?: unknown; mediaIds?: unknown; label?: unknown; last?: unknown } | null;
   const id = typeof body?.id === "string" && /^[\w-]{8,80}$/.test(body.id) ? body.id : null;
   if (!id) return NextResponse.json({ error: "Missing message id." }, { status: 400 });
   const str = (v: unknown) => (typeof v === "string" ? v : null);
@@ -30,6 +31,8 @@ export async function POST(req: NextRequest) {
   try {
     const r = await receiveAssistantMessage(userId, {
       id, text: str(body?.text), mediaId: str(body?.mediaId), label: str(body?.label),
+      // Several photos sent at once: one message, an album.
+      mediaIds: Array.isArray(body?.mediaIds) ? body.mediaIds.filter((m): m is string => typeof m === "string").slice(0, 8) : null,
       // Photos of one upload: false on all but the last, which gets the bot's count.
       last: typeof body?.last === "boolean" ? body.last : null,
     });
