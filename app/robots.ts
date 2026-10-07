@@ -2,10 +2,7 @@ import type { MetadataRoute } from "next";
 
 // ─── robots.txt — Next.js convention file ────────────────────────────────────
 //
-// Next.js auto-renders this at /robots.txt at build time. Allows
-// search engines to crawl public marketing pages while blocking the
-// authenticated app (no benefit to indexing /dashboard or /settings,
-// and we don't want Google attempting to crawl private listing data).
+// Next.js auto-renders this at /robots.txt at build time.
 //
 // The sitemap line points crawlers at app/sitemap.ts, which lists
 // every public route worth indexing.
@@ -18,16 +15,13 @@ export default function robots(): MetadataRoute.Robots {
       {
         userAgent: "*",
         allow:     "/",
-        disallow: [
-          "/api/",            // server routes — never useful in search
-          "/dashboard",       // authenticated dashboard
-          "/listings",        // private listing data
-          "/settings",        // private settings (account, billing)
-          "/onboarding",      // signed-in onboarding flow
-          "/admin",           // staff-only routes
-          "/sign-in",         // Clerk-hosted; thin shell that redirects
-          "/sign-up",         // same — let Google rank /pricing instead
-        ],
+        // Only the API is closed to crawlers. Every other private page is
+        // closed by itself: a signed-out request gets a 404 (Clerk), and
+        // sign-in, sign-up, onboarding and the embed carry noindex. A page
+        // blocked here can't be read, so Google never sees its noindex or
+        // 404 and keeps the bare URL ("Indexed, though blocked by
+        // robots.txt", Search Console, 2026-10-07).
+        disallow: ["/api/"],
       },
     ],
     sitemap:  `${APP_URL}/sitemap.xml`,

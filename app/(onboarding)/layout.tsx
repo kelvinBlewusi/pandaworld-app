@@ -1,6 +1,11 @@
 import ShaderBackground from "@/components/onboarding/ShaderBackground";
 import { COMMUNITY_WHATSAPP_URL } from "@/lib/constants/support";
 
+// The connect flow and its "connected" page are a signed-in step, not a
+// page to find in search: noindex (Search Console listed /onboarding/done,
+// 2026-10-07, back when robots.txt hid this noindex from Google).
+export const metadata: import("next").Metadata = { robots: { index: false, follow: false } };
+
 export default function OnboardingLayout({
   children,
 }: {
