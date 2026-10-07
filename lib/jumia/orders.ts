@@ -141,7 +141,7 @@ export function describeError(status: number, json: unknown, text: string): stri
 /** One Vendor API call, its answer or a readable reason. Shared with lib/jumia/shop.ts. */
 export async function call<T>(
   accessToken: string,
-  method:      "GET" | "POST" | "PUT",
+  method:      "GET" | "POST" | "PUT" | "PATCH",
   path:        string,
   opts:        { query?: Record<string, string | number | string[] | undefined>; body?: unknown } = {},
 ): Promise<JumiaCall<T>> {

@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowUp, ChevronLeft, ExternalLink, ImagePlus, Loader2, RotateCw, Sparkles, X } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, ImagePlus, Loader2, RotateCw, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Message {
@@ -142,14 +142,42 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
     return () => clearTimeout(t);
   }, [waitingSince]);
 
-  // Keep the newest message in view: straight there on first load, smoothly after.
+  // Keep the newest message in view: straight there on first load, smoothly
+  // after. Scrolled up to read, they stay where they are: the down arrow
+  // takes them back, with a dot when something new came in (owner,
+  // 2026-10-07: "a down arrow ... when moved back a bit").
   const firstScroll = useRef(true);
-  useEffect(() => {
+  const nearBottom = useRef(true);
+  const autoUntil = useRef(0);
+  const [atBottom, setAtBottom] = useState(true);
+  const [unseen, setUnseen] = useState(false);
+  const toBottom = useCallback((smooth = true) => {
     const el = scroller.current;
     if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: firstScroll.current ? "auto" : "smooth" });
-    if (messages.length > 0) firstScroll.current = false;
-  }, [messages.length, waitingSince]);
+    autoUntil.current = Date.now() + 800;
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    nearBottom.current = true;
+    setAtBottom(true);
+    setUnseen(false);
+  }, []);
+  const onScroll = useCallback(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    // A smooth scroll down passes through "not at the bottom": not a reason to show the arrow.
+    if (!near && Date.now() < autoUntil.current) return;
+    nearBottom.current = near;
+    setAtBottom(near);
+    if (near) setUnseen(false);
+  }, []);
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const mine = messages[messages.length - 1]?.local;
+    if (firstScroll.current || nearBottom.current || mine) toBottom(!firstScroll.current);
+    else setUnseen(true);
+    firstScroll.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, waitingSince, toBottom]);
   // A photo that loads after that grows the chat: stay at the bottom if they were there.
   const onMedia = useCallback(() => {
     const el = scroller.current;
@@ -329,7 +357,8 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
         </div>
       </div>
 
-      <div ref={scroller} className="flex-1 space-y-3 overflow-y-auto bg-zinc-50/60 px-3 py-4 sm:px-5">
+      <div className="relative min-h-0 flex-1">
+      <div ref={scroller} onScroll={onScroll} className="h-full space-y-3 overflow-y-auto bg-zinc-50/60 px-3 py-4 sm:px-5">
         {!loaded && (
           <div className="flex h-full items-center justify-center text-sm text-zinc-400">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading your conversation…
@@ -369,6 +398,18 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
             </span>
           </div>
         )}
+      </div>
+      {!atBottom && (
+        <button
+          type="button"
+          onClick={() => toBottom()}
+          aria-label="Go to the newest message"
+          className="absolute bottom-3 right-3 flex h-10 w-10 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-md transition-colors hover:bg-zinc-50 sm:right-5"
+        >
+          <ChevronDown className="h-5 w-5" />
+          {unseen && <span className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-orange-500 ring-2 ring-white" />}
+        </button>
+      )}
       </div>
 
       {error && (

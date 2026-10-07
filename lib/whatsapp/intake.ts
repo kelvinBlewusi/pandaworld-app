@@ -87,6 +87,8 @@ import { restrictedWordsInJumiaRejection, restrictedBrandWordsInRejection } from
 import { rememberRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
 import { handleShopTap } from "@/lib/whatsapp/shop";
+import { handleWarehouseTap } from "@/lib/whatsapp/shop-insights";
+import { findBrandExact, getBrandCount, searchBrandsFromDB } from "@/lib/jumia/brands";
 import { chatChannelOf, isWebAddress } from "@/lib/whatsapp/channel";
 import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPrice, dropVariantSalesFrom, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import { answerLiveValue, answerPendingQuestion, assistantEnabled, looksLikeQuestion, plainQuickEdit, runAssistant } from "@/lib/whatsapp/assistant";
@@ -589,6 +591,8 @@ export async function handleLinkedMessage(
   // product the assistant offered (lib/whatsapp/shop.ts). Global and
   // stateless like the order taps: the id names the change.
   if (!content.imageMediaId && (await handleShopTap(userId, phoneNumber, content.text))) return;
+  // The same for a delivery order into Jumia's warehouse (lib/whatsapp/shop-insights.ts).
+  if (!content.imageMediaId && (await handleWarehouseTap(userId, phoneNumber, content.text))) return;
 
   // The answer to the assistant's "What should its stock be?" about a live
   // product: a bare "10" is the stock, not a batch of 10 (owner's second
@@ -4674,8 +4678,48 @@ async function handleQcAnswer(
     await updateSession(phoneNumber, { awaitingQcAnswer: null });
     return false;
   }
+  // Live, 2026-10-07: asked "What brand is on the product?", the seller
+  // asked back "what was the old one used", and that became the brand and
+  // went to Jumia. A question about it is answered and the question stays;
+  // "stop" leaves the product as it is.
+  if (q.kind === "brand" || q.kind === "value") {
+    if (/^(cancel|stop|never ?mind|forget it|not now|leave it|later)\b/i.test(text)) {
+      await updateSession(phoneNumber, { awaitingQcAnswer: null });
+      await replyText(phoneNumber, "OK, I've left it as it is. Say *fix* any time to come back to it.");
+      return true;
+    }
+    if (isQcQuestion(text)) {
+      await answerQcQuestion(userId, phoneNumber, q);
+      return true;
+    }
+  }
   await applyQcAnswer(userId, phoneNumber, q, text);
   return true;
+}
+
+/** A question back ("what was the old one used", "which brand?"), not the answer. */
+export function isQcQuestion(text: string): boolean {
+  const t = text.trim();
+  return /\?\s*$/.test(t)
+    || /^(what|which|why|how|who|where|when|is|are|was|were|can|could|do|does|did|should|tell me|show me|remind me)\b/i.test(t)
+    || /\b(old one|previous|before|the current|used before|what it was)\b/i.test(t);
+}
+
+/** What the product has now for the field asked about, and the question again. */
+async function answerQcQuestion(userId: string, phoneNumber: string, q: QcQuestion): Promise<void> {
+  const { data: row } = await createServerClient().from("listings")
+    .select("whatsapp_seq, title, brand, dynamic_attributes").eq("id", q.listingId).eq("user_id", userId).maybeSingle();
+  const label = row?.whatsapp_seq != null ? `Product ${row.whatsapp_seq}` : (row?.title as string | null) ?? "This product";
+  if (q.kind === "brand") {
+    const now = (row?.brand as string | null)?.trim();
+    await replyText(phoneNumber,
+      `${label} was sent with the brand *${now || "Generic"}*, which Jumia refused. What brand is printed on the product or its packaging? ` +
+      "Reply with just the brand name, or *generic* if it has none.");
+    return;
+  }
+  const now = q.field ? String(((row?.dynamic_attributes as Record<string, unknown> | null) ?? {})[q.field] ?? "").trim() : "";
+  await replyText(phoneNumber,
+    `${label}'s ${q.fieldLabel ?? "detail"} is ${now ? `*${now}* now` : "empty now"}. Reply with just the ${q.fieldLabel ?? "value"} Jumia needs, or *stop* to leave it.`);
 }
 
 const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
@@ -4733,7 +4777,28 @@ async function applyQcAnswer(userId: string, phoneNumber: string, q: QcQuestion,
   }
 
   if (q.kind === "brand") {
-    const brand = /^(generic|none|no brand|unbranded|n\/?a)[.!]*$/i.test(text) ? "Generic" : text.slice(0, 80);
+    let brand = /^(generic|none|no brand|unbranded|n\/?a)[.!]*$/i.test(text) ? "Generic" : text.replace(/[.!]+$/, "").trim().slice(0, 80);
+    if (brand !== "Generic") {
+      // A brand Jumia doesn't have is refused again: said here instead,
+      // with the ones it does have that start the same.
+      if (brand.split(/\s+/).length > 5) {
+        await replyText(phoneNumber, "Reply with just the brand name printed on the product, e.g. *Lattafa*, or *generic* if it has none.");
+        return;
+      }
+      const known = (await getBrandCount().catch(() => 0)) > 0;
+      const exact = known ? await findBrandExact(brand).catch(() => null) : null;
+      if (known && !exact) {
+        const near = Array.from(new Set([
+          ...(await searchBrandsFromDB(brand, 5).catch(() => [])), ...(await searchBrandsFromDB(brand.slice(0, 3), 5).catch(() => [])),
+        ].map((b) => b.name))).slice(0, 6);
+        await replyText(phoneNumber,
+          `"${brand}" isn't in Jumia's brand list, so Jumia would refuse it again.` +
+          (near.length > 0 ? ` Close ones: ${near.join(", ")}.` : "") +
+          " Reply with the brand exactly as Jumia has it, or *generic*. A brand Jumia doesn't have yet needs Jumia's brand form first (the link in its rejection).");
+        return;
+      }
+      if (exact) brand = exact.name;
+    }
     await db.from("listings").update({ brand, field_sources: { ...sources, brand: "user" } }).eq("id", q.listingId);
     await updateSession(phoneNumber, { awaitingQcAnswer: null });
     await replyText(phoneNumber, `🔧 ${label}: brand set to "${brand}". Resubmitting…`);

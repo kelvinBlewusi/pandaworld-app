@@ -3185,6 +3185,32 @@ describe("fixing a quality-check rejection", () => {
     expect(pushCallCount).toBe(1);
   });
 
+  // Owner's test, 2026-10-07: asked "What brand is on the product?", they
+  // asked back "what was the old one used", and that went to Jumia as the brand.
+  it("a question back about the brand is answered, and the question stays", async () => {
+    seedQcRejected("Other Reason", "Rejected");
+    await say(`fix:${QC_ID}`);
+    await say("Wrong Brand: The product image shows NIVEA, please create it with the correct brand");
+    expect(question()).toEqual({ listingId: QC_ID, kind: "brand" });
+    const before = qcRow().brand;
+
+    await say("what was the old one used");
+    expect(qcRow().brand).toBe(before);
+    expect(pushCallCount).toBe(0);
+    expect(question()).toEqual({ listingId: QC_ID, kind: "brand" });
+    expect(lastBody()).toContain("was sent with the brand");
+    expect(lastBody()).toContain("Reply with just the brand name");
+
+    // A brand Jumia doesn't have is said, not sent; its own spelling is used.
+    db.tables.jumia_brands = [{ code: 1, name: "NIVEA" }, { code: 2, name: "Nivea Men" }];
+    await say("Niveaa");
+    expect(pushCallCount).toBe(0);
+    expect(lastBody()).toContain("isn't in Jumia's brand list");
+    await say("nivea");
+    expect(qcRow().brand).toBe("NIVEA");
+    expect(pushCallCount).toBe(1);
+  });
+
   it("collects new photos and resubmits with them on done", async () => {
     seedQcRejected("Poor Image Quality", "Images are blurry");
 
