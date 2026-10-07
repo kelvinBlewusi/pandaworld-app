@@ -69,6 +69,59 @@ export async function carryPriceToVariants(listingId: string, oldPrice: unknown,
   }
 }
 
+export interface SaleTerms { salePrice: number; startDate: string; endDate: string }
+
+/**
+ * The same for a sale set in chat ("sale 100 from 20 Oct to 28 Oct"). A
+ * variant's own sale beats the listing's in the push and is what the editor
+ * shows, so a sale saved on the listing alone was invisible in the draft
+ * once its variants had one (owner's test, 2026-10-07). Followed by the
+ * variants with no sale, those at the listing's previous one, and all of
+ * them when they share one sale; a variant given its own in the editor
+ * keeps it. Returns how many followed.
+ */
+export async function carrySaleToVariants(
+  listingId: string,
+  old: { sale_price?: unknown; sale_start_date?: unknown; sale_end_date?: unknown },
+  sale: SaleTerms,
+): Promise<number> {
+  const db = createServerClient();
+  const key = (p: unknown, s: unknown, e: unknown) => (p == null ? "" : `${Number(p)}|${s ?? ""}|${e ?? ""}`);
+  const before = key(old.sale_price, old.sale_start_date, old.sale_end_date);
+  try {
+    const { data } = await db.from("variants").select("id, sale_price, sale_start_date, sale_end_date").eq("listing_id", listingId);
+    const rows = (data ?? []) as { id: string; sale_price: unknown; sale_start_date: unknown; sale_end_date: unknown }[];
+    const keys = rows.map((v) => key(v.sale_price, v.sale_start_date, v.sale_end_date));
+    const shared = new Set(keys).size === 1;
+    const following = rows.filter((_, i) => shared || keys[i] === "" || keys[i] === before);
+    for (const v of following) {
+      const { error } = await db.from("variants")
+        .update({ sale_price: sale.salePrice, sale_start_date: sale.startDate, sale_end_date: sale.endDate })
+        .eq("id", v.id);
+      if (error) throw new Error(error.message);
+    }
+    return following.length;
+  } catch (e) {
+    console.warn(`[listing-edits] couldn't carry the sale to listing ${listingId}'s variants: ${(e as Error).message}`);
+    return 0;
+  }
+}
+
+/** A sale at or above a new price is no sale: Jumia refuses it. Cleared from the variants as from the listing. */
+export async function dropVariantSalesFrom(listingId: string, price: number): Promise<void> {
+  const db = createServerClient();
+  try {
+    const { data } = await db.from("variants").select("id, sale_price").eq("listing_id", listingId);
+    for (const v of (data ?? []) as { id: string; sale_price: unknown }[]) {
+      if (v.sale_price == null || Number(v.sale_price) < price) continue;
+      const { error } = await db.from("variants").update({ sale_price: null, sale_start_date: null, sale_end_date: null }).eq("id", v.id);
+      if (error) throw new Error(error.message);
+    }
+  } catch (e) {
+    console.warn(`[listing-edits] couldn't clear listing ${listingId}'s variant sales: ${(e as Error).message}`);
+  }
+}
+
 /**
  * The same for stock. Jumia takes a variant's stock from the variant alone
  * (`stock: v.quantity ?? 1` in mapListingToJumiaProducts), and drafting

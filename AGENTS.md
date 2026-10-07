@@ -800,6 +800,16 @@ only appear while billing is off.
   gives no variant but the note intent read the seller's (verified against
   the note), those are used (2026-10-07: "Variation is 100ml" drafted with
   none and the bot asked "What variation(s) do you have?").
+- **Sales set in chat reach the variants (2026-10-07)**: handleEdit,
+  applyNotes and the assistant's edit save a sale on the listing and carry
+  it to the variants (`carrySaleToVariants`, listing-edits.ts: those with no
+  sale, those at the listing's previous one, or all when they share one).
+  A variant's own sale beats the listing's in the push and is what the
+  editor shows, so "Sale 100 from 20th October to 28th October" was set and
+  the draft showed none. The focused editor also shows the listing's sale on
+  a variant without its own, and on save writes the listing's sale as the
+  variants' shared one (none when they differ). A QC price fix below a
+  variant's sale clears it (`dropVariantSalesFrom`).
 - **Named once (2026-10-07)**: a single product's "✅ Product drafted: X."
   with its missing-value or variation question drops the question's own
   "*X*" line (`named` in askForNextMissingValue / askBlockingValue).
@@ -1634,6 +1644,10 @@ labels." It is the WhatsApp bot itself, not a copy:
   button (no notes: "Type its price and any notes…"); a product closed in
   silence gets "✅ Product N saved (…). Next: product N+1 of M…"; a quiet-mode
   note gets "📝 Noted for product N". WhatsApp is unchanged.
+- **Resend**: a message or photo that didn't go stays in the chat marked
+  "Not sent" with a small Resend button under it (the message's own body,
+  or for a photo that never uploaded, its file). Other photos of the same
+  upload still go. Sidebar: "Jumia Listing Assistant" is first on the list.
 - **No photo-settle waits on the web** (`albumsArriveLoose` in intake.ts):
   the page sends one photo at a time and waits for each, so the in-flight
   waits and the "Still receiving your photos" hold only apply to WhatsApp.

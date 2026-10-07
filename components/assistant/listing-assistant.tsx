@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowUp, ChevronLeft, ExternalLink, ImagePlus, Loader2, Sparkles, X } from "lucide-react";
+import { ArrowUp, ChevronLeft, ExternalLink, ImagePlus, Loader2, RotateCw, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Message {
@@ -27,7 +27,12 @@ interface Message {
   /** Sent from this page and not yet read back from the server. */
   local?:    boolean;
   failed?:   boolean;
+  /** What a message that didn't send needs to go again: Resend under it. */
+  retry?:    Retry;
 }
+
+/** A message as the page sends it; a photo that never uploaded keeps its file. */
+interface Retry { text?: string; mediaId?: string; label?: string; last?: boolean; file?: File }
 
 interface Attachment { key: string; file: File; preview: string }
 
@@ -177,9 +182,9 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
   }
 
   /** One message to the bot. The placeholder shows at once; the server's copy replaces it. */
-  async function post(body: { text?: string; mediaId?: string; label?: string; last?: boolean }, placeholder: Omit<Message, "id" | "clientId" | "direction" | "at">) {
+  async function post(body: Omit<Retry, "file">, placeholder: Omit<Message, "id" | "clientId" | "direction" | "at">) {
     const id = newId();
-    const local: Message = { ...placeholder, id, clientId: id, direction: "inbound", at: new Date().toISOString(), local: true };
+    const local: Message = { ...placeholder, id, clientId: id, direction: "inbound", at: new Date().toISOString(), local: true, retry: body };
     setMessages((prev) => [...prev, local]);
     setWaitingSince(Date.now());
     const res = await fetch("/api/listing-assistant/message", {
@@ -190,7 +195,7 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
     if (!res || !res.ok) {
       const msg = res ? ((await res.json().catch(() => ({}))) as { error?: string }).error : null;
       setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, failed: true } : m)));
-      setError(msg ?? "That didn't send. Check your connection and try again.");
+      setError(msg ?? "That didn't send. Check your connection, then tap Resend under it.");
       setWaitingSince(null);
       return false;
     }
@@ -213,24 +218,27 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
         setText("");
         setAttachments([]);
       }
-      // The page already has these files; the previews go once they're sent.
-      const sentPhotos = photos;
-      setTimeout(() => release(sentPhotos), 60_000);
-      // Photos first, one by one like a WhatsApp album, the words as the first one's caption.
+      // Photos first, one by one like a WhatsApp album, the words as the
+      // first one's caption. One that doesn't go stays in the chat, its
+      // preview kept, with Resend under it; the rest still go.
+      const unsent = new Set<string>();
       for (let i = 0; i < photos.length; i++) {
-        const form = new FormData();
-        form.append("file", photos[i].file);
-        const up = await fetch("/api/listing-assistant/upload", { method: "POST", body: form }).catch(() => null);
-        const data = up ? ((await up.json().catch(() => ({}))) as { mediaId?: string; url?: string; error?: string }) : {};
-        if (!up || !up.ok || !data.mediaId) {
-          setError(data.error ?? `Photo ${i + 1} didn't upload. Try again.`);
-          return;
-        }
         const caption = i === 0 && typed ? typed : undefined;
         // `last` marks the end of the upload: the bot answers it with the product's photo count.
-        const body = { mediaId: data.mediaId, last: i === photos.length - 1, ...(caption ? { text: caption } : {}) };
-        if (!(await post(body, { type: "image", text: caption ?? null, payload: { link: data.url } }))) return;
+        const last = i === photos.length - 1;
+        const up = await upload(photos[i].file);
+        if ("error" in up) {
+          unsent.add(photos[i].key);
+          unsentPhoto(photos[i], { text: caption, last, file: photos[i].file });
+          setError(up.error ?? `Photo ${i + 1} didn't upload. Check your connection, then tap Resend under it.`);
+          continue;
+        }
+        const body = { mediaId: up.mediaId, last, ...(caption ? { text: caption } : {}) };
+        await post(body, { type: "image", text: caption ?? null, payload: { link: up.url ?? photos[i].preview } });
       }
+      // The page already has these files; the previews go once they're sent.
+      const sent = photos.filter((p) => !unsent.has(p.key));
+      setTimeout(() => release(sent), 60_000);
       if (typed && photos.length === 0) {
         await post(
           { text: typed, ...(override?.label ? { label: override.label } : {}) },
@@ -240,6 +248,48 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
     } finally {
       setSending(false);
       textArea.current?.focus();
+    }
+  }
+
+  /** A photo stored for the bot: its media id, or why it wasn't. */
+  async function upload(file: File): Promise<{ mediaId: string; url?: string } | { error: string | null }> {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch("/api/listing-assistant/upload", { method: "POST", body: form }).catch(() => null);
+    const data = res ? ((await res.json().catch(() => ({}))) as { mediaId?: string; url?: string; error?: string }) : {};
+    return res?.ok && data.mediaId ? { mediaId: data.mediaId, url: data.url } : { error: data.error ?? null };
+  }
+
+  /** A photo that never uploaded, shown from the page's own copy with Resend under it. */
+  function unsentPhoto(photo: Attachment, retry: Retry) {
+    setMessages((prev) => [...prev, {
+      id: newId(), clientId: null, direction: "inbound", type: "image", text: retry.text ?? null,
+      payload: { link: photo.preview }, at: new Date().toISOString(), local: true, failed: true, retry,
+    }]);
+  }
+
+  /** Resend under a message that didn't go: the same words or photo, sent again. */
+  async function resend(m: Message) {
+    if (sending || !m.retry) return;
+    const r = m.retry;
+    setSending(true);
+    setError(null);
+    setMessages((prev) => prev.filter((x) => x.id !== m.id));
+    try {
+      if (r.file) {
+        const up = await upload(r.file);
+        if ("error" in up) {
+          setMessages((prev) => [...prev, { ...m, at: new Date().toISOString() }]);
+          setError(up.error ?? "The photo still didn't upload. Check your connection, then tap Resend again.");
+          return;
+        }
+        const { file: _file, ...rest } = r;
+        await post({ ...rest, mediaId: up.mediaId }, { type: "image", text: r.text ?? null, payload: m.payload });
+      } else {
+        await post(r, { type: m.type, text: m.text, payload: m.payload });
+      }
+    } finally {
+      setSending(false);
     }
   }
 
@@ -308,7 +358,7 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
           </div>
         )}
 
-        {messages.map((m) => <Bubble key={m.id} m={m} onTap={tap} disabled={sending} onMedia={onMedia} />)}
+        {messages.map((m) => <Bubble key={m.id} m={m} onTap={tap} onResend={resend} disabled={sending} onMedia={onMedia} />)}
 
         {waiting && (
           <div className="flex items-center gap-2 pl-1 text-sm text-zinc-400">
@@ -408,7 +458,9 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
   );
 }
 
-function Bubble({ m, onTap, disabled, onMedia }: { m: Message; onTap: (b: Button) => void; disabled: boolean; onMedia: () => void }) {
+function Bubble({ m, onTap, onResend, disabled, onMedia }: {
+  m: Message; onTap: (b: Button) => void; onResend: (m: Message) => void; disabled: boolean; onMedia: () => void;
+}) {
   const mine = m.direction === "inbound";
   const p = m.payload ?? {};
   const link = typeof p.link === "string" ? p.link : null;
@@ -482,9 +534,23 @@ function Bubble({ m, onTap, disabled, onMedia }: { m: Message; onTap: (b: Button
           {cta.label} <ExternalLink className="h-3.5 w-3.5" />
         </a>
       )}
-      <span className="mt-1 px-1 text-[11px] text-zinc-400">
-        {m.failed ? "Not sent" : m.local ? "Sending…" : time(m.at)}
-      </span>
+      {m.failed ? (
+        <span className="mt-1 flex items-center gap-2 px-1 text-[11px]">
+          <span className="text-red-500">Not sent</span>
+          {m.retry && (
+            <button
+              type="button"
+              onClick={() => onResend(m)}
+              disabled={disabled}
+              className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-white px-2 py-0.5 font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50"
+            >
+              <RotateCw className="h-3 w-3" /> Resend
+            </button>
+          )}
+        </span>
+      ) : (
+        <span className="mt-1 px-1 text-[11px] text-zinc-400">{m.local ? "Sending…" : time(m.at)}</span>
+      )}
     </div>
   );
 }

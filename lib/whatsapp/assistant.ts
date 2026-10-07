@@ -70,7 +70,7 @@ import { isWebAddress } from "@/lib/whatsapp/channel";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
 import { resetSession, updateSession, type AssistantPending, type LiveValueAsk, type WhatsAppSession } from "@/lib/whatsapp/session";
 import { parseVariations, saveVariations, variationOptions } from "@/lib/whatsapp/variation-question";
-import { carryPriceToVariants, carryStockToVariants, chatPrice, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
+import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPrice, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import type { ListingRow } from "@/lib/supabase/types";
 
 /** Small and quick, like the review step's older fallback (lib/whatsapp/intent.ts). */
@@ -1027,6 +1027,11 @@ export async function applyChanges(userId: string, listing: ListingRow, changes:
     if (update.quantity != null) {
       const followed = await carryStockToVariants(listing.id, listing.quantity, changes.quantity!);
       if (followed > 1) result.done[result.done.indexOf(`quantity ${changes.quantity}`)] = `quantity ${changes.quantity} for each of its ${followed} variations`;
+    }
+    if (update.sale_price != null) {
+      await carrySaleToVariants(listing.id, listing, {
+        salePrice: update.sale_price as number, startDate: update.sale_start_date as string, endDate: update.sale_end_date as string,
+      });
     }
   }
 

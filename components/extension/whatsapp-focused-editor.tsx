@@ -149,9 +149,17 @@ export function WhatsAppFocusedEditor({
         gtin:          v.gtin             ?? "",
         quantity:      String(v.quantity ?? 1),
         globalPrice:   v.global_price != null ? String(v.global_price) : "",
-        salePrice:     v.sale_price   != null ? String(v.sale_price)   : "",
-        saleStartDate: v.sale_start_date  ?? "",
-        saleEndDate:   v.sale_end_date    ?? "",
+        // A variant with no sale of its own goes to Jumia with the
+        // listing's (mapListingToJumiaProducts), which is where a sale set
+        // in chat lands, so that's what it shows. Live, 2026-10-07: "Sale
+        // 100 from 20th October to 28th October" was set and this was blank.
+        ...(v.sale_price != null
+          ? { salePrice: String(v.sale_price), saleStartDate: v.sale_start_date ?? "", saleEndDate: v.sale_end_date ?? "" }
+          : {
+              salePrice:     initialListing.sale_price != null ? String(initialListing.sale_price) : "",
+              saleStartDate: initialListing.sale_price != null ? initialListing.sale_start_date ?? "" : "",
+              saleEndDate:   initialListing.sale_price != null ? initialListing.sale_end_date ?? "" : "",
+            }),
       }));
     }
     return [{
@@ -350,6 +358,16 @@ export function WhatsAppFocusedEditor({
 
   const persist = useCallback(async (): Promise<boolean> => {
     const sellingPrice = variants[0]?.globalPrice ? parseFloat(variants[0].globalPrice) : null;
+    // The listing's sale is what a variant with none of its own falls back
+    // to. Saved here as the variants' shared sale, or none when they differ,
+    // so a sale cleared or changed here can't come back from the listing.
+    const sales = new Set(variants.map((v) => `${v.salePrice.trim()}|${v.saleStartDate}|${v.saleEndDate}`));
+    const shared = sales.size === 1 && variants[0]?.salePrice.trim() ? variants[0] : null;
+    const listingSale = {
+      sale_price:      shared ? parseFloat(shared.salePrice) : null,
+      sale_start_date: shared?.saleStartDate || null,
+      sale_end_date:   shared?.saleEndDate || null,
+    };
 
     const overrideColumnUpdates: Record<string, unknown> = {};
     for (const [attr, val] of Object.entries(columnOverrides)) {
@@ -371,6 +389,7 @@ export function WhatsAppFocusedEditor({
           ? { quantity: Math.max(0, parseInt(variants[0]?.quantity ?? "1", 10) || 1) }
           : {}),
         dynamic_attributes: { ...dynAttrs },
+        ...listingSale,
         ...overrideColumnUpdates,
       });
       setListing(updated);

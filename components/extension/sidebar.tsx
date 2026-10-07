@@ -32,7 +32,8 @@ const primaryNav = [
 ];
 
 // The Listing Assistant (app/extension/(app)/assistant): shown to the sellers
-// it's on for (lib/whatsapp/listing-assistant.ts), right under the dashboard.
+// it's on for (lib/whatsapp/listing-assistant.ts), first on the list (owner,
+// 2026-10-07).
 const assistantItem = { href: "/extension/assistant", label: "Jumia Listing Assistant", icon: Sparkles };
 
 // Public, like Guides, so the same answers reach sellers before they sign up.
@@ -126,12 +127,8 @@ export function ExtensionSidebar({ onClose, isAdmin = false, showAssistant = fal
       </div>
 
       <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
-        {primaryNav.map((item, i) => (
-          <span key={item.href} className="contents">
-            <NavItem {...item} />
-            {i === 0 && showAssistant && <NavItem {...assistantItem} />}
-          </span>
-        ))}
+        {showAssistant && <NavItem {...assistantItem} />}
+        {primaryNav.map((item) => <NavItem key={item.href} {...item} />)}
 
         <div className="pb-1 pt-3">
           <div className="mb-3 h-px bg-zinc-100" />
