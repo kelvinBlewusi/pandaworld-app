@@ -474,6 +474,31 @@ export function payoutAt(fees: CountryFees, price: number, fee: number, commissi
   return price - commissionOn(fees, price, commissionPct, fulfilment) - fee;
 }
 
+const feeWords = (s: string) =>
+  s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w && w !== "and").map((w) => (w.length > 3 ? w.replace(/s$/, "") : w));
+
+/**
+ * The fee table's category for a product in this Jumia category ("Home &
+ * Office > Home & Kitchen > Kitchen & Dining > Small Appliances > … > Electric
+ * Kettles"): the deepest part of the path that holds every word of a table
+ * name ("Kettles", else "Small Appliances", else "Home"), the longer name
+ * first. Null when no part fits: the seller is sent to the calculator.
+ */
+export function feeCategoryForPath(fees: CountryFees, path: string | null | undefined): FeeCategory | null {
+  if (!path) return null;
+  const parts = path.split(/\s*[>/]\s*/).filter(Boolean).reverse();
+  const named = fees.categories
+    .map((c) => ({ c, words: feeWords(c.name) }))
+    .filter((x) => x.words.length > 0 && x.c.name.toLowerCase() !== "others")
+    .sort((a, b) => b.words.length - a.words.length);
+  for (const part of parts) {
+    const have = new Set(feeWords(part));
+    const hit = named.find((x) => x.words.every((w) => have.has(w)));
+    if (hit) return hit.c;
+  }
+  return null;
+}
+
 /** Lowest and highest commission in a country's table, for copy. */
 export function commissionSpan(fees: CountryFees): { min: number; max: number } {
   const rates = fees.categories.map((c) => c.commission);

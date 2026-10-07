@@ -98,6 +98,7 @@ export class FakeDb {
             eq(col: string, val: unknown) { return countBuilder([...filters, { col, val, op: "eq" }]); },
             in(col: string, val: unknown[]) { return countBuilder([...filters, { col, val, op: "in" }]); },
             lt(col: string, val: unknown) { return countBuilder([...filters, { col, val, op: "lt" }]); },
+            gt(col: string, val: unknown) { return countBuilder([...filters, { col, val, op: "gt" }]); },
             not(col: string, _o: string, _v: unknown) { return countBuilder([...filters, { col, val: null, op: "not-is-null" }]); },
             then(resolve: (v: { count: number; error: null }) => unknown) {
               return Promise.resolve({ count: rows().filter((r) => db.match(r, filters)).length, error: null }).then(resolve);

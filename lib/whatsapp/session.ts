@@ -26,6 +26,19 @@ export interface AssistantPending {
   at:      string;
 }
 
+/**
+ * The assistant's "What should its stock be?" about a live Jumia product,
+ * kept in the same column: a bare "10" next is the answer, not a batch of 10
+ * (owner's second test, 2026-10-07). See answerLiveValue.
+ */
+export interface LiveValueAsk {
+  kind:      "live_value";
+  field:     "stock" | "price";
+  products:  string[];
+  preferSid: string | null;
+  at:        string;
+}
+
 export type WhatsAppSessionState =
   | "awaiting_jumia_credentials"
   | "awaiting_jumia_oauth"
@@ -134,7 +147,7 @@ export interface WhatsAppSession {
    * for the tap or the number. Null when none is outstanding; anything
    * that isn't an answer drops it. See lib/whatsapp/assistant.ts.
    */
-  assistantPending: AssistantPending | null;
+  assistantPending: AssistantPending | LiveValueAsk | null;
 }
 
 /** What awaitingQcAnswer holds. */
@@ -166,7 +179,7 @@ function fromRow(row: Record<string, unknown>): WhatsAppSession {
     lastSubmittedBatchId: (row.last_submitted_batch_id as string | null) ?? null,
     batchQuiet: (row.batch_quiet as boolean | null) ?? null,
     preferredBatchQuiet: (row.preferred_batch_quiet as boolean | null) ?? null,
-    assistantPending: (row.assistant_pending as AssistantPending | null) ?? null,
+    assistantPending: (row.assistant_pending as AssistantPending | LiveValueAsk | null) ?? null,
   };
 }
 
@@ -301,7 +314,7 @@ export async function updateSession(
     lastSubmittedBatchId: string | null;
     batchQuiet: boolean | null;
     preferredBatchQuiet: boolean | null;
-    assistantPending: AssistantPending | null;
+    assistantPending: AssistantPending | LiveValueAsk | null;
   }>,
 ): Promise<void> {
   const db = createServerClient();

@@ -24,7 +24,7 @@ import { createServerClient } from "@/lib/supabase/server";
 import {
   sendButtonsIfConfigured, sendCtaUrlIfConfigured, sendListIfConfigured, sendTextIfConfigured,
 } from "@/lib/whatsapp/client";
-import { splitForText } from "@/lib/whatsapp/text-limits";
+import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { appUrl } from "@/lib/whatsapp/app-url";
 import { featureAccess, featureMinPackName, type FeatureId } from "@/lib/billing/features";
 import { COUNTRY_CURRENCY, getValidJumiaCredentials } from "@/lib/jumia/api";
@@ -35,9 +35,12 @@ import { priceMinimumForUser, isBelowMinimum, money } from "@/lib/jumia/price-mi
 import { formatAmount, handleOrderMessage } from "@/lib/whatsapp/orders";
 import { isPacked, isToPack } from "@/lib/jumia/order-flow";
 import { sellerCountry } from "@/lib/jumia/unlistable-categories";
+import { getCategoryByCode } from "@/lib/jumia/categories";
+import { COUNTRY_FEES, commissionOn, feeCategoryForPath, itemFeeFor, payoutAt } from "@/lib/marketing/country-fees";
+import { calculatorPathFor, type JumiaCountryCode } from "@/lib/marketing/countries";
 import {
-  fetchPayouts, fetchStock, findOrderByNumber, findProducts, fromRow, localUpdate, orderStatusWord, ordersCreatedSince, ordersWithStatus, sendLiveChange,
-  shopProducts, summarizeOrders, syncCatalog, type LiveChange, type ShopProduct,
+  fetchPayouts, fetchStock, findOrderByNumber, findProducts, fromRow, localUpdate, orderStatusWord, ordersCreatedSince, ordersWithStatus, refreshProducts,
+  saveProducts, sendLiveChange, sendLiveChanges, shopProducts, summarizeOrders, syncCatalog, type LiveChange, type ShopProduct,
 } from "@/lib/jumia/shop";
 
 const ID = "[0-9a-f-]{36}";
@@ -118,12 +121,59 @@ export function describeLiveChange(change: LiveChange, p: ShopProduct | null, ct
   }
 }
 
+/** The most products one tap changes. */
+export const MAX_GROUP = 20;
+
 /**
- * Offer a change to the product the seller means, for one tap. Returns what
- * was done, for the assistant's log.
+ * The products each of the seller's words mean, for a change to several at
+ * once: one match, the one they just changed, every match when they said
+ * "all" or the matches are one product's variations (sizes, colours), else
+ * unclear (said back, nothing changed).
+ */
+export function groupTargets(
+  products: ShopProduct[], queries: string[], opts: { all?: boolean; preferSid?: string | null } = {},
+): { targets: ShopProduct[]; missing: string[]; unclear: { query: string; matches: ShopProduct[] }[] } {
+  const targets: ShopProduct[] = [];
+  const missing: string[] = [];
+  const unclear: { query: string; matches: ShopProduct[] }[] = [];
+  for (const query of queries) {
+    const found = findProducts(products, query, MAX_GROUP + 1);
+    const preferred = opts.preferSid ? found.find((m) => m.sid === opts.preferSid) : undefined;
+    const sets = new Set(found.map((m) => m.setSid ?? m.sid));
+    if (found.length === 0) missing.push(query);
+    else if (found.length === 1) targets.push(found[0]);
+    else if (preferred) targets.push(preferred);
+    else if (opts.all || sets.size === 1) targets.push(...found);
+    else unclear.push({ query, matches: found });
+  }
+  const seen = new Set<string>();
+  return { targets: targets.filter((p) => !seen.has(p.sid) && !!seen.add(p.sid)), missing, unclear };
+}
+
+/** The confirm question for a change, one line per product. */
+function confirmText(products: ShopProduct[], change: LiveChange, ctx: { currency: string; jc?: JumiaCountry }): string {
+  if (products.length === 1) {
+    const one = products[0];
+    return `Change *${shorten(label(one), 120)}* (SKU ${one.sellerSku}): ${describeLiveChange(change, one, ctx)}?\n\nThis changes it on Jumia.`;
+  }
+  const lines = products.map((p) => `• ${shorten(label(p), 50)}: ${describeLiveChange(change, p, ctx)}`);
+  const head = `Change these ${products.length} products on Jumia?`;
+  const tail = "One tap changes them all.";
+  let body = [head, ...lines, "", tail].join("\n");
+  for (let shown = lines.length - 1; body.length > INTERACTIVE_BODY_MAX - 20 && shown > 0; shown--) {
+    body = [head, ...lines.slice(0, shown), `+${products.length - shown} more`, "", tail].join("\n");
+  }
+  return body;
+}
+
+/**
+ * Offer a change to the product the seller means, for one tap. Several
+ * products (a list of their words, or "all" of what one fits) go together:
+ * one question, one tap, one feed. Returns what was done, for the
+ * assistant's log.
  */
 export async function proposeLiveChange(
-  userId: string, phone: string, query: string, change: LiveChange, opts: { preferSid?: string | null } = {},
+  userId: string, phone: string, query: string | string[], change: LiveChange, opts: { preferSid?: string | null; all?: boolean } = {},
 ): Promise<string> {
   const ctx = await shopContext(userId, phone, "shop_whatsapp", "your live products");
   if (!ctx) return "blocked";
@@ -137,9 +187,11 @@ export async function proposeLiveChange(
   }
   const products = await catalog(ctx);
   if (!products) return "no catalog";
-  const found = findProducts(products, query);
+  const queries = (Array.isArray(query) ? query : [query]).filter((q) => q.trim());
+  if (queries.length > 1 || opts.all) return proposeGroup(ctx, products, queries, change, opts);
+  const found = findProducts(products, queries[0] ?? "");
   if (found.length === 0) {
-    await sendTextIfConfigured(phone, `I couldn't find "${shorten(query, 60)}" among your ${products.length} Jumia products. Try its name as it shows on Jumia, or its SKU.`);
+    await sendTextIfConfigured(phone, `I couldn't find "${shorten(queries[0] ?? "", 60)}" among your ${products.length} Jumia products. Try its name as it shows on Jumia, or its SKU.`);
     return "not found";
   }
   // "Change its sale price…" right after changing one of these: that one.
@@ -167,7 +219,7 @@ export async function proposeLiveChange(
   if (one) {
     await sendButtonsIfConfigured(
       phone,
-      `Change *${shorten(label(one), 120)}* (SKU ${one.sellerSku}): ${describeLiveChange(change, one, ctx)}?\n\nThis changes it on Jumia.`,
+      confirmText([one], change, ctx),
       [{ id: `lchg:${id}`, title: "Yes, change it ✅" }, { id: `lchgno:${id}`, title: "No" }],
     );
     return `offered ${change.kind} for ${one.sellerSku}`;
@@ -185,7 +237,49 @@ export async function proposeLiveChange(
   return `asked which of ${matches.length}`;
 }
 
-type ShopTap = { kind: "confirm" | "cancel"; id: string } | { kind: "pick"; id: string; index: number };
+/** Several products, one change: said back when any is missing or unclear, else one question for one tap. */
+async function proposeGroup(
+  ctx: Ctx, products: ShopProduct[], queries: string[], change: LiveChange, opts: { preferSid?: string | null; all?: boolean },
+): Promise<string> {
+  const { userId, phone } = ctx;
+  const { targets, missing, unclear } = groupTargets(products, queries, opts);
+  if (missing.length > 0 || unclear.length > 0) {
+    const lines: string[] = ["I haven't changed anything yet:"];
+    for (const q of missing) lines.push(`• I couldn't find "${shorten(q, 50)}" among your Jumia products.`);
+    for (const u of unclear) {
+      lines.push(`• "${shorten(u.query, 40)}" could be ${u.matches.length} products:`);
+      for (const m of u.matches.slice(0, 5)) lines.push(`   – ${shorten(label(m), 50)} (SKU ${m.sellerSku})`);
+      if (u.matches.length > 5) lines.push(`   +${u.matches.length - 5} more`);
+    }
+    lines.push("", "Send it again with each product's name as it shows on Jumia, or its SKU" + (unclear.length > 0 ? ", or say \"all\" to change every one that fits." : "."));
+    await sendLong(phone, lines.join("\n"));
+    return `group unclear: ${[...missing, ...unclear.map((u) => u.query)].join(", ")}`;
+  }
+  if (targets.length > MAX_GROUP) {
+    await sendTextIfConfigured(phone, `That's ${targets.length} products: I change up to ${MAX_GROUP} with one tap. Name fewer at a time, or use Jumia Vendor Center's bulk tools for more.`);
+    return `group too big: ${targets.length}`;
+  }
+  const db = createServerClient();
+  const groupId = crypto.randomUUID();
+  const { error } = await db.from("jumia_product_changes").insert(targets.map((p) => ({
+    id: crypto.randomUUID(), user_id: userId, group_id: groupId, product_sid: p.sid, seller_sku: p.sellerSku, name: label(p),
+    change, candidates: null, status: "pending",
+  })));
+  if (error) {
+    await sendTextIfConfigured(phone, "I couldn't get that ready just now. Send it again in a moment.");
+    return `failed: ${error.message}`;
+  }
+  await sendButtonsIfConfigured(phone, confirmText(targets, change, ctx), [
+    { id: `lgrp:${groupId}`, title: targets.length === 1 ? "Yes, change it ✅" : `Yes, change ${targets.length} ✅` },
+    { id: `lgrpno:${groupId}`, title: "No" },
+  ]);
+  return `offered ${change.kind} for ${targets.length}: ${targets.map((p) => p.sellerSku).join(", ")}`;
+}
+
+type ShopTap =
+  | { kind: "confirm" | "cancel"; id: string }
+  | { kind: "pick"; id: string; index: number }
+  | { kind: "group" | "groupno"; id: string };
 
 /** A tap on a change's buttons, or null. Cheap: no I/O. */
 export function parseShopTap(text: string | undefined): ShopTap | null {
@@ -194,13 +288,65 @@ export function parseShopTap(text: string | undefined): ShopTap | null {
   if ((m = t.match(new RegExp(`^lchg:(${ID})$`, "i")))) return { kind: "confirm", id: m[1] };
   if ((m = t.match(new RegExp(`^lchgno:(${ID})$`, "i")))) return { kind: "cancel", id: m[1] };
   if ((m = t.match(new RegExp(`^lpick:(${ID}):(\\d{1,2})$`, "i")))) return { kind: "pick", id: m[1], index: Number(m[2]) };
+  if ((m = t.match(new RegExp(`^lgrp:(${ID})$`, "i")))) return { kind: "group", id: m[1] };
+  if ((m = t.match(new RegExp(`^lgrpno:(${ID})$`, "i")))) return { kind: "groupno", id: m[1] };
   return null;
+}
+
+/** The tap on a several-products change: every product in one feed, or none. */
+async function handleGroupTap(userId: string, phone: string, groupId: string, confirm: boolean): Promise<void> {
+  const db = createServerClient();
+  const { data } = await db.from("jumia_product_changes").select("*").eq("group_id", groupId).eq("user_id", userId);
+  const rows = (data ?? []) as Record<string, unknown>[];
+  const pending = rows.filter((r) => r.status === "pending");
+  if (pending.length === 0) {
+    await sendTextIfConfigured(phone, rows.length > 0 ? "That change was already handled." : "I couldn't find that change. Tell me again what to change.");
+    return;
+  }
+  const ids = pending.map((r) => String(r.id));
+  const now = () => new Date().toISOString();
+  if (Date.now() - new Date(String(pending[0].created_at)).getTime() > CHANGE_TTL_MS) {
+    await db.from("jumia_product_changes").update({ status: "cancelled", error: "expired", updated_at: now() }).in("id", ids);
+    await sendTextIfConfigured(phone, "That was a while ago, so I haven't changed anything. Tell me again what to change.");
+    return;
+  }
+  if (!confirm) {
+    await db.from("jumia_product_changes").update({ status: "cancelled", updated_at: now() }).in("id", ids);
+    await sendTextIfConfigured(phone, "OK, nothing changed on Jumia.");
+    return;
+  }
+  const ctx = await shopContext(userId, phone, "shop_whatsapp", "your live products");
+  if (!ctx) return;
+  const { data: prows } = await db.from("jumia_products").select("*").eq("user_id", userId).in("product_sid", pending.map((r) => String(r.product_sid)));
+  const products = ((prows ?? []) as Record<string, unknown>[]).map(fromRow);
+  const live = pending[0].change as LiveChange;
+  const kept = pending.filter((r) => products.some((p) => p.sid === r.product_sid));
+  if (kept.length === 0) {
+    await sendTextIfConfigured(phone, "I couldn't find those products any more. Tell me again what to change.");
+    return;
+  }
+  const keptProducts = kept.map((r) => products.find((p) => p.sid === r.product_sid)!);
+  const sent = await sendLiveChanges(ctx.token, keptProducts, live, { country: ctx.country, currency: ctx.currency });
+  if (!sent.ok) {
+    await db.from("jumia_product_changes").update({ status: "failed", error: sent.message, updated_at: now() }).in("id", ids);
+    await sendTextIfConfigured(phone, `⚠️ Jumia didn't take that change: ${sent.message}`);
+    return;
+  }
+  await db.from("jumia_product_changes").update({ status: "sent", feed_id: sent.data.feedId, updated_at: now() }).in("id", kept.map((r) => String(r.id)));
+  const gone = pending.filter((r) => !kept.includes(r));
+  if (gone.length > 0) await db.from("jumia_product_changes").update({ status: "cancelled", error: "product gone", updated_at: now() }).in("id", gone.map((r) => String(r.id)));
+  const names = keptProducts.slice(0, 5).map((p) => shorten(label(p), 40)).join(", ") + (keptProducts.length > 5 ? ` and ${keptProducts.length - 5} more` : "");
+  await sendTextIfConfigured(phone, `✅ Sent to Jumia for ${keptProducts.length} product${keptProducts.length === 1 ? "" : "s"} (${names}): ${describeLiveChange(live, null, ctx)}. Jumia usually applies it within a few minutes; I'll tell you if it refuses any.`);
 }
 
 /** Handle a change's tap. False when the message isn't one. */
 export async function handleShopTap(userId: string, phone: string, text: string | undefined): Promise<boolean> {
   const tap = parseShopTap(text);
   if (!tap) return false;
+  if (tap.kind === "group" || tap.kind === "groupno") {
+    await handleGroupTap(userId, phone, tap.id, tap.kind === "group");
+    return true;
+  }
   const db = createServerClient();
   const { data: row } = await db.from("jumia_product_changes").select("*").eq("id", tap.id).eq("user_id", userId).maybeSingle();
   const change = row as Record<string, unknown> | null;
@@ -239,7 +385,7 @@ export async function handleShopTap(userId: string, phone: string, text: string 
     }).eq("id", tap.id);
     await sendButtonsIfConfigured(
       phone,
-      `Change *${shorten(label(product), 120)}* (SKU ${product.sellerSku}): ${describeLiveChange(live, product, ctx)}?\n\nThis changes it on Jumia.`,
+      confirmText([product], live, ctx),
       [{ id: `lchg:${tap.id}`, title: "Yes, change it ✅" }, { id: `lchgno:${tap.id}`, title: "No" }],
     );
     return true;
@@ -336,6 +482,136 @@ export async function answerProducts(userId: string, phone: string, filter: "all
   return "overview";
 }
 
+const QC_WORDS: Record<string, string> = {
+  APPROVED: "approved", PENDING: "waiting for Jumia's check", NOT_READY_TO_QC: "waiting for Jumia's check", REJECTED: "rejected",
+};
+
+/** One product's place on Jumia, for "is the drone live?". */
+export function productInfoText(p: ShopProduct, ctx: { currency: string; jc?: JumiaCountry }, today: string): string {
+  const cur = p.currency || ctx.currency;
+  const amount = (n: number) => formatAmount(n, cur, ctx.jc);
+  const on = p.status === "ACTIVE" ? (p.visible === false ? "on, but not shown to buyers yet" : "on (shown on Jumia)") : p.status === "INACTIVE" ? "off (hidden on Jumia)" : p.status === "DELETED" ? "deleted" : "unknown";
+  const qc = p.qcStatus ? QC_WORDS[p.qcStatus] ?? p.qcStatus.toLowerCase() : null;
+  const saleOn = p.salePrice != null && (!p.saleEnd || p.saleEnd.slice(0, 10) >= today);
+  const live = p.status === "ACTIVE" && p.visible !== false && p.qcStatus === "APPROVED" && (p.stock == null || p.stock > 0);
+  return [
+    `${live ? "🟢" : "⚪"} *${shorten(label(p), 90)}* · SKU ${p.sellerSku}`,
+    `• Status: ${on}`,
+    ...(qc ? [`• Quality check: ${qc}${p.qcStatus === "REJECTED" && p.qcReason ? `: ${shorten(p.qcReason, 100)}` : ""}`] : []),
+    `• Price: ${p.price != null ? amount(p.price) : "not set"}` +
+      (saleOn ? ` · on sale at ${amount(p.salePrice!)}${p.saleStart && p.saleEnd ? ` (${shortDate(p.saleStart)} to ${shortDate(p.saleEnd)})` : ""}` : ""),
+    `• Stock: ${stockText(p)}`,
+    ...(p.status === "ACTIVE" && p.qcStatus === "APPROVED" && p.stock === 0 ? ["Buyers can't order it until it has stock."] : []),
+  ].join("\n");
+}
+
+/** Where a product is on Jumia: on or off, its quality check, price, sale and stock, read fresh. */
+export async function answerProductInfo(userId: string, phone: string, query: string): Promise<string> {
+  const ctx = await shopContext(userId, phone, "shop_whatsapp", "your live products");
+  if (!ctx) return "blocked";
+  const products = await catalog(ctx);
+  if (!products) return "no catalog";
+  const found = findProducts(products, query);
+  if (found.length === 0) {
+    await sendTextIfConfigured(phone, `I couldn't find "${shorten(query, 60)}" among your ${products.length} Jumia products. Try its name as it shows on Jumia, or its SKU.`);
+    return "not found";
+  }
+  const shown = await refreshProducts(ctx.token, ctx.country, found.slice(0, 3)).catch(() => found.slice(0, 3));
+  await saveProducts(userId, shown).catch(() => undefined);
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: ctx.jc?.timeZone ?? "UTC" }).format(new Date());
+  await sendLong(phone, [
+    ...shown.map((p) => productInfoText(p, ctx, today)),
+    ...(found.length > 3 ? [`+${found.length - 3} more match "${shorten(query, 40)}". Name one more exactly, or its SKU.`] : []),
+  ].join("\n\n"));
+  return `info on ${shown.map((p) => p.sellerSku).join(", ")}`;
+}
+
+/**
+ * What Jumia takes when a product sells and what the seller receives: its
+ * commission by its category (Jumia's own tables, lib/marketing/country-fees.ts),
+ * and the per-item fee where it's set by category. At the price they give,
+ * else its sale price while the sale runs, else its price. A draft (in the
+ * review step) is passed in; anything else is found in their Jumia shop.
+ */
+export async function answerFees(
+  userId: string, phone: string, query: string, price: number | null,
+  draft?: { name: string; price: number | null; categoryPath: string | null },
+): Promise<string> {
+  const ctx = await shopContext(userId, phone, "fee_calc_whatsapp", "Jumia's fees");
+  if (!ctx) return "blocked";
+  const fees = COUNTRY_FEES[ctx.country as JumiaCountryCode];
+  const calculator = `${appUrl()}${calculatorPathFor(ctx.country)}`;
+  if (!fees) {
+    await sendCtaUrlIfConfigured(phone, "I don't have Jumia's fee table for your country yet. The calculator has the rates I know.", "Price calculator", calculator);
+    return "no fee table";
+  }
+  let name: string;
+  let basePrice: number | null;
+  let categoryPath: string | null;
+  let currency = ctx.currency;
+  let onSale = false;
+  if (draft) {
+    name = draft.name;
+    basePrice = draft.price;
+    categoryPath = draft.categoryPath;
+  } else {
+    const products = await catalog(ctx);
+    if (!products) return "no catalog";
+    const found = findProducts(products, query);
+    if (found.length === 0) {
+      await sendTextIfConfigured(phone, `I couldn't find "${shorten(query, 60)}" among your Jumia products. Try its name as it shows on Jumia, or its SKU.`);
+      return "not found";
+    }
+    if (new Set(found.map((m) => m.setSid ?? m.sid)).size > 1) {
+      await sendLong(phone, [
+        `"${shorten(query, 40)}" could be ${found.length} products. Which one?`,
+        ...found.slice(0, 5).map((m) => `• ${shorten(label(m), 60)} (SKU ${m.sellerSku})`),
+        "", "Ask again with its name as it shows on Jumia, or its SKU.",
+      ].join("\n"));
+      return `fees unclear: ${found.length}`;
+    }
+    const p = found[0];
+    name = label(p);
+    currency = p.currency || currency;
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: ctx.jc?.timeZone ?? "UTC" }).format(new Date());
+    onSale = p.salePrice != null && (!p.saleEnd || p.saleEnd.slice(0, 10) >= today) && (!p.saleStart || p.saleStart.slice(0, 10) <= today);
+    basePrice = onSale ? p.salePrice : p.price;
+    categoryPath = p.categoryCode ? (await getCategoryByCode(Number(p.categoryCode)).catch(() => null))?.path ?? null : null;
+  }
+  const at = price ?? basePrice;
+  if (at == null || !(at > 0)) {
+    await sendTextIfConfigured(phone, `What price should I work it out at? e.g. "how much do I get if I sell the ${shorten(name, 30)} at 300".`);
+    return "no price";
+  }
+  const category = feeCategoryForPath(fees, categoryPath);
+  if (!category) {
+    await sendCtaUrlIfConfigured(phone, `I couldn't match *${shorten(name, 80)}*'s Jumia category${categoryPath ? ` (${shorten(categoryPath.split(">").pop()!.trim(), 40)})` : ""} to Jumia's fee table. Pick its category in the calculator to see what you'd receive at ${formatAmount(at, currency, ctx.jc)}.`, "Price calculator", calculator);
+    return "no fee category";
+  }
+  const amount = (n: number) => formatAmount(n, currency, ctx.jc);
+  const commission = commissionOn(fees, at, category.commission, "ds");
+  const dsFee = itemFeeFor(fees, category, "ds", null);
+  const jeFee = itemFeeFor(fees, category, "je", null);
+  const lines = [
+    `🧮 *${shorten(name, 80)}* sold at ${amount(at)}${onSale && price == null ? " (its sale price)" : ""}:`,
+    `• Jumia commission (${category.name}, ${category.commission}%): ${amount(commission)}`,
+  ];
+  if (dsFee != null) {
+    lines.push(`• ${capitalise(fees.feeName)} when you ship it yourself: ${amount(dsFee)}`);
+    lines.push(`• You receive about *${amount(payoutAt(fees, at, dsFee, category.commission, "ds"))}*`);
+    if (jeFee != null && jeFee !== dsFee) lines.push(`With Jumia Express (stock in Jumia's warehouse) the ${fees.feeName} is ${amount(jeFee)}, so about ${amount(payoutAt(fees, at, jeFee, category.commission, "je"))}.`);
+  } else {
+    const sizes = fees.itemFee.by === "size" ? fees.itemFee.sizes.map((s) => s.ds).filter((n): n is number => n != null) : [];
+    lines.push(sizes.length > 0
+      ? `• ${capitalise(fees.feeName)}: ${amount(Math.min(...sizes))} to ${amount(Math.max(...sizes))} by the item's size`
+      : `• Plus Jumia's ${fees.feeName} per item`);
+    lines.push(`• You receive about *${amount(at - commission)}* before the ${fees.feeName}`);
+  }
+  lines.push("", `Jumia's rates (${fees.effective}), VAT included. Your statement shows the exact figures.`);
+  await sendCtaUrlIfConfigured(phone, lines.join("\n"), "Price calculator", calculator);
+  return `fees ${category.name} at ${at}`;
+}
+
 const STATUS_NAMES: Record<string, string> = {
   PENDING: "Pending", READY_TO_SHIP: "Ready to ship", SHIPPED: "Shipped", DELIVERED: "Delivered", CANCELED: "Cancelled",
   CANCELLED: "Cancelled", RETURNED: "Returned", FAILED: "Failed delivery", MULTIPLE_STATUS: "Mixed",
@@ -379,11 +655,11 @@ export async function answerOrderStatus(userId: string, phone: string, number: s
   return `order ${order.number}`;
 }
 
-export type Period = "today" | "yesterday" | "week" | "month";
+export type Period = "today" | "yesterday" | "week" | "month" | "quarter";
 
-/** The first day of `period` in the seller's own timezone, as YYYY-MM-DD. */
+/** The first day of `period` in the seller's own timezone, as YYYY-MM-DD. "quarter" is 90 days, as far back as Jumia's orders go. */
 export function periodStart(period: Period, timeZone: string, now = new Date()): string {
-  const back = period === "today" ? 0 : period === "yesterday" ? 1 : period === "week" ? 6 : 29;
+  const back = period === "today" ? 0 : period === "yesterday" ? 1 : period === "week" ? 6 : period === "month" ? 29 : 89;
   return new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date(now.getTime() - back * 86_400_000));
 }
 
@@ -392,38 +668,49 @@ export function periodEnd(period: Period, timeZone: string, now = new Date()): s
   return new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date(now.getTime() + (period === "yesterday" ? 0 : 1) * 86_400_000));
 }
 
-const PERIOD_WORDS: Record<Period, string> = { today: "today", yesterday: "yesterday", week: "in the last 7 days", month: "in the last 30 days" };
+const PERIOD_WORDS: Record<Period, string> = {
+  today: "today", yesterday: "yesterday", week: "in the last 7 days", month: "in the last 30 days", quarter: "in the last 90 days",
+};
 
 /**
- * Their orders and sales for today, yesterday, the last 7 days or the last
- * 30, by status; or, with a status ("cancelled orders yesterday"), the orders
- * that moved to it in that time, one line each.
+ * Their orders and sales for today, yesterday, the last 7, 30 or 90 days, by
+ * status; or, with statuses ("ready to ship and cancelled orders yesterday"),
+ * the orders that moved to each in that time, one line each. Each status is
+ * its own request, the way the worker's single-status reads were checked live.
  */
-export async function answerSales(userId: string, phone: string, period: Period, status: string | null = null): Promise<string> {
+export async function answerSales(userId: string, phone: string, period: Period, status: string | string[] | null = null): Promise<string> {
   const ctx = await shopContext(userId, phone, "order_alerts", "your Jumia orders");
   if (!ctx) return "blocked";
   const tz = ctx.jc?.timeZone ?? "UTC";
   const when = PERIOD_WORDS[period];
-  if (status) {
-    const r = await ordersWithStatus(ctx.token, status, periodStart(period, tz), periodEnd(period, tz));
-    if (!r.ok) {
-      await sendTextIfConfigured(phone, `I couldn't read your Jumia orders: ${r.message}`);
-      return "failed";
+  const statuses = (Array.isArray(status) ? status : status ? [status] : []).slice(0, 4);
+  if (statuses.length > 0) {
+    const parts: string[] = [];
+    const counts: string[] = [];
+    for (const s of statuses) {
+      const r = await ordersWithStatus(ctx.token, s, periodStart(period, tz), periodEnd(period, tz));
+      if (!r.ok) {
+        await sendTextIfConfigured(phone, `I couldn't read your Jumia orders: ${r.message}`);
+        return "failed";
+      }
+      const name = statusName(s).toLowerCase();
+      counts.push(`${r.data.length} ${name}`);
+      if (r.data.length === 0) {
+        parts.push(`No ${name} Jumia orders ${when}.`);
+        continue;
+      }
+      const max = statuses.length > 1 ? 8 : 15;
+      const lines = r.data.slice(0, max).map((o) =>
+        `• #${o.number}${o.totalAmountLocal ? ` · ${formatAmount(Number(o.totalAmountLocal.value) || 0, o.totalAmountLocal.currency, ctx.jc)}` : ""}` +
+        (o.updatedAt || o.createdAt ? ` · ${shortDate(o.updatedAt ?? o.createdAt, ctx.jc)}` : ""));
+      parts.push([
+        `📦 ${r.data.length} ${name} Jumia order${r.data.length === 1 ? "" : "s"} ${when}`,
+        ...lines, ...(r.data.length > max ? [`+${r.data.length - max} more`] : []),
+      ].join("\n"));
     }
-    const name = statusName(status).toLowerCase();
-    if (r.data.length === 0) {
-      await sendTextIfConfigured(phone, `No ${name} Jumia orders ${when}.`);
-      return "none";
-    }
-    const lines = r.data.slice(0, 15).map((o) =>
-      `• #${o.number}${o.totalAmountLocal ? ` · ${formatAmount(Number(o.totalAmountLocal.value) || 0, o.totalAmountLocal.currency, ctx.jc)}` : ""}` +
-      (o.updatedAt || o.createdAt ? ` · ${shortDate(o.updatedAt ?? o.createdAt, ctx.jc)}` : ""));
-    await sendLong(phone, [
-      `📦 ${r.data.length} ${name} Jumia order${r.data.length === 1 ? "" : "s"} ${when}`,
-      ...lines, ...(r.data.length > 15 ? [`+${r.data.length - 15} more`] : []),
-      "", "Ask me about one by its number for the details.",
-    ].join("\n"));
-    return `${r.data.length} ${name}`;
+    const any = counts.some((c) => !c.startsWith("0 "));
+    await sendLong(phone, [...parts, ...(any ? ["Ask me about one by its number for the details."] : [])].join("\n\n"));
+    return counts.join(", ");
   }
   const r = await ordersCreatedSince(ctx.token, periodStart(period, tz), 10, periodEnd(period, tz));
   if (!r.ok) {

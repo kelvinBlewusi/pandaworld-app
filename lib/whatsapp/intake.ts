@@ -89,7 +89,7 @@ import { rememberRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
 import { handleShopTap } from "@/lib/whatsapp/shop";
 import { carryPriceToVariants, carryStockToVariants, chatPrice, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
-import { answerPendingQuestion, assistantEnabled, looksLikeQuestion, plainQuickEdit, runAssistant } from "@/lib/whatsapp/assistant";
+import { answerLiveValue, answerPendingQuestion, assistantEnabled, looksLikeQuestion, plainQuickEdit, runAssistant } from "@/lib/whatsapp/assistant";
 import { batchCreditRefusal, creditGate } from "@/lib/whatsapp/credit-gate";
 
 /**
@@ -525,7 +525,7 @@ export async function handleLinkedMessage(
   messageId: string | undefined,
   content: { text?: string; imageMediaId?: string; unsupported?: string; platformError?: string },
 ): Promise<void> {
-  const session = await getOrCreateSession(userId, phoneNumber);
+  let session = await getOrCreateSession(userId, phoneNumber);
 
   // Claimed ATOMICALLY, up front, before any slow work — not read-then-
   // written-back-at-the-end. handleFixAndResubmit (an AI rerun + a Jumia
@@ -585,6 +585,14 @@ export async function handleLinkedMessage(
   // product the assistant offered (lib/whatsapp/shop.ts). Global and
   // stateless like the order taps: the id names the change.
   if (!content.imageMediaId && (await handleShopTap(userId, phoneNumber, content.text))) return;
+
+  // The answer to the assistant's "What should its stock be?" about a live
+  // product: a bare "10" is the stock, not a batch of 10 (owner's second
+  // test, 2026-10-07). Anything else drops the question and carries on.
+  if (session.assistantPending && "kind" in session.assistantPending) {
+    if (await answerLiveValue(userId, phoneNumber, session, content.imageMediaId ? undefined : content.text)) return;
+    session = { ...session, assistantPending: null };
+  }
 
   // Global commands (restart/cancel, disconnect, status, help) work in ANY
   // state — checked before the per-state dispatch, not folded into it, so
