@@ -87,6 +87,7 @@ import { enqueueAnalysisJobs, nudgeWorker, workersFor, isBatchSettled, type Anal
 import { restrictedWordsInJumiaRejection, restrictedBrandWordsInRejection } from "@/lib/ai/restricted-words";
 import { rememberRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
+import { handleShopTap } from "@/lib/whatsapp/shop";
 import { carryPriceToVariants, carryStockToVariants, chatPrice, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import { answerPendingQuestion, assistantEnabled, plainQuickEdit, runAssistant } from "@/lib/whatsapp/assistant";
 import { batchCreditRefusal, creditGate } from "@/lib/whatsapp/credit-gate";
@@ -579,6 +580,11 @@ export async function handleLinkedMessage(
   // arrives whatever the session is doing, and stateless: every id names
   // the order it acts on.
   if (!content.imageMediaId && (await handleOrderMessage(userId, phoneNumber, content.text))) return;
+
+  // A tap confirming (or picking the product for) a change to a live Jumia
+  // product the assistant offered (lib/whatsapp/shop.ts). Global and
+  // stateless like the order taps: the id names the change.
+  if (!content.imageMediaId && (await handleShopTap(userId, phoneNumber, content.text))) return;
 
   // Global commands (restart/cancel, disconnect, status, help) work in ANY
   // state — checked before the per-state dispatch, not folded into it, so

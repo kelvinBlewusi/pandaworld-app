@@ -29,6 +29,7 @@ import {
   cancelOrder, labelsPdf, packOrders, packedItems, readyToShip, toPackItems, waitingOrders, type WaitingOrder,
 } from "@/lib/jumia/order-flow";
 import type { ShipmentProvider } from "@/lib/jumia/orders";
+import { markNoticed } from "@/lib/jumia/shop";
 
 const ID = "[0-9a-f-]{36}";
 const BODY_MAX = 1024;
@@ -199,7 +200,7 @@ export async function handleOrderMessage(userId: string, phone: string, text: st
     }
     return true;
   }
-  const ctx: Ctx = { phone, token: creds.accessToken, country: jumiaCountryByCode(creds.country) };
+  const ctx: Ctx = { userId, phone, token: creds.accessToken, country: jumiaCountryByCode(creds.country) };
 
   switch (cmd.kind) {
     case "list":       await showWaiting(ctx); break;
@@ -217,7 +218,7 @@ export async function handleOrderMessage(userId: string, phone: string, text: st
   return true;
 }
 
-interface Ctx { phone: string; token: string; country?: JumiaCountry }
+interface Ctx { userId: string; phone: string; token: string; country?: JumiaCountry }
 
 async function loadWaiting(ctx: Ctx): Promise<WaitingOrder[] | null> {
   const w = await waitingOrders(ctx.token);
@@ -250,17 +251,23 @@ function waitingButtons(orders: WaitingOrder[]): { id: string; title: string }[]
   return [{ id: "orders:labels", title: "Get labels" }, { id: "orders:rtsall", title: "Ready to ship all" }, PICK];
 }
 
-/** The new-order alert as our own message (inside WhatsApp's 24 hours). */
-export async function sendOrderAlert(phone: string, orders: WaitingOrder[], country?: JumiaCountry): Promise<void> {
+/**
+ * The new-order alert as our own message (inside WhatsApp's 24 hours). A
+ * `note` (low stock) goes under it, or after it when it wouldn't fit.
+ */
+export async function sendOrderAlert(phone: string, orders: WaitingOrder[], country?: JumiaCountry, note?: string | null): Promise<void> {
+  let body = alertText(orders, country);
+  if (note && body.length + note.length + 2 <= BODY_MAX) body = `${body}\n\n${note}`;
+  else if (note) await sendTextIfConfigured(phone, note);
   if (orders.length === 1) {
     const id = orders[0].id;
-    await sendButtonsIfConfigured(phone, alertText(orders, country), [
+    await sendButtonsIfConfigured(phone, body, [
       { id: `opack:${id}`, title: "Pack & get label" },
       { id: `ocancel:${id}`, title: "Cancel order" },
     ]);
     return;
   }
-  await sendButtonsIfConfigured(phone, alertText(orders, country), [{ id: "orders:packall", title: "Pack all & labels" }, PICK]);
+  await sendButtonsIfConfigured(phone, body, [{ id: "orders:packall", title: "Pack all & labels" }, PICK]);
 }
 
 /** The same alert as the approved template (outside WhatsApp's 24 hours). */
@@ -501,5 +508,7 @@ async function cancelYes(ctx: Ctx, orderId: string): Promise<void> {
   const o = await loadOne(ctx, orderId);
   if (!o) return;
   const r = await cancelOrder(ctx.token, o);
+  // Their own cancellation: not told back to them as "cancelled" (shop-notices.ts).
+  if (r.ok) await markNoticed(ctx.userId, "order", `${o.id}:CANCELED`);
   await sendTextIfConfigured(ctx.phone, r.ok ? `Order #${o.number} is cancelled.` : `#${o.number} wasn't cancelled: ${r.reason}.`);
 }

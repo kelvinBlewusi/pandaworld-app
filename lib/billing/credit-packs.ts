@@ -65,6 +65,7 @@ export const PACK_FEATURES: PackFeature[] = [
   { id: "qc_fix",                 label: "Jumia QC rejection alerts and guided fixes",  short: "QC alerts & fixes",          minPack: "standard" },
   { id: "order_alerts",           label: "Order alerts on WhatsApp",                    short: "Order alerts",               minPack: "pro", comingSoon: true },
   { id: "shipping_labels",        label: "Shipping labels on WhatsApp",                 short: "Shipping labels",            minPack: "pro", comingSoon: true },
+  { id: "shop_whatsapp",          label: "Live Jumia products and payouts on WhatsApp", short: "Shop on WhatsApp", minPack: "pro", comingSoon: true },
   { id: "fee_calc_whatsapp",      label: "Jumia fee calculator on WhatsApp",            short: "Fee calculator on WhatsApp", minPack: "pro", comingSoon: true },
   { id: "fee_calc_extension",     label: "Jumia fee calculator on the extension panel", short: "Fee calculator in the extension", minPack: "pro" },
   { id: "image_polish_extension", label: "Jumia image polish on the Chrome extension",  short: "Image polish in the extension",   minPack: "pro" },

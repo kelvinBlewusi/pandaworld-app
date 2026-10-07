@@ -138,7 +138,8 @@ export function describeError(status: number, json: unknown, text: string): stri
   return `Jumia answered ${status}${detail ? `: ${detail}` : ""}`;
 }
 
-async function call<T>(
+/** One Vendor API call, its answer or a readable reason. Shared with lib/jumia/shop.ts. */
+export async function call<T>(
   accessToken: string,
   method:      "GET" | "POST" | "PUT",
   path:        string,
@@ -177,13 +178,18 @@ async function call<T>(
  */
 export function listOrders(
   accessToken: string,
-  opts: { status?: string[]; createdAfter?: string; createdBefore?: string; size?: number; sort?: "ASC" | "DESC"; token?: string } = {},
+  opts: {
+    status?: string[]; createdAfter?: string; createdBefore?: string; updatedAfter?: string; updatedBefore?: string;
+    size?: number; sort?: "ASC" | "DESC"; token?: string;
+  } = {},
 ): Promise<JumiaCall<{ orders: JumiaOrder[]; nextToken: string | null; isLastPage: boolean }>> {
   return call(accessToken, "GET", "/orders", {
     query: {
       status:        opts.status?.join(","),
       createdAfter:  opts.createdAfter,
       createdBefore: opts.createdBefore,
+      updatedAfter:  opts.updatedAfter,
+      updatedBefore: opts.updatedBefore,
       size:          opts.size,
       sort:          opts.sort,
       token:         opts.token,
