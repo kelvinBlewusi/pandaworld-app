@@ -116,6 +116,8 @@ export interface ListingRow {
   // within it. Null for listings created any other way.
   whatsapp_batch_id: string | null;
   whatsapp_seq:      number | null;
+  /** 'web' when the batch was made in the Listing Assistant (lib/whatsapp/channel.ts): its updates go there. Null for WhatsApp. */
+  chat_channel?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -171,6 +173,7 @@ export type ListingInsert = Omit<
   user_prompt?: string | null;
   whatsapp_batch_id?: string | null;
   whatsapp_seq?: number | null;
+  chat_channel?: string | null;
 };
 
 export type VariantInsert = Omit<VariantRow, "id" | "created_at"> & {

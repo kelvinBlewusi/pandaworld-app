@@ -66,6 +66,7 @@ import {
 import type { LiveChange } from "@/lib/jumia/shop";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { ALLOWANCE_TOLD, allowanceText, assistantGate, assistantSwitchedOn } from "@/lib/whatsapp/assistant-limits";
+import { isWebAddress } from "@/lib/whatsapp/channel";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
 import { resetSession, updateSession, type AssistantPending, type LiveValueAsk, type WhatsAppSession } from "@/lib/whatsapp/session";
 import { parseVariations, saveVariations, variationOptions } from "@/lib/whatsapp/variation-question";
@@ -311,12 +312,20 @@ export interface PromptContext {
   conversation?: string[];
   /** What a listing costs this seller (their country's price). */
   listingCost?: number;
+  /** The Listing Assistant on the website (lib/whatsapp/channel.ts), not WhatsApp. */
+  web?: boolean;
 }
 
 export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): string {
-  const { products, currency, seller, links, hintSeq, conversation = [], listingCost } = ctx;
+  const { products, currency, seller, links, hintSeq, conversation = [], listingCost, web } = ctx;
   return [
-    "You are PandaWorld's assistant on WhatsApp. PandaWorld lists sellers' products on Jumia (Africa's online marketplace) and helps them run their Jumia shop.",
+    web
+      ? "You are PandaWorld's Listing Assistant, a chat on the PandaWorld website. PandaWorld lists sellers' products on Jumia (Africa's online marketplace) and helps them run their Jumia shop."
+      : "You are PandaWorld's assistant on WhatsApp. PandaWorld lists sellers' products on Jumia (Africa's online marketplace) and helps them run their Jumia shop.",
+    ...(web ? [
+      "This chat works like the WhatsApp bot: the seller uploads product photos with the image button, adds the price and notes as text, and you draft, edit and submit them to Jumia.",
+      "Here, NOT available: orders waiting to be packed, new-order alerts and shipping labels. Those are on WhatsApp only: for them, say so in a reply (never the orders action).",
+    ] : []),
     "You choose ONE action as JSON, and PandaWorld's code checks it and carries it out.",
     "",
     `Where the seller is: ${STAGE_TEXT[stage]}`,
@@ -922,14 +931,14 @@ export async function interpret(
   stage: Stage,
   products: ProductFacts[],
   message: string,
-  opts: { batchId?: string | null; hintSeq?: number; conversation?: string[] } = {},
+  opts: { batchId?: string | null; hintSeq?: number; conversation?: string[]; web?: boolean } = {},
 ): Promise<{ action: AssistantAction; links: Record<string, AssistantLink>; raw: string }> {
   const [currency, seller, model, listingCost] = await Promise.all([
     shopCurrencyForUser(userId), sellerFacts(userId), assistantModel(), listingCreditCost(userId).catch(() => LIVE_LISTING_CREDIT_COST),
   ]);
   const links = assistantLinks({ batchId: opts.batchId, countrySlug: seller.countrySlug });
   const conversation = opts.conversation ?? [];
-  const prompt = buildPrompt(stage, message, { products, currency, seller: seller.lines, links, hintSeq: opts.hintSeq, conversation, listingCost });
+  const prompt = buildPrompt(stage, message, { products, currency, seller: seller.lines, links, hintSeq: opts.hintSeq, conversation, listingCost, web: opts.web });
   const { text } = await withAiUsageContext({ feature: "assistant", userId }, () =>
     callGeminiBackend(model, [{ text: prompt }], model.startsWith("gemini-3") ? { preferBackend: "ai-studio" } : {}));
   const action = parseAction(text, message, products, links, currency, { context: conversation.join("\n"), stage });
@@ -1206,7 +1215,7 @@ export async function runAssistant(
   try {
     const conversation = await recentConversation(phone, text);
     products = batchId ? await productFacts(await batchListings(batchId, userId)) : [];
-    ({ action, links, raw } = await interpret(userId, stage, products, text, { batchId, hintSeq, conversation }));
+    ({ action, links, raw } = await interpret(userId, stage, products, text, { batchId, hintSeq, conversation, web: isWebAddress(phone) }));
   } catch (e) {
     console.warn(`[assistant] interpreting for ${userId} failed: ${(e as Error).message}`);
     await logTurn(userId, stage, text, null, `failed: ${(e as Error).message}`);

@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@clerk/nextjs/server";
 import { isAdmin } from "@/lib/auth/is-admin";
 import { isBillingEnabled } from "@/lib/billing/mode";
+import { listingAssistantFor } from "@/lib/whatsapp/listing-assistant";
 import {
   getOrCreateCreditBalance,
   getRecentTransactions,
@@ -41,6 +42,8 @@ export default async function ExtensionAppLayout({
     getUserNotices(userId, 5),
     listingCreditCost(userId),
   ]);
+  // The Listing Assistant's pilot (lib/whatsapp/listing-assistant.ts).
+  const showAssistant = await listingAssistantFor(userId).catch(() => false);
 
   // The pack the seller last bought, or "Free" until they buy one.
   const planId = recentPack?.id ?? "free";
@@ -54,6 +57,7 @@ export default async function ExtensionAppLayout({
       // Buying only makes sense once credits are being spent.
       canBuyCredits={billingOn && !isAdmin(userId)}
       listingCost={listingCost}
+      showAssistant={showAssistant}
       notifications={notifications}
       notices={notices}
       notificationsSeenAt={notificationsSeenAt}

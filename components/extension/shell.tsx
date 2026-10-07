@@ -36,6 +36,7 @@ import {
 
 const PAGE_TITLES: Record<string, string> = {
   "/extension/dashboard": "Extension Dashboard",
+  "/extension/assistant": "Listing Assistant",
   "/extension/whatsapp-listings": "List from WhatsApp",
   "/extension/calculator": "Calculator",
   "/extension/listings": "Autofill Activity",
@@ -77,6 +78,7 @@ export function ExtensionShell({
   isAdmin = false,
   canBuyCredits = false,
   listingCost,
+  showAssistant = false,
 }: {
   children: React.ReactNode;
   planLabel: string;
@@ -90,6 +92,8 @@ export function ExtensionShell({
   canBuyCredits?: boolean;
   /** What a listing costs this seller, for the pack picker. */
   listingCost?: number;
+  /** The Listing Assistant is on for this seller (lib/whatsapp/listing-assistant.ts). */
+  showAssistant?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [buyOpen, setBuyOpen] = useState(false);
@@ -159,7 +163,7 @@ export function ExtensionShell({
     <div className="flex h-[100dvh] overflow-hidden bg-zinc-50">
       {/* Desktop sidebar */}
       <div className="hidden lg:flex">
-        <ExtensionSidebar isAdmin={isAdmin} />
+        <ExtensionSidebar isAdmin={isAdmin} showAssistant={showAssistant} />
       </div>
 
       {/* Mobile drawer */}
@@ -184,7 +188,7 @@ export function ExtensionShell({
           open ? "translate-x-0" : "translate-x-full",
         ].join(" ")}
       >
-        <ExtensionSidebar onClose={() => setOpen(false)} isAdmin={isAdmin} />
+        <ExtensionSidebar onClose={() => setOpen(false)} isAdmin={isAdmin} showAssistant={showAssistant} />
       </div>
 
       {/* Main content area */}

@@ -3828,3 +3828,25 @@ describe("the assistant, on the pilot's accounts", () => {
   });
 });
 
+
+describe("the Listing Assistant's web chat (owner, 2026-10-07)", () => {
+  it("runs the same flow under the web address, and marks its listings 'web' so their updates come back there", async () => {
+    const WEB = `web:${USER}`;
+    seedSession({ phone_number: WEB, batch_id: "batch-web" });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, WEB, "web-m1", { imageMediaId: "a", text: "price 150" });
+
+    const made = db.tables.listings.filter((l) => l.whatsapp_batch_id === "batch-web");
+    expect(made).toHaveLength(1);
+    expect(made[0].chat_channel).toBe("web");
+    expect(sent.every((m) => m.to === WEB)).toBe(true);
+  });
+
+  it("a WhatsApp batch's listings aren't marked", async () => {
+    seedSession({ batch_id: "batch-wa" });
+    await handleLinkedMessage(USER, PHONE, "wa-m1", { imageMediaId: "a", text: "price 150" });
+    const made = db.tables.listings.filter((l) => l.whatsapp_batch_id === "batch-wa");
+    expect(made[0].chat_channel ?? null).toBeNull();
+  });
+});

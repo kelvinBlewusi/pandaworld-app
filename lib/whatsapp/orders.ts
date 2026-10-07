@@ -26,6 +26,7 @@ import { featureAccess, featureMinPackName, type FeatureBlock, type FeatureId } 
 import { LABEL_CREDIT_COST } from "@/lib/billing/credit-packs";
 import { availableCredits, chargeService, isUnmetered } from "@/lib/billing/extension-credits";
 import { createServerClient } from "@/lib/supabase/server";
+import { isWebAddress } from "@/lib/whatsapp/channel";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
 import { promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
@@ -185,6 +186,13 @@ async function upgrade(phone: string, feature: FeatureId, blockedBy: FeatureBloc
 export async function handleOrderMessage(userId: string, phone: string, text: string | undefined): Promise<boolean> {
   const cmd = parseOrderCommand(text);
   if (!cmd) return false;
+
+  // The Listing Assistant (web:<userId>) does everything but orders and
+  // labels (owner, 2026-10-07): those stay on WhatsApp, where the alerts are.
+  if (isWebAddress(phone)) {
+    await sendTextIfConfigured(phone, "📦 Your Jumia orders, packing and shipping labels are on WhatsApp: message the PandaWorld bot there and say *orders*. Here I can list products, change your live products and answer questions about your shop and sales.");
+    return true;
+  }
 
   // Seeing the waiting orders comes with either: the alerts (Pro), or the
   // labels (Standard), which need the list to pack from.
