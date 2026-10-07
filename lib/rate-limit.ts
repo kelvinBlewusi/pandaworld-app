@@ -140,6 +140,13 @@ export const RATE_LIMITS = {
   // Connecting Jumia with a generated token: each attempt calls Jumia's
   // token endpoint, and a wrong pair only needs a few tries to fix.
   jumiaConnect:      { max: 10, windowMs: 60 * 60 * 1000 }, // 10/hour
+
+  // The Listing Assistant (app/api/listing-assistant): a message runs the
+  // bot, a photo is stored. Room for a 10-product batch with several photos
+  // each, plus the conversation around it; the AI part has its own daily
+  // allowance (lib/whatsapp/assistant-limits.ts).
+  assistantMessage:  { max: 300, windowMs: 60 * 60 * 1000 }, // 300/hour
+  assistantUpload:   { max: 200, windowMs: 60 * 60 * 1000 }, // 200/hour
 } as const;
 
 // ─── Convenience wrapper ─────────────────────────────────────────────────────

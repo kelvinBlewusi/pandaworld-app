@@ -14,6 +14,14 @@ const BUCKET = "product-images";
  * why rather than silently dropping their photo.
  */
 export async function ingestWhatsAppImage(mediaId: string, userId: string): Promise<string | null> {
+  // A photo uploaded on the Listing Assistant's page (lib/whatsapp/channel.ts)
+  // was validated and stored when it was uploaded (storeAssistantUpload): its
+  // id is the storage path, under the seller's own folder.
+  if (mediaId.startsWith(WEB_MEDIA_PREFIX)) {
+    const path = mediaId.slice(WEB_MEDIA_PREFIX.length);
+    if (!path.startsWith(`${userId}/`) || path.includes("..")) return null;
+    return createServerClient().storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
+  }
   const buffer = await downloadMedia(mediaId);
 
   const validated = await validateImageBuffer(buffer, `whatsapp-media-${mediaId}`);
@@ -33,4 +41,27 @@ export async function ingestWhatsAppImage(mediaId: string, userId: string): Prom
 
   const { data } = db.storage.from(BUCKET).getPublicUrl(path);
   return data.publicUrl;
+}
+
+/** A Listing Assistant upload's media id: `web:<storage path>`. */
+export const WEB_MEDIA_PREFIX = "web:";
+
+/**
+ * Store a photo uploaded on the Listing Assistant's page, with the same
+ * checks as a WhatsApp photo (validateImageBuffer), and return the media id
+ * the bot takes for it and its public URL. Null when it isn't an image we take.
+ */
+export async function storeAssistantUpload(
+  userId: string, buffer: Buffer, filename: string,
+): Promise<{ mediaId: string; url: string } | null> {
+  const validated = await validateImageBuffer(buffer, filename);
+  if (!validated) return null;
+  const db = createServerClient();
+  const path = `${userId}/assistant/${Date.now()}-${Math.random().toString(36).slice(2)}.${validated.ext}`;
+  const { error } = await db.storage.from(BUCKET).upload(path, buffer, { contentType: validated.mime, upsert: false });
+  if (error) {
+    console.warn(`[assistant upload] storage write failed for ${userId}: ${error.message}`);
+    return null;
+  }
+  return { mediaId: `${WEB_MEDIA_PREFIX}${path}`, url: db.storage.from(BUCKET).getPublicUrl(path).data.publicUrl };
 }

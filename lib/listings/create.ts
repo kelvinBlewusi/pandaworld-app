@@ -43,6 +43,8 @@ export async function createListingForUser(userId: string, input: {
    */
   whatsapp_batch_id?: string | null;
   whatsapp_seq?: number | null;
+  /** 'web' for the Listing Assistant (lib/whatsapp/channel.ts), where its updates then go. */
+  chat_channel?: string | null;
 }): Promise<ListingRow> {
   const db = createServerClient();
 
@@ -84,6 +86,8 @@ export async function createListingForUser(userId: string, input: {
     sale_end_date: null,
     whatsapp_batch_id: input.whatsapp_batch_id ?? null,
     whatsapp_seq: input.whatsapp_seq ?? null,
+    // Only written when set: a WhatsApp or web-app listing leaves the column alone.
+    ...(input.chat_channel ? { chat_channel: input.chat_channel } : {}),
   };
 
   const { data, error } = await db

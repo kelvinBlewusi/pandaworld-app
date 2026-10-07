@@ -25,12 +25,22 @@
  * actually reply is worse than one that fails loudly during setup.
  */
 
-import { logOutboundMessage } from "@/lib/whatsapp/message-log";
+import { logOutboundMessage, recordOutboundMessage } from "@/lib/whatsapp/message-log";
+import { isWebAddress } from "@/lib/whatsapp/channel";
 
 const GRAPH_API_VERSION = "v21.0";
 
 export function isWhatsAppConfigured(): boolean {
   return Boolean(process.env.WHATSAPP_ACCESS_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID);
+}
+
+/**
+ * Whether a message to `to` can go: WhatsApp is set up, or `to` is the
+ * Listing Assistant's web address (lib/whatsapp/channel.ts), which needs no
+ * Meta account: its messages are only recorded.
+ */
+function canSend(to: string): boolean {
+  return isWebAddress(to) || isWhatsAppConfigured();
 }
 
 function requireConfig(): { token: string; phoneNumberId: string } {
@@ -89,6 +99,14 @@ function throttleCodeOf(body: string): number | null {
  * malformed — sending it again just fails again, more slowly.
  */
 async function callGraphApi(body: Record<string, unknown>): Promise<void> {
+  // The Listing Assistant (web:<userId>): the message is recorded, with its
+  // buttons, rows or link, for the page to show. Nothing goes to Meta, so it
+  // costs nothing and is never throttled. Awaited, so messages keep their order.
+  if (typeof body.to === "string" && isWebAddress(body.to)) {
+    await recordOutboundMessage(body.to, body);
+    return;
+  }
+
   const { token, phoneNumberId } = requireConfig();
 
   // Logged once here — the one chokepoint every send helper below funnels
@@ -176,7 +194,7 @@ export async function sendButtons(
  * guard.
  */
 export async function sendTextIfConfigured(to: string, text: string, options?: { preview?: boolean }): Promise<void> {
-  if (!isWhatsAppConfigured()) {
+  if (!canSend(to)) {
     console.warn(`[whatsapp] not configured — would have sent to ${to}: ${text}`);
     return;
   }
@@ -190,7 +208,7 @@ export async function sendButtonsIfConfigured(
   bodyText: string,
   buttons: { id: string; title: string }[],
 ): Promise<void> {
-  if (!isWhatsAppConfigured()) {
+  if (!canSend(to)) {
     console.warn(`[whatsapp] not configured — would have sent buttons to ${to}: ${bodyText}`);
     return;
   }
@@ -218,7 +236,7 @@ export async function sendImage(to: string, link: string, caption?: string): Pro
 }
 
 export async function sendImageIfConfigured(to: string, link: string, caption?: string): Promise<void> {
-  if (!isWhatsAppConfigured()) {
+  if (!canSend(to)) {
     console.warn(`[whatsapp] not configured — would have sent an image to ${to}: ${link}`);
     return;
   }
@@ -277,7 +295,7 @@ export async function sendListIfConfigured(
   buttonText: string,
   rows:       { id: string; title: string; description?: string }[],
 ): Promise<void> {
-  if (!isWhatsAppConfigured()) {
+  if (!canSend(to)) {
     console.warn(`[whatsapp] not configured — would have sent a list to ${to}: ${bodyText}`);
     return;
   }
@@ -317,7 +335,7 @@ export async function sendCtaUrlIfConfigured(
   buttonText: string,
   url: string,
 ): Promise<void> {
-  if (!isWhatsAppConfigured()) {
+  if (!canSend(to)) {
     console.warn(`[whatsapp] not configured — would have sent a link to ${to}: ${url}`);
     return;
   }
@@ -362,6 +380,12 @@ export async function sendButtonsWithDocument(
   if (buttons.length === 0 || buttons.length > 3) {
     throw new Error(`sendButtonsWithDocument: expected 1-3 buttons, got ${buttons.length}`);
   }
+  // Labels stay on WhatsApp (lib/whatsapp/orders.ts refuses orders on the web);
+  // should one get here, the words and buttons go without the PDF.
+  if (isWebAddress(to)) {
+    await sendButtons(to, `${bodyText}\n\n(The label PDF is sent on WhatsApp.)`.slice(0, 1024), buttons);
+    return;
+  }
   const id = await uploadMedia(bytes, "application/pdf", filename);
   await callGraphApi({
     to,
@@ -378,7 +402,7 @@ export async function sendButtonsWithDocument(
 export async function sendButtonsWithDocumentIfConfigured(
   to: string, bytes: Uint8Array, filename: string, bodyText: string, buttons: { id: string; title: string }[],
 ): Promise<void> {
-  if (!isWhatsAppConfigured()) {
+  if (!canSend(to)) {
     console.warn(`[whatsapp] not configured — would have sent ${filename} with buttons to ${to}: ${bodyText}`);
     return;
   }
@@ -400,6 +424,8 @@ export async function sendTemplate(
   bodyValues:  string[],
   buttonPayloads: string[] = [],
 ): Promise<void> {
+  // Templates are WhatsApp's own (alerts outside its 24 hours): never to the web.
+  if (isWebAddress(to)) return;
   await callGraphApi({
     to,
     type: "template",
@@ -419,7 +445,7 @@ export async function sendTemplate(
 export async function sendTemplateIfConfigured(
   to: string, name: string, language: string, bodyValues: string[], buttonPayloads: string[] = [],
 ): Promise<void> {
-  if (!isWhatsAppConfigured()) {
+  if (!canSend(to)) {
     console.warn(`[whatsapp] not configured — would have sent template ${name} to ${to}`);
     return;
   }

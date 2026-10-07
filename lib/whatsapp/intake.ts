@@ -87,6 +87,7 @@ import { restrictedWordsInJumiaRejection, restrictedBrandWordsInRejection } from
 import { rememberRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
 import { handleShopTap } from "@/lib/whatsapp/shop";
+import { chatChannelOf } from "@/lib/whatsapp/channel";
 import { carryPriceToVariants, carryStockToVariants, chatPrice, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import { answerLiveValue, answerPendingQuestion, assistantEnabled, looksLikeQuestion, plainQuickEdit, runAssistant } from "@/lib/whatsapp/assistant";
 import { batchCreditRefusal, creditGate } from "@/lib/whatsapp/credit-gate";
@@ -1494,6 +1495,8 @@ async function claimBatchSlot(
   userId:  string,
   batchId: string | null,
   seq:     number,
+  /** 'web' from the Listing Assistant: the listing's updates go back there. */
+  channel: "web" | null = null,
 ): Promise<{ ok: true; listingId: string } | { ok: false; message: string }> {
   const findExisting = () => findBatchSlotListing(userId, batchId, seq);
 
@@ -1504,6 +1507,7 @@ async function claimBatchSlot(
     const listing = await createListingForUser(userId, {
       whatsapp_batch_id: batchId,
       whatsapp_seq:      seq,
+      chat_channel:      channel,
     });
     return { ok: true, listingId: listing.id };
   } catch (e) {
@@ -1620,7 +1624,7 @@ async function appendPhotoToListing(
     // (see 2026-09-14_one-listing-per-batch-slot.sql), because the losing
     // INSERT has to fail for the loser to know to adopt the winner's row.
     // So: look, then claim, then on collision look again.
-    const claimed = await claimBatchSlot(userId, session.batchId, seq);
+    const claimed = await claimBatchSlot(userId, session.batchId, seq, chatChannelOf(phoneNumber));
     if (!claimed.ok) {
       await replyError(phoneNumber, `⚠️ Couldn't start product ${seq}: ${claimed.message}`);
       return { ok: false };

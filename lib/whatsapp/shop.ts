@@ -25,6 +25,7 @@ import {
   sendButtonsIfConfigured, sendCtaUrlIfConfigured, sendListIfConfigured, sendTextIfConfigured,
 } from "@/lib/whatsapp/client";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
+import { isWebAddress } from "@/lib/whatsapp/channel";
 import { appUrl } from "@/lib/whatsapp/app-url";
 import { featureAccess, featureMinPackName, type FeatureId } from "@/lib/billing/features";
 import { LIVE_CHANGE_CREDIT_COST } from "@/lib/billing/credit-packs";
@@ -667,8 +668,9 @@ export async function answerOrderStatus(userId: string, phone: string, number: s
     return "not found";
   }
   const { order, items } = r.data;
-  // Still waiting on the seller: the usual order view, with its buttons.
-  if (items.some((i) => isToPack(i) || isPacked(i))) {
+  // Still waiting on the seller: the usual order view, with its buttons
+  // (on WhatsApp: packing isn't done in the Listing Assistant).
+  if (!isWebAddress(phone) && items.some((i) => isToPack(i) || isPacked(i))) {
     if (await handleOrderMessage(userId, phone, `order:${order.id}`)) return "showed waiting order";
   }
   const total = order.totalAmountLocal ? formatAmount(Number(order.totalAmountLocal.value) || 0, order.totalAmountLocal.currency, ctx.jc) : "";

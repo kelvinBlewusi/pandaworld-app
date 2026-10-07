@@ -699,6 +699,21 @@ export const QC_APPROVED = "qc_approved";
  */
 export const AUTO_RESUBMITTED = "auto_resubmitted";
 
+/**
+ * Where a seller hears about a listing: the Listing Assistant's chat for
+ * one made there (chat_channel 'web'), else their linked WhatsApp number.
+ * Null when it came from WhatsApp and none is linked any more.
+ */
+async function chatAddressFor(userId: string, channel: string | null): Promise<string | null> {
+  if (channel === "web") {
+    const { webAddress } = await import("@/lib/whatsapp/channel");
+    return webAddress(userId);
+  }
+  const { getWhatsAppConnection } = await import("@/lib/whatsapp/link");
+  const wa = await getWhatsAppConnection(userId);
+  return wa.connected && wa.phoneNumber ? wa.phoneNumber : null;
+}
+
 /** Not a rejection: nothing to fix. */
 const isGoodNews = (status: string) => status === "live" || status === QC_APPROVED || status === AUTO_RESUBMITTED;
 
@@ -761,17 +776,18 @@ async function notifyListingResolved(
     const db = createServerClient();
     const { data: row } = await db
       .from("listings")
-      .select("user_id, title, whatsapp_batch_id")
+      .select("user_id, title, whatsapp_batch_id, chat_channel")
       .eq("id", listingId)
       .maybeSingle();
 
     if (!row?.whatsapp_batch_id) return;
 
-    const { getWhatsAppConnection } = await import("@/lib/whatsapp/link");
     const { sendTextIfConfigured, sendButtonsIfConfigured } = await import("@/lib/whatsapp/client");
 
-    const wa = await getWhatsAppConnection(row.user_id as string);
-    if (!wa.connected || !wa.phoneNumber) return;
+    // Made in the Listing Assistant: told there (lib/whatsapp/channel.ts).
+    const to = await chatAddressFor(row.user_id as string, (row as { chat_channel?: string | null }).chat_channel ?? null);
+    if (!to) return;
+    const wa = { phoneNumber: to };
 
     // A refused category is asked for straight away: the question is the message.
     if (!isGoodNews(newStatus) && await askedForRefusedCategory(wa.phoneNumber, listingId, errorMsg)) return;
@@ -1030,9 +1046,13 @@ const MAX_STORED_ERROR = 4000;
 export async function notifyResolvedListings(userId: string, resolved: ResolvedListingNotice[]): Promise<void> {
   if (resolved.length === 0) return;
   try {
-    const { getWhatsAppConnection } = await import("@/lib/whatsapp/link");
-    const wa = await getWhatsAppConnection(userId);
-    if (!wa.connected || !wa.phoneNumber) return;
+    // Batches made in the Listing Assistant are told there; the rest on WhatsApp.
+    const { data: channels } = await createServerClient().from("listings").select("id, chat_channel")
+      .in("id", resolved.map((r) => r.listingId));
+    const web = new Set(((channels ?? []) as { id: string; chat_channel?: string | null }[])
+      .filter((c) => c.chat_channel === "web").map((c) => c.id));
+    const whatsapp = await chatAddressFor(userId, null);
+    const webChat = await chatAddressFor(userId, "web");
 
     const byBatch = new Map<string, ResolvedListingNotice[]>();
     for (const item of resolved) {
@@ -1041,7 +1061,8 @@ export async function notifyResolvedListings(userId: string, resolved: ResolvedL
     }
     const qcAlerts = await hasFeature(userId, "qc_fix", { ignoreBalance: true });
     for (const [batchId, items] of Array.from(byBatch)) {
-      await notifyBatchResolved(wa.phoneNumber, batchId, items, { qcAlerts });
+      const to = items.some((i) => web.has(i.listingId)) ? webChat : whatsapp;
+      if (to) await notifyBatchResolved(to, batchId, items, { qcAlerts });
     }
   } catch (e) {
     console.warn(`[push-listing] notifyResolvedListings failed for user ${userId}: ${(e as Error).message}`);

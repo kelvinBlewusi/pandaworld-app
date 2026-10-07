@@ -15,7 +15,7 @@ import { WhatsAppIcon } from "@/components/whatsapp/whatsapp-icon";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { UserButton, useUser } from "@clerk/nextjs";
-import {LayoutDashboard, Calculator, ListChecks, HelpCircle, BookOpen, Settings, ArrowRight, X, MessageSquare, AlertTriangle, Ban} from "lucide-react";
+import {LayoutDashboard, Calculator, ListChecks, HelpCircle, BookOpen, Settings, ArrowRight, X, MessageSquare, AlertTriangle, Ban, Sparkles} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Wordmark } from "@/components/marketing/wordmark";
 import { COMMUNITY_WHATSAPP_URL } from "@/lib/constants/support";
@@ -30,6 +30,10 @@ const primaryNav = [
   // is signed in or not. See app/how-to/page.tsx.
   { href: "/how-to",               label: "Guides",       icon: BookOpen },
 ];
+
+// The Listing Assistant (app/extension/(app)/assistant): shown to the sellers
+// it's on for (lib/whatsapp/listing-assistant.ts), right under the dashboard.
+const assistantItem = { href: "/extension/assistant", label: "Listing Assistant", icon: Sparkles };
 
 // Public, like Guides, so the same answers reach sellers before they sign up.
 const faqItem = { href: "/faq", label: "FAQ", icon: HelpCircle };
@@ -85,7 +89,7 @@ function SupportNavItem() {
   );
 }
 
-export function ExtensionSidebar({ onClose, isAdmin = false }: { onClose?: () => void; isAdmin?: boolean }) {
+export function ExtensionSidebar({ onClose, isAdmin = false, showAssistant = false }: { onClose?: () => void; isAdmin?: boolean; showAssistant?: boolean }) {
   const { user } = useUser();
 
   return (
@@ -122,8 +126,11 @@ export function ExtensionSidebar({ onClose, isAdmin = false }: { onClose?: () =>
       </div>
 
       <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
-        {primaryNav.map((item) => (
-          <NavItem key={item.href} {...item} />
+        {primaryNav.map((item, i) => (
+          <span key={item.href} className="contents">
+            <NavItem {...item} />
+            {i === 0 && showAssistant && <NavItem {...assistantItem} />}
+          </span>
         ))}
 
         <div className="pb-1 pt-3">

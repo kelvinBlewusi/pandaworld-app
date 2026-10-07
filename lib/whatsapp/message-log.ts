@@ -147,3 +147,20 @@ export function logOutboundMessage(to: string, body: Record<string, unknown>): v
   const fields = describeOutboundMessage(to, body);
   if (fields) void insertLog(fields);
 }
+
+/**
+ * The same record, awaited: for the Listing Assistant (lib/whatsapp/
+ * channel.ts) the record IS the delivery, read back by its page, so it must
+ * be written, and in order, before the next message.
+ */
+export async function recordOutboundMessage(to: string, body: Record<string, unknown>): Promise<void> {
+  const fields = describeOutboundMessage(to, body);
+  if (fields) await insertLog(fields);
+}
+
+/** An inbound message from the Listing Assistant's page, awaited (see recordOutboundMessage). */
+export async function recordInboundMessage(
+  address: string, id: string, messageType: string, bodyText: string | null, payload?: Record<string, unknown>,
+): Promise<void> {
+  await insertLog({ phoneNumber: address, direction: "inbound", messageType, bodyText, wamid: id, payload: payload ?? null });
+}

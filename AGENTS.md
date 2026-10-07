@@ -1572,6 +1572,54 @@ never for admins.
   (count, note ack, saving, drafted, question, answer, submitted, accepted,
   then live); now 6 to 7. A captioned batch: 5 for the whole batch.
 
+### Listing Assistant: the bot on the dashboard (owner, 2026-10-07)
+
+"A chat interface with image + upload button named Listing Assistant, where
+the interface does all queries, drafting and pushing except order alerts and
+labels." It is the WhatsApp bot itself, not a copy:
+- **Address**: `web:<userId>` stands where a phone number would
+  (`lib/whatsapp/channel.ts`: `webAddress`, `isWebAddress`, `chatChannelOf`).
+  The session (whatsapp_sessions), the log, the assistant and its allowance
+  all key on it, so the web chat and WhatsApp are separate conversations.
+- **Sending**: `callGraphApi` in lib/whatsapp/client.ts records a message to
+  a web address in whatsapp_message_log (awaited, `recordOutboundMessage`,
+  with its buttons / list rows / link in `payload`) and returns: nothing goes
+  to Meta, and the `*IfConfigured` senders work with no WhatsApp account
+  (`canSend`). Templates are never sent to the web; a label document would
+  go without its PDF (orders are refused before that).
+- **Photos**: POST /api/listing-assistant/upload validates (validateImageBuffer,
+  5 MB) and stores under `<userId>/assistant/` in product-images
+  (`storeAssistantUpload`); the media id is `web:<path>`, and
+  `ingestWhatsAppImage` returns its public URL (only the seller's own folder).
+- **Messages**: POST /api/listing-assistant/message (`receiveAssistantMessage`
+  in lib/whatsapp/listing-assistant.ts) records the inbound message (a photo
+  with its link, a tap with the button's words as `label`; the page's own id
+  as `wamid`, so `claimMessageId` drops a resend) and calls
+  `handleLinkedMessage(userId, web:<userId>, id, content)`, exactly like the
+  webhook. GET /api/listing-assistant/messages?after= is polled by the page.
+  Rate limits `assistantMessage` 300/h, `assistantUpload` 200/h.
+- **Listings made there** carry `listings.chat_channel = 'web'` (set at
+  `claimBatchSlot`; migration 2026-10-07_listing-assistant.sql, applied), so
+  their updates (accepted, live, rejected, the category question) go to the
+  web chat (`chatAddressFor` in push-listing; works with no WhatsApp linked).
+  Analysis jobs already carry the address, so drafts come back to it.
+- **Not on the web**: `handleOrderMessage` answers any order command on a web
+  address with "orders, packing and labels are on WhatsApp" and reads
+  nothing; `answerOrderStatus` doesn't open the packing view there; the
+  assistant's prompt says so (`web` in PromptContext). New-order alerts and
+  shop notices only ever go to whatsapp_connections numbers. Sales, order
+  status by number, stock, live changes, payouts, fees all work.
+- **Page**: /extension/assistant (`components/assistant/listing-assistant.tsx`):
+  bubbles with WhatsApp formatting, the bot's buttons as pills, list rows
+  inline, links as buttons, photos; Upload (several at once; the typed text
+  becomes the first photo's caption), drag-and-drop and paste; polls every
+  2.5 s (1.2 s while a message is being handled). Sidebar item "Listing
+  Assistant" under the dashboard.
+- **Who**: the assistant's pilot (`assistantEnabled`: admins and
+  app_settings `assistant_users`, `["*"]` for everyone; off with the kill
+  switch). Others see "coming soon" with a link to WhatsApp. Its messages
+  cost no WhatsApp fees; the AI turns count against the same daily allowance.
+
 ### Feature expansion (when relevant)
 9. **Cloud Vision OCR** (Tier 1.2 of GCP plan) — dedicated OCR for packaging text.
    $1.50/1000 images, first 1000 free monthly. Improves spec-text accuracy.

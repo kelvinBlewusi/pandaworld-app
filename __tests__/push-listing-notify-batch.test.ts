@@ -390,6 +390,20 @@ describe("notifyResolvedListings", () => {
     expect(single).toBeDefined();
   });
 
+  it("a batch made in the Listing Assistant is told there, even with no WhatsApp linked (2026-10-07)", async () => {
+    connResult = { connected: false, phoneNumber: null };
+    db.tables.listings = [
+      { id: "l1", user_id: "user_1", chat_channel: "web" },
+      { id: "l3", user_id: "user_1", chat_channel: null },
+    ];
+    await notifyResolvedListings("user_1", [
+      notice({ listingId: "l1", batchId: "batch-W", title: "Web kettle", newStatus: QC_APPROVED }),
+      notice({ listingId: "l3", batchId: "batch-B", title: "WhatsApp kettle", newStatus: QC_APPROVED }),
+    ]);
+    expect(sent.map((m) => [m.to, m.body.includes("Web kettle")])).toEqual([["web:user_1", true]]);
+    connResult = { connected: true, phoneNumber: "233550607231" };
+  });
+
   it("sends nothing when the seller has no WhatsApp connection", async () => {
     connResult = { connected: false, phoneNumber: null };
     await notifyResolvedListings("user_1", [notice()]);
