@@ -77,7 +77,7 @@ import {
   ADMIN_MAX_BATCH_SIZE,
 } from "@/lib/whatsapp/batch";
 import {
-  splitCredentialTokens, identifyCredentials, looksLikeCredential, isResendCommand, jumiaConnectLink, promptJumiaConnection, countryFromPhone,
+  splitCredentialTokens, identifyCredentials, looksLikeCredential, isResendCommand, jumiaConnectLink, promptJumiaConnection, chatCountry,
   promptReconnectKeepingBatch, resumeBatchAfterReconnect, RECONNECT_JUMIA_BUTTON,
 } from "@/lib/whatsapp/jumia-connect";
 import { classifyBatchIntent, looksActionable } from "@/lib/whatsapp/intent";
@@ -93,6 +93,7 @@ import { chatChannelOf, isWebAddress } from "@/lib/whatsapp/channel";
 import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPrice, dropVariantSalesFrom, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import { answerLiveValue, answerPendingQuestion, assistantFor, looksLikeQuestion, plainQuickEdit, runAssistant } from "@/lib/whatsapp/assistant";
 import { batchCreditRefusal, creditGate } from "@/lib/whatsapp/credit-gate";
+import { runChatCommand } from "@/lib/whatsapp/chat-commands";
 
 /**
  * WhatsApp chatbot, Stage 4: multi-product batches, entirely in chat.
@@ -758,6 +759,13 @@ async function handleGlobalCommand(
       await replyText(phoneNumber, "👍 No changes made — Jumia stays connected.");
       await sendStatusReply(phoneNumber, await describeStatus(session));
       return;
+    case "menu":
+    case "credits":
+    case "polish":
+    case "report":
+    case "shop_read":
+      await runChatCommand(cmd, userId, phoneNumber, session);
+      return;
     case "reconnect_jumia": {
       const kind = await getJumiaConnectionKind(userId);
       if (kind === "connected") {
@@ -1392,7 +1400,7 @@ async function handleAwaitingJumiaCredentials(
   }
 
   // Self Authorization first: connect now, no login link, stays connected.
-  const connected = await connectSelfAuthorization(userId, appId, secretKey, countryFromPhone(phoneNumber));
+  const connected = await connectSelfAuthorization(userId, appId, secretKey, await chatCountry(userId, phoneNumber));
   if (!connected.ok && connected.reason !== "web_app") {
     await updateSession(phoneNumber, { pendingAppId: null });
     await replyButtons(

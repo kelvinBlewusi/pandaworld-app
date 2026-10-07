@@ -31,7 +31,7 @@ describe("parseGlobalCommand", () => {
     expect(parseGlobalCommand("where am I?")).toEqual({ type: "status" });
     expect(parseGlobalCommand("help")).toEqual({ type: "help" });
     expect(parseGlobalCommand("?")).toEqual({ type: "help" });
-    expect(parseGlobalCommand("commands")).toEqual({ type: "help" });
+    expect(parseGlobalCommand("commands")).toEqual({ type: "menu" });
   });
 
   it("does not match longer sentences or unrelated text", () => {

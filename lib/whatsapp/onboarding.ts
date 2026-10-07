@@ -30,6 +30,8 @@ export const BOT_COMMANDS: { phrase: string; meaning: string }[] = [
   { phrase: "retry",      meaning: "run the last failed step again, using the photos you already sent" },
   { phrase: "restart",    meaning: "abandon this batch and start a new one" },
   { phrase: "start another", meaning: "list more products once a batch is with Jumia" },
+  { phrase: "menu",       meaning: "your orders, sales, products, payouts, the shop health report and your credits" },
+  { phrase: "polish 2",   meaning: "4 polished photos for product 2 (2 credits each)" },
   { phrase: "status",     meaning: "see where things stand right now" },
   { phrase: "help",       meaning: "show this guide again" },
   { phrase: "disconnect", meaning: "unlink your Jumia store" },

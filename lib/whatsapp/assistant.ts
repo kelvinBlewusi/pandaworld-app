@@ -43,7 +43,10 @@ import { isAdmin } from "@/lib/auth/is-admin";
 import { callGeminiBackend } from "@/lib/ai/gemini-client";
 import { withAiUsageContext } from "@/lib/ai/usage";
 import { availableCredits, isUnmetered, listingCreditCost } from "@/lib/billing/extension-credits";
-import { LABEL_CREDIT_COST, LIVE_CHANGE_CREDIT_COST, LIVE_LISTING_CREDIT_COST, NOTICE_CREDIT_COST } from "@/lib/billing/credit-packs";
+import { LABEL_CREDIT_COST, LIVE_CHANGE_CREDIT_COST, LIVE_LISTING_CREDIT_COST, NOTICE_CREDIT_COST, POLISH_CREDIT_COST, REPORT_CREDIT_COST } from "@/lib/billing/credit-packs";
+
+/** Image polish makes four photos (lib/gemini-image.ts PRODUCT_SHOTS). */
+const PRODUCT_SHOT_COUNT = 4;
 import { creditReach } from "@/lib/billing/credit-status";
 import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
 import { priceMinimumForUser, isBelowMinimum, money } from "@/lib/jumia/price-minimums";
@@ -194,6 +197,9 @@ export type AssistantAction =
   | { type: "warehouse_stock"; product: string }
   | { type: "warehouse_order"; items: { product: string; quantity: number }[]; date: string | null }
   | { type: "warehouse_shipped"; po: string; tracking: string; carrier: string | null }
+  /** The chat's billed commands (owner, 2026-10-07): run when asked, charged when they run. */
+  | { type: "polish"; seq: number | null }
+  | { type: "health_report" }
   | { type: "note" }
   | { type: "unclear" };
 
@@ -266,7 +272,10 @@ function capabilities(listingCost = LIVE_LISTING_CREDIT_COST): string {
     `- Credits: tell the balance; a WhatsApp listing or an extension autofill costs ${listingCost} credits for this seller, a listing charged only when it goes live on Jumia; a shipping label ${LABEL_CREDIT_COST} credits (the same label again is free), a confirmed change to live products ${LIVE_CHANGE_CREDIT_COST} (back if Jumia refuses it), an order-updates message ${NOTICE_CREDIT_COST}; new-order alerts, payout messages and chatting are free (chat replies have a daily limit by pack); warn when running low. Credits are bought on the dashboard.`,
     "- The PandaWorld Chrome extension fills Jumia's Vendor Center product form on a laptop; image polish and a fee calculator in it on Pro.",
     "- A free Jumia price calculator, Jumia commission rates, how-to guides and an FAQ on the website.",
-    "- Words the bot always knows: \"status\" (where they are), \"restart\", \"help\", \"orders\", \"disconnect\" (Jumia).",
+    `- Image polish: ${PRODUCT_SHOT_COUNT} product photos made from the seller's own (main on white, angle, lifestyle, detail), ${POLISH_CREDIT_COST} credits each, for a product being listed (\"polish 2\"), or by itself when the product's note asks for polished photos. They go first on the listing, the seller's own after.`,
+    `- The shop health report: a full check of their shop from live Jumia data, a score out of 100, what's working, what isn't and what to do, ${REPORT_CREDIT_COST} credits.`,
+    "- Commands (type / in the Listing Assistant or tap +; \"menu\" on WhatsApp): orders, sales today, sales week, shop, out of stock, payouts, report, polish and a product number, credits, status, restart, how it works, disconnect. Only polish, the report and confirmed changes to live products cost credits; chatting and everything else is free.",
+    "- Words the bot always knows: \"status\" (where they are), \"restart\", \"help\", \"menu\", \"orders\", \"disconnect\" (Jumia).",
   ].join("\n");
 }
 
@@ -448,6 +457,8 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '{"type":"warehouse_shipped","po":"<purchase order number from the message>","tracking":"<tracking number from the message>","carrier":"<from',
     '  the message>" or null} - tell Jumia a delivery order to its warehouse has shipped',
     '{"type":"credits"} - their credit balance (sent with a Buy credits button)',
+    `{"type":"polish","product":<the product number from the message> or null} - polish a product's photos: ${PRODUCT_SHOT_COUNT} new product photos made from theirs (main on white, angle, lifestyle, detail), ${POLISH_CREDIT_COST} credits each`,
+    `{"type":"health_report"} - a full health check of their whole shop from live Jumia data: what's working, what isn't, what to do (${REPORT_CREDIT_COST} credits). "How is my shop doing?" is this; best sellers or returns alone are "report".`,
     ...(stage === "starting" ? ['{"type":"note"} - their message is information about the product they are about to send (price, sizes, colours, condition)'] : []),
     '{"type":"reply","text":"<your message>","link":"<a key above, or null>"} - everything else. You write the message:',
     "  - \"What can you do\", a hello (\"hi\", \"hello there\"), or something you can't match: in your own words (vary it, never a set",
@@ -1018,6 +1029,12 @@ function parseActionRaw(
     }
     case "shops":
       return { type: "shops" };
+    case "polish": {
+      const n = typeof parsed.product === "number" ? parsed.product : parseInt(String(parsed.product ?? ""), 10);
+      return { type: "polish", seq: Number.isInteger(n) && n > 0 && new RegExp(`\\b${n}\\b`).test(message) ? n : null };
+    }
+    case "health_report": case "health": case "shop_health":
+      return { type: "health_report" };
     case "warehouse_stock": {
       const product = typeof parsed.product === "string" ? parsed.product.trim().slice(0, 120) : "";
       return namesAProduct(product) && productBacked(product, message)
@@ -1417,7 +1434,7 @@ async function lastChangedSid(userId: string): Promise<string | null> {
   return rows[0]?.product_sid ?? null;
 }
 
-async function creditsReply(userId: string, phone: string): Promise<void> {
+export async function creditsReply(userId: string, phone: string): Promise<void> {
   if (await isUnmetered(userId)) {
     await sendTextIfConfigured(phone, "Your account isn't charged credits right now, so list as much as you like.");
     return;
@@ -1620,6 +1637,15 @@ async function carryOut(
       return answerCategoryNeeds(userId, phone, action.product);
     case "shops":
       return answerLinkedShops(userId, phone);
+    case "polish": {
+      const { runChatCommand } = await import("@/lib/whatsapp/chat-commands");
+      await runChatCommand({ type: "polish", seq: action.seq }, userId, phone, session);
+      return "polish";
+    }
+    case "health_report": {
+      const { answerHealthReport } = await import("@/lib/whatsapp/shop-health");
+      return answerHealthReport(userId, phone);
+    }
     case "warehouse_stock":
       return answerWarehouseStock(userId, phone, action.product);
     case "warehouse_order":

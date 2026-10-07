@@ -108,6 +108,7 @@ export function ExtensionShell({
   const [seenAt, setSeenAt] = useState(notificationsSeenAt);
   const [displaySeenAt, setDisplaySeenAt] = useState(notificationsSeenAt);
   const pathname = usePathname();
+  const onAssistant = pathname === "/extension/assistant";
   const { user } = useUser();
   const pageTitle = PAGE_TITLES[pathname] ?? "Extension Dashboard";
 
@@ -190,6 +191,16 @@ export function ExtensionShell({
       >
         <ExtensionSidebar onClose={() => setOpen(false)} isAdmin={isAdmin} showAssistant={showAssistant} />
       </div>
+
+      {/* On a phone the sidebar is behind ☰: the same note, bottom right. */}
+      {showAssistant && !onAssistant && (
+        <Link
+          href="/extension/assistant"
+          className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 z-30 flex items-center gap-2 rounded-full bg-orange-500 px-4 py-3 text-sm font-semibold text-white shadow-lg transition-colors hover:bg-orange-600 lg:hidden"
+        >
+          💬 Talk to your Listing Assistant
+        </Link>
+      )}
 
       {/* Main content area */}
       <div className="flex flex-1 flex-col overflow-hidden">

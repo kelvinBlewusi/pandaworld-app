@@ -15,7 +15,7 @@ import { BOT_NUMBER_DISPLAY, SUPPORT_EMAIL } from "@/lib/constants/support";
 export function siteGuide(): string {
   return [
     "The website (pandaworld's dashboard, after signing in; the left menu on a laptop, the ☰ menu on a phone):",
-    "- Jumia Listing Assistant [assistant]: this same chat on the website. Upload photos with the Upload button (up to 8 at a time) or drag them in; everything the WhatsApp bot does works there, except shipping label PDFs and the alerts, which come on WhatsApp only.",
+    "- Jumia Listing Assistant [assistant]: this same chat on the website, for every seller, free to chat. It starts once Jumia is connected (paste the Client ID and token in it). Upload photos with the Upload button (up to 8 at a time) or drag them in; type / or tap + for the commands. Everything the WhatsApp bot does works there, except shipping label PDFs and order alerts, which come on WhatsApp only. On WhatsApp, \"menu\" lists the commands.",
     "- Extension Dashboard [dashboard]: the credit balance (\"Remaining credit\"), autofills in the last 30 days, the API key card (Copy, show, Regenerate key) and the extension's setup steps. \"Buy credits\" is at the top of every dashboard page (next to the bell, which holds PandaWorld's notices).",
     "- List from WhatsApp [review]: every WhatsApp and Listing Assistant batch, by day, with each product as Drafts, Needs attention, Submitted or Live. Open a product to edit it (name, price, stock, brand, category, description, variations, images) and push it to Jumia with \"Push to Jumia\". A seller with no WhatsApp linked sees the Connect WhatsApp card here.",
     "- Calculator [calculator_app]: the Jumia fee calculator for their country.",

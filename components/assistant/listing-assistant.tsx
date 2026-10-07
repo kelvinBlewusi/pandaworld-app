@@ -13,9 +13,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, ImagePlus, Loader2, Lock, RotateCw, X } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, ImagePlus, Loader2, Lock, Plus, RotateCw, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BuyCreditsButton } from "@/components/billing/buy-credits-button";
+import { matchingCommands, slashToText, type PaletteCommand } from "@/components/assistant/chat-commands";
 
 interface Message {
   id:        string;
@@ -97,6 +98,10 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
   const [dragging, setDragging] = useState(false);
   // At 0 credits: the bot says to top up once, then the chat locks until the balance is above 0 (owner, 2026-10-07).
   const [locked, setLocked] = useState(false);
+  // Until Jumia is connected the chat takes only the Client ID and token (owner, 2026-10-07).
+  const [connectJumia, setConnectJumia] = useState(false);
+  // The command menu: "/" typed in the box, or the + button (owner, 2026-10-07).
+  const [commandsOpen, setCommandsOpen] = useState(false);
   const lastAt = useRef<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -120,9 +125,10 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
       const q = lastAt.current ? `?after=${encodeURIComponent(lastAt.current)}` : "";
       const res = await fetch(`/api/listing-assistant/messages${q}`, { cache: "no-store" });
       if (!res.ok) return;
-      const { messages: got, locked: isLocked } = (await res.json()) as { messages: Message[]; locked?: boolean };
+      const { messages: got, locked: isLocked, connectJumia: needsJumia } = (await res.json()) as { messages: Message[]; locked?: boolean; connectJumia?: boolean };
       merge(got);
       setLocked(Boolean(isLocked));
+      setConnectJumia(Boolean(needsJumia));
     } catch {
       // The next poll tries again.
     } finally {
@@ -240,7 +246,10 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
 
   async function send(override?: { text: string; label?: string }) {
     if (sending || locked) return;
-    const typed = (override?.text ?? text).trim();
+    const raw = (override?.text ?? text).trim();
+    // "/polish 2" goes as the words the bot knows: "polish 2".
+    const typed = raw.startsWith("/") ? slashToText(raw) : raw;
+    setCommandsOpen(false);
     const photos = override ? [] : attachments;
     if (!typed && photos.length === 0) return;
     setSending(true);
@@ -284,6 +293,18 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
   }
 
   /** A photo stored for the bot: its media id, or why it wasn't. */
+  /** A command from the menu: sent as it is, or put in the box to finish. */
+  function choose(c: PaletteCommand) {
+    setCommandsOpen(false);
+    if (c.send) {
+      setText("");
+      void send({ text: c.send });
+      return;
+    }
+    setText(c.fill ?? "");
+    textArea.current?.focus();
+  }
+
   async function upload(file: File): Promise<{ mediaId: string; url?: string } | { error: string | null }> {
     const form = new FormData();
     form.append("file", file);
@@ -417,6 +438,16 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
       )}
       </div>
 
+      {connectJumia && !locked && (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-orange-100 bg-orange-50 px-4 py-2 text-sm text-orange-900">
+          <span>Connect Jumia to start: paste your Client ID and token below.</span>
+          <span className="flex gap-3 text-sm font-semibold">
+            <Link href="/how-to/connect-jumia-vendor-center" className="text-orange-700 hover:text-orange-800">How to get them</Link>
+            <Link href="/extension/settings" className="text-orange-700 hover:text-orange-800">Settings</Link>
+          </span>
+        </div>
+      )}
+
       {error && (
         <div className="flex items-start justify-between gap-3 border-t border-red-100 bg-red-50 px-4 py-2 text-sm text-red-700">
           <span>{error}</span>
@@ -437,7 +468,14 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
           </div>
         </div>
       ) : (
-      <div className="border-t border-zinc-100 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4">
+      <div className="relative border-t border-zinc-100 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4">
+        {(commandsOpen || (text.startsWith("/") && !/\s/.test(text))) && (
+          <CommandMenu
+            commands={matchingCommands(commandsOpen && !text.startsWith("/") ? "" : text)}
+            onChoose={choose}
+            onClose={() => { setCommandsOpen(false); if (text.startsWith("/")) setText(""); }}
+          />
+        )}
         {attachments.length > 0 && (
           <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
             {attachments.map((a) => (
@@ -475,11 +513,25 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
             <ImagePlus className="h-5 w-5 text-orange-500" />
             <span className="hidden sm:inline">Upload</span>
           </button>
+          <button
+            type="button"
+            onClick={() => setCommandsOpen((o) => !o)}
+            disabled={sending}
+            className={cn(
+              "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-zinc-200 text-zinc-600 transition-colors hover:border-orange-300 hover:bg-orange-50 disabled:opacity-50",
+              commandsOpen && "border-orange-300 bg-orange-50 text-orange-600",
+            )}
+            aria-label="Commands"
+            aria-expanded={commandsOpen}
+          >
+            <Plus className="h-5 w-5" />
+          </button>
           <textarea
             ref={textArea}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
+              if (e.key === "Escape") setCommandsOpen(false);
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 void send();
@@ -490,7 +542,7 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
               if (files.length > 0) { e.preventDefault(); addFiles(files); }
             }}
             rows={1}
-            placeholder={attachments.length > 0 ? "Price and notes for these photos…" : "Type a message…"}
+            placeholder={attachments.length > 0 ? "Price and notes for these photos…" : "Type / for commands"}
             // 16px on a phone: iOS zooms the page into a smaller field on focus.
             className="max-h-36 min-h-11 flex-1 resize-none rounded-xl border border-zinc-200 px-3.5 py-2.5 text-base text-zinc-900 sm:text-sm outline-none placeholder:text-zinc-400 focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
           />
@@ -512,6 +564,39 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
           Drop photos to add them
         </div>
       )}
+    </div>
+  );
+}
+
+/** The command menu, above the message box: the billed ones say their price. */
+function CommandMenu({ commands, onChoose, onClose }: { commands: PaletteCommand[]; onChoose: (c: PaletteCommand) => void; onClose: () => void }) {
+  return (
+    <div className="absolute inset-x-3 bottom-full z-10 mb-2 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-lg sm:inset-x-4" role="menu">
+      <div className="flex items-center justify-between border-b border-zinc-100 px-3 py-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Commands</span>
+        <button type="button" onClick={onClose} aria-label="Close commands" className="text-zinc-400 hover:text-zinc-600">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="max-h-72 overflow-y-auto py-1">
+        {commands.length === 0 && <p className="px-3 py-2 text-sm text-zinc-500">No command by that name. Type your message instead.</p>}
+        {commands.map((c) => (
+          <button
+            key={c.slash}
+            type="button"
+            role="menuitem"
+            onClick={() => onChoose(c)}
+            className="flex w-full items-start gap-3 px-3 py-2 text-left hover:bg-orange-50"
+          >
+            <span className="w-24 shrink-0 font-mono text-sm text-orange-600">/{c.slash}</span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-medium text-zinc-900">{c.title}</span>
+              <span className="block text-xs text-zinc-500">{c.hint}</span>
+            </span>
+            {c.credits && <span className="shrink-0 rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-600">{c.credits}</span>}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

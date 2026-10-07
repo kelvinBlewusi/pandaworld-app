@@ -735,3 +735,21 @@ describe("more of the Jumia API (owner, 2026-10-07: \"do all\")", () => {
     expect(parse('{"type":"warehouse_shipped","po":"123AB","tracking":"XYZ"}', "PO 123AB shipped")).toMatchObject({ type: "reply" });
   });
 });
+
+describe("the chat's billed commands, understood (owner, 2026-10-07)", () => {
+  it("polish and the shop health report are actions", () => {
+    expect(parseAction('{"type":"polish","product":2}', "can you polish the photos of product 2", [])).toEqual({ type: "polish", seq: 2 });
+    // A number the seller didn't write isn't taken.
+    expect(parseAction('{"type":"polish","product":3}', "polish my photos", [])).toEqual({ type: "polish", seq: null });
+    expect(parseAction('{"type":"health_report"}', "how is my shop doing?", [])).toEqual({ type: "health_report" });
+  });
+
+  it("the prompt lists them with their prices, and the commands", async () => {
+    aiReplies.push('{"type":"reply","text":"Hi!","link":null}');
+    await runAssistant("seller", "233", { phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null } as never, "hi", "idle");
+    expect(aiPrompts[0]).toContain('{"type":"polish","product":<the product number from the message> or null}');
+    expect(aiPrompts[0]).toContain("2 credits each");
+    expect(aiPrompts[0]).toContain('{"type":"health_report"}');
+    expect(aiPrompts[0]).toContain("Only polish, the report and confirmed changes to live products cost credits");
+  });
+});
