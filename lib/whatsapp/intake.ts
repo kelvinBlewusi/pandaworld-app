@@ -44,7 +44,7 @@ import { getValidJumiaCredentials, currencyNameWord } from "@/lib/jumia/api";
 import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
 import { isFashionCategory } from "@/lib/jumia/fashion-category";
 import { getJumiaConnectionKind, testJumiaCredentials, saveJumiaCredentialsForUser, disconnectJumiaForUser } from "@/lib/jumia/credentials";
-import { connectSelfAuthorization, looksLikeClientId } from "@/lib/jumia/self-auth";
+import { connectSelfAuthorization, looksLikeBrokenClientId, looksLikeClientId } from "@/lib/jumia/self-auth";
 import { createConnectToken } from "@/lib/jumia/connect-token";
 import { parseGlobalCommand, type GlobalCommand } from "@/lib/whatsapp/commands";
 import { extractVariantClaim } from "@/lib/whatsapp/variant-claims";
@@ -55,7 +55,7 @@ import {
   unsupportedMediaMessage,
 } from "@/lib/whatsapp/onboarding";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
-import { endsWithDoneSignal, stripDoneSignal, isProductNumber } from "@/lib/whatsapp/draft";
+import { endsWithDoneSignal, stripDoneSignal, isDoneWord, isProductNumber } from "@/lib/whatsapp/draft";
 import { removeBrandWords } from "@/lib/jumia/auto-resubmit";
 import { priceMinimumForUser, isBelowMinimum, belowMinimumText, money, type PriceMinimum } from "@/lib/jumia/price-minimums";
 import {
@@ -90,6 +90,7 @@ import { handleShopTap } from "@/lib/whatsapp/shop";
 import { handleWarehouseTap } from "@/lib/whatsapp/shop-insights";
 import { findBrandExact, getBrandCount, searchBrandsFromDB } from "@/lib/jumia/brands";
 import { chatChannelOf, isWebAddress } from "@/lib/whatsapp/channel";
+import { limitedText } from "@/lib/whatsapp/assistant-limits";
 import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPrice, dropVariantSalesFrom, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import { answerLiveValue, answerPendingQuestion, assistantFor, looksLikeQuestion, plainQuickEdit, runAssistant } from "@/lib/whatsapp/assistant";
 import { batchCreditRefusal, creditGate } from "@/lib/whatsapp/credit-gate";
@@ -764,6 +765,8 @@ async function handleGlobalCommand(
     case "polish":
     case "report":
     case "shop_read":
+    case "clear":
+    case "edit_help":
       await runChatCommand(cmd, userId, phoneNumber, session);
       return;
     case "reconnect_jumia": {
@@ -1225,9 +1228,11 @@ async function handleAwaitingCount(
   // never starts a batch from a stray number ("I have 2 questions"). If the
   // AI can't be reached, the usual reading below runs.
   let understood: number | null = null;
+  let limited = false;
   if (typed && plain == null && (await assistantFor(userId, phoneNumber))) {
     const outcome = await runAssistant(userId, phoneNumber, session, typed, session.lastSubmittedBatchId ? "sent" : "idle");
     if (outcome === "handled") return;
+    limited = outcome === "limited";
     if (typeof outcome === "object") understood = outcome.list;
     else if (outcome === "default" && !session.lastSubmittedBatchId) {
       await replyButtons(phoneNumber, "Sorry, I didn't catch that. Tell me what you'd like to do for your Jumia shop, or tap how many products you're listing.", COUNT_QUICK_PICKS);
@@ -1238,7 +1243,7 @@ async function handleAwaitingCount(
   // Straight after a batch went to Jumia, a reply that isn't plainly a
   // count is about those products. "Quantity 20" was read as a count and
   // started a 20-product batch (owner's report, 2026-10-03).
-  if (understood == null && session.lastSubmittedBatchId && typed && plain == null) {
+  if (understood == null && !limited && session.lastSubmittedBatchId && typed && plain == null) {
     const sent = await getBatchListings(session.lastSubmittedBatchId);
     const one = sent.length === 1;
     const which = one && sent[0].title ? `"${sent[0].title}" is` : one ? "Your product is" : "Your products are";
@@ -1260,6 +1265,12 @@ async function handleAwaitingCount(
     : content.text ? readProductCount(content.text, max) : { ok: false, reason: "no_number" };
 
   if (!parsed.ok) {
+    // Past the day's chat replies, a question isn't a count gone wrong
+    // (owner's test, 2026-10-07: "explain" got "I need a number").
+    if (limited && parsed.reason === "no_number") {
+      await replyButtons(phoneNumber, limitedText(isWebAddress(phoneNumber)), COUNT_QUICK_PICKS);
+      return;
+    }
     // Say which thing went wrong. Answering "50" with "I need a number"
     // reads as the bot not understanding, when the real answer is the
     // batch cap — a fact the seller can act on immediately.
@@ -1384,10 +1395,39 @@ async function handleAwaitingJumiaCredentials(
   // changes their mind and re-pastes both clearly means "start over with
   // these", not "append this to what I sent before". Only a single token
   // ever consults pendingAppId, to complete whichever half is missing.
+  // A Client ID cut short (or with a bit extra) is neither half: say so
+  // rather than send it to Jumia as the token (owner's test, 2026-10-07).
+  const broken = tokens.find(looksLikeBrokenClientId);
+  if (broken) {
+    await replyText(
+      phoneNumber,
+      `⚠️ That Client ID looks cut off: it has ${broken.length} characters, and a Client ID has 36 (like 1a2b3c4d-1a2b-1a2b-1a2b-1a2b3c4d5e6f). Copy it again in full from Vendor Center → Settings → Applications.`,
+    );
+    return;
+  }
+
+  // The same half twice: still waiting for the other (owner's test,
+  // 2026-10-07: the Client ID pasted again was sent as the token, and
+  // Jumia's "expired token" answer sent them round again). A different
+  // one of the same kind replaces the first.
+  const pending = session.pendingAppId;
+  if (tokens.length === 1 && pending && looksLikeClientId(pending) === looksLikeClientId(tokens[0])) {
+    const isId = looksLikeClientId(tokens[0]);
+    const again = pending === tokens[0];
+    if (!again) await updateSession(phoneNumber, { pendingAppId: tokens[0] });
+    await replyText(
+      phoneNumber,
+      isId
+        ? `${again ? "That's the Client ID again" : "Got the new Client ID"} — now paste the generated token (the long code from the padlock, without dashes).`
+        : `${again ? "That's the token again" : "Got the new token"} — now paste the Client ID (the code with dashes next to your application).`,
+    );
+    return;
+  }
+
   if (tokens.length >= 2) {
     ({ appId, secretKey } = identifyCredentials(tokens[0], tokens[1]));
-  } else if (tokens.length === 1 && session.pendingAppId) {
-    ({ appId, secretKey } = identifyCredentials(session.pendingAppId, tokens[0]));
+  } else if (tokens.length === 1 && pending) {
+    ({ appId, secretKey } = identifyCredentials(pending, tokens[0]));
   } else if (tokens.length === 1) {
     await updateSession(phoneNumber, { pendingAppId: tokens[0] });
     await replyText(phoneNumber, looksLikeClientId(tokens[0])
@@ -1893,7 +1933,7 @@ async function handleQuietBatchMessage(
   // must not lose the note.
   const tokens = text.split(/\s+/);
   const lastToken = (tokens[tokens.length - 1] ?? "").replace(/^\*+/, "").replace(/[*.,!]+$/, "");
-  const closesThis = lastToken === String(seq) || /^done$/i.test(lastToken);
+  const closesThis = lastToken === String(seq) || isDoneWord(lastToken, tokens.length === 1);
 
   if (!closesThis) {
     const other = otherProductNumber(text, seq, batchSize);
@@ -3388,6 +3428,26 @@ async function handleAwaitingBatchConfirmation(
         );
       }
       return;
+    }
+    // "I have entered the price, submit it" (owner's test, 2026-10-07): it
+    // reached the edit below and got only the editor's link. Priced since
+    // (on the review page), it goes; still unpriced, the question stands.
+    if (/\bsubmit\b/i.test(text)) {
+      const asked = (await getBatchListings(batchId)).find((l) => l.id === priceFor);
+      if (asked && Number(asked.selling_price) > 0) {
+        await updateSession(phoneNumber, { awaitingPriceFor: null });
+        await handleSubmit(userId, phoneNumber, batchId, { all: true });
+        return;
+      }
+      if (asked) {
+        await replyCta(
+          phoneNumber,
+          `💰 Product ${asked.whatsapp_seq ?? 1} still has no price, so Jumia won't take it yet. Reply with just its price (e.g. *1500*), then *submit*.`,
+          "Edit product",
+          focusedEditorUrl(asked.id),
+        );
+        return;
+      }
     }
     await updateSession(phoneNumber, { awaitingPriceFor: null });
   }

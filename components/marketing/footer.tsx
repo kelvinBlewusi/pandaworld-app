@@ -3,6 +3,7 @@ import { Mail, Users } from "lucide-react";
 import { Wordmark } from "./wordmark";
 import { JumiaPandaWorldPuzzle } from "./jumia-pandaworld-puzzle";
 import { FooterPricingTrigger } from "./footer-pricing-trigger";
+import { InstallApp } from "@/components/install/install-app";
 import { CALCULATOR_HREF, COMMISSION_RATES_HREF } from "@/lib/marketing/links";
 import {
   SUPPORT_EMAIL,
@@ -172,7 +173,17 @@ export function MarketingFooter({
           </FooterColumn>
         </div>
 
-        <div className="mt-10 flex flex-col-reverse items-center justify-between gap-3 border-t border-zinc-200 pt-6 text-xs text-zinc-500 sm:flex-row">
+        {/* PandaWorld on the phone's home screen (owner, 2026-10-07): the
+            buttons slide up that phone's steps (components/install). */}
+        <div className="mt-10 flex flex-col gap-4 border-t border-zinc-200 pt-8 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-900">Get the app</p>
+            <p className="mt-1 text-sm text-zinc-500">Put PandaWorld on your phone&apos;s home screen. Free, nothing to download from a store.</p>
+          </div>
+          <InstallApp />
+        </div>
+
+        <div className="mt-8 flex flex-col-reverse items-center justify-between gap-3 border-t border-zinc-200 pt-6 text-xs text-zinc-500 sm:flex-row">
           <p>© {new Date().getFullYear()} PandaWorld</p>
           <div className="flex items-center gap-5">
             <Link href="/terms" className="transition-colors hover:text-zinc-900">Terms</Link>

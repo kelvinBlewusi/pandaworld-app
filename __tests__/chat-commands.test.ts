@@ -39,6 +39,9 @@ import { healthEvidence, healthScore, plainReading, evidenceText } from "@/lib/w
 import { MENU_ROWS, runChatCommand } from "@/lib/whatsapp/chat-commands";
 import { notesAskForPolish, verifyNoteIntent } from "@/lib/whatsapp/note-intent";
 import type { WhatsAppSession } from "@/lib/whatsapp/session";
+import { endsWithDoneSignal } from "@/lib/whatsapp/draft";
+import { looksLikeBrokenClientId } from "@/lib/jumia/self-auth";
+import { PALETTE, matchingCommands, slashCommand, slashToText, unfinishedFill } from "@/components/assistant/chat-commands";
 import type { ShopProduct } from "@/lib/jumia/shop";
 
 const PHONE = "233200000000";
@@ -86,6 +89,82 @@ describe("the words", () => {
     await runChatCommand({ type: "menu" }, "seller", PHONE, {} as WhatsAppSession);
     expect(sent[0].kind).toBe("list");
     expect(sent[0].body).toContain("*polish 2*");
+  });
+});
+
+describe("what the owner's web test showed (2026-10-07)", () => {
+  it("reads the ways a seller asks for their credits", () => {
+    for (const t of ["remaining credit", "Remaining credits", "credits left", "how many credits do i have", "check my credits", "my balance", "what's my balance"]) {
+      expect(parseGlobalCommand(t)).toEqual({ type: "credits" });
+    }
+    expect(parseGlobalCommand("credits for product 2")).toBeNull();
+  });
+
+  it("a bare \"Change\" or \"edit\" asks what to change, never restarts", async () => {
+    expect(parseGlobalCommand("Change")).toEqual({ type: "edit_help" });
+    expect(parseGlobalCommand("edit on Jumia")).toEqual({ type: "edit_help" });
+    expect(parseGlobalCommand("change the price of the gold medal to 500")).toBeNull();
+    await runChatCommand({ type: "edit_help" }, "seller", PHONE, {} as WhatsAppSession);
+    expect(sent[0].body).toContain("Say which product and what to change");
+  });
+
+  it("\"clear\": asked first on the web; the tap clears it; on WhatsApp, how to clear it on the phone", async () => {
+    expect(parseGlobalCommand("clear my chat")).toEqual({ type: "clear", step: "ask" });
+    expect(parseGlobalCommand("clear chat now")).toEqual({ type: "clear", step: "now" });
+    expect(parseGlobalCommand("keep chat")).toEqual({ type: "clear", step: "keep" });
+    const WEB = "web:seller";
+    db.tables.whatsapp_sessions = [{ phone_number: WEB, user_id: "seller", state: "awaiting_confirmation", batch_id: "b1" }];
+    await runChatCommand({ type: "clear", step: "ask" }, "seller", WEB, {} as WhatsAppSession);
+    expect(sent.at(-1)).toMatchObject({ kind: "buttons" });
+    expect(sent.at(-1)?.body).toContain("Clear this chat?");
+    expect(db.tables.whatsapp_sessions[0].chat_cleared_at).toBeUndefined();
+    await runChatCommand({ type: "clear", step: "now" }, "seller", WEB, {} as WhatsAppSession);
+    expect(db.tables.whatsapp_sessions[0]).toMatchObject({ state: "awaiting_count", batch_id: null });
+    expect(typeof db.tables.whatsapp_sessions[0].chat_cleared_at).toBe("string");
+    sent.length = 0;
+    await runChatCommand({ type: "clear", step: "ask" }, "seller", PHONE, {} as WhatsAppSession);
+    expect(sent[0].body).toContain("WhatsApp keeps this chat on your phone");
+  });
+
+  it("\"dine\" alone is done; in a caption it's a word", () => {
+    expect(endsWithDoneSignal("dine")).toBe(true);
+    expect(endsWithDoneSignal("Dine.")).toBe(true);
+    expect(endsWithDoneSignal("fine dine")).toBe(false);
+    expect(endsWithDoneSignal("Price 40 done")).toBe(true);
+  });
+
+  it("\"Ghc 160\" is the price, not a sale price too", () => {
+    const note = "Ghc 160\ndine";
+    const read = verifyNoteIntent({
+      selling_price: { value: 160, quote: "Ghc 160" },
+      sale_price: { value: 160, quote: "Ghc 160" },
+    }, note);
+    expect(read.intent.selling_price?.value).toBe(160);
+    expect(read.intent.sale_price).toBeUndefined();
+    const sale = verifyNoteIntent({
+      selling_price: { value: 200, quote: "200" },
+      sale_price: { value: 160, quote: "sale 160" },
+    }, "200, sale 160 till Friday");
+    expect(sale.intent.sale_price?.value).toBe(160);
+  });
+
+  it("a Client ID cut short or with extra is neither half", () => {
+    expect(looksLikeBrokenClientId("c9758cb3-8a9b-49b2-9ae5-6973aa3015c")).toBe(true);
+    expect(looksLikeBrokenClientId("c9758cb3-8a9b-49b2-9ae5-6973aa3015cd")).toBe(false);
+    expect(looksLikeBrokenClientId("BYQZm9Gdk16GiIuXW1K_SiwboupmDjsMj3vhSDzbous")).toBe(false);
+  });
+
+  it("the page's commands: /edit (or /change) is Edit live on Jumia, /clear asks first, no prices shown", () => {
+    const edit = slashCommand("/change");
+    expect(edit?.slash).toBe("edit");
+    expect(edit?.title).toBe("Edit live on Jumia");
+    expect(slashToText("/edit the price of the medal to 500")).toBe("Change the price of the medal to 500");
+    expect(slashToText("/change stock of GEMMALL5 to 10")).toBe("Change stock of GEMMALL5 to 10");
+    expect(unfinishedFill("Change")?.slash).toBe("edit");
+    expect(unfinishedFill("polish")).toBeNull();
+    expect(slashCommand("/clear")?.action).toBe("clear");
+    expect(matchingCommands("/ed").map((c) => c.slash)).toEqual(["edit"]);
+    expect(PALETTE.every((c) => !("credits" in c))).toBe(true);
   });
 });
 

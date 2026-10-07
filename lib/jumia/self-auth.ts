@@ -31,6 +31,16 @@ export function looksLikeClientId(s: string): boolean {
 }
 
 /**
+ * A Client ID with a piece missing or extra: hex in dashed groups that
+ * isn't a whole UUID. The owner's test (2026-10-07) pasted one a character
+ * short, which was taken as the token.
+ */
+export function looksLikeBrokenClientId(s: string): boolean {
+  const t = s.trim();
+  return !UUID_RE.test(t) && /^[0-9a-f]+(?:-[0-9a-f]*){3,5}$/i.test(t) && t.length >= 20;
+}
+
+/**
  * Plausibly a token Vendor Center generated: one unbroken run of token
  * characters. Deliberately loose — Jumia's docs show a JWT ("eyJ…"), but
  * the lock icon hands out a short opaque one (43 characters, confirmed

@@ -43,6 +43,13 @@ export const metadata: Metadata = {
   description:
     "AI-powered product listings for Jumia sellers across Africa. Snap a photo, get a complete listing in seconds — category, attributes, images, pushed straight to Vendor Center. Works in Ghana, Nigeria, Kenya, Egypt, Morocco, and more.",
   applicationName: "PandaWorld",
+  // Opened from the iPhone home screen (components/install), it runs full
+  // screen under its own name, like the Android install from app/manifest.ts.
+  appleWebApp: {
+    capable:        true,
+    title:          "PandaWorld",
+    statusBarStyle: "default",
+  },
   // Keyword set spans every Jumia market we technically support (the
   // onboarding flow already lists 9 countries). Per-country keywords
   // here drive long-tail SEO for "Jumia Nigeria tool" / "Jumia Kenya

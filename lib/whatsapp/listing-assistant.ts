@@ -35,14 +35,22 @@ export interface AssistantMessage {
 
 export const listingAssistantFor = (_userId: string) => assistantSwitchedOn();
 
-/** The conversation, oldest first: the last `limit` messages, or those after `after` (an ISO time). */
-export async function assistantMessages(userId: string, opts: { after?: string | null; limit?: number } = {}): Promise<AssistantMessage[]> {
+/**
+ * The conversation, oldest first: the last `limit` messages, or those after
+ * `after` (an ISO time); never those from before the chat was last cleared
+ * (`clearedAt`, lib/whatsapp/chat-clear.ts).
+ */
+export async function assistantMessages(
+  userId: string,
+  opts: { after?: string | null; clearedAt?: string | null; limit?: number } = {},
+): Promise<AssistantMessage[]> {
   const limit = Math.min(Math.max(opts.limit ?? 80, 1), 200);
   let q = createServerClient()
     .from("whatsapp_message_log")
     .select("id, direction, message_type, body_text, payload, created_at, wamid")
     .eq("phone_number", webAddress(userId));
   if (opts.after) q = q.gt("created_at", opts.after);
+  if (opts.clearedAt) q = q.gt("created_at", opts.clearedAt);
   const { data } = await q.order("created_at", { ascending: false }).limit(limit);
   return ((data ?? []) as { id: string; direction: string; message_type: string | null; body_text: string | null; payload: Record<string, unknown> | null; created_at: string; wamid: string | null }[])
     .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))

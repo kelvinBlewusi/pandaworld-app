@@ -35,7 +35,11 @@ export type GlobalCommand =
   | { type: "credits" }
   | { type: "polish"; seq: number | null }
   | { type: "report" }
-  | { type: "shop_read"; what: ShopRead };
+  | { type: "shop_read"; what: ShopRead }
+  // Clearing the web chat (lib/whatsapp/chat-clear.ts): asked, then the tap that clears it or keeps it.
+  | { type: "clear"; step: "ask" | "now" | "keep" }
+  // "Change" or "edit" alone: what to say after it.
+  | { type: "edit_help" };
 
 /** What the menu's shop commands read. */
 export type ShopRead = "shop" | "out_of_stock" | "low_stock" | "sales_today" | "sales_week" | "payouts";
@@ -71,9 +75,20 @@ const HOW_IT_WORKS_RE = /^(how it works|how does (this|it) work|guide|how to use
 const STATUS_RE = /^(status|where am i)[.!?]?$/i;
 const HELP_RE = /^(help|\?)[.!]?$/i;
 const MENU_RE = /^(menu|commands|\/)[.!]?$/i;
-const CREDITS_RE = /^(credits|my credits|credit balance|balance)[.!?]?$/i;
+// "remaining credit" was read as a note about the batch just sent (owner's test, 2026-10-07).
+const CREDITS_RE = new RegExp(
+  "^(?:(?:my |check (?:my )?|show (?:my )?)?(?:credits?|credit balance|balance)" +
+    "|(?:my )?(?:remaining|left) credits?|credits? (?:left|remaining)" +
+    "|how many credits?(?: do i have| have i got| are left| left)?" +
+    "|what(?:'s| is) my (?:credit )?balance)[.!?]?$",
+  "i",
+);
 // "polish", "polish 2", "polish product 2", "polish 2 photos".
 const POLISH_RE = /^polish(?:\s+(?:product\s*)?(\d{1,2}))?(?:\s+(?:photos?|pictures?|images?))?[.!]?$/i;
+const CLEAR_RE = /^(clear|clear (the |my |this )?(chat|conversation|history|messages)|delete (the |my |this )?chat)[.!]?$/i;
+const CLEAR_NOW_RE = /^clear chat now$/i;
+const KEEP_CHAT_RE = /^keep (the |my )?chat$/i;
+const EDIT_HELP_RE = /^(change|edit|edit (live )?on jumia|edit live|change a live product)[.!?]?$/i;
 const REPORT_RE = /^(report|shop report|health report|shop health(?: report| check)?|health check)[.!?]?$/i;
 const SHOP_READS: [RegExp, ShopRead][] = [
   [/^(my )?(shop|products)[.!?]?$/i, "shop"],
@@ -105,6 +120,10 @@ export function parseGlobalCommand(text: string): GlobalCommand | null {
   const polish = t.match(POLISH_RE);
   if (polish) return { type: "polish", seq: polish[1] ? Number(polish[1]) : null };
   if (REPORT_RE.test(t)) return { type: "report" };
+  if (CLEAR_NOW_RE.test(t)) return { type: "clear", step: "now" };
+  if (KEEP_CHAT_RE.test(t)) return { type: "clear", step: "keep" };
+  if (CLEAR_RE.test(t)) return { type: "clear", step: "ask" };
+  if (EDIT_HELP_RE.test(t)) return { type: "edit_help" };
   for (const [re, what] of SHOP_READS) if (re.test(t)) return { type: "shop_read", what };
   return null;
 }

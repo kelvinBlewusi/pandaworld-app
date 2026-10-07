@@ -129,6 +129,9 @@ function asRecord(v: unknown): Record<string, unknown> | null {
  * dropped field is a seller filling one box in the editor, an invented
  * one is a wrong price on a live marketplace.
  */
+/** Words that make a number a sale price, as extractSalePrice (lib/whatsapp/batch.ts) reads them, and a few more. */
+const SALE_WORDS = /\b(sales?|promo\w*|discount\w*|offer|deal|reduced|slashed|now|was|off)\b/i;
+
 export function verifyNoteIntent(raw: unknown, note: string): VerifiedNoteIntent {
   const intent: NoteIntent = {};
   const rejected: RejectedIntent[] = [];
@@ -170,6 +173,21 @@ export function verifyNoteIntent(raw: unknown, note: string): VerifiedNoteIntent
       continue;
     }
     intent[field] = { value: field === "quantity" ? Math.round(num) : num, quote: g.quote };
+  }
+
+  // A sale price is only one the seller called one: "Ghc 160" alone was
+  // taken as both the price and the sale price (owner's test, 2026-10-07),
+  // which Jumia then refused for want of dates. Its quote must say sale
+  // (or promo, discount, "was ... now ..."), and it can't be the price itself.
+  if (intent.sale_price) {
+    const { value, quote } = intent.sale_price;
+    if (!SALE_WORDS.test(quote)) {
+      reject("sale_price", `"${quote}" doesn't say it's a sale price`);
+      delete intent.sale_price;
+    } else if (intent.selling_price && intent.selling_price.value === value) {
+      reject("sale_price", `${value} is the price itself`);
+      delete intent.sale_price;
+    }
   }
 
   // ── Dates ──────────────────────────────────────────────────────────────

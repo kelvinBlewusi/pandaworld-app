@@ -707,6 +707,23 @@ describe("asking for a missing price in chat", () => {
     expect(session().awaiting_price_for).toBeNull();
   });
 
+  // Owner's test, 2026-10-07: "i have entered the price submit it" got the editor's link.
+  it("\"submit it\" while asked: still no price, the question stands; priced since, it goes", async () => {
+    seedBatch([{ seq: 1, title: "Panasonic Electric Kettle 1.7L" }]);
+    confirming({ batch_size: 1, awaiting_price_for: "listing-1" });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "i have entered the price submit it" });
+    expect(sent.at(-1)?.body).toContain("Product 1 still has no price");
+    expect(session().awaiting_price_for).toBe("listing-1");
+    expect(pushCallCount).toBe(0);
+
+    listings()[0].selling_price = 150; // set on the review page meanwhile
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "i have entered the price submit it" });
+    expect(session().awaiting_price_for ?? null).toBeNull();
+    expect(pushCallCount).toBe(1);
+  });
+
   // Skipping must walk FORWARD. Re-offering the product just declined is
   // the one way this loop could trap a seller.
   it("skips to the next product rather than re-asking the skipped one", async () => {
@@ -3088,6 +3105,22 @@ describe("connecting Jumia from the chat", () => {
 
     expect(selfAuthCalls).toEqual([{ clientId: CLIENT_ID, token: TOKEN, country: "GH" }]);
     expect(session().state).toBe("awaiting_count");
+  });
+
+  // Owner's test, 2026-10-07: the Client ID pasted again was sent as the
+  // token, and one a character short was taken for the token.
+  it("the same half twice asks for the other; a cut-off Client ID is said to be cut off", async () => {
+    await handleLinkedMessage(USER, PHONE, "m1", { text: CLIENT_ID });
+    await handleLinkedMessage(USER, PHONE, "m2", { text: CLIENT_ID });
+    expect(sent.at(-1)?.body).toContain("That's the Client ID again — now paste the generated token");
+    expect(selfAuthCalls).toHaveLength(0);
+
+    await handleLinkedMessage(USER, PHONE, "m3", { text: CLIENT_ID.slice(0, -1) });
+    expect(sent.at(-1)?.body).toContain("That Client ID looks cut off: it has 35 characters");
+    expect(selfAuthCalls).toHaveLength(0);
+
+    await handleLinkedMessage(USER, PHONE, "m4", { text: TOKEN });
+    expect(selfAuthCalls).toEqual([{ clientId: CLIENT_ID, token: TOKEN, country: "GH" }]);
   });
 
   it("falls back to the Web Application login when Jumia says that's what the app is", async () => {

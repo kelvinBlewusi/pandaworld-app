@@ -1,10 +1,11 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
-import { KeyRound } from "lucide-react";
+import { KeyRound, Smartphone } from "lucide-react";
 import { listExtensionApiKeys } from "@/lib/security/extension-keys";
 import { RegenerateKeyButton } from "@/components/extension/regenerate-key-button";
 import { WhatsAppCard } from "@/components/whatsapp/whatsapp-card";
 import { JumiaConnectionCard } from "@/components/jumia/jumia-connection-card";
+import { InstallApp } from "@/components/install/install-app";
 
 export const metadata: import("next").Metadata = {
   title: "Settings",
@@ -75,6 +76,19 @@ export default async function ExtensionSettingsPage() {
         <div className="mt-4">
           <RegenerateKeyButton />
         </div>
+      </div>
+
+      {/* On the phone's home screen like an app (owner, 2026-10-07). */}
+      <div className="mt-6 rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+        <div className="flex items-center gap-2">
+          <Smartphone className="h-4 w-4 text-orange-600" />
+          <h2 className="text-sm font-semibold text-zinc-700">Install PandaWorld on your phone</h2>
+        </div>
+        <p className="mt-2 text-sm text-zinc-600">
+          Put PandaWorld on your home screen and open it like an app: the Listing Assistant, your listings and your credits in one tap.
+          Tap your phone for the steps.
+        </p>
+        <InstallApp className="mt-4" />
       </div>
     </div>
   );
