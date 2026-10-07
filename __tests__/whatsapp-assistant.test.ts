@@ -309,7 +309,7 @@ describe("its own replies (owner, 2026-10-06)", () => {
     expect(prompt).toContain("- Changes to live Jumia products from the chat: not on their pack (Standard and up)");
     expect(prompt).toContain("up to 200 products");
     expect(prompt).toContain("- Country: Ghana");
-    expect(prompt).toContain("- No pack bought yet: on their free sign-up credits.");
+    expect(prompt).toContain("- Pack: none bought yet, on their free sign-up credits");
     // Every plan since 2026-10-07: the chat's features; labels and alerts keep their packs.
     expect(prompt).toContain("- The chat's shop features (products, orders, reports, payouts, fees): on");
     expect(prompt).toContain("- Jumia QC rejection alerts and guided fixes: not on their pack (Standard and up)");
@@ -637,7 +637,7 @@ describe("the assistant's daily allowance (owner, 2026-10-07)", () => {
     expect(sent[0].body).toContain(`You've used today's ${DAILY_ALLOWANCE.none} chat replies on your pack`);
     expect(db.tables.whatsapp_assistant_log.at(-1)).toMatchObject({ outcome: ALLOWANCE_TOLD });
     sent.length = 0;
-    expect(await runAssistant("seller", "233", session(), "what else", "idle")).toBe("failed");
+    expect(await runAssistant("seller", "233", session(), "what else", "idle")).toBe("limited");
     expect(sent).toEqual([]);
     expect(aiCalls).toBe(0);
   });

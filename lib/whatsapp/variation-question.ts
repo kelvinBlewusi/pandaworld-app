@@ -54,9 +54,32 @@ export async function variationMayBlock(listingId: string, categoryCode: number)
     || (allowed.length > 0 && lower.some((l) => !allowed.some((a) => a.toLowerCase() === l)));
 }
 
+/**
+ * The options as a seller would look for them: the plain clothing sizes
+ * first, smallest to largest, then the rest as the category lists them.
+ * Live 2026-10-07, a bodysuit's question offered "S, S AB, S CD, S-M, S/M
+ * and 544 more".
+ */
+export function commonFirst(options: string[]): string[] {
+  const rank = (o: string) => {
+    const q = squash(o);
+    if (q === "onesize" || q === "freesize") return 0;
+    const i = SIZE_NAMES.findIndex((n) => n[0] === q);
+    return i < 0 ? Infinity : i + 1;
+  };
+  const common = options.filter((o) => rank(o) !== Infinity).sort((a, b) => rank(a) - rank(b));
+  return [...common, ...options.filter((o) => rank(o) === Infinity)];
+}
+
+/** The first few options to show, and how many more there are. */
+export function optionsShown(options: string[], max: number): string {
+  const ordered = commonFirst(options);
+  return ordered.length > max + 1 ? `${ordered.slice(0, max).join(", ")} and ${ordered.length - max} more` : ordered.join(", ");
+}
+
 /** The question, in the owner's words: the product, then what to reply. */
 export function variationQuestion(who: string, options: string[]): string {
-  const shown = options.length > 6 ? `${options.slice(0, 5).join(", ")} and ${options.length - 5} more` : options.join(", ");
+  const shown = optionsShown(options, 5);
   return options.length > 0
     ? `*${who}*\n*What variation(s) do you have?* Reply with one or more of the stocked options (${shown}), or pick in the editor.`
     : `*${who}*\n*What variation(s) do you have?* Reply with them, e.g. *Small, Medium*, or set them in the editor.`;

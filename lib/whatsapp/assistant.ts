@@ -56,12 +56,13 @@ import {
 import {
   COUNT_QUICK_PICKS, MAX_BATCH_SIZE, buyCreditsUrl, extractDateRange, extractSalePrice, findDateIn, focusedEditorUrl, whatsappListingsUrl,
 } from "@/lib/whatsapp/batch";
-import { helpMessage } from "@/lib/whatsapp/onboarding";
+import { sendHelp } from "@/lib/whatsapp/help";
 import { appUrl } from "@/lib/whatsapp/app-url";
 import { CHROME_WEB_STORE_URL, COMMUNITY_WHATSAPP_URL } from "@/lib/constants/support";
 import { siteGuide } from "@/lib/whatsapp/site-guide";
 import { jumiaCountryByCode } from "@/lib/marketing/countries";
 import { sellerCountry } from "@/lib/jumia/unlistable-categories";
+import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
 import { currentPack, featureAccess, featureMinPackName, type FeatureId } from "@/lib/billing/features";
 import {
   BULK_MAX, MAX_GROUP, answerFees, answerListings, answerOrderStatus, answerPayouts, answerProductInfo, answerProducts, answerSales, answerStock,
@@ -75,6 +76,7 @@ import type { LiveChange } from "@/lib/jumia/shop";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { ALLOWANCE_TOLD, allowanceText, assistantGate, assistantSwitchedOn } from "@/lib/whatsapp/assistant-limits";
 import { isWebAddress } from "@/lib/whatsapp/channel";
+import { chatClearedAt } from "@/lib/whatsapp/chat-clear";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
 import { resetSession, updateSession, type AssistantPending, type LiveValueAsk, type WhatsAppSession } from "@/lib/whatsapp/session";
 import { parseVariations, saveVariations, variationOptions } from "@/lib/whatsapp/variation-question";
@@ -327,12 +329,25 @@ export async function sellerFacts(userId: string): Promise<{ lines: string[]; co
     const shopName = (conn as { store_name?: string | null; seller_name?: string | null } | null)?.store_name
       ?? (conn as { seller_name?: string | null } | null)?.seller_name;
     if (shopName) lines.push(`- Their Jumia shop: ${shopName}`);
+    // What's connected, as it is: asked "is my WhatsApp connected?", the AI
+    // said yes and made up the rest (owner's test, 2026-10-07).
+    const [{ data: wa }, jumia] = await Promise.all([
+      createServerClient().from("whatsapp_connections").select("phone_number").eq("user_id", userId).limit(1),
+      getJumiaConnectionKind(userId).catch(() => null),
+    ]);
+    const waNumber = ((wa ?? []) as { phone_number: string | null }[])[0]?.phone_number ?? null;
+    lines.push(waNumber ? `- WhatsApp: linked, number ${waNumber}` : "- WhatsApp: not linked (Settings → WhatsApp → Connect WhatsApp)");
+    lines.push(
+      jumia === "connected" ? `- Jumia: connected${shopName ? ` (${shopName})` : ""}`
+        : jumia == null ? "- Jumia: couldn't check just now"
+        : "- Jumia: not connected (Settings → Jumia, or paste the Client ID and token in the chat)",
+    );
     if (await isUnmetered(userId)) {
       lines.push("- Not charged credits: every feature is on for them.");
       return { lines, countrySlug };
     }
     const pack = await currentPack(userId).catch(() => null);
-    lines.push(pack ? `- Pack: ${capitalise(pack.id)} (the last one they bought)` : "- No pack bought yet: on their free sign-up credits.");
+    lines.push(pack ? `- Pack: ${capitalise(pack.id)} (the last one they bought)` : "- Pack: none bought yet, on their free sign-up credits (they have what every pack has).");
     const access = async (f: FeatureId) => {
       const a = await featureAccess(userId, f).catch(() => ({ ok: false as const, blockedBy: "pack" as const }));
       return a.ok ? "on" : a.blockedBy === "credits" ? "paused until they buy credits" : `not on their pack (${featureMinPackName(f)} and up)`;
@@ -404,6 +419,8 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     "- A change to many products by a rule (all, every, everything, a percentage) is bulk; to products they name one by one, live_change.",
     "- \"How many products are on / off / live\" is shop (the overview), never product_info.",
     "- Sellers make typos (\"ordrs\" is orders, \"payed\" is paid, \"tun on\" is turn on) and write in many languages.",
+    "- About themselves (their pack, credits, WhatsApp number, Jumia connection, shop), answer only from \"About this seller\", word for word where it gives a number or name. If it isn't there, say you can't see it here and where to look (Settings).",
+    "- Asked what pack they're on or what it includes: name the pack (or \"no pack yet, your free credits\"), then list what's on and what isn't from \"About this seller\", one short line each, and what the next pack adds.",
     "",
     "Reply with ONLY one JSON object, no markdown, one of:",
     '{"type":"edit","edits":[{"products":[<numbers>],"said":"<their words for the product, or null>","changes":{...},"ask":false}]} - change drafts above. One entry per different change.',
@@ -1181,10 +1198,14 @@ export async function assistantModel(): Promise<string> {
  */
 export async function recentConversation(phone: string, current: string, max = 8): Promise<string[]> {
   try {
-    const { data } = await createServerClient()
+    // A cleared web chat starts its conversation again (lib/whatsapp/chat-clear.ts).
+    const cleared = await chatClearedAt(phone);
+    let q = createServerClient()
       .from("whatsapp_message_log")
       .select("direction, message_type, body_text, created_at")
-      .eq("phone_number", phone)
+      .eq("phone_number", phone);
+    if (cleared) q = q.gt("created_at", cleared);
+    const { data } = await q
       .order("created_at", { ascending: false })
       .limit(max + 1);
     const rows = ((data ?? []) as { direction: string; message_type: string | null; body_text: string | null; created_at: string }[])
@@ -1453,11 +1474,13 @@ export async function creditsReply(userId: string, phone: string): Promise<void>
 /**
  * handled: the assistant replied. default: nothing it should do here, so
  * the usual reply for this step goes out. failed: the AI couldn't be
- * reached, so the usual handling runs instead. { list }: between batches,
+ * reached, so the usual handling runs instead. limited: past the day's
+ * allowance or the global ceiling, so the usual handling runs, saying the
+ * commands still work where it has nothing else to say. { list }: between batches,
  * the seller wants to list this many products; the caller starts the
  * batch the usual way (credits checked, then the photo flow).
  */
-export type AssistantOutcome = "handled" | "default" | "failed" | { list: number };
+export type AssistantOutcome = "handled" | "default" | "failed" | "limited" | { list: number };
 
 /**
  * Understand `text` and act on it. `stage` says where the seller is (see
@@ -1475,17 +1498,18 @@ export async function runAssistant(
   if (/^[a-z_]+:\S+$/i.test(text.trim())) return "default";
 
   // The day's allowance and the global ceiling (lib/whatsapp/assistant-limits.ts):
-  // past them, the fixed flow answers ("failed" runs the usual handling).
+  // past them, the fixed flow answers ("limited" runs the usual handling,
+  // which says the commands still work where it has nothing else to say).
   // The seller is told once a day; that message is the whole reply.
   const gate = await assistantGate(userId).catch(() => ({ ok: true }) as const);
   if (!gate.ok) {
     if (gate.reason === "allowance" && !gate.told) {
-      await sendTextIfConfigured(phone, allowanceText(gate.allowance));
+      await sendTextIfConfigured(phone, allowanceText(gate.allowance, isWebAddress(phone)));
       await logTurn(userId, stage, text, null, ALLOWANCE_TOLD);
       return "handled";
     }
     console.info(`[assistant] ${userId}: ${gate.reason === "ceiling" ? "daily ceiling reached" : "over daily allowance"}, fixed flow`);
-    return "failed";
+    return "limited";
   }
 
   const batchId = stage === "review" ? session.batchId : stage === "sent" ? session.lastSubmittedBatchId : null;
@@ -1593,11 +1617,7 @@ async function carryOut(
       await creditsReply(userId, phone);
       return "sent credits";
     case "help":
-      await sendButtonsIfConfigured(phone, helpMessage(), [
-        { id: "status", title: "Status" },
-        { id: "restart", title: "Restart 🔄" },
-        { id: "disconnect", title: "Disconnect" },
-      ]);
+      await sendHelp(userId, phone);
       return "sent help";
     case "live_change":
       return proposeLiveChange(userId, phone, action.others ? [action.product, ...action.others] : action.product, action.change, {

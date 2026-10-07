@@ -35,6 +35,7 @@ import { isWebAddress, webAddress, chatChannelOf } from "@/lib/whatsapp/channel"
 import { assistantMessages, creditLock, jumiaGate, receiveAssistantMessage } from "@/lib/whatsapp/listing-assistant";
 import { _resetBillingModeCache } from "@/lib/billing/mode";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
+import { chatClearedAt, clearWebChat } from "@/lib/whatsapp/chat-clear";
 
 const USER = "user_web1";
 const ADDRESS = `web:${USER}`;
@@ -132,6 +133,21 @@ describe("the conversation the page reads", () => {
       ["2", "outbound", "How many?", null],
     ]);
     expect((await assistantMessages(USER, { after: "2026-10-07T10:00:01Z" })).map((m) => m.id)).toEqual(["2"]);
+  });
+
+  // Owner, 2026-10-07: "a clear button ... starts fresh like when users see it for the first time".
+  it("cleared, starts again: only what came after, and the bot starts over", async () => {
+    db.tables.whatsapp_message_log = [
+      { id: "1", phone_number: ADDRESS, direction: "inbound", message_type: "text", body_text: "hi", payload: null, created_at: "2026-10-07T10:00:01Z", wamid: null },
+    ];
+    db.tables.whatsapp_sessions = [{ phone_number: ADDRESS, user_id: USER, state: "awaiting_photos", batch_id: "b1", batch_size: 2, batch_seq: 1 }];
+    const at = await clearWebChat(USER);
+    expect(await chatClearedAt(ADDRESS)).toBe(at);
+    expect(await chatClearedAt("233550607231")).toBeNull();
+    expect(db.tables.whatsapp_sessions[0]).toMatchObject({ state: "awaiting_count", batch_id: null });
+    expect(await assistantMessages(USER, { clearedAt: at })).toEqual([]);
+    db.tables.whatsapp_message_log.push({ id: "2", phone_number: ADDRESS, direction: "outbound", message_type: "text", body_text: "Hi again", payload: null, created_at: new Date(Date.parse(at) + 1000).toISOString(), wamid: null });
+    expect((await assistantMessages(USER, { clearedAt: at })).map((m) => m.id)).toEqual(["2"]);
   });
 });
 

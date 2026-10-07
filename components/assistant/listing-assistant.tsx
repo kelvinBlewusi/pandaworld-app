@@ -13,10 +13,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, ImagePlus, Loader2, Lock, Plus, RotateCw, X } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, ImagePlus, Loader2, Lock, Plus, RotateCw, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BuyCreditsButton } from "@/components/billing/buy-credits-button";
-import { matchingCommands, slashToText, type PaletteCommand } from "@/components/assistant/chat-commands";
+import { matchingCommands, slashCommand, slashToText, unfinishedFill, type PaletteCommand } from "@/components/assistant/chat-commands";
 
 interface Message {
   id:        string;
@@ -102,7 +102,11 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
   const [connectJumia, setConnectJumia] = useState(false);
   // The command menu: "/" typed in the box, or the + button (owner, 2026-10-07).
   const [commandsOpen, setCommandsOpen] = useState(false);
+  // "Clear chat" (owner, 2026-10-07): asked first, then the chat starts over as on a first visit.
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const lastAt = useRef<string | null>(null);
+  const clearedAt = useRef<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const textArea = useRef<HTMLTextAreaElement>(null);
@@ -125,7 +129,14 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
       const q = lastAt.current ? `?after=${encodeURIComponent(lastAt.current)}` : "";
       const res = await fetch(`/api/listing-assistant/messages${q}`, { cache: "no-store" });
       if (!res.ok) return;
-      const { messages: got, locked: isLocked, connectJumia: needsJumia } = (await res.json()) as { messages: Message[]; locked?: boolean; connectJumia?: boolean };
+      const { messages: got, locked: isLocked, connectJumia: needsJumia, clearedAt: cleared } =
+        (await res.json()) as { messages: Message[]; locked?: boolean; connectJumia?: boolean; clearedAt?: string | null };
+      // Cleared since (here, in another tab, or by tapping the bot's Clear chat): what came before goes.
+      if (cleared && cleared !== clearedAt.current) {
+        const first = clearedAt.current === null;
+        clearedAt.current = cleared;
+        if (!first) setMessages((prev) => prev.filter((m) => !m.local && m.at > cleared));
+      }
       merge(got);
       setLocked(Boolean(isLocked));
       setConnectJumia(Boolean(needsJumia));
@@ -247,10 +258,23 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
   async function send(override?: { text: string; label?: string }) {
     if (sending || locked) return;
     const raw = (override?.text ?? text).trim();
+    if (!override && slashCommand(raw)?.action === "clear") {
+      setText("");
+      setCommandsOpen(false);
+      setConfirmClear(true);
+      return;
+    }
     // "/polish 2" goes as the words the bot knows: "polish 2".
     const typed = raw.startsWith("/") ? slashToText(raw) : raw;
     setCommandsOpen(false);
     const photos = override ? [] : attachments;
+    const bare = !override && photos.length === 0 ? unfinishedFill(typed) : null;
+    if (bare) {
+      setText(bare.fill ?? "");
+      setError(`Say which product and what to change, e.g. "${bare.example}".`);
+      textArea.current?.focus();
+      return;
+    }
     if (!typed && photos.length === 0) return;
     setSending(true);
     setError(null);
@@ -296,6 +320,11 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
   /** A command from the menu: sent as it is, or put in the box to finish. */
   function choose(c: PaletteCommand) {
     setCommandsOpen(false);
+    if (c.action === "clear") {
+      setText("");
+      setConfirmClear(true);
+      return;
+    }
     if (c.send) {
       setText("");
       void send({ text: c.send });
@@ -303,6 +332,28 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
     }
     setText(c.fill ?? "");
     textArea.current?.focus();
+  }
+
+  /** Clears the conversation: the bot starts over, the page shows the first-visit welcome. */
+  async function clearChat() {
+    setClearing(true);
+    const res = await fetch("/api/listing-assistant/clear", { method: "POST" }).catch(() => null);
+    setClearing(false);
+    setConfirmClear(false);
+    if (!res?.ok) {
+      setError("The chat didn't clear. Check your connection and try again.");
+      return;
+    }
+    const { clearedAt: cleared } = (await res.json().catch(() => ({}))) as { clearedAt?: string };
+    if (cleared) clearedAt.current = cleared;
+    release(attachments);
+    setAttachments([]);
+    setMessages([]);
+    setError(null);
+    setWaitingSince(null);
+    lastAt.current = null;
+    firstScroll.current = true;
+    await poll();
   }
 
   async function upload(file: File): Promise<{ mediaId: string; url?: string } | { error: string | null }> {
@@ -559,6 +610,10 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
       </div>
       )}
 
+      {confirmClear && (
+        <ClearDialog busy={clearing} onCancel={() => setConfirmClear(false)} onConfirm={() => void clearChat()} />
+      )}
+
       {dragging && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-orange-50/80 text-sm font-semibold text-orange-700">
           Drop photos to add them
@@ -568,7 +623,7 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
   );
 }
 
-/** The command menu, above the message box: the billed ones say their price. */
+/** The command menu, above the message box. */
 function CommandMenu({ commands, onChoose, onClose }: { commands: PaletteCommand[]; onChoose: (c: PaletteCommand) => void; onClose: () => void }) {
   return (
     <div className="absolute inset-x-3 bottom-full z-10 mb-2 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-lg sm:inset-x-4" role="menu">
@@ -593,9 +648,43 @@ function CommandMenu({ commands, onChoose, onClose }: { commands: PaletteCommand
               <span className="block text-sm font-medium text-zinc-900">{c.title}</span>
               <span className="block text-xs text-zinc-500">{c.hint}</span>
             </span>
-            {c.credits && <span className="shrink-0 rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-600">{c.credits}</span>}
           </button>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/** "Clear chat?", over the chat: what goes and what stays. */
+function ClearDialog({ busy, onCancel, onConfirm }: { busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div className="absolute inset-0 z-20 flex items-end justify-center bg-black/30 p-3 sm:items-center" role="dialog" aria-modal="true" aria-labelledby="clear-chat-title">
+      <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl">
+        <span className="flex h-10 w-10 items-center justify-center rounded-full bg-orange-50">
+          <Trash2 className="h-5 w-5 text-orange-600" />
+        </span>
+        <p id="clear-chat-title" className="mt-3 font-semibold text-zinc-900">Clear this chat?</p>
+        <p className="mt-1.5 text-sm leading-relaxed text-zinc-600">
+          The conversation goes and the assistant starts fresh, like your first visit. Your drafts and listings stay on List from WhatsApp, and your credits don&apos;t change.
+        </p>
+        <div className="mt-5 flex gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="h-11 flex-1 rounded-xl border border-zinc-200 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-50"
+          >
+            Keep it
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            className="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-orange-500 text-sm font-semibold text-white transition-colors hover:bg-orange-600 disabled:opacity-60"
+          >
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />} Clear chat
+          </button>
+        </div>
       </div>
     </div>
   );

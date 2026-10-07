@@ -22,6 +22,7 @@
 
 import { createServerClient } from "@/lib/supabase/server";
 import { REPORT_CREDIT_COST } from "@/lib/billing/credit-packs";
+import { isWebAddress } from "@/lib/whatsapp/channel";
 import { availableCredits, chargeService, isUnmetered } from "@/lib/billing/extension-credits";
 import { getItemsOfOrders, type JumiaOrder, type JumiaOrderItem } from "@/lib/jumia/orders";
 import { fetchPayouts, ordersCreatedSince, type PayoutStatement, type ShopProduct } from "@/lib/jumia/shop";
@@ -277,6 +278,8 @@ export async function answerHealthReport(userId: string, phone: string): Promise
       return "report: charge failed";
     }
   }
-  await sendLong(phone, `${evidenceText(evidence, score, ctx.jc)}\n\n${reading}\n\n_${REPORT_CREDIT_COST} credits · from Jumia, just now_`);
+  // No credits named after it on the web (owner, 2026-10-07: "don't mention credit spent after an action").
+  const spent = isWebAddress(phone) ? "" : `${REPORT_CREDIT_COST} credits · `;
+  await sendLong(phone, `${evidenceText(evidence, score, ctx.jc)}\n\n${reading}\n\n_${spent}from Jumia, just now_`);
   return `report: ${score}/100`;
 }

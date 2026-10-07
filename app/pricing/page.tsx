@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { auth } from "@clerk/nextjs/server";
-import { ArrowRight, Check, Coins } from "lucide-react";
+import { ArrowRight, Check, Coins, Gift } from "lucide-react";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { HomeFloatingNav } from "@/components/marketing/home-floating-nav";
 import { BuyCreditsButton } from "@/components/billing/buy-credits-button";
@@ -162,13 +162,18 @@ export default async function PricingPage() {
       {/* Packs */}
       <section className="bg-zinc-50">
         <div className="mx-auto max-w-6xl px-6 py-16">
-          <h2 className="text-2xl font-bold sm:text-3xl">Credit packs</h2>
-          {/* What every plan has, free credits included (owner, 2026-10-07). */}
+          <h2 className="text-2xl font-bold sm:text-3xl">Free credits and packs</h2>
+          {/* What every plan has is on the Free card (owner, 2026-10-07). */}
           <p className="mt-3 max-w-3xl text-sm text-zinc-600">
-            On every pack, and on your free credits: {everyoneFeatures().map((f) => f.label.charAt(0).toLowerCase() + f.label.slice(1)).join("; ")}.
-            The bigger packs add what&apos;s listed on each card.
+            Every pack includes everything on the Free card. The bigger packs add what&apos;s listed on each card.
           </p>
-          <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+            {/* The free credits as a card of their own, first (owner, 2026-10-07: "in pricing add the free price cards"). */}
+            <FreeCard
+              listingCost={listingCost}
+              href={userId ? DASHBOARD_REDIRECT : signUpHref}
+              signedIn={Boolean(userId)}
+            />
             {CREDIT_PACKS.map((p) => {
               const { autofills, listings } = packReach(p.credits, listingCost);
               const popular = p.id === POPULAR_PACK_ID;
@@ -292,6 +297,56 @@ export default async function PricingPage() {
       </section>
 
       <MarketingFooter />
+    </div>
+  );
+}
+
+/** Free: the sign-up credits, what they reach, and what every plan has. */
+function FreeCard({ listingCost, href, signedIn }: { listingCost: number; href: string; signedIn: boolean }) {
+  const { autofills, listings } = packReach(FREE_SIGNUP_CREDITS, listingCost);
+  return (
+    <div className="relative flex flex-col rounded-2xl border border-emerald-200 bg-white p-6 shadow-sm">
+      <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-emerald-500 px-3 py-0.5 text-xs font-semibold uppercase tracking-wide text-white">
+        Start here
+      </span>
+      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+        <Gift className="h-5 w-5" />
+      </div>
+      <h3 className="mt-5 text-lg font-bold">Free</h3>
+      <p className="mt-1 text-3xl font-bold">GHS 0</p>
+      <ul className="mt-5 flex-1 space-y-2.5 text-sm text-zinc-700">
+        <li className="flex items-start gap-2">
+          <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+          {FREE_SIGNUP_CREDITS} credits when you sign up
+        </li>
+        <li className="flex items-start gap-2">
+          <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+          {listings === autofills ? `${listings} listings, on WhatsApp or the extension` : `${listings} live WhatsApp listings, or ${autofills} extension autofills`}
+        </li>
+        <li className="flex items-start gap-2">
+          <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+          No card, no subscription
+        </li>
+        <li className="flex items-start gap-2">
+          <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+          Chatting with the Listing Assistant is free
+        </li>
+        {everyoneFeatures().map((f) => (
+          <li key={f.id} className="flex items-start gap-2 font-medium">
+            <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+            {f.label}
+          </li>
+        ))}
+      </ul>
+      <div className="mt-6">
+        <Link
+          href={href}
+          className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-emerald-700"
+        >
+          {signedIn ? "Open dashboard" : "Start free"}
+          <ArrowRight className="h-4 w-4" />
+        </Link>
+      </div>
     </div>
   );
 }

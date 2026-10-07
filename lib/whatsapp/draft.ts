@@ -20,7 +20,20 @@
 export function endsWithDoneSignal(text: string): boolean {
   const tokens = text.trim().split(/\s+/);
   const last = (tokens[tokens.length - 1] ?? "").replace(/[.,!]+$/, "");
-  return /^done$/i.test(last);
+  return isDoneWord(last, tokens.length === 1);
+}
+
+/**
+ * Typos of "done", taken only as a whole message: "dine" was saved as a
+ * product's note (owner's test, 2026-10-07). After a caption they stay
+ * words ("fine dine set").
+ */
+const DONE_TYPOS = /^(dine|dne|doen|donee|doone|ddone|donw|donr|dobe|dpne|don|dome|domne)$/i;
+
+/** "done", or (when it's the whole message) a slip of it. */
+export function isDoneWord(word: string, whole: boolean): boolean {
+  const w = word.replace(/^\*+/, "").replace(/[*.,!]+$/, "");
+  return /^done$/i.test(w) || (whole && DONE_TYPOS.test(w));
 }
 
 /**

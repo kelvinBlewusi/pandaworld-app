@@ -622,11 +622,12 @@ describe("asking for a missing price in chat", () => {
     await finalizeBatch("batch-1", PHONE, 1);
 
     expect(sent).toHaveLength(1);
-    expect(sent[0].kind).toBe("cta");
-    expect(sent[0].body).toBe(
-      "✅ Product drafted: Vintage Radio Eau de Parfum - 100ml, Natural Spray.\n⚠️ *needs price.*\n\n" +
-      "*What price are you selling it at? Reply with just the amount (Eg. 1500)*",
-    );
+    // Skip and Restart under it, the editor's link written in (owner, 2026-10-07).
+    expect(sent[0]).toMatchObject({ kind: "buttons", rows: ["skip price", "restart"] });
+    expect(sent[0].body).toMatch(new RegExp(
+      "^✅ Product drafted: Vintage Radio Eau de Parfum - 100ml, Natural Spray\\.\n⚠️ \\*needs price\\.\\*\n\n" +
+      "\\*What price are you selling it at\\? Reply with just the amount \\(Eg\\. 1500\\)\\*\n\nOr enter it here: https?://\\S+listing-1",
+    ));
     expect(session().awaiting_price_for).toBe("listing-1");
   });
 
@@ -705,6 +706,23 @@ describe("asking for a missing price in chat", () => {
 
     expect(listings()[0].selling_price).toBeNull();
     expect(session().awaiting_price_for).toBeNull();
+  });
+
+  // Owner's test, 2026-10-07: "i have entered the price submit it" got the editor's link.
+  it("\"submit it\" while asked: still no price, the question stands; priced since, it goes", async () => {
+    seedBatch([{ seq: 1, title: "Panasonic Electric Kettle 1.7L" }]);
+    confirming({ batch_size: 1, awaiting_price_for: "listing-1" });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "i have entered the price submit it" });
+    expect(sent.at(-1)?.body).toContain("Product 1 still has no price");
+    expect(session().awaiting_price_for).toBe("listing-1");
+    expect(pushCallCount).toBe(0);
+
+    listings()[0].selling_price = 150; // set on the review page meanwhile
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "i have entered the price submit it" });
+    expect(session().awaiting_price_for ?? null).toBeNull();
+    expect(pushCallCount).toBe(1);
   });
 
   // Skipping must walk FORWARD. Re-offering the product just declined is
@@ -841,10 +859,11 @@ describe("asking for a missing price in chat", () => {
       const { finalizeBatch } = await import("@/lib/whatsapp/intake");
       await finalizeBatch("batch-1", PHONE, 1);
 
-      expect(sent.map((m) => m.body)).toEqual([
+      expect(sent).toHaveLength(1);
+      expect(sent[0].body.startsWith(
         "✅ Product drafted: Panasonic Electric Kettle 1.7L.\n⚠️ *the price (GHS 3) is below the lowest Jumia allows (GHS 8.81).*\n\n" +
-        "*What price are you selling it at? Reply with just the amount (Eg. 1500)*",
-      ]);
+        "*What price are you selling it at? Reply with just the amount (Eg. 1500)*\n\nOr enter it here: ",
+      )).toBe(true);
       expect(session().awaiting_price_for).toBe("listing-1");
     });
   });
@@ -1605,6 +1624,49 @@ describe("message volume on a large batch", () => {
   });
 });
 
+// A seller's WhatsApp, 2026-10-07 (user_3KJkY…): what didn't go smoothly.
+describe("what a seller's day on WhatsApp showed (2026-10-07)", () => {
+  beforeEach(() => { db.tables.jumia_connections = [{ user_id: USER, status: "active", access_token: "tok", refresh_token: "ref" }]; });
+  afterEach(() => { db.tables.jumia_connections = []; });
+  const seedBatch = (rows: { seq: number; title: string; price: number }[]) => {
+    db.tables.listings = rows.map((r) => ({
+      id: `listing-${r.seq}`, user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: r.seq, title: r.title, selling_price: r.price,
+      description: "A long enough description to clear the fifty-character minimum check.", status: "draft", images: ["https://cdn.test/a.jpg"],
+    }));
+  };
+
+  it("photos before a count get one answer for the album, not one each", async () => {
+    seedSession({ state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null, listing_id: null });
+    sent.length = 0;
+    for (let i = 1; i <= 5; i++) await handleLinkedMessage(USER, PHONE, `p${i}`, { imageMediaId: `media-${i}` });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ kind: "buttons", rows: ["1", "2", "3"] });
+    expect(sent[0].body).toContain("how many products are you listing?");
+
+    // The count after it starts the batch with a clean photo clock.
+    await handleLinkedMessage(USER, PHONE, "c1", { text: "1" });
+    expect(session()).toMatchObject({ state: "awaiting_photos", last_image_at: null });
+  });
+
+  it("\"Put a stop to this product creation\" asks to start over", async () => {
+    seedBatch([{ seq: 1, title: "Thong Bodysuit", price: 130 }]);
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    sent.length = 0;
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "Put a stop to this product creation" });
+    expect(sent.at(-1)).toMatchObject({ kind: "buttons", rows: ["restart", "status"] });
+    expect(sent.at(-1)?.body).toContain("Stop this and start over?");
+  });
+
+  it("the editor's link for anything else carries Submit all and Restart", async () => {
+    seedBatch([{ seq: 1, title: "Thong Bodysuit", price: 130 }]);
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    sent.length = 0;
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "1: change the material to cotton" });
+    expect(sent.at(-1)).toMatchObject({ kind: "buttons", rows: ["submit all", "restart"] });
+    expect(sent.at(-1)?.body).toContain("Edit product: ");
+  });
+});
+
 describe("asking for the variation when it's what Jumia won't take", () => {
   // Owner's request, 2026-10-03: "This category needs a variation picked
   // from its own stocked options … pick one in the editor" at draft time,
@@ -1629,12 +1691,24 @@ describe("asking for the variation when it's what Jumia won't take", () => {
     sent.length = 0;
   });
 
+  // Live 2026-10-07: "Price: 130gh / Sizes: Large, Medium, Small" was then asked for its variation.
+  it("sizes sent with the price are its variations, not asked again", async () => {
+    db.tables.listings[0].selling_price = null;
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null, awaiting_price_for: "listing-1" });
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "Price: 150gh\nSizes: 50ml, 10ml.\nColors: cream" });
+    expect(db.tables.listings[0].selling_price).toBe(150);
+    expect(db.tables.variants.map((v) => v.variation)).toEqual(["50ml", "10ml"]);
+    expect(sent.some((m) => m.body.includes("What variation(s)"))).toBe(false);
+  });
+
   it("asks for it when a submit is stopped over it, and sends the product back with the answer", async () => {
     pushResultFor.set("listing-1", { ok: false, code: "validation", message: VARIATION_BLOCK });
     await handleLinkedMessage(USER, PHONE, "m1", { text: "submit" });
 
     const ask = sent.find((m) => m.body.includes("*What variation(s) do you have?*"))!;
-    expect(ask.kind).toBe("cta");
+    // The editor's link written in, Skip and Restart under it (owner, 2026-10-07).
+    expect(ask).toMatchObject({ kind: "buttons", rows: ["skip value", "restart"] });
+    expect(ask.body).toContain("Or pick in the editor: ");
     expect(ask.body).toContain(`*${TITLE}*`);
     expect(ask.body).toContain("Reply with one or more of the stocked options (100ml, 105ml, 10ml, 50ml)");
     expect(session().awaiting_value_for).toEqual({ listingId: "listing-1", field: "__variation", resubmit: true });
@@ -3088,6 +3162,22 @@ describe("connecting Jumia from the chat", () => {
 
     expect(selfAuthCalls).toEqual([{ clientId: CLIENT_ID, token: TOKEN, country: "GH" }]);
     expect(session().state).toBe("awaiting_count");
+  });
+
+  // Owner's test, 2026-10-07: the Client ID pasted again was sent as the
+  // token, and one a character short was taken for the token.
+  it("the same half twice asks for the other; a cut-off Client ID is said to be cut off", async () => {
+    await handleLinkedMessage(USER, PHONE, "m1", { text: CLIENT_ID });
+    await handleLinkedMessage(USER, PHONE, "m2", { text: CLIENT_ID });
+    expect(sent.at(-1)?.body).toContain("That's the Client ID again — now paste the generated token");
+    expect(selfAuthCalls).toHaveLength(0);
+
+    await handleLinkedMessage(USER, PHONE, "m3", { text: CLIENT_ID.slice(0, -1) });
+    expect(sent.at(-1)?.body).toContain("That Client ID looks cut off: it has 35 characters");
+    expect(selfAuthCalls).toHaveLength(0);
+
+    await handleLinkedMessage(USER, PHONE, "m4", { text: TOKEN });
+    expect(selfAuthCalls).toEqual([{ clientId: CLIENT_ID, token: TOKEN, country: "GH" }]);
   });
 
   it("falls back to the Web Application login when Jumia says that's what the app is", async () => {

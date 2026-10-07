@@ -6,6 +6,9 @@
  * extra features linked to the packs"): "menu" lists these as a WhatsApp
  * list, each row the command's own words.
  *
+ * "clear" clears the web chat (lib/whatsapp/chat-clear.ts); on WhatsApp it
+ * says how to clear the chat on the phone.
+ *
  * Billed ones: "report" (REPORT_CREDIT_COST) and "polish N"
  * (POLISH_CREDIT_COST an image); a change to live products is billed on its
  * confirm tap (lib/whatsapp/shop.ts). The rest are free.
@@ -13,7 +16,9 @@
 
 import { createServerClient } from "@/lib/supabase/server";
 import { POLISH_CREDIT_COST, REPORT_CREDIT_COST } from "@/lib/billing/credit-packs";
-import { sendListIfConfigured, sendTextIfConfigured } from "@/lib/whatsapp/client";
+import { sendButtonsIfConfigured, sendListIfConfigured, sendTextIfConfigured } from "@/lib/whatsapp/client";
+import { isWebAddress } from "@/lib/whatsapp/channel";
+import { CLEAR_CONFIRM_TEXT, CLEAR_NOW_ID, CLEAR_ON_WHATSAPP, clearWebChat } from "@/lib/whatsapp/chat-clear";
 import type { GlobalCommand, ShopRead } from "@/lib/whatsapp/commands";
 import type { WhatsAppSession } from "@/lib/whatsapp/session";
 import { creditsReply } from "@/lib/whatsapp/assistant";
@@ -21,10 +26,16 @@ import { answerPayouts, answerProducts, answerSales, answerStock } from "@/lib/w
 import { answerHealthReport } from "@/lib/whatsapp/shop-health";
 import { POLISH_COST, polishOnRequest } from "@/lib/whatsapp/chat-polish";
 
-type ChatCommand = Extract<GlobalCommand, { type: "menu" | "credits" | "polish" | "report" | "shop_read" }>;
+type ChatCommand = Extract<GlobalCommand, { type: "menu" | "credits" | "polish" | "report" | "shop_read" | "clear" | "edit_help" }>;
 
-export const isChatCommand = (cmd: GlobalCommand): cmd is ChatCommand =>
-  cmd.type === "menu" || cmd.type === "credits" || cmd.type === "polish" || cmd.type === "report" || cmd.type === "shop_read";
+const CHAT_COMMANDS = new Set<GlobalCommand["type"]>(["menu", "credits", "polish", "report", "shop_read", "clear", "edit_help"]);
+
+export const isChatCommand = (cmd: GlobalCommand): cmd is ChatCommand => CHAT_COMMANDS.has(cmd.type);
+
+/** "Change" or "edit" with nothing after it (owner's test, 2026-10-07: a bare "Change" was read as restarting). */
+export const EDIT_HELP =
+  "✏️ Say which product and what to change, e.g. *change the price of the gold medal to 500*, *set the stock of GEMMALL5 to 10* or *turn off the blue helmet*.\n\n" +
+  "For a product you're listing now, use its number, e.g. *2: price 150*.";
 
 /** The menu's rows: each id is the command's words (WhatsApp list, at most 10). */
 export const MENU_ROWS = [
@@ -72,7 +83,37 @@ export async function runChatCommand(cmd: ChatCommand, userId: string, phone: st
     case "polish":
       await polishCommand(userId, phone, session, cmd.seq);
       return;
+    case "edit_help":
+      await sendTextIfConfigured(phone, EDIT_HELP);
+      return;
+    case "clear":
+      await clearCommand(userId, phone, cmd.step);
+      return;
   }
+}
+
+/**
+ * "clear": on the web, asked first, then the chat starts over (the page
+ * drops what came before); on WhatsApp, where the chat lives on the phone,
+ * how to clear it there.
+ */
+async function clearCommand(userId: string, phone: string, step: "ask" | "now" | "keep"): Promise<void> {
+  if (!isWebAddress(phone)) {
+    if (step !== "keep") await sendTextIfConfigured(phone, CLEAR_ON_WHATSAPP);
+    return;
+  }
+  if (step === "keep") {
+    await sendTextIfConfigured(phone, "👍 Kept. Carry on where you were.");
+    return;
+  }
+  if (step === "ask") {
+    await sendButtonsIfConfigured(phone, CLEAR_CONFIRM_TEXT, [
+      { id: CLEAR_NOW_ID, title: "Clear chat" },
+      { id: "keep chat", title: "Keep it" },
+    ]);
+    return;
+  }
+  await clearWebChat(userId);
 }
 
 /** "polish 2": that product of the batch in progress (or the one just sent, which says it's with Jumia). */

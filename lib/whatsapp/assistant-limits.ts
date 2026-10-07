@@ -29,8 +29,13 @@ import { currentPack } from "@/lib/billing/features";
 import { sellerCountry } from "@/lib/jumia/unlistable-categories";
 import { jumiaCountryByCode } from "@/lib/marketing/countries";
 
-/** AI turns a day, by the pack the seller is on ("none": never bought one). */
-export const DAILY_ALLOWANCE: Record<string, number> = { none: 10, starter: 20, standard: 30, pro: 50, business: 100 };
+/**
+ * AI turns a day, by the pack the seller is on ("none": never bought one).
+ * Tripled from 10/20/30/50/100 on 2026-10-07: the owner's own test used the
+ * free 10 within the first half hour of trying the web chat, and chatting
+ * is free (a turn costs us a fraction of a pesewa on the web).
+ */
+export const DAILY_ALLOWANCE: Record<string, number> = { none: 30, starter: 40, standard: 60, pro: 100, business: 200 };
 
 /** Where WhatsApp messages cost us more, a smaller allowance (Meta's 2026 rates). */
 export const COUNTRY_FACTOR: Record<string, number> = { NG: 0.5, MA: 0.25 };
@@ -105,12 +110,24 @@ export async function assistantGate(userId: string, now = new Date()): Promise<A
   return { ok: false, reason: "allowance", allowance, told: ((data ?? []) as unknown[]).length > 0 };
 }
 
+/** Where the commands are: the / menu and + on the web, "menu" on WhatsApp. */
+const commandsHint = (web: boolean) => (web ? "type */* or tap *+* for the commands" : "type *menu* for the commands");
+
 /** What a seller past their allowance is told, once a day. */
-export function allowanceText(allowance: number): string {
+export function allowanceText(allowance: number, web = false): string {
   return [
     `You've used today's ${allowance} chat replies on your pack, so until tomorrow I'll keep to the usual steps.`,
     "",
-    "Listing still works as always: tell me how many products (e.g. *3*), then send each one's photos. *orders*, *status* and *help* work too.",
+    `Listing still works as always: tell me how many products (e.g. *3*), then send each one's photos. Your orders, sales, stock, payouts and credits work too: ${commandsHint(web)}.`,
     "Bigger packs come with more chat replies a day.",
   ].join("\n");
+}
+
+/**
+ * After that, a question the fixed flow can't answer (owner's test,
+ * 2026-10-07: "explain", "is my WhatsApp connected?" each got "I need a
+ * number to get started").
+ */
+export function limitedText(web = false): string {
+  return `I can't answer questions until tomorrow: today's chat replies are used up. The commands still work: ${commandsHint(web)}, or tell me how many products you're listing (e.g. *3*).`;
 }

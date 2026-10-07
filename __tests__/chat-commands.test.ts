@@ -39,6 +39,10 @@ import { healthEvidence, healthScore, plainReading, evidenceText } from "@/lib/w
 import { MENU_ROWS, runChatCommand } from "@/lib/whatsapp/chat-commands";
 import { notesAskForPolish, verifyNoteIntent } from "@/lib/whatsapp/note-intent";
 import type { WhatsAppSession } from "@/lib/whatsapp/session";
+import { endsWithDoneSignal } from "@/lib/whatsapp/draft";
+import { helpFor, sendQueuedHelp } from "@/lib/whatsapp/help";
+import { looksLikeBrokenClientId } from "@/lib/jumia/self-auth";
+import { PALETTE, matchingCommands, slashCommand, slashToText, unfinishedFill } from "@/components/assistant/chat-commands";
 import type { ShopProduct } from "@/lib/jumia/shop";
 
 const PHONE = "233200000000";
@@ -89,6 +93,133 @@ describe("the words", () => {
   });
 });
 
+describe("what the owner's web test showed (2026-10-07)", () => {
+  it("reads the ways a seller asks for their credits", () => {
+    for (const t of ["remaining credit", "Remaining credits", "credits left", "how many credits do i have", "check my credits", "my balance", "what's my balance"]) {
+      expect(parseGlobalCommand(t)).toEqual({ type: "credits" });
+    }
+    expect(parseGlobalCommand("credits for product 2")).toBeNull();
+  });
+
+  it("a bare \"Change\" or \"edit\" asks what to change, never restarts", async () => {
+    expect(parseGlobalCommand("Change")).toEqual({ type: "edit_help" });
+    expect(parseGlobalCommand("edit on Jumia")).toEqual({ type: "edit_help" });
+    expect(parseGlobalCommand("change the price of the gold medal to 500")).toBeNull();
+    await runChatCommand({ type: "edit_help" }, "seller", PHONE, {} as WhatsAppSession);
+    expect(sent[0].body).toContain("Say which product and what to change");
+  });
+
+  it("\"clear\": asked first on the web; the tap clears it; on WhatsApp, how to clear it on the phone", async () => {
+    expect(parseGlobalCommand("clear my chat")).toEqual({ type: "clear", step: "ask" });
+    expect(parseGlobalCommand("clear chat now")).toEqual({ type: "clear", step: "now" });
+    expect(parseGlobalCommand("keep chat")).toEqual({ type: "clear", step: "keep" });
+    const WEB = "web:seller";
+    db.tables.whatsapp_sessions = [{ phone_number: WEB, user_id: "seller", state: "awaiting_confirmation", batch_id: "b1" }];
+    await runChatCommand({ type: "clear", step: "ask" }, "seller", WEB, {} as WhatsAppSession);
+    expect(sent.at(-1)).toMatchObject({ kind: "buttons" });
+    expect(sent.at(-1)?.body).toContain("Clear this chat?");
+    expect(db.tables.whatsapp_sessions[0].chat_cleared_at).toBeUndefined();
+    await runChatCommand({ type: "clear", step: "now" }, "seller", WEB, {} as WhatsAppSession);
+    expect(db.tables.whatsapp_sessions[0]).toMatchObject({ state: "awaiting_count", batch_id: null });
+    expect(typeof db.tables.whatsapp_sessions[0].chat_cleared_at).toBe("string");
+    sent.length = 0;
+    await runChatCommand({ type: "clear", step: "ask" }, "seller", PHONE, {} as WhatsAppSession);
+    expect(sent[0].body).toContain("WhatsApp keeps this chat on your phone");
+  });
+
+  it("\"dine\" alone is done; in a caption it's a word", () => {
+    expect(endsWithDoneSignal("dine")).toBe(true);
+    expect(endsWithDoneSignal("Dine.")).toBe(true);
+    expect(endsWithDoneSignal("fine dine")).toBe(false);
+    expect(endsWithDoneSignal("Price 40 done")).toBe(true);
+  });
+
+  it("\"Ghc 160\" is the price, not a sale price too", () => {
+    const note = "Ghc 160\ndine";
+    const read = verifyNoteIntent({
+      selling_price: { value: 160, quote: "Ghc 160" },
+      sale_price: { value: 160, quote: "Ghc 160" },
+    }, note);
+    expect(read.intent.selling_price?.value).toBe(160);
+    expect(read.intent.sale_price).toBeUndefined();
+    const sale = verifyNoteIntent({
+      selling_price: { value: 200, quote: "200" },
+      sale_price: { value: 160, quote: "sale 160" },
+    }, "200, sale 160 till Friday");
+    expect(sale.intent.sale_price?.value).toBe(160);
+  });
+
+  it("a Client ID cut short or with extra is neither half", () => {
+    expect(looksLikeBrokenClientId("c9758cb3-8a9b-49b2-9ae5-6973aa3015c")).toBe(true);
+    expect(looksLikeBrokenClientId("c9758cb3-8a9b-49b2-9ae5-6973aa3015cd")).toBe(false);
+    expect(looksLikeBrokenClientId("BYQZm9Gdk16GiIuXW1K_SiwboupmDjsMj3vhSDzbous")).toBe(false);
+  });
+
+  it("the page's commands: /edit (or /change) is Edit live on Jumia, /clear asks first, no prices shown", () => {
+    const edit = slashCommand("/change");
+    expect(edit?.slash).toBe("edit");
+    expect(edit?.title).toBe("Edit live on Jumia");
+    expect(slashToText("/edit the price of the medal to 500")).toBe("Change the price of the medal to 500");
+    expect(slashToText("/change stock of GEMMALL5 to 10")).toBe("Change stock of GEMMALL5 to 10");
+    expect(unfinishedFill("Change")?.slash).toBe("edit");
+    expect(unfinishedFill("polish")).toBeNull();
+    expect(slashCommand("/clear")?.action).toBe("clear");
+    expect(matchingCommands("/ed").map((c) => c.slash)).toEqual(["edit"]);
+    expect(PALETTE.every((c) => !("credits" in c))).toBe(true);
+  });
+});
+
+describe("help, for the seller's own pack (owner, 2026-10-07)", () => {
+  it("free credits: what every plan has, and what bigger packs add", async () => {
+    db.tables.extension_credits[0].balance = 9;
+    const text = await helpFor("seller", PHONE);
+    expect(text).toContain("on your free credits");
+    expect(text).toContain("*polish 2*");
+    expect(text).toContain("*Bigger packs add*");
+    expect(text).toContain("Live product changes: Standard pack and up");
+    expect(text).not.toContain("*On your pack*");
+    expect(text).toContain("Credits: 9 available");
+    expect(text).toContain("type *menu*");
+  });
+
+  it("Standard: live changes and QC are on, and named as such; the web says / and /clear", async () => {
+    db.tables.extension_credit_transactions = [{ user_id: "seller", type: "purchase", amount: 210, created_at: "2026-10-01T00:00:00Z" }];
+    const text = await helpFor("seller", "web:seller");
+    expect(text).toContain("on your Standard pack");
+    expect(text).toContain("*On your pack*");
+    expect(text).toContain("set the stock of the blue kettle to 10");
+    expect(text).toContain("Fee calculator in the extension: Pro pack and up");
+    expect(text).toContain("type / or tap +");
+    expect(text).toContain("/clear");
+  });
+
+  it("the outbox sends each named seller their help once, to their WhatsApp number", async () => {
+    db.tables.app_settings = [{ key: "help_outbox", value: ["seller"] }];
+    db.tables.whatsapp_connections = [{ user_id: "seller", phone_number: "+233206987692" }];
+    expect(await sendQueuedHelp()).toEqual(["seller"]);
+    expect(sent.at(-1)).toMatchObject({ kind: "buttons", to: "233206987692" });
+    expect(sent.at(-1)?.body).toContain("Here's what you can do, on your free credits.");
+    expect(db.tables.app_settings[0].value).toEqual([]);
+    expect(await sendQueuedHelp()).toEqual([]);
+  });
+
+  it("polish on the web says nothing of the credits it took", async () => {
+    await queuePolish("l1");
+    db.tables.listings[0].chat_channel = "web";
+    const push = jest.requireMock("@/lib/jumia/push-listing") as { chatAddressFor: () => Promise<string> };
+    const before = push.chatAddressFor;
+    push.chatAddressFor = async () => "web:seller";
+    try {
+      expect(await polishListing("l1")).toBe("done");
+    } finally {
+      push.chatAddressFor = before;
+    }
+    const caption = sent.find((m) => m.kind === "image" && m.body)?.body ?? "";
+    expect(caption).toContain("3 polished photos (main image, angle, detail). They replace your own photos");
+    expect(caption).not.toContain("credits");
+  });
+});
+
 describe("polish from the seller's note", () => {
   it("a note that asks for it, in their own words, is read; one that doesn't isn't", () => {
     const asked = verifyNoteIntent({ polish_images: { value: true, quote: "polish the photos" } }, "300 cedis, polish the photos please");
@@ -99,20 +230,21 @@ describe("polish from the seller's note", () => {
     expect(notesAskForPolish("nice picture frame")).toBe(false);
   });
 
-  it("is queued once, and polished by the worker: 2 credits an image that came back, new photos first", async () => {
+  it("is queued once, and polished by the worker: 2 credits an image that came back, replacing the seller's photos", async () => {
     expect(await queuePolish("l1")).toBe(true);
     expect(await queuePolish("l1")).toBe(false);
     expect(await polishQueue(2)).toEqual(["l1"]);
     expect(await polishListing("l1")).toBe("done");
     const row = db.tables.listings[0];
     expect(row.polish_status).toBe("done");
-    expect(row.images).toEqual(["https://cdn.test/main.png", "https://cdn.test/angle.png", "https://cdn.test/detail.png", "https://cdn.test/a.jpg", "https://cdn.test/b.jpg"]);
+    // The new ones replace the seller's (owner, 2026-10-07: "it must replace them entirely").
+    expect(row.images).toEqual(["https://cdn.test/main.png", "https://cdn.test/angle.png", "https://cdn.test/detail.png"]);
     expect(row.original_images).toEqual(["https://cdn.test/a.jpg", "https://cdn.test/b.jpg"]);
     expect(balance()).toBe(20 - 3 * 2);
     // On WhatsApp, the main photo with the caption (each photo is a paid message there).
     const images = sent.filter((m) => m.kind === "image");
     expect(images).toHaveLength(1);
-    expect(images[0].body).toContain("Product 2: 3 polished photos (main image, angle, detail), 6 credits.");
+    expect(images[0].body).toContain("Product 2: 3 polished photos (main image, angle, detail), 6 credits. They replace your own photos");
     // Run again: nothing claimed, nothing charged.
     expect(await polishListing("l1")).toBe("busy");
     expect(balance()).toBe(14);

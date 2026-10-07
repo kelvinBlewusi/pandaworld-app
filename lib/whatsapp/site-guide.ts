@@ -15,13 +15,14 @@ import { BOT_NUMBER_DISPLAY, SUPPORT_EMAIL } from "@/lib/constants/support";
 export function siteGuide(): string {
   return [
     "The website (pandaworld's dashboard, after signing in; the left menu on a laptop, the ☰ menu on a phone):",
-    "- Jumia Listing Assistant [assistant]: this same chat on the website, for every seller, free to chat. It starts once Jumia is connected (paste the Client ID and token in it). Upload photos with the Upload button (up to 8 at a time) or drag them in; type / or tap + for the commands. Everything the WhatsApp bot does works there, except shipping label PDFs and order alerts, which come on WhatsApp only. On WhatsApp, \"menu\" lists the commands.",
+    "- Jumia Listing Assistant [assistant]: this same chat on the website, for every seller, free to chat. It starts once Jumia is connected (paste the Client ID and token in it). Upload photos with the Upload button (up to 8 at a time) or drag them in; type / or tap + for the commands (/edit changes a live product; /clear clears the chat and starts it afresh, drafts and credits kept). Everything the WhatsApp bot does works there, except shipping label PDFs and order alerts, which come on WhatsApp only. On WhatsApp, \"menu\" lists the commands.",
     "- Extension Dashboard [dashboard]: the credit balance (\"Remaining credit\"), autofills in the last 30 days, the API key card (Copy, show, Regenerate key) and the extension's setup steps. \"Buy credits\" is at the top of every dashboard page (next to the bell, which holds PandaWorld's notices).",
     "- List from WhatsApp [review]: every WhatsApp and Listing Assistant batch, by day, with each product as Drafts, Needs attention, Submitted or Live. Open a product to edit it (name, price, stock, brand, category, description, variations, images) and push it to Jumia with \"Push to Jumia\". A seller with no WhatsApp linked sees the Connect WhatsApp card here.",
     "- Calculator [calculator_app]: the Jumia fee calculator for their country.",
     "- Autofill Activity [listings]: the products the Chrome extension filled in, with how many fields each.",
     "- Guides [guides] and FAQ [faq]: step-by-step guides with videos, and the questions sellers ask most.",
-    "- Settings [settings]: their details; the Jumia connection (connected or not, Re-authorise, Disconnect); WhatsApp (Connect WhatsApp, or the linked number with Disconnect); the API key (Regenerate key).",
+    "- Settings [settings]: their details; the Jumia connection (connected or not, Re-authorise, Disconnect); WhatsApp (Connect WhatsApp, or the linked number with Disconnect); the API key (Regenerate key); \"Install PandaWorld on your phone\".",
+    "- Footer of the public pages: \"Get the app\", the same two install buttons.",
     "- Public pages: credit packs [pricing], the Jumia price calculator [calculator], commission rates [commission], selling on Jumia in their country [country], terms [terms], privacy [privacy].",
     "",
     "How to do things (give the steps in order, short, with the page's own button words):",
@@ -33,6 +34,7 @@ export function siteGuide(): string {
     "- Buy credits: link WhatsApp and connect Jumia first (every pack needs both; the Buy credits window shows what's missing, with Settings). Then \"Buy credits\" at the top of the dashboard, pick a pack, pay with Paystack (cards, mobile money: MTN, AirtelTigo, Telecel, or bank transfer). Credits arrive at once and never expire; one balance covers the chat, WhatsApp and the extension. Packs and what each unlocks: [pricing].",
     "- At 0 credits the chat says to top up once, then stays locked until the balance is above 0 again: a purchase, or a refund from Jumia's quality check, unlocks it.",
     "- A product Jumia rejected: the bot says why and offers Fix & resubmit; or edit it on List from WhatsApp and push it again. Products already live are changed here in chat (stock, price, sale, on/off, name, description) or in Vendor Center (photos, category).",
+    "- Put PandaWorld on the phone like an app (there's no App Store or Play Store app): Settings → \"Install PandaWorld on your phone\", or \"Get the app\" at the bottom of the website, and tap iPhone & iPad or Android for the steps. iPhone: in Safari, Share → Add to Home Screen → Add. Android: in Chrome, ⋮ menu → Install app (or Add to Home screen) → Install.",
     "- Disconnect Jumia: Settings → Jumia → Disconnect, or type \"disconnect\" here.",
     `- A person to help: email ${SUPPORT_EMAIL}, or the community WhatsApp group [community].`,
   ].join("\n");
