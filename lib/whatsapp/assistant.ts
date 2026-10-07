@@ -106,6 +106,19 @@ export async function assistantEnabled(userId: string): Promise<boolean> {
   }
 }
 
+/**
+ * Whether the conversational assistant answers this message: in the Jumia
+ * Listing Assistant on the website, every seller (owner, 2026-10-07: "the
+ * conversational style should only be for the chat"); on WhatsApp, the
+ * pilot only ("let's not make it chatty or conversational for users"), and
+ * everyone else gets the WhatsApp flow and its commands. The kill switch
+ * turns both off.
+ */
+export async function assistantFor(userId: string, phone: string): Promise<boolean> {
+  if (isWebAddress(phone)) return assistantSwitchedOn();
+  return assistantEnabled(userId);
+}
+
 // ─── What the AI is told ──────────────────────────────────────────────────
 
 /**
@@ -239,7 +252,7 @@ function capabilities(listingCost = LIVE_LISTING_CREDIT_COST): string {
     `- List products on Jumia from WhatsApp: the seller says how many (1 to ${MAX_BATCH_SIZE}), sends each product's photos with the price and notes as the caption, and AI drafts each listing (name, description, category, details) for them to check and submit. Two ways to send: all at once, or guided step by step.`,
     "- Ask for what Jumia needs that the photos don't show: a missing price, weight or other required detail, the variation, the category when unsure.",
     "- Edit drafts in chat before they're submitted: price, quantity, variations or sizes, name, brand, colour, a sale price with its dates. Anything else in the editor on the review page.",
-    "- Everything in the chat works on every pack, free credits included, charged per use as below, and pauses at 0 credits. Only these need a pack: Jumia QC rejection alerts and guided fixes (Standard and up), shipping label PDFs on WhatsApp (Standard and up), the alerts the bot sends on its own (Pro and up), and the Chrome extension's image polish and fee calculator (Pro and up).",
+    "- Chatting is free on every pack. Every pack, free credits included: listing, orders (see, pack, ready to ship, cancel), reading their shop (products, stock, sales, reports, payouts, fees), image polish and the shop health report; only the commands below that cost credits are charged. Only these need a pack: changes to live Jumia products from the chat, Jumia QC rejection alerts and guided fixes and shipping label PDFs on WhatsApp (Standard and up); order alerts on WhatsApp and the extension's fee calculator (Pro and up). Everything pauses at 0 credits.",
     "- Submit to Jumia and report back when each product goes live or is rejected; fix common rejections itself (banned words, restricted brands) and guide the seller through the rest with Fix & resubmit. After Jumia accepts a listing, its quality-check verdict is followed up (and the credits returned if QC rejects it) with the Standard pack and up.",
     "- Orders: \"orders\" shows orders waiting to be packed; pack them, mark them ready to ship, or cancel, here or on WhatsApp; where any order is, by its number; orders and sales for today, the week, the month or 90 days. Shipping label PDFs only on WhatsApp (Standard pack and up). Pro and up also: alerts for new Jumia orders on WhatsApp, grouped and quiet at night, and a message when orders are delivered, returned, fail delivery or are cancelled.",
     `- Their live Jumia products, found by name among everything in their shop: change a product's stock, price, a sale price with its dates, or turn it on or off, with one tap to confirm, for one product or several named together (up to ${MAX_GROUP}); where a product is (on or off, Jumia's quality check, price, sale, stock); how many are left; what's out of stock or low; which products are turned off or rejected by Jumia's quality check.`,
@@ -315,11 +328,12 @@ export async function sellerFacts(userId: string): Promise<{ lines: string[]; co
       const a = await featureAccess(userId, f).catch(() => ({ ok: false as const, blockedBy: "pack" as const }));
       return a.ok ? "on" : a.blockedBy === "credits" ? "paused until they buy credits" : `not on their pack (${featureMinPackName(f)} and up)`;
     };
-    // Every plan has the chat's features (owner, 2026-10-07); QC, labels and the alerts need a pack.
+    // Every plan reads its shop and handles its orders (owner, 2026-10-07); live changes, QC, labels and the alerts need a pack.
     lines.push(`- The chat's shop features (products, orders, reports, payouts, fees): ${await access("shop_whatsapp")}`);
+    lines.push(`- Changes to live Jumia products from the chat: ${await access("shop_changes")}`);
     lines.push(`- Jumia QC rejection alerts and guided fixes: ${await access("qc_fix")}`);
     lines.push(`- Shipping label PDFs on WhatsApp: ${await access("shipping_labels")}`);
-    lines.push(`- New-order, order-update and payout alerts on WhatsApp: ${await access("order_alerts")}`);
+    lines.push(`- Order alerts on WhatsApp (new orders, order updates, payouts): ${await access("order_alerts")}`);
     const credits = Math.max(0, Math.round((await availableCredits(userId)) * 100) / 100);
     lines.push(`- Credits: ${credits} available, ${creditReach(credits, await listingCreditCost(userId))}`);
   } catch (e) {

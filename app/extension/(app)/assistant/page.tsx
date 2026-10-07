@@ -9,8 +9,10 @@ import { listingAssistantFor } from "@/lib/whatsapp/listing-assistant";
 //
 // The WhatsApp bot as a chat on the dashboard (owner, 2026-10-07), with photo
 // upload: listing from photos, drafts, submitting, live products, questions
-// about the shop. Orders and shipping labels stay on WhatsApp. See
-// lib/whatsapp/channel.ts for how the same bot runs here.
+// about the shop. Every seller has it (2026-10-07); only while the
+// assistant's kill switch is off does this say it's paused. Shipping labels
+// and order alerts stay on WhatsApp. See lib/whatsapp/channel.ts for how the
+// same bot runs here.
 
 export const metadata: import("next").Metadata = {
   title: "Jumia Listing Assistant",
@@ -29,9 +31,9 @@ export default async function ListingAssistantPage() {
         <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-50">
           <Image src="/brand/panda-p-logo-trimmed.png" alt="PandaWorld" width={634} height={562} className="h-8 w-auto" />
         </span>
-        <h2 className="mt-4 text-lg font-semibold text-zinc-900">The Jumia Listing Assistant is coming soon</h2>
+        <h2 className="mt-4 text-lg font-semibold text-zinc-900">The Jumia Listing Assistant is paused</h2>
         <p className="mt-2 text-sm leading-relaxed text-zinc-600">
-          It&apos;s being tried by a few sellers first. Meanwhile, list from WhatsApp: it does the same.
+          It&apos;s back shortly. Meanwhile, list from WhatsApp: it does the same.
         </p>
         <Link
           href="/extension/whatsapp-listings"

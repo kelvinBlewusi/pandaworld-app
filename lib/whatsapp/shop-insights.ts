@@ -22,7 +22,7 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { sendButtonsIfConfigured, sendTextIfConfigured } from "@/lib/whatsapp/client";
 import { formatAmount } from "@/lib/whatsapp/orders";
-import { catalog, label, LOW_STOCK, sendLong, shopContext, shorten, type Ctx } from "@/lib/whatsapp/shop";
+import { CHANGES_FEATURE, catalog, label, LOW_STOCK, sendLong, shopContext, shorten, type Ctx } from "@/lib/whatsapp/shop";
 import { periodEnd, periodStart, type Period } from "@/lib/whatsapp/shop";
 import { getItemsOfOrders, type JumiaCall, type JumiaOrderItem } from "@/lib/jumia/orders";
 import {
@@ -395,7 +395,7 @@ const tomorrow = (tz: string) => new Intl.DateTimeFormat("en-CA", { timeZone: tz
 export async function proposeWarehouseOrder(
   userId: string, phone: string, items: { product: string; quantity: number }[], date: string | null,
 ): Promise<string> {
-  const ctx = await shopContext(userId, phone, "shop_whatsapp", "delivery orders to Jumia's warehouse");
+  const ctx = await shopContext(userId, phone, CHANGES_FEATURE, "delivery orders to Jumia's warehouse");
   if (!ctx) return "blocked";
   if (!ctx.shopId) {
     await sendTextIfConfigured(phone, "I don't have your Jumia shop's id yet. Reconnect Jumia in Settings, then try again.");
@@ -442,7 +442,7 @@ export async function proposeWarehouseOrder(
 
 /** Marking a delivery order shipped, with its tracking number, offered for one tap. */
 export async function proposeWarehouseShipped(userId: string, phone: string, po: string, tracking: string, carrier: string | null): Promise<string> {
-  const ctx = await shopContext(userId, phone, "shop_whatsapp", "delivery orders to Jumia's warehouse");
+  const ctx = await shopContext(userId, phone, CHANGES_FEATURE, "delivery orders to Jumia's warehouse");
   if (!ctx) return "blocked";
   const { data, error } = await createServerClient().from("jumia_warehouse_orders").insert({
     id: crypto.randomUUID(), user_id: userId, action: "ship", status: "pending", po_number: po, tracking_number: tracking, carrier,
@@ -480,7 +480,7 @@ export async function handleWarehouseTap(userId: string, phone: string, text: st
     await sendTextIfConfigured(phone, "OK, nothing sent to Jumia.");
     return true;
   }
-  const ctx = await shopContext(userId, phone, "shop_whatsapp", "delivery orders to Jumia's warehouse");
+  const ctx = await shopContext(userId, phone, CHANGES_FEATURE, "delivery orders to Jumia's warehouse");
   if (!ctx) return true;
   if (row.action === "create") {
     const products = (row.products ?? []) as { jumiaSku: string; quantity: number; name: string }[];

@@ -594,6 +594,31 @@ all & labels"), no label is fetched or charged, and the reply says labels
 come with the Standard pack. The assistant's `sellerFacts` lists three
 lines: the chat's shop features, label PDFs, alerts.
 
+**The owner's plan of 2026-10-07 (pack rules, buying, autofill).**
+- Free credits = Starter: listing, the chat (free), orders (see, pack,
+  ready to ship, cancel), reading their shop (products, stock, sales,
+  reports, payouts, fees), image polish, the shop health report.
+  `shop_changes` (Standard+): changes to live Jumia products from the chat
+  (one product, bulk rules, content, warehouse orders and their taps:
+  shop.ts CHANGES_FEATURE). QC fixes and labels Standard+; order alerts
+  (renamed "Order alerts on WhatsApp", still covering order updates and the
+  free payout message) Pro+, WhatsApp only; the extension's fee calculator
+  Pro+. `image_polish_extension` is EVERYONE at POLISH_CREDIT_COST (2) an
+  image, in the extension and the chat; REPORT_CREDIT_COST (2) for the
+  shop health report.
+- Buying any pack needs WhatsApp linked and Jumia connected
+  (lib/billing/connections.ts purchaseBlock): the checkout route answers
+  403 with `connect`, and the Buy credits modal asks
+  GET /api/extension/credits/eligibility when it opens and shows "Before
+  you buy" with Settings instead of a Buy button. Owner, asked: yes, an
+  extension-only seller can't buy without connecting both.
+- Extension autofill on Standard/Pro/Business (pack bought last) needs both
+  still connected (autofillBlock, a 403 the panel shows as text); free
+  credits and Starter autofill with nothing connected.
+- The web Listing Assistant is every seller's (listingAssistantFor: only
+  the kill switch); the conversational AI on WhatsApp stays the pilot's
+  (assistantFor in lib/whatsapp/assistant.ts: web address → everyone).
+
 **Pay when live** (WhatsApp and web listings). Drafts are free; a seller
 only needs enough available credits to draft. `pushListingToJumia` checks
 `creditsDueForSubmission` before anything reaches Jumia and records the

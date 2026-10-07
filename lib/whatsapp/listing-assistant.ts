@@ -3,13 +3,13 @@
  * bot through these: a message in, the conversation out. The bot itself is
  * the WhatsApp one, under the seller's web address (lib/whatsapp/channel.ts).
  *
- * Who has it: the assistant's pilot (assistantEnabled: admins and app_settings
- * `assistant_users`; `["*"]` for everyone), and never while the assistant's
- * kill switch is off.
+ * Who has it: every signed-in seller since 2026-10-07 (the pilot before),
+ * never while the assistant's kill switch is off. The conversational AI on
+ * WhatsApp stays the pilot's (assistantFor in lib/whatsapp/assistant.ts).
  */
 
 import { createServerClient } from "@/lib/supabase/server";
-import { assistantEnabled } from "@/lib/whatsapp/assistant";
+import { assistantSwitchedOn } from "@/lib/whatsapp/assistant-limits";
 import { webAddress } from "@/lib/whatsapp/channel";
 import { sendButtonsIfConfigured, sendTextIfConfigured } from "@/lib/whatsapp/client";
 import { recordInboundMessage } from "@/lib/whatsapp/message-log";
@@ -29,7 +29,7 @@ export interface AssistantMessage {
   at:        string;
 }
 
-export const listingAssistantFor = (userId: string) => assistantEnabled(userId);
+export const listingAssistantFor = (_userId: string) => assistantSwitchedOn();
 
 /** The conversation, oldest first: the last `limit` messages, or those after `after` (an ISO time). */
 export async function assistantMessages(userId: string, opts: { after?: string | null; limit?: number } = {}): Promise<AssistantMessage[]> {

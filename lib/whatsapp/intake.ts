@@ -91,7 +91,7 @@ import { handleWarehouseTap } from "@/lib/whatsapp/shop-insights";
 import { findBrandExact, getBrandCount, searchBrandsFromDB } from "@/lib/jumia/brands";
 import { chatChannelOf, isWebAddress } from "@/lib/whatsapp/channel";
 import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPrice, dropVariantSalesFrom, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
-import { answerLiveValue, answerPendingQuestion, assistantEnabled, looksLikeQuestion, plainQuickEdit, runAssistant } from "@/lib/whatsapp/assistant";
+import { answerLiveValue, answerPendingQuestion, assistantFor, looksLikeQuestion, plainQuickEdit, runAssistant } from "@/lib/whatsapp/assistant";
 import { batchCreditRefusal, creditGate } from "@/lib/whatsapp/credit-gate";
 
 /**
@@ -1217,7 +1217,7 @@ async function handleAwaitingCount(
   // never starts a batch from a stray number ("I have 2 questions"). If the
   // AI can't be reached, the usual reading below runs.
   let understood: number | null = null;
-  if (typed && plain == null && (await assistantEnabled(userId))) {
+  if (typed && plain == null && (await assistantFor(userId, phoneNumber))) {
     const outcome = await runAssistant(userId, phoneNumber, session, typed, session.lastSubmittedBatchId ? "sent" : "idle");
     if (outcome === "handled") return;
     if (typeof outcome === "object") understood = outcome.list;
@@ -2036,7 +2036,7 @@ async function handleAwaitingPhotos(
   const early = content.text?.trim();
   if (early && !content.imageMediaId && seq === 1 && !listingId && looksLikeQuestion(early)
     && !isProductNumber(early, batchSize) && !endsWithDoneSignal(early)
-    && (await assistantEnabled(userId))
+    && (await assistantFor(userId, phoneNumber))
     && !(await findBatchSlotListing(userId, session.batchId, 1))
     && (await runAssistant(userId, phoneNumber, session, early, "starting")) === "handled") {
     return;
@@ -3413,7 +3413,7 @@ async function handleAwaitingBatchConfirmation(
   // our code. A plain price, stock or sale edit ("2: price 150") still goes
   // straight to handleEdit, as it always has. If the AI can't be reached,
   // the usual handling below runs.
-  const pilot = await assistantEnabled(userId);
+  const pilot = await assistantFor(userId, phoneNumber);
   if (pilot) {
     if (editCmd && !editCmd.needsSeq) {
       const currency = await shopCurrencyForUser(userId);

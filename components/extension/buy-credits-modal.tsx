@@ -7,10 +7,21 @@
  * (LISTING_CREDIT_COST / LIVE_LISTING_CREDIT_COST in lib/billing/
  * credit-packs.ts). Shown only
  * while billing is on (lib/billing/mode.ts).
+ *
+ * Every pack needs WhatsApp linked and Jumia connected first (owner,
+ * 2026-10-07, lib/billing/connections.ts): a signed-in seller's conditions
+ * are checked when the modal opens, and until they're met it shows what
+ * to connect, with Settings, instead of a Buy button.
  */
 
-import { useState } from "react";
-import { X, Check, Loader2, Lock } from "lucide-react";
+/** What to connect before buying, as the modal says it. */
+const CONNECT_STEPS: Record<string, string> = {
+  whatsapp: "Link your WhatsApp number",
+  jumia:    "Connect your Jumia account",
+};
+
+import { useEffect, useState } from "react";
+import { X, Check, Loader2, Lock, Circle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CREDIT_PACKS, LIVE_LISTING_CREDIT_COST, POPULAR_PACK_ID, packFeatures, packReach } from "@/lib/billing/credit-packs";
 
@@ -63,6 +74,19 @@ export function BuyCreditsModal({
   const [selected, setSelected] = useState(POPULAR_PACK_ID);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // null while checking; [] when they can buy.
+  const [missing, setMissing] = useState<string[] | null>(signedIn ? null : []);
+
+  useEffect(() => {
+    if (!open || !signedIn) return;
+    let live = true;
+    setMissing(null);
+    fetch("/api/extension/credits/eligibility", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d: { missing?: string[] }) => { if (live) setMissing(d.missing ?? []); })
+      .catch(() => { if (live) setMissing([]); }); // the checkout route checks again
+    return () => { live = false; };
+  }, [open, signedIn]);
 
   if (!open) return null;
 
@@ -86,6 +110,7 @@ export function BuyCreditsModal({
       });
       const data = await res.json();
       if (!res.ok) {
+        if (Array.isArray(data.connect)) setMissing(data.connect);
         setError(data.error || "Could not start checkout.");
         return;
       }
@@ -171,16 +196,37 @@ export function BuyCreditsModal({
           </p>
         )}
 
-        {error && <p className="mt-3 text-xs text-red-600">{error}</p>}
-
-        <button
-          onClick={buy}
-          disabled={pending}
-          className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-zinc-900 px-4 py-3 text-sm font-semibold text-white hover:bg-zinc-800 disabled:opacity-60"
-        >
-          {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-          {signedIn ? `Buy ${tier.credits} credits · ${tier.price}` : "Sign in to buy"}
-        </button>
+        {missing && missing.length > 0 ? (
+          <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4">
+            <p className="text-sm font-semibold text-amber-900">Before you buy</p>
+            <ul className="mt-2 space-y-1.5">
+              {missing.map((m) => (
+                <li key={m} className="flex items-center gap-2 text-sm text-amber-900">
+                  <Circle className="h-3.5 w-3.5 shrink-0" /> {CONNECT_STEPS[m] ?? m}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-xs leading-relaxed text-amber-800">Packs are bought with WhatsApp and Jumia connected, so your credits work everywhere: WhatsApp, the Listing Assistant and your live shop.</p>
+            <a
+              href="/extension/settings"
+              className="mt-3 flex w-full items-center justify-center rounded-xl bg-zinc-900 px-4 py-3 text-sm font-semibold text-white hover:bg-zinc-800"
+            >
+              Open Settings to connect
+            </a>
+          </div>
+        ) : (
+          <>
+            {error && <p className="mt-3 text-xs text-red-600">{error}</p>}
+            <button
+              onClick={buy}
+              disabled={pending || missing === null}
+              className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-zinc-900 px-4 py-3 text-sm font-semibold text-white hover:bg-zinc-800 disabled:opacity-60"
+            >
+              {pending || missing === null ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {signedIn ? `Buy ${tier.credits} credits · ${tier.price}` : "Sign in to buy"}
+            </button>
+          </>
+        )}
         <p className="mt-2.5 flex items-center justify-center gap-1 text-[11px] text-zinc-400">
           <Lock className="h-3 w-3" /> Secure checkout by Paystack
         </p>

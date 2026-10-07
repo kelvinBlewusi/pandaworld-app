@@ -61,6 +61,15 @@ export function packRank(id: string | null | undefined): number {
  * those we charge ... except the label and the alert on WhatsApp"); QC
  * alerts and fixes stayed on Standard. They still pause at 0 credits. Not
  * listed as a pack's own (packFeatures).
+ *
+ * The owner's plan of 2026-10-07 (later the same day): free credits get
+ * what Starter gets ("same as Starter"): listing, the chat, orders (pack,
+ * ready to ship, cancel) and reading their shop. Changes to live Jumia
+ * products from the chat (`shop_changes`) start at Standard ("they can not
+ * make changes to listings on Jumia via the chat"), with labels and QC;
+ * order alerts at Pro, on WhatsApp only. Image polish is on every plan, in
+ * the extension and the chat ("all packs can use Chrome image generation
+ * tool even free packs"), at POLISH_CREDIT_COST an image.
  */
 export interface PackFeature {
   id:          string;
@@ -76,16 +85,23 @@ export const EVERYONE = "everyone";
 export const PACK_FEATURES: PackFeature[] = [
   // Back to Standard the same day (owner, 2026-10-07: "yes QC on standard and up").
   { id: "qc_fix",                 label: "Jumia QC rejection alerts and guided fixes",  short: "QC alerts & fixes",          minPack: "standard" },
-  // The alerts the bot sends on its own: new orders, order updates, payouts.
-  { id: "order_alerts",           label: "Order and payout alerts on WhatsApp",         short: "Order & payout alerts",      minPack: "pro", comingSoon: true },
+  // The alerts the bot sends on its own, on WhatsApp only: new orders, order
+  // updates, and the free "Jumia paid you" message (named for orders only,
+  // owner 2026-10-07: "change to Order alerts on WhatsApp even though we
+  // still alert for payouts").
+  { id: "order_alerts",           label: "Order alerts on WhatsApp",                    short: "Order alerts",               minPack: "pro", comingSoon: true },
   // Standard from 2026-10-07, since each label is charged (owner: "the label download to WhatsApp should be added to the GHS 70 pack").
   { id: "shipping_labels",        label: "Shipping labels on WhatsApp",                 short: "Shipping labels",            minPack: "standard", comingSoon: true },
-  // In the chat (WhatsApp and the Jumia Listing Assistant): products, orders
-  // (packing, ready to ship, cancelling), reports, payouts, the warehouse.
-  { id: "shop_whatsapp",          label: "Your live Jumia shop in chat: products, orders, reports and payouts", short: "Shop in chat", minPack: EVERYONE, comingSoon: true },
-  { id: "fee_calc_whatsapp",      label: "Jumia fee calculator in chat",                short: "Fee calculator in chat",     minPack: EVERYONE, comingSoon: true },
+  // In the chat (the Jumia Listing Assistant, and WhatsApp's menu): reading
+  // their products, stock, sales, reports and payouts, and their orders
+  // (packing, ready to ship, cancelling).
+  { id: "shop_whatsapp",          label: "Your Jumia shop in chat: orders, products, sales, reports and payouts", short: "Shop in chat", minPack: EVERYONE },
+  { id: "fee_calc_whatsapp",      label: "Jumia fee calculator in chat",                short: "Fee calculator in chat",     minPack: EVERYONE },
+  // Polish on every plan, in the extension and the chat (POLISH_CREDIT_COST an image).
+  { id: "image_polish_extension", label: "Image polish: four product photos from your own", short: "Image polish",          minPack: EVERYONE },
+  // Changes to live Jumia products from the chat: one product, a rule for many, content, warehouse orders.
+  { id: "shop_changes",           label: "Changes to your live Jumia products from the chat", short: "Live product changes", minPack: "standard" },
   { id: "fee_calc_extension",     label: "Jumia fee calculator on the extension panel", short: "Fee calculator in the extension", minPack: "pro" },
-  { id: "image_polish_extension", label: "Jumia image polish on the Chrome extension",  short: "Image polish in the extension",   minPack: "pro" },
 ];
 
 /** The pack features not built yet, by label, for the pages that must say so. */
@@ -189,8 +205,18 @@ export function listingCostFor(country: string | null | undefined): number {
 export const LABEL_CREDIT_COST = 0.5;
 /** One confirmed change to live Jumia products (one tap, up to 20 products); given back if Jumia refuses it all. */
 export const LIVE_CHANGE_CREDIT_COST = 0.5;
-/** A message the bot sends on its own, other than a new-order alert: order updates, "Jumia paid you". */
+/** An order-updates message the bot sends on its own (delivered, returned, failed, cancelled). New-order alerts and "Jumia paid you" are free. */
 export const NOTICE_CREDIT_COST = 0.2;
+/**
+ * One image of an image polish (four product photos from the seller's own:
+ * main on white, angle, lifestyle, detail), in the chat or the extension.
+ * Owner, 2026-10-07: 2 an image, 8 for the four ("cheaper polish"). The
+ * image model costs about $0.04 an image: near cost on the biggest pack.
+ * Charged per image that came back.
+ */
+export const POLISH_CREDIT_COST = 2;
+/** The shop health report in chat (owner, 2026-10-07). */
+export const REPORT_CREDIT_COST = 2;
 
 /**
  * One AI image (a photo polished or rebuilt on the review page, or one
@@ -217,6 +243,8 @@ export function creditCosts(listingCost = LIVE_LISTING_CREDIT_COST): CreditCost[
     { what: "Shipping label on WhatsApp", detail: "One order's label PDF. The same label again is free.", credits: LABEL_CREDIT_COST },
     { what: "Change to a live Jumia product", detail: "Stock, price, a sale or on/off, confirmed with one tap, for up to 20 products at once. Given back if Jumia refuses it.", credits: LIVE_CHANGE_CREDIT_COST },
     { what: "Order updates on WhatsApp", detail: "Delivered, returned, failed or cancelled orders. New-order alerts and \"Jumia paid you\" messages are free.", credits: NOTICE_CREDIT_COST },
+    { what: "Image polish, per image", detail: "Four product photos made from your own (main on white, angle, lifestyle, detail), in the chat or the extension. Only images that come back are charged.", credits: POLISH_CREDIT_COST },
+    { what: "Shop health report", detail: "A full look at your Jumia shop: sales, returns, stock, quality checks and payouts, what's working and what to fix.", credits: REPORT_CREDIT_COST },
   ];
 }
 

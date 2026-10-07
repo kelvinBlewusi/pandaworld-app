@@ -305,7 +305,8 @@ describe("its own replies (owner, 2026-10-06)", () => {
     expect(prompt).toContain("- List products on Jumia from WhatsApp");
     expect(prompt).toContain("pack them, mark them ready to ship, or cancel, here or on WhatsApp");
     expect(prompt).toContain("Shipping label PDFs only on WhatsApp (Standard pack and up). Pro and up also: alerts for new Jumia orders on WhatsApp");
-    expect(prompt).toContain("- Everything in the chat works on every pack, free credits included, charged per use as below, and pauses at 0 credits.");
+    expect(prompt).toContain("- Chatting is free on every pack.");
+    expect(prompt).toContain("- Changes to live Jumia products from the chat: not on their pack (Standard and up)");
     expect(prompt).toContain("up to 200 products");
     expect(prompt).toContain("- Country: Ghana");
     expect(prompt).toContain("- No pack bought yet: on their free sign-up credits.");
@@ -313,7 +314,7 @@ describe("its own replies (owner, 2026-10-06)", () => {
     expect(prompt).toContain("- The chat's shop features (products, orders, reports, payouts, fees): on");
     expect(prompt).toContain("- Jumia QC rejection alerts and guided fixes: not on their pack (Standard and up)");
     expect(prompt).toContain("- Shipping label PDFs on WhatsApp: not on their pack (Standard and up)");
-    expect(prompt).toContain("- New-order, order-update and payout alerts on WhatsApp: not on their pack (Pro and up)");
+    expect(prompt).toContain("- Order alerts on WhatsApp (new orders, order updates, payouts): not on their pack (Pro and up)");
     expect(prompt).toContain("a shipping label 0.5 credits (the same label again is free)");
     expect(prompt).toContain("- Credits: 9 available, enough for about 4 WhatsApp listings");
     expect(prompt).toContain("- home: PandaWorld's home page");
@@ -329,7 +330,8 @@ describe("its own replies (owner, 2026-10-06)", () => {
     await runAssistant("seller", "233", session(), "hi", "idle");
     expect(aiPrompts[0]).toContain("- Pack: Pro (the last one they bought)");
     expect(aiPrompts[0]).toContain("- Shipping label PDFs on WhatsApp: on");
-    expect(aiPrompts[0]).toContain("- New-order, order-update and payout alerts on WhatsApp: on");
+    expect(aiPrompts[0]).toContain("- Order alerts on WhatsApp (new orders, order updates, payouts): on");
+    expect(aiPrompts[0]).toContain("- Changes to live Jumia products from the chat: on");
   });
 
   it("an account that isn't charged has everything on", async () => {

@@ -1,8 +1,8 @@
 /**
  * POST /api/extension/polish-images — the extension's Polish images: rough
- * photos in, four generated product shots out. Comes with the Pro and
- * Business packs and costs IMAGE_CREDIT_COST per image that came back
- * (from 2026-10-02; admins only before). GET /api/extension/account tells
+ * photos in, four generated product shots out. On every plan, free credits
+ * included, since 2026-10-07 (Pro and Business from 2026-10-02, admins only
+ * before), at POLISH_CREDIT_COST per image that came back. GET /api/extension/account tells
  * the panel which of these tools to show, and the calculator's country.
  */
 
@@ -39,7 +39,7 @@ jest.mock("next/headers", () => ({ headers: () => new Headers({ "x-vercel-ip-cou
 import { POST } from "@/app/api/extension/polish-images/route";
 import { GET as account } from "@/app/api/extension/account/route";
 import { _resetBillingModeCache } from "@/lib/billing/mode";
-import { IMAGE_CREDIT_COST } from "@/lib/billing/credit-packs";
+import { POLISH_CREDIT_COST } from "@/lib/billing/credit-packs";
 
 const PHOTO = `data:image/jpeg;base64,${Buffer.alloc(2048, 1).toString("base64")}`;
 const call = (body: unknown) => POST(new Request("https://pandaworldai.site/api/extension/polish-images", {
@@ -75,25 +75,25 @@ it("needs a valid API key", async () => {
   expect((await call({ images: [{ dataUrl: PHOTO }] })).status).toBe(401);
 });
 
-it("comes with the Pro and Business packs, not Starter", async () => {
+// Owner, 2026-10-07: "all packs can use Chrome image generation tool even free packs".
+it("works on every plan: Starter, and free credits with no pack", async () => {
   authUser = "user_starter";
+  expect((await call({ images: [{ dataUrl: PHOTO }] })).status).toBe(200);
+  buyer("user_free", 0, 12);
+  db.tables.extension_credit_transactions = db.tables.extension_credit_transactions.filter((t) => t.user_id !== "user_free");
+  authUser = "user_free";
   const res = await call({ images: [{ dataUrl: PHOTO }] });
-  expect(res.status).toBe(403);
-  // The panel shows the button to everyone and says to upgrade on this.
-  expect(await res.json()).toEqual({
-    error:   "Upgrade to use this feature. Image polish comes with the Pro and Business credit packs.",
-    upgrade: true,
-  });
-  expect(generated).toHaveLength(0);
+  expect(res.status).toBe(200);
+  expect((await res.json()).creditsRemaining).toBe(12 - 3 * POLISH_CREDIT_COST);
 });
 
 it("charges for the images that came back, and says what's left", async () => {
   const res = await call({ images: [{ dataUrl: PHOTO }] });
   expect(res.status).toBe(200);
   const body = await res.json();
-  expect(body.creditsRemaining).toBe(50 - 3 * IMAGE_CREDIT_COST); // lifestyle failed: free
+  expect(body.creditsRemaining).toBe(50 - 3 * 2); // 2 an image; lifestyle failed: free
   expect(db.tables.extension_credit_transactions).toContainEqual(expect.objectContaining({
-    user_id: "user_pro", type: "deduction", amount: -3 * IMAGE_CREDIT_COST, description: "Polished 3 product images in the extension",
+    user_id: "user_pro", type: "deduction", amount: -3 * POLISH_CREDIT_COST, description: "Polished 3 product images in the extension",
   }));
 });
 
@@ -105,13 +105,13 @@ it("a Pro buyer at 0 credits is told to buy credits, not to upgrade (owner's rul
   expect(generated).toHaveLength(0);
 });
 
-it("follows the pack bought last: Pro then Starter means no Polish", async () => {
+it("whatever the pack bought last: Pro then Starter still polishes", async () => {
   db.tables.extension_credit_transactions.push({ user_id: "user_pro", type: "purchase", amount: 100, reference: "later", created_at: "2099-01-01T00:00:00Z" });
-  expect((await call({ images: [{ dataUrl: PHOTO }] })).status).toBe(403);
+  expect((await call({ images: [{ dataUrl: PHOTO }] })).status).toBe(200);
 });
 
 it("stops before generating when the balance can't cover four images", async () => {
-  db.tables.extension_credits.find((r) => r.user_id === "user_pro")!.balance = 4 * IMAGE_CREDIT_COST - 1;
+  db.tables.extension_credits.find((r) => r.user_id === "user_pro")!.balance = 4 * POLISH_CREDIT_COST - 1;
   const res = await call({ images: [{ dataUrl: PHOTO }] });
   expect(res.status).toBe(402);
   expect(generated).toHaveLength(0);
@@ -146,8 +146,8 @@ describe("the panel's account", () => {
   // Owner's request, 2026-10-06: every seller sees the Polish button; the
   // ones without the pack are told to upgrade on tap. Panels 0.2.53 to
   // 0.2.55 show it from imagePolish, so that is true for everyone.
-  it("shows a Starter buyer the Polish button but not the right to use it, and no calculator", async () => {
-    expect((await accountFor("user_starter")).features).toEqual({ imagePolish: true, imagePolishAllowed: false, feeCalculator: false });
+  it("lets a Starter buyer polish (every plan), but no calculator (Pro)", async () => {
+    expect((await accountFor("user_starter")).features).toEqual({ imagePolish: true, imagePolishAllowed: true, feeCalculator: false });
   });
 
   it("turns a Pro buyer's tools off at 0 credits and says why, so 0.2.58 offers Buy credits", async () => {
@@ -186,14 +186,14 @@ describe("a free grant", () => {
     expect((await accountFor("user_gift")).features.imagePolishAllowed).toBe(true);
   });
 
-  it("ends once the credits it covered are spent, whatever was bought since", async () => {
+  it("ends once the credits it covered are spent: polish is then charged like anyone's", async () => {
     db.tables.extension_credit_transactions.push(
       ...Array.from({ length: 8 }, () => ({ user_id: "user_gift", type: "deduction", amount: -1, created_at: "2026-10-07T10:00:00.000Z" })),
       { user_id: "user_gift", type: "purchase", amount: 100, created_at: "2026-10-07T11:00:00.000Z" },
     );
     const res = await call({ images: [{ dataUrl: PHOTO }] });
-    expect(res.status).toBe(403);
-    expect((await accountFor("user_gift")).features.imagePolishAllowed).toBe(false);
+    expect(res.status).toBe(200);
+    expect((await res.json()).creditsRemaining).toBe(8 - 3 * POLISH_CREDIT_COST);
   });
 
   it("doesn't count what was spent before it began", async () => {
@@ -216,6 +216,6 @@ describe("a free grant", () => {
     db.tables.feature_grants[0].free_use = false;
     db.tables.extension_credits.find((r) => r.user_id === "user_gift")!.balance = 50;
     const body = await (await call({ images: [{ dataUrl: PHOTO }] })).json();
-    expect(body.creditsRemaining).toBe(50 - 3 * IMAGE_CREDIT_COST);
+    expect(body.creditsRemaining).toBe(50 - 3 * POLISH_CREDIT_COST);
   });
 });

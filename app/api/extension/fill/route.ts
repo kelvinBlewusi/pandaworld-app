@@ -44,6 +44,7 @@ import { getOrCreateCreditBalance, deductCredits } from "@/lib/billing/extension
 import { LISTING_CREDIT_COST, serializeCredits } from "@/lib/billing/credit-packs";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { resolveOneImage } from "@/lib/extension/harvested-images";
+import { autofillBlock } from "@/lib/billing/connections";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -260,6 +261,14 @@ export async function POST(req: Request) {
       { error: "No fields provided — harvest the form first." },
       { status: 400, headers: CORS },
     );
+  }
+
+  // Standard, Pro and Business autofill with WhatsApp and Jumia connected;
+  // free credits and Starter whatever is connected (owner, 2026-10-07,
+  // lib/billing/connections.ts). The panel shows `error` as it is.
+  const blocked = await autofillBlock(userId);
+  if (blocked) {
+    return NextResponse.json({ error: blocked.message, connect: blocked.missing }, { status: 403, headers: CORS });
   }
 
   const balance = await getOrCreateCreditBalance(userId);

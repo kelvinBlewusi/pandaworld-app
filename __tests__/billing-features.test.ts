@@ -48,7 +48,8 @@ describe("the chat's features: on every plan (owner, 2026-10-07)", () => {
   });
 
   it("aren't any pack's own, and name no pack", () => {
-    expect(everyoneFeatures().map((f) => f.id)).toEqual(["shop_whatsapp", "fee_calc_whatsapp"]);
+    // Image polish on every plan too (owner, 2026-10-07: "even free packs").
+    expect(everyoneFeatures().map((f) => f.id)).toEqual(["shop_whatsapp", "fee_calc_whatsapp", "image_polish_extension"]);
     expect(featureMinPackName("shop_whatsapp")).toBe("");
   });
 });
@@ -80,11 +81,11 @@ describe("QC fixes and WhatsApp labels (Standard and up), alerts (Pro and up)", 
     bought(440, 100);
     expect((await currentPack("seller"))?.id).toBe("starter");
     expect(await hasFeature("seller", "shipping_labels")).toBe(false);
-    expect(await hasFeature("seller", "image_polish_extension")).toBe(false);
+    expect(await hasFeature("seller", "fee_calc_extension")).toBe(false);
 
     bought(100, 440);
     expect((await currentPack("seller"))?.id).toBe("pro");
-    expect(await hasFeature("seller", "image_polish_extension")).toBe(true);
+    expect(await hasFeature("seller", "fee_calc_extension")).toBe(true);
   });
 
   it("count an earlier pack by its nearest pack today", async () => {
@@ -159,14 +160,14 @@ describe("at 0 credits", () => {
 
 describe("what each pack lists", () => {
   // The chat's features are on every plan (everyoneFeatures) and no pack lists them.
-  it("Standard adds QC fixes and shipping labels; Pro the extension's two tools and the alerts to come", () => {
+  it("Standard adds QC fixes, live product changes and labels; Pro the extension's calculator and the alerts to come", () => {
     expect(packFeatures("starter")).toEqual([]);
     // Labels from Standard since 2026-10-07: each one is charged.
-    expect(packFeatures("standard").map((f) => f.id)).toEqual(["qc_fix", "shipping_labels"]);
+    expect(packFeatures("standard").map((f) => f.id)).toEqual(["qc_fix", "shipping_labels", "shop_changes"]);
     const pro = packFeatures("pro");
-    expect(pro.filter((f) => !f.comingSoon).map((f) => f.id)).toEqual(["qc_fix", "fee_calc_extension", "image_polish_extension"]);
+    expect(pro.filter((f) => !f.comingSoon).map((f) => f.id)).toEqual(["qc_fix", "shop_changes", "fee_calc_extension"]);
     expect(pro.filter((f) => f.comingSoon).map((f) => f.label)).toEqual([
-      "Order and payout alerts on WhatsApp",
+      "Order alerts on WhatsApp",
       "Shipping labels on WhatsApp",
     ]);
     expect(packFeatures("business")).toEqual(pro);
