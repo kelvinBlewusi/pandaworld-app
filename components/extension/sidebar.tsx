@@ -93,6 +93,7 @@ function SupportNavItem() {
 
 export function ExtensionSidebar({ onClose, isAdmin = false, showAssistant = false }: { onClose?: () => void; isAdmin?: boolean; showAssistant?: boolean }) {
   const { user } = useUser();
+  const pathname = usePathname();
 
   return (
     // h-[100dvh], not h-screen. On iOS Safari 100vh is the height of the
@@ -129,6 +130,18 @@ export function ExtensionSidebar({ onClose, isAdmin = false, showAssistant = fal
 
       <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
         {showAssistant && <NavItem {...assistantItem} />}
+        {/* Points at it, always there, no close button (owner, 2026-10-07:
+            "a page tour guide which is un-dismissable pointing to the side
+            panel"). Not on its own page. */}
+        {showAssistant && pathname !== assistantItem.href && (
+          <Link
+            href={assistantItem.href}
+            className="relative mx-1 mb-2 mt-2 block rounded-lg bg-orange-500 px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-orange-600"
+          >
+            <span aria-hidden="true" className="absolute -top-1 left-5 h-2.5 w-2.5 rotate-45 bg-inherit" />
+            <span className="relative">💬 Talk to your Listing Assistant</span>
+          </Link>
+        )}
         {primaryNav.map((item) => <NavItem key={item.href} {...item} />)}
 
         <div className="pb-1 pt-3">

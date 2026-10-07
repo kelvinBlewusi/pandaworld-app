@@ -40,6 +40,7 @@ import { resolveStatedCategory } from "@/lib/jumia/stated-category";
 import { isFashionCategory } from "@/lib/jumia/fashion-category";
 import { aiReadNoteIntent } from "@/lib/actions/ai";
 import { verifyNoteIntent, type NoteIntent } from "@/lib/whatsapp/note-intent";
+import { nudgePolishWorker, queuePolish } from "@/lib/whatsapp/chat-polish";
 import {
   extractVariantClaim,
   notesNameVariants,
@@ -357,7 +358,7 @@ async function runAutoAnalyzeUnmetered(
   // ── Load listing + verify ownership ───────────────────────────────────────
   const { data: listing } = await db
     .from("listings")
-    .select("id, user_id, sku, images, title, brand, description, highlights, selling_price, sale_price, quantity, dynamic_attributes, field_sources, field_confidence, user_prompt, category_code, category_alternates")
+    .select("id, user_id, sku, images, title, brand, description, highlights, selling_price, sale_price, quantity, dynamic_attributes, field_sources, field_confidence, user_prompt, category_code, category_alternates, whatsapp_batch_id")
     .eq("id", listingId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -1101,6 +1102,18 @@ async function runAutoAnalyzeUnmetered(
           ? ` rejected=${verified.rejected.map((r) => `${r.field}(${r.reason})`).join("; ")}`
           : ""),
       );
+    }
+  }
+
+  // Polished photos when the seller's note asks for them, for a product
+  // listed from the chat (owner, 2026-10-07: image polish "when inferred and
+  // executed from the user's note let it be billed accordingly"). Queued
+  // here and made by app/api/worker/polish-images, outside drafting's
+  // budget; charged when they're made (lib/whatsapp/chat-polish.ts).
+  if (intent.polish_images?.value && (listing as { whatsapp_batch_id?: string | null }).whatsapp_batch_id) {
+    if (await queuePolish(listingId).catch(() => false)) {
+      console.info(`[auto-analyze] listing=${listingId} polish queued from the note: "${intent.polish_images.quote}"`);
+      await nudgePolishWorker();
     }
   }
 

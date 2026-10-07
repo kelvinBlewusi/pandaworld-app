@@ -23,13 +23,16 @@ jest.mock("@/lib/whatsapp/intake", () => ({
   handleLinkedMessage: async (...a: unknown[]) => { handled.push(a); await mockBot(); },
 }));
 jest.mock("@/lib/actions/upload", () => ({ validateImageBuffer: async () => ({ mime: "image/jpeg", ext: "jpg" }) }));
+let jumiaKind = "connected";
+jest.mock("@/lib/jumia/credentials", () => ({ getJumiaConnectionKind: async () => jumiaKind }));
+jest.mock("@/lib/jumia/connect-token", () => ({ createConnectToken: async () => "tok" }));
 let pilot = true;
 jest.mock("@/lib/whatsapp/assistant", () => ({ assistantEnabled: async () => pilot }));
 
 import { sendButtonsIfConfigured, sendCtaUrlIfConfigured, sendTextIfConfigured, sendTemplateIfConfigured } from "@/lib/whatsapp/client";
 import { ingestWhatsAppImage } from "@/lib/whatsapp/media";
 import { isWebAddress, webAddress, chatChannelOf } from "@/lib/whatsapp/channel";
-import { assistantMessages, creditLock, receiveAssistantMessage } from "@/lib/whatsapp/listing-assistant";
+import { assistantMessages, creditLock, jumiaGate, receiveAssistantMessage } from "@/lib/whatsapp/listing-assistant";
 import { _resetBillingModeCache } from "@/lib/billing/mode";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
 
@@ -44,6 +47,7 @@ beforeEach(() => {
   mockBot = async () => {};
   handled.length = 0;
   pilot = true;
+  jumiaKind = "connected";
   delete process.env.WHATSAPP_ACCESS_TOKEN;
   delete process.env.WHATSAPP_PHONE_NUMBER_ID;
   global.fetch = jest.fn(async () => { throw new Error("nothing should reach Meta"); }) as unknown as typeof fetch;
@@ -164,6 +168,41 @@ describe("at 0 credits (owner, 2026-10-07: \"tell the user they need to top up a
     db.tables.extension_credits = [{ user_id: USER, balance: 0 }];
     _resetBillingModeCache();
     expect(await creditLock(USER)).toBe(false);
+  });
+});
+
+describe("Jumia first (owner, 2026-10-07: \"after it is connected before conversations can be unlocked\")", () => {
+  const state = () => (db.tables.whatsapp_sessions.find((r) => r.phone_number === ADDRESS) as Record<string, unknown> | undefined)?.state;
+
+  it("not connected: the connect steps go in the conversation once, and the chat waits for the Client ID and token", async () => {
+    jumiaKind = "needs_credentials";
+    expect(await jumiaGate(USER)).toBe(true);
+    expect(await jumiaGate(USER)).toBe(true);
+    const said = log().filter((r) => r.direction === "outbound");
+    expect(said).toHaveLength(1);
+    expect(String(said[0].body_text)).toContain("First, connect your Jumia account");
+    expect(state()).toBe("awaiting_jumia_credentials");
+  });
+
+  it("a message before connecting goes to the connect flow", async () => {
+    jumiaKind = "needs_credentials";
+    await receiveAssistantMessage(USER, { id: "msg-00000001", text: "hello" });
+    expect(state()).toBe("awaiting_jumia_credentials");
+    expect(handled).toHaveLength(1); // the bot's connect state answers it
+  });
+
+  it("connected from Settings meanwhile: the chat moves on by itself", async () => {
+    jumiaKind = "needs_credentials";
+    await jumiaGate(USER);
+    jumiaKind = "connected";
+    expect(await jumiaGate(USER)).toBe(false);
+    expect(state()).toBe("awaiting_count");
+    expect(String(log().filter((r) => r.direction === "outbound").pop()?.body_text)).toContain("🎉 Jumia connected!");
+  });
+
+  it("connected: nothing in the way", async () => {
+    expect(await jumiaGate(USER)).toBe(false);
+    expect(log()).toHaveLength(0);
   });
 });
 

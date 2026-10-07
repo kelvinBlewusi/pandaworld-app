@@ -63,6 +63,8 @@ export interface NoteIntent {
   color?:            IntentField<string>;
   main_material?:    IntentField<string>;
   model?:            IntentField<string>;
+  /** They asked for their photos to be polished or made professional (lib/whatsapp/chat-polish.ts). */
+  polish_images?:    IntentField<boolean>;
 }
 
 /** Why a field the model reported was thrown away. Logged, never silent —
@@ -237,7 +239,36 @@ export function verifyNoteIntent(raw: unknown, note: string): VerifiedNoteIntent
     intent[field] = { value: text, quote: g.quote };
   }
 
+  // ── Polish the photos ─────────────────────────────────────────────────
+  // Charged when it runs (owner, 2026-10-07), so it takes the seller's own
+  // words about their photos, checked like the rest, and a quote that
+  // names the photos (POLISH_ASK).
+  {
+    const g = gate("polish_images");
+    if (g) {
+      if (g.value !== true && g.value !== "true") reject("polish_images", `"${g.value}" isn't true`);
+      else if (!notesAskForPolish(g.quote)) reject("polish_images", `"${g.quote}" doesn't ask for the photos to be polished`);
+      else intent.polish_images = { value: true, quote: g.quote };
+    }
+  }
+
   return { intent, rejected };
+}
+
+/**
+ * A request to polish or improve the photos, in the seller's words: a
+ * photo word with a polish word near it ("polish the pictures", "make the
+ * photos professional", "white background", "remove the background",
+ * "studio photos"). "Polished steel" says nothing about photos.
+ */
+const PHOTO = String.raw`(?:photos?|pictures?|pics?|images?|imgs?|shots?)`;
+const POLISH = String.raw`(?:polish\w*|enhanc\w*|edit\w*|retouch\w*|clean(?:\s|-)?up|beautif\w*|improve\w*|professional\w*|studio|nicer|better|fine-?tune\w*)`;
+const POLISH_ASK = new RegExp(
+  String.raw`\b${POLISH}\b[^.!?\n]{0,40}\b${PHOTO}\b|\b${PHOTO}\b[^.!?\n]{0,40}\b${POLISH}|\bwhite\s+background\b|\bremove\s+(?:the\s+)?background\b|\bstudio\s+${PHOTO}\b`,
+  "i",
+);
+export function notesAskForPolish(note: string | null | undefined): boolean {
+  return Boolean(note && POLISH_ASK.test(note));
 }
 
 // ─── Prompt ──────────────────────────────────────────────────────────────────
@@ -272,7 +303,8 @@ Return JSON. Include a key ONLY if the seller genuinely stated it. Every key's "
   "brand":            { "value": "...", "quote": "..." },
   "color":            { "value": "...", "quote": "..." },
   "main_material":    { "value": "...", "quote": "..." },
-  "model":            { "value": "...", "quote": "..." }
+  "model":            { "value": "...", "quote": "..." },
+  "polish_images":    { "value": true, "quote": "..." }   // ONLY if they ask for their photos to be polished, edited, made professional, put on a white background.
 }
 
 RULES:

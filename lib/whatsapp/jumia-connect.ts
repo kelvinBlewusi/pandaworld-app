@@ -3,6 +3,8 @@ import { createConnectToken } from "@/lib/jumia/connect-token";
 import { updateSession } from "@/lib/whatsapp/session";
 import { sendButtonsIfConfigured, sendCtaUrlIfConfigured } from "@/lib/whatsapp/client";
 import type { JumiaConnectionKind } from "@/lib/jumia/credentials";
+import { createServerClient } from "@/lib/supabase/server";
+import { isWebAddress } from "@/lib/whatsapp/channel";
 
 /**
  * Helpers for connecting Jumia entirely from a WhatsApp chat. Most of this
@@ -138,6 +140,19 @@ const DIALLING_CODES: [prefix: string, country: string][] = [
 export function countryFromPhone(phoneNumber: string): string {
   const digits = phoneNumber.replace(/\D/g, "");
   return DIALLING_CODES.find(([prefix]) => digits.startsWith(prefix))?.[1] ?? "GH";
+}
+
+/**
+ * The country a Jumia account connected from this chat is saved with: the
+ * WhatsApp number's, and in the Listing Assistant on the website (a web
+ * address has no dialling code) the seller's linked WhatsApp number's;
+ * Ghana otherwise.
+ */
+export async function chatCountry(userId: string, phoneNumber: string): Promise<string> {
+  if (!isWebAddress(phoneNumber)) return countryFromPhone(phoneNumber);
+  const { data } = await createServerClient().from("whatsapp_connections").select("phone_number").eq("user_id", userId).limit(1);
+  const linked = ((data ?? []) as { phone_number: string }[])[0]?.phone_number;
+  return linked ? countryFromPhone(linked) : "GH";
 }
 
 const CLEAR_BATCH = { listingId: null, batchId: null, batchSize: null, batchSeq: null, pendingAppId: null } as const;

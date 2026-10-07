@@ -28,7 +28,17 @@ export type GlobalCommand =
   | { type: "reconnect_jumia" }
   | { type: "how_it_works" }
   | { type: "status" }
-  | { type: "help" };
+  | { type: "help" }
+  // The chat's commands (owner, 2026-10-07): the same words on WhatsApp and
+  // in the Listing Assistant (its / and + menus send these).
+  | { type: "menu" }
+  | { type: "credits" }
+  | { type: "polish"; seq: number | null }
+  | { type: "report" }
+  | { type: "shop_read"; what: ShopRead };
+
+/** What the menu's shop commands read. */
+export type ShopRead = "shop" | "out_of_stock" | "low_stock" | "sales_today" | "sales_week" | "payouts";
 
 const RESTART_RE = /^(restart|start over|start again|cancel|stop|new batch|reset)[.!]?$/i;
 // The "Start another" button on drafted and submitted messages
@@ -59,7 +69,20 @@ const RECONNECT_JUMIA_RE = /^reconnect jumia[.!]?$/i;
 // someone who does not yet know the right words.
 const HOW_IT_WORKS_RE = /^(how it works|how does (this|it) work|guide|how to use|how do i use (this|it))[.!?]?$/i;
 const STATUS_RE = /^(status|where am i)[.!?]?$/i;
-const HELP_RE = /^(help|\?|commands)[.!]?$/i;
+const HELP_RE = /^(help|\?)[.!]?$/i;
+const MENU_RE = /^(menu|commands|\/)[.!]?$/i;
+const CREDITS_RE = /^(credits|my credits|credit balance|balance)[.!?]?$/i;
+// "polish", "polish 2", "polish product 2", "polish 2 photos".
+const POLISH_RE = /^polish(?:\s+(?:product\s*)?(\d{1,2}))?(?:\s+(?:photos?|pictures?|images?))?[.!]?$/i;
+const REPORT_RE = /^(report|shop report|health report|shop health(?: report| check)?|health check)[.!?]?$/i;
+const SHOP_READS: [RegExp, ShopRead][] = [
+  [/^(my )?(shop|products)[.!?]?$/i, "shop"],
+  [/^out of stock[.!?]?$/i, "out_of_stock"],
+  [/^low stock[.!?]?$/i, "low_stock"],
+  [/^sales( today)?[.!?]?$/i, "sales_today"],
+  [/^sales (this )?week[.!?]?$/i, "sales_week"],
+  [/^(my )?payouts?[.!?]?$/i, "payouts"],
+];
 
 /** Order matters: "confirm disconnect" must be checked before the bare
  *  "disconnect" pattern, since the latter wouldn't otherwise be reached. */
@@ -77,5 +100,11 @@ export function parseGlobalCommand(text: string): GlobalCommand | null {
   if (HOW_IT_WORKS_RE.test(t)) return { type: "how_it_works" };
   if (STATUS_RE.test(t)) return { type: "status" };
   if (HELP_RE.test(t)) return { type: "help" };
+  if (MENU_RE.test(t)) return { type: "menu" };
+  if (CREDITS_RE.test(t)) return { type: "credits" };
+  const polish = t.match(POLISH_RE);
+  if (polish) return { type: "polish", seq: polish[1] ? Number(polish[1]) : null };
+  if (REPORT_RE.test(t)) return { type: "report" };
+  for (const [re, what] of SHOP_READS) if (re.test(t)) return { type: "shop_read", what };
   return null;
 }

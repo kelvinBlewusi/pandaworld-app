@@ -1734,6 +1734,55 @@ labels." It is the WhatsApp bot itself, not a copy:
 - **Scroll down**: a round down-arrow, centred over the composer, shows once the chat is
   scrolled up from the bottom; tapping it goes back to the newest message.
 
+### Commands, polish, the shop health report, Jumia first (owner, 2026-10-07)
+
+- **Commands** (lib/whatsapp/commands.ts, run by lib/whatsapp/chat-commands.ts):
+  menu, credits, report, polish [N], shop, out of stock, low stock, sales
+  [today|week], payouts, on top of restart/status/help/orders/disconnect.
+  The same words on WhatsApp (a command flow for everyone; "menu" sends a
+  10-row list; the conversational AI there stays the pilot's) and in the
+  Listing Assistant, whose message box says "Type / for commands": "/"
+  or the + button beside Upload opens the menu
+  (components/assistant/chat-commands.ts PALETTE, `slashToText` turns
+  "/polish 2" into "polish 2"). Billed: report (REPORT_CREDIT_COST),
+  polish (POLISH_CREDIT_COST an image that came back) and confirmed
+  changes to live products; the rest is free. The assistant has the same
+  two as actions (polish, health_report) when a seller asks in words.
+- **Polish in the chat** (lib/whatsapp/chat-polish.ts): the extension's
+  four PRODUCT_SHOTS made from a draft's own photos, new ones first and the
+  seller's after (up to 8), originals kept in listings.original_images.
+  From the note: note-intent.ts `polish_images` (the AI reads it, the quote
+  must name the photos, notesAskForPolish) queues the listing at drafting
+  (auto-analyze, chat listings only) and nudges
+  app/api/worker/polish-images (CRON_SECRET, 2 per run); 'minute-workers'
+  calls it while one is queued or a run is stale
+  (2026-10-07_chat-polish-cron.sql). "polish 2" runs at once. Columns:
+  polish_status (queued, running, done, failed, skipped),
+  polish_requested_at (the charge reference `polish:<id>:<requested_at>`),
+  original_images. Checked for all four first, charged for those that came
+  back; nothing when none did, not enough credits, or the product is
+  already with Jumia. pushListingToJumia refuses a product whose photos are
+  queued or running ("still being polished").
+- **Shop health report** (lib/whatsapp/shop-health.ts): live catalog, 90
+  days of orders and items (newest 300 orders' items within 35s), payouts,
+  PandaWorld listings → healthEvidence (pure) → healthScore (catalog 25,
+  quality 15, orders 25, trend 10, fulfilment 25) → the numbers as text
+  plus the AI's "What's working / What isn't / Do this next" from those
+  numbers only (plainReading when the AI can't be reached). Credits are
+  checked before Jumia is read and charged once it's ready
+  (`report:<userId>:<minute>`).
+- **Jumia first in the Listing Assistant** (jumiaGate in
+  lib/whatsapp/listing-assistant.ts): not connected, the connect steps go
+  in the conversation once and the web session waits in
+  awaiting_jumia_credentials (the WhatsApp flow, paste Client ID + token;
+  the country from the linked WhatsApp number, chatCountry); connected
+  from Settings meanwhile, it moves on by itself. The page shows a "Connect
+  Jumia to start" bar (`connectJumia` from GET .../messages).
+- **Pointers to the assistant**: a fixed orange note under the sidebar's
+  Jumia Listing Assistant item ("Talk to your Listing Assistant", no close)
+  and, on phones, a pill at the bottom right; the home page's floating nav
+  has it as its first of five links (a row from xl, the menu below that).
+
 ### The chat knows the website (owner, 2026-10-07)
 
 "Let the chat know our site very well ... connect WhatsApp, use extension,

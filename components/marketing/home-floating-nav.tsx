@@ -67,6 +67,8 @@ export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref, pricin
     // Absolute path (not a bare "#how-it-works" fragment) — this nav is no
     // longer only rendered on the homepage (see app/how-to/page.tsx), and a
     // bare fragment resolves against whatever page it's clicked from.
+    // The chat, first (owner, 2026-10-07): a signed-out visitor signs in on the way.
+    { href: "/extension/assistant", label: "Jumia Listing Assistant" },
     { href: "/#how-it-works", label: "How it Works" },
     { href: "/how-to", label: "Guides" },
     // Greyed out + non-clickable while billing is off (everything is
@@ -78,7 +80,8 @@ export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref, pricin
 
   return (
     <div className="sticky top-3 z-30 px-4 sm:top-4 sm:px-6 lg:px-8">
-      <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 rounded-full border border-zinc-200 bg-white/95 px-4 py-2.5 shadow-[0_2px_24px_rgba(0,0,0,0.07)] backdrop-blur sm:px-5">
+      {/* Five links since 2026-10-07 (the Listing Assistant): wider, and in a row from xl; the menu below that. */}
+      <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 rounded-full border border-zinc-200 bg-white/95 px-4 py-2.5 shadow-[0_2px_24px_rgba(0,0,0,0.07)] backdrop-blur sm:px-5">
         <Link href="/extension" aria-label="pandaworld home" className="inline-flex shrink-0 items-center">
           <Image
             src="/brand/panda-p-logo-trimmed.png"
@@ -93,7 +96,7 @@ export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref, pricin
           </span>
         </Link>
 
-        <nav className="hidden items-center gap-6 text-base font-medium text-zinc-600 lg:flex">
+        <nav className="hidden items-center gap-6 text-base font-medium text-zinc-600 xl:flex">
           {links.map((link) =>
             link.disabled ? (
               <span
@@ -114,7 +117,7 @@ export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref, pricin
           )}
         </nav>
 
-        <div className="hidden items-center gap-1 lg:flex">
+        <div className="hidden items-center gap-1 xl:flex">
           {signedIn ? (
             <Link
               href={DASHBOARD_REDIRECT}
@@ -145,7 +148,7 @@ export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref, pricin
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-zinc-600 transition-colors hover:bg-zinc-100 lg:hidden"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-zinc-600 transition-colors hover:bg-zinc-100 xl:hidden"
           aria-label={open ? "Close menu" : "Open menu"}
           aria-expanded={open}
         >
@@ -154,7 +157,7 @@ export function HomeFloatingNav({ signInHref, signUpHref, calculatorHref, pricin
       </div>
 
       {open && (
-        <div className="mx-auto mt-2 max-w-5xl rounded-2xl border border-zinc-200 bg-white p-3 shadow-lg lg:hidden">
+        <div className="mx-auto mt-2 max-w-6xl rounded-2xl border border-zinc-200 bg-white p-3 shadow-lg xl:hidden">
           <nav className="flex flex-col gap-1 text-base font-medium text-zinc-700">
             {links.map((link) =>
               link.disabled ? (

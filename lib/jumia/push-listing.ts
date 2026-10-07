@@ -299,6 +299,12 @@ export async function pushListingToJumia(
     return { ok: false, code: "validation", message: errors.join(". ") + "." };
   }
 
+  // Photos being polished go to Jumia once they're made (lib/whatsapp/chat-polish.ts).
+  const polishing = (row as { polish_status?: string | null }).polish_status;
+  if (polishing === "queued" || polishing === "running") {
+    return { ok: false, code: "validation", message: "its photos are still being polished (about a minute). Submit it again once they're here." };
+  }
+
   // ── Resolve variants: prefer caller-supplied (live UI state), fall back to DB ──
   let variants: VariantRow[];
   if (bodyVariants && bodyVariants.length > 0) {
@@ -704,7 +710,7 @@ export const AUTO_RESUBMITTED = "auto_resubmitted";
  * one made there (chat_channel 'web'), else their linked WhatsApp number.
  * Null when it came from WhatsApp and none is linked any more.
  */
-async function chatAddressFor(userId: string, channel: string | null): Promise<string | null> {
+export async function chatAddressFor(userId: string, channel: string | null): Promise<string | null> {
   if (channel === "web") {
     const { webAddress } = await import("@/lib/whatsapp/channel");
     return webAddress(userId);

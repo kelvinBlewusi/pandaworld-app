@@ -16,6 +16,10 @@ import { recordInboundMessage } from "@/lib/whatsapp/message-log";
 import { WEB_MEDIA_PREFIX } from "@/lib/whatsapp/media";
 import { handleLinkedMessage } from "@/lib/whatsapp/intake";
 import { botPausedForCredits, creditGate } from "@/lib/whatsapp/credit-gate";
+import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
+import { promptJumiaConnection, resumeBatchAfterReconnect } from "@/lib/whatsapp/jumia-connect";
+import { getOrCreateSession, updateSession } from "@/lib/whatsapp/session";
+import { COUNT_QUICK_PICKS } from "@/lib/whatsapp/batch";
 
 /** One message as the page shows it. */
 export interface AssistantMessage {
@@ -58,6 +62,45 @@ export async function assistantMessages(userId: string, opts: { after?: string |
 export async function creditLock(userId: string): Promise<boolean> {
   if (!(await botPausedForCredits(userId))) return false;
   await creditGate(userId, webAddress(userId), undefined); // sends the one reply, once
+  return true;
+}
+
+const CONNECT_STATES = new Set(["awaiting_jumia_credentials", "awaiting_jumia_oauth"]);
+
+/**
+ * The chat starts with Jumia connected (owner, 2026-10-07: "Jumia connection
+ * should be made possible in the chat just as the WhatsApp does it ... and
+ * should follow the strict connection flow as WhatsApp after it is connected
+ * before conversations can be unlocked"). Not connected: the bot's connect
+ * steps go in the conversation once and the chat waits for the Client ID
+ * and token (handleAwaitingJumiaCredentials in lib/whatsapp/intake.ts, as on
+ * WhatsApp), answering nothing else. Connected from Settings meanwhile: the
+ * chat moves on by itself. True while it's waiting.
+ */
+export async function jumiaGate(userId: string): Promise<boolean> {
+  const address = webAddress(userId);
+  const [kind, session] = await Promise.all([
+    getJumiaConnectionKind(userId).catch(() => "connected" as const),
+    getOrCreateSession(userId, address),
+  ]);
+  const waiting = CONNECT_STATES.has(session.state);
+  if (kind === "connected") {
+    if (waiting) {
+      if (session.batchId) {
+        await resumeBatchAfterReconnect(address, null);
+      } else {
+        await updateSession(address, { state: "awaiting_count", pendingAppId: null, listingId: null, batchId: null, batchSize: null, batchSeq: null });
+        await sendButtonsIfConfigured(address, "🎉 Jumia connected!\n\nHow many products are you listing today? Reply with a number to get started, or ask me about your shop.", COUNT_QUICK_PICKS);
+      }
+    }
+    return false;
+  }
+  if (!waiting) {
+    await promptJumiaConnection(
+      userId, address, kind,
+      "First, connect your Jumia account: I list your products, run your orders and read your shop through it. Paste the Client ID and token here when you have them.\n\n",
+    );
+  }
   return true;
 }
 
@@ -182,6 +225,8 @@ export async function receiveAssistantMessage(
     address, id, mediaId ? "image" : label ? "interactive" : "text", text ?? null,
     mediaId ? { imageMediaId: mediaId, link } : label ? { label } : undefined,
   );
+  // Jumia first, as on WhatsApp: until it's connected, the message goes to the connect flow.
+  await jumiaGate(userId).catch(() => false);
   const [before, repliesBefore] = await Promise.all([collecting(address), replyCount(address)]);
   await handleLinkedMessage(userId, address, id, { ...(text ? { text } : {}), ...(mediaId ? { imageMediaId: mediaId } : {}) });
   if (before) await sayWhereWeAre(userId, address, before, repliesBefore, { photo: Boolean(mediaId), lastPhoto: input.last !== false, text: text ?? null });
