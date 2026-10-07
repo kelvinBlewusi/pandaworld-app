@@ -350,11 +350,15 @@ describe("answers", () => {
     expect(calls.find((c) => c.path === "/payout-statement")!.query.get("currency")).toBe("LOCAL");
   });
 
-  it("orders and sales need order_alerts; payouts need the shop pack", async () => {
+  // Every plan has the chat's shop feature since 2026-10-07; the alerts' pack isn't needed to ask.
+  it("orders, sales and payouts need the chat's shop feature, not the alerts' pack", async () => {
     off.add("order_alerts");
     await answerSales(USER, PHONE, "today");
-    expect(last().body).toBe("Your Jumia orders on WhatsApp come with the Pro pack.");
+    expect(last().body).toBe("No Jumia orders today yet.");
+    calls.length = 0;
     off.add("shop_whatsapp");
+    await answerSales(USER, PHONE, "today");
+    expect(last().body).toBe("Your Jumia orders on WhatsApp come with the Pro pack.");
     await answerPayouts(USER, PHONE);
     expect(last().body).toBe("Your Jumia payouts on WhatsApp come with the Pro pack.");
     expect(calls).toHaveLength(0);
@@ -447,7 +451,6 @@ describe("told without asking", () => {
 
   it("a payout paid since the last check, after the first check learns the old ones", async () => {
     seed();
-    off.add("order_alerts");
     statements = [{ statementNumber: "GH1-0929", createdAt: "2026-09-29 03:00:00", paid: true, paymentReference: "PAY-77", payout: { amount: 1820, currency: "GHS" } }];
     await runShopNotices(at("2026-10-07T10:00:00Z"));
     expect(sent).toHaveLength(0);
@@ -457,6 +460,19 @@ describe("told without asking", () => {
     expect(sent).toHaveLength(0); // checked every 6 hours
     await runShopNotices(at("2026-10-07T16:01:00Z"));
     expect(last().body).toBe("💰 Jumia paid you *GHS 2,020* (ref PAY-91).\nStatement GH1-1006. Ask me \"my payouts\" for the details.");
+  });
+
+  // The alerts stay with the Pro pack when the chat's features opened to every plan (2026-10-07).
+  it("without the alerts' pack, neither order updates nor payouts are told, or read", async () => {
+    seed();
+    off.add("order_alerts");
+    orders = [];
+    await runShopNotices(at("2026-10-07T10:00:00Z"));
+    orders = [order("o1", 111, "Delivered")];
+    statements = [{ statementNumber: "GH1-1006", createdAt: "2026-10-06 03:00:00", paid: true, paymentReference: "PAY-91", payout: { amount: 2020, currency: "GHS" } }];
+    await runShopNotices(at("2026-10-07T16:01:00Z"));
+    expect(sent).toHaveLength(0);
+    expect(calls).toHaveLength(0);
   });
 
   it("a change Jumia refused is told; one it applied updates the local copy quietly", async () => {

@@ -121,7 +121,8 @@ describe("a seller buying the Starter pack", () => {
 
     expect((await getRecentTransactions(SELLER)).map((t) => t.description)).toContain(`Purchased ${starter.credits} credits (starter pack)`);
     expect((await getMostRecentCreditPack(SELLER))?.id).toBe("starter");
-    expect(await hasFeature(SELLER, "qc_fix")).toBe(false); // Standard and up
+    expect(await hasFeature(SELLER, "shipping_labels")).toBe(false); // Standard and up
+    expect(await hasFeature(SELLER, "qc_fix")).toBe(true); // every plan since 2026-10-07
   });
 
   it("is spent from like any other credits", async () => {

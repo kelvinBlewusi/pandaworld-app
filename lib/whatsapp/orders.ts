@@ -4,11 +4,12 @@
  * labels as ONE PDF, Ready to ship all, Pick orders (one order's Pack / Get
  * label / Ready to ship / Cancel), and "orders" typed any time.
  *
- * Gated by pack (lib/billing/features.ts): packing, labels and the rest
- * need `shipping_labels` (Standard and up since 2026-10-07, as each label is
- * charged, LABEL_CREDIT_COST); seeing waiting orders needs that or
- * `order_alerts` (Pro: the new-order alerts, which are free); admins and
- * grants too, and neither works at 0 credits. Works for every Jumia country: amounts in the
+ * Gated by pack (lib/billing/features.ts): seeing waiting orders, packing,
+ * ready to ship and cancelling are on every plan (`shop_whatsapp`, owner
+ * 2026-10-07: "all the capabilities available to all plans in the chat");
+ * the label PDF needs `shipping_labels` (Standard and up, each label
+ * charged, LABEL_CREDIT_COST) and the new-order alerts `order_alerts` (Pro,
+ * free). Nothing works at 0 credits. Works for every Jumia country: amounts in the
  * shop's own currency and the country's formatting, Jumia's own wording
  * passed through.
  *
@@ -169,27 +170,31 @@ export function stationShortName(code: string): string {
 
 // ─── The flow ────────────────────────────────────────────────────────────────
 
-const VIEW_FEATURE: FeatureId = "order_alerts";
-const ACT_FEATURE: FeatureId = "shipping_labels";
+/** Orders in chat: seeing them, packing, ready to ship, cancelling (every plan). */
+const ORDERS_FEATURE: FeatureId = "shop_whatsapp";
+/** The label PDF on WhatsApp. */
+const LABEL_FEATURE: FeatureId = "shipping_labels";
+/** The new-order alerts. */
+const ALERTS_FEATURE: FeatureId = "order_alerts";
 
-async function upgrade(phone: string, feature: FeatureId, blockedBy: FeatureBlock): Promise<void> {
+async function upgrade(phone: string, blockedBy: FeatureBlock): Promise<void> {
   const web = isWebAddress(phone);
   if (blockedBy === "credits") {
     await sendCtaUrlIfConfigured(phone, `📦 You're out of credits: buy credits to use your orders ${web ? "here" : "on WhatsApp"} again.`, "Buy credits", `${appUrl()}/extension/dashboard`);
     return;
   }
-  await sendCtaUrlIfConfigured(
-    phone,
-    web
-      ? `📦 Packing and shipping your Jumia orders comes with the ${featureMinPackName(feature)} pack (new-order alerts on WhatsApp with ${featureMinPackName(VIEW_FEATURE)}).`
-      : `📦 Orders and shipping labels on WhatsApp come with the ${featureMinPackName(feature)} pack (new-order alerts with ${featureMinPackName(VIEW_FEATURE)}).`,
-    "See packs",
-    `${appUrl()}/pricing`,
-  );
+  await sendCtaUrlIfConfigured(phone, "📦 Your Jumia orders aren't on for your account yet.", "See packs", `${appUrl()}/pricing`);
 }
 
 /** Where a label is printed, for the web chat. */
 const LABELS_ON_WHATSAPP = "🏷️ Shipping labels are printed on WhatsApp: message the PandaWorld bot there and say *orders*, or print them in Jumia Vendor Center.";
+
+/** Where a label is printed, on WhatsApp without the pack that has them. */
+const labelsNeedPack = () =>
+  `🏷️ Shipping labels on WhatsApp come with the ${featureMinPackName(LABEL_FEATURE)} pack and up. You can print them in Jumia Vendor Center.`;
+
+/** Why there's no label here, when there isn't. */
+const noLabels = (ctx: Ctx) => (ctx.web ? LABELS_ON_WHATSAPP : labelsNeedPack());
 
 /**
  * Handle an order command. False when the message isn't one, so the rest of
@@ -200,15 +205,14 @@ export async function handleOrderMessage(userId: string, phone: string, text: st
   if (!cmd) return false;
   const web = isWebAddress(phone);
 
-  // Seeing the waiting orders comes with either: the alerts (Pro), or the
-  // labels (Standard), which need the list to pack from.
-  const viewing = cmd.kind === "list" || cmd.kind === "pick" || cmd.kind === "view";
-  const alerts = await featureAccess(userId, VIEW_FEATURE);
-  const access = viewing && alerts.ok ? alerts : await featureAccess(userId, ACT_FEATURE);
+  // Orders are on every plan (they still pause at 0 credits); the label
+  // PDF is the Standard pack's, and only on WhatsApp.
+  const access = await featureAccess(userId, ORDERS_FEATURE);
   if (!access.ok) {
-    await upgrade(phone, ACT_FEATURE, access.blockedBy);
+    await upgrade(phone, access.blockedBy);
     return true;
   }
+  const [alerts, labels] = await Promise.all([featureAccess(userId, ALERTS_FEATURE), featureAccess(userId, LABEL_FEATURE)]);
 
   let creds: Awaited<ReturnType<typeof getValidJumiaCredentials>>;
   try {
@@ -222,7 +226,7 @@ export async function handleOrderMessage(userId: string, phone: string, text: st
     }
     return true;
   }
-  const ctx: Ctx = { userId, phone, token: creds.accessToken, country: jumiaCountryByCode(creds.country), alerts: alerts.ok, web };
+  const ctx: Ctx = { userId, phone, token: creds.accessToken, country: jumiaCountryByCode(creds.country), alerts: alerts.ok, web, labels: labels.ok && !web };
 
   switch (cmd.kind) {
     case "list":       await showWaiting(ctx); break;
@@ -240,8 +244,12 @@ export async function handleOrderMessage(userId: string, phone: string, text: st
   return true;
 }
 
-/** `alerts`: they get new-order alerts (Pro), so "I'll message you" is true. `web`: the website's chat, where labels aren't printed. */
-interface Ctx { userId: string; phone: string; token: string; country?: JumiaCountry; alerts?: boolean; web?: boolean }
+/**
+ * `alerts`: they get new-order alerts (Pro), so "I'll message you" is true.
+ * `web`: the website's chat. `labels`: a label PDF can be sent here (on
+ * WhatsApp, with the pack that has them).
+ */
+interface Ctx { userId: string; phone: string; token: string; country?: JumiaCountry; alerts?: boolean; web?: boolean; labels?: boolean }
 
 async function loadWaiting(ctx: Ctx): Promise<WaitingOrder[] | null> {
   const w = await waitingOrders(ctx.token);
@@ -265,14 +273,14 @@ async function loadOne(ctx: Ctx, orderId: string): Promise<WaitingOrder | null> 
 
 const PICK = { id: "orders:pick", title: "Pick orders" };
 
-/** The buttons for a set of waiting orders; on the web, packing without the labels. */
-function waitingButtons(orders: WaitingOrder[], web = false): { id: string; title: string }[] {
+/** The buttons for a set of waiting orders; without labels here, packing on its own. */
+function waitingButtons(orders: WaitingOrder[], labels = true): { id: string; title: string }[] {
   const toPack = orders.some((o) => toPackItems(o).length > 0);
   const packed = orders.some((o) => packedItems(o).length > 0);
-  const packAll = { id: "orders:packall", title: web ? "Pack all" : "Pack all & labels" };
+  const packAll = { id: "orders:packall", title: labels ? "Pack all & labels" : "Pack all" };
   if (toPack && packed) return [packAll, { id: "orders:rtsall", title: "Ready to ship all" }, PICK];
   if (toPack) return [packAll, PICK];
-  if (web) return [{ id: "orders:rtsall", title: "Ready to ship all" }, PICK];
+  if (!labels) return [{ id: "orders:rtsall", title: "Ready to ship all" }, PICK];
   return [{ id: "orders:labels", title: "Get labels" }, { id: "orders:rtsall", title: "Ready to ship all" }, PICK];
 }
 
@@ -317,7 +325,7 @@ async function showWaiting(ctx: Ctx): Promise<void> {
     ...(toPack.length && packed.length ? [""] : []),
     ...(packed.length ? [`*Packed, not yet ready to ship (${packed.length})*`, ...packed.map((o) => orderLine(o, ctx.country))] : []),
   ];
-  await sendButtonsIfConfigured(ctx.phone, fitLines("📦 Your Jumia orders waiting\n", lines), waitingButtons(orders, ctx.web));
+  await sendButtonsIfConfigured(ctx.phone, fitLines("📦 Your Jumia orders waiting\n", lines), waitingButtons(orders, ctx.labels));
 }
 
 async function pickOrders(ctx: Ctx): Promise<void> {
@@ -351,9 +359,9 @@ async function viewOrder(ctx: Ctx, orderId: string): Promise<void> {
     ctx.phone,
     fitLines(head, itemLines(o, ctx.country)),
     toPack
-      ? [{ id: `opack:${o.id}`, title: ctx.web ? "Pack order" : "Pack & get label" }, { id: `ocancel:${o.id}`, title: "Cancel order" }]
+      ? [{ id: `opack:${o.id}`, title: ctx.labels ? "Pack & get label" : "Pack order" }, { id: `ocancel:${o.id}`, title: "Cancel order" }]
       : [
-          ...(ctx.web ? [] : [{ id: `olabel:${o.id}`, title: "Get label" }]),
+          ...(ctx.labels ? [{ id: `olabel:${o.id}`, title: "Get label" }] : []),
           { id: `orts:${o.id}`, title: "Ready to ship" }, { id: `ocancel:${o.id}`, title: "Cancel order" },
         ],
   );
@@ -375,9 +383,10 @@ type Button = { id: string; title: string };
  * one PDF, one page per order.
  */
 async function sendWithLabels(ctx: Ctx, orders: WaitingOrder[], body: string, buttons: Button[], retry: Button): Promise<void> {
-  // The web chat packs but prints no label: where to print it, nothing charged.
-  if (ctx.web) {
-    const note = `\n\n${LABELS_ON_WHATSAPP}`;
+  // No label here (the web chat, or a pack without them): packed, where to
+  // print it, nothing charged.
+  if (!ctx.labels) {
+    const note = `\n\n${noLabels(ctx)}`;
     await sendButtonsIfConfigured(ctx.phone, (body.slice(0, BODY_MAX - note.length) + note).trim(), buttons.slice(0, 3));
     return;
   }
@@ -460,8 +469,8 @@ async function packAll(ctx: Ctx, stationId?: string): Promise<void> {
 }
 
 async function labelsAll(ctx: Ctx): Promise<void> {
-  if (ctx.web) {
-    await sendButtonsIfConfigured(ctx.phone, LABELS_ON_WHATSAPP, [{ id: "orders:rtsall", title: "Ready to ship all" }, PICK]);
+  if (!ctx.labels) {
+    await sendButtonsIfConfigured(ctx.phone, noLabels(ctx), [{ id: "orders:rtsall", title: "Ready to ship all" }, PICK]);
     return;
   }
   const orders = await loadWaiting(ctx);
@@ -523,8 +532,8 @@ async function packOne(ctx: Ctx, orderId: string, stationId?: string): Promise<v
 }
 
 async function labelOne(ctx: Ctx, orderId: string): Promise<void> {
-  if (ctx.web) {
-    await sendButtonsIfConfigured(ctx.phone, LABELS_ON_WHATSAPP, [{ id: `orts:${orderId}`, title: "Ready to ship" }, PICK]);
+  if (!ctx.labels) {
+    await sendButtonsIfConfigured(ctx.phone, noLabels(ctx), [{ id: `orts:${orderId}`, title: "Ready to ship" }, PICK]);
     return;
   }
   const o = await loadOne(ctx, orderId);

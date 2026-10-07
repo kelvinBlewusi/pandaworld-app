@@ -4533,7 +4533,7 @@ async function fixQcRejection(
 ): Promise<Remedy | null> {
   const listingId = row.id as string;
 
-  // Guided QC fixes come with the Standard pack and up, and pause at 0
+  // Guided QC fixes are on every plan since 2026-10-07 and pause at 0
   // credits (lib/billing/features.ts). Without them: the editor, and why.
   const access = await featureAccess(userId, "qc_fix");
   if (!access.ok) {

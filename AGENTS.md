@@ -571,6 +571,29 @@ fee calculator on WhatsApp), shown like the others with no "soon" label
 Terms §4 name them as not available yet (`comingSoonLabels()`); keep that
 while any are.
 
+**Every plan in the chat (owner, 2026-10-07: "make all the capabilities
+available to all plans in the chat and charge credits for those we
+charge ... except the label and the alert on WhatsApp").** `minPack:
+EVERYONE` in `PACK_FEATURES` means every plan, free sign-up credits
+included: `qc_fix`, `shop_whatsapp` (live products, orders with packing,
+ready to ship and cancelling, reports, payouts, warehouse, bulk and content
+changes) and `fee_calc_whatsapp`. `featureAccess` only checks the balance
+for them (blocked at 0, `blockedBy: "credits"`); `qc_fix` with
+`ignoreBalance` is therefore always on, so every seller now gets QC
+follow-up and its refund. Charges are unchanged (live change or bulk tap
+0.5, notices 0.2, listings at the country price). Still by pack:
+`shipping_labels` (Standard+, the label PDF on WhatsApp only, never on the
+web) and `order_alerts` (Pro+: new-order alerts, order-update notices and
+payout-paid notices, `runShopNotices` skips a seller without it); and the
+extension's two Pro tools. `packFeatures(pack)` leaves out the every-plan
+ones (`everyoneFeatures()`); the pricing page lists those in a line of
+their own, the FAQ and Terms §4 say so, and `featureMinPackName` is "" for
+them. In `lib/whatsapp/orders.ts` the orders gate is `shop_whatsapp`;
+without `shipping_labels` on WhatsApp a pack shows "Pack all" (not "Pack
+all & labels"), no label is fetched or charged, and the reply says labels
+come with the Standard pack. The assistant's `sellerFacts` lists three
+lines: the chat's shop features, label PDFs, alerts.
+
 **Pay when live** (WhatsApp and web listings). Drafts are free; a seller
 only needs enough available credits to draft. `pushListingToJumia` checks
 `creditsDueForSubmission` before anything reaches Jumia and records the
@@ -1662,7 +1685,10 @@ labels." It is the WhatsApp bot itself, not a copy:
   with its confirm. Packing there prints and charges no label: the message
   says labels are printed on WhatsApp ("orders") or in Vendor Center, and
   `orders:labels` / `olabel:` there answer the same without asking Jumia.
-  New-order alerts still only go to whatsapp_connections numbers.
+  New-order alerts still only go to whatsapp_connections numbers. Since
+  the same day orders are on every plan (`shop_whatsapp`, see "Every plan
+  in the chat" under Billing); only the label PDF and the alerts keep
+  their packs.
 - **Logo, not a sparkle** (owner, 2026-10-07): the PandaWorld "P" in the
   chat header on desktop, the sidebar item (`PandaLogoIcon`,
   components/assistant/panda-logo-icon.tsx, on a white tile so it shows on

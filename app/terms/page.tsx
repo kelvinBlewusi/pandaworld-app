@@ -129,12 +129,12 @@ export default function TermsPage() {
           </p>
           <p>
             Some features come with particular packs, as shown on the
-            pricing page, and stay available once you have bought that
-            pack or a larger one. With Jumia QC rejection alerts (the
-            Standard pack and up), we check Jumia&apos;s quality-check result
-            after a listing is accepted, and if Jumia rejects it there, the
-            credits are returned. Without that feature, the quality-check
-            result is shown in your Jumia Vendor Center only. These features
+            pricing page, and stay available while the last pack you bought
+            is that pack or a larger one; others are on every pack and on
+            free credits. With Jumia QC rejection alerts (every pack), we
+            check Jumia&apos;s quality-check result after a listing is
+            accepted, and if Jumia rejects it there, the credits are
+            returned. Features pause while your balance is 0. These features
             listed on the pricing page are not yet available:{" "}
             {comingSoonLabels().join(", ")}.
           </p>
