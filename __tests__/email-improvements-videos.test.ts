@@ -28,7 +28,7 @@ describe("improvementsAndVideosEmail", () => {
   });
 
   it("states today's prices", () => {
-    expect(tpl.html).toContain("A WhatsApp listing is 2 credits and an autofill is 1");
-    expect(tpl.html).toContain("New accounts get 20 free credits");
+    expect(tpl.html).toContain("A WhatsApp listing or an autofill is 2 credits");
+    expect(tpl.html).toContain("New accounts get 12 free credits");
   });
 });

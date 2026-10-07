@@ -4,9 +4,11 @@
  * labels as ONE PDF, Ready to ship all, Pick orders (one order's Pack / Get
  * label / Ready to ship / Cancel), and "orders" typed any time.
  *
- * Gated by pack (lib/billing/features.ts): seeing orders needs
- * `order_alerts`, changing one needs `shipping_labels` (both Pro and up;
- * admins and grants too), and neither works at 0 credits. Works for every Jumia country: amounts in the
+ * Gated by pack (lib/billing/features.ts): packing, labels and the rest
+ * need `shipping_labels` (Standard and up since 2026-10-07, as each label is
+ * charged, LABEL_CREDIT_COST); seeing waiting orders needs that or
+ * `order_alerts` (Pro: the new-order alerts, which are free); admins and
+ * grants too, and neither works at 0 credits. Works for every Jumia country: amounts in the
  * shop's own currency and the country's formatting, Jumia's own wording
  * passed through.
  *
@@ -21,6 +23,9 @@ import {
 } from "@/lib/whatsapp/client";
 import { appUrl } from "@/lib/whatsapp/app-url";
 import { featureAccess, featureMinPackName, type FeatureBlock, type FeatureId } from "@/lib/billing/features";
+import { LABEL_CREDIT_COST } from "@/lib/billing/credit-packs";
+import { availableCredits, chargeService, isUnmetered } from "@/lib/billing/extension-credits";
+import { createServerClient } from "@/lib/supabase/server";
 import { getValidJumiaCredentials } from "@/lib/jumia/api";
 import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
 import { promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
@@ -167,7 +172,7 @@ async function upgrade(phone: string, feature: FeatureId, blockedBy: FeatureBloc
   }
   await sendCtaUrlIfConfigured(
     phone,
-    `📦 Order alerts and shipping labels on WhatsApp come with the ${featureMinPackName(feature)} pack.`,
+    `📦 Orders and shipping labels on WhatsApp come with the ${featureMinPackName(feature)} pack (new-order alerts with ${featureMinPackName(VIEW_FEATURE)}).`,
     "See packs",
     `${appUrl()}/pricing`,
   );
@@ -181,10 +186,13 @@ export async function handleOrderMessage(userId: string, phone: string, text: st
   const cmd = parseOrderCommand(text);
   if (!cmd) return false;
 
-  const feature = cmd.kind === "list" || cmd.kind === "pick" || cmd.kind === "view" ? VIEW_FEATURE : ACT_FEATURE;
-  const access = await featureAccess(userId, feature);
+  // Seeing the waiting orders comes with either: the alerts (Pro), or the
+  // labels (Standard), which need the list to pack from.
+  const viewing = cmd.kind === "list" || cmd.kind === "pick" || cmd.kind === "view";
+  const alerts = await featureAccess(userId, VIEW_FEATURE);
+  const access = viewing && alerts.ok ? alerts : await featureAccess(userId, ACT_FEATURE);
   if (!access.ok) {
-    await upgrade(phone, feature, access.blockedBy);
+    await upgrade(phone, ACT_FEATURE, access.blockedBy);
     return true;
   }
 
@@ -200,7 +208,7 @@ export async function handleOrderMessage(userId: string, phone: string, text: st
     }
     return true;
   }
-  const ctx: Ctx = { userId, phone, token: creds.accessToken, country: jumiaCountryByCode(creds.country) };
+  const ctx: Ctx = { userId, phone, token: creds.accessToken, country: jumiaCountryByCode(creds.country), alerts: alerts.ok };
 
   switch (cmd.kind) {
     case "list":       await showWaiting(ctx); break;
@@ -218,7 +226,8 @@ export async function handleOrderMessage(userId: string, phone: string, text: st
   return true;
 }
 
-interface Ctx { userId: string; phone: string; token: string; country?: JumiaCountry }
+/** `alerts`: they get new-order alerts (Pro), so "I'll message you" is true. */
+interface Ctx { userId: string; phone: string; token: string; country?: JumiaCountry; alerts?: boolean }
 
 async function loadWaiting(ctx: Ctx): Promise<WaitingOrder[] | null> {
   const w = await waitingOrders(ctx.token);
@@ -282,7 +291,7 @@ async function showWaiting(ctx: Ctx): Promise<void> {
   const orders = await loadWaiting(ctx);
   if (!orders) return;
   if (orders.length === 0) {
-    await sendTextIfConfigured(ctx.phone, "✅ No Jumia orders waiting for you. I'll message you when a new one comes in.");
+    await sendTextIfConfigured(ctx.phone, `✅ No Jumia orders waiting for you.${ctx.alerts === false ? " Type *orders* any time to check." : " I'll message you when a new one comes in."}`);
     return;
   }
   const toPack = orders.filter((o) => toPackItems(o).length > 0);
@@ -347,14 +356,36 @@ type Button = { id: string; title: string };
  * one PDF, one page per order.
  */
 async function sendWithLabels(ctx: Ctx, orders: WaitingOrder[], body: string, buttons: Button[], retry: Button): Promise<void> {
+  // Each order's label is charged the first time it's sent (LABEL_CREDIT_COST);
+  // the same label again is free. Checked before Jumia is asked for it.
+  const unpaid = await labelsToCharge(ctx.userId, orders);
+  const cost = Math.round(unpaid.length * LABEL_CREDIT_COST * 100) / 100;
+  if (cost > 0) {
+    const available = await availableCredits(ctx.userId);
+    if (available < cost) {
+      const note = `\n\n🏷️ ${unpaid.length === 1 ? "A label costs" : `${unpaid.length} labels cost`} ${cost} credit${cost === 1 ? "" : "s"}, and you have ${Math.max(0, Math.round(available * 100) / 100)}. Buy credits, then tap ${retry.title}.`;
+      await sendButtonsIfConfigured(ctx.phone, (body.slice(0, BODY_MAX - note.length) + note).trim(), [buttons[0], retry, ...buttons.slice(1)].slice(0, 3));
+      return;
+    }
+  }
   const r = await labelsPdf(ctx.token, orders.flatMap(packedItems));
   if (r.ok) {
+    for (const o of unpaid) await chargeService(ctx.userId, LABEL_CREDIT_COST, `label:${o.id}`, `Shipping label on WhatsApp: order #${o.number}`);
     await sendButtonsWithDocumentIfConfigured(ctx.phone, r.pdf, labelFileName(orders, ctx.country), body.slice(0, BODY_MAX), buttons.slice(0, 3));
     return;
   }
   const one = orders.length === 1;
   const note = `\n\nThe label${one ? " isn't" : "s aren't"} ready yet (${r.reason}). Tap ${retry.title} in a minute.`;
   await sendButtonsIfConfigured(ctx.phone, (body.slice(0, BODY_MAX - note.length) + note).trim(), [buttons[0], retry, ...buttons.slice(1)].slice(0, 3));
+}
+
+/** The orders whose label hasn't been charged yet (nothing for an account that isn't charged). */
+async function labelsToCharge(userId: string, orders: WaitingOrder[]): Promise<WaitingOrder[]> {
+  if (LABEL_CREDIT_COST <= 0 || orders.length === 0 || (await isUnmetered(userId))) return [];
+  const { data } = await createServerClient().from("extension_credit_transactions").select("reference")
+    .in("reference", orders.map((o) => `label:${o.id}`));
+  const paid = new Set(((data ?? []) as { reference: string }[]).map((r) => r.reference));
+  return orders.filter((o) => !paid.has(`label:${o.id}`));
 }
 
 /** The station list for orders Jumia offers several stations for. */

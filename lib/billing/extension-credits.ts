@@ -14,7 +14,8 @@
  */
 
 import { createServerClient } from "@/lib/supabase/server";
-import { FREE_SIGNUP_CREDITS, getCreditPackByCredits, type CreditPack } from "@/lib/billing/credit-packs";
+import { FREE_SIGNUP_CREDITS, getCreditPackByCredits, listingCostFor, type CreditPack } from "@/lib/billing/credit-packs";
+import { sellerCountry } from "@/lib/jumia/unlistable-categories";
 import { isAdmin } from "@/lib/auth/is-admin";
 import { isBillingEnabled } from "@/lib/billing/mode";
 import { onBalanceDropped, onBalanceSeen } from "@/lib/billing/credit-status";
@@ -563,6 +564,88 @@ export async function refundLiveListing(listingId: string): Promise<{ refunded: 
     return { refunded: amount };
   } catch (e) {
     console.error(`[extension-credits] refundLiveListing failed for ${listingId}: ${(e as Error).message}`);
+    return { refunded: 0 };
+  }
+}
+
+// ─── Per-country listing price ───────────────────────────────────────────────
+
+/**
+ * What a live listing costs this seller: the price for their Jumia country
+ * (listingCostFor; 3 in Nigeria, 5 in Morocco, else 2). The country is the
+ * one their Jumia account is connected from.
+ */
+export async function listingCreditCost(userId: string): Promise<number> {
+  return listingCostFor(await sellerCountry(userId).catch(() => null));
+}
+
+// ─── WhatsApp services, charged as used ──────────────────────────────────────
+//
+// A label, a confirmed live change, a notice the bot sends on its own
+// (LABEL_CREDIT_COST and the rest in lib/billing/credit-packs.ts). Each is
+// charged once per reference ("label:<orderId>", "lchg:<changeId>",
+// "notice:<kind>:<ref>"): the ledger's unique reference stops a second
+// charge for the same thing, so sending the same label again is free.
+
+/**
+ * Charge `amount` for a service, once per `reference`. Refused (nothing
+ * charged) when the seller's available credits don't cover it. Free for
+ * admins and while billing is off. Never throws.
+ */
+export async function chargeService(
+  userId: string, amount: number, reference: string, description: string,
+): Promise<{ ok: true; charged: number } | { ok: false; reason: "insufficient" | "error"; available: number }> {
+  try {
+    if (amount <= 0 || (await isUnmetered(userId))) return { ok: true, charged: 0 };
+    const db = createServerClient();
+    const { data: done } = await db.from("extension_credit_transactions").select("reference").eq("reference", reference).maybeSingle();
+    if (done) return { ok: true, charged: 0 };
+    const available = await availableCredits(userId);
+    if (available < amount) return { ok: false, reason: "insufficient", available };
+    const { error: txError } = await db.from("extension_credit_transactions").insert({
+      user_id: userId, type: "deduction", amount: -amount, balance_after: 0, reference, description,
+    });
+    if (txError) {
+      if (txError.code === "23505") return { ok: true, charged: 0 }; // charged by a racing call
+      throw new Error(txError.message);
+    }
+    const newBalance = await addToBalance(userId, -amount);
+    if (newBalance === null) {
+      await db.from("extension_credit_transactions").delete().eq("reference", reference);
+      throw new Error("balance update failed");
+    }
+    await db.from("extension_credit_transactions").update({ balance_after: newBalance }).eq("reference", reference);
+    return { ok: true, charged: amount };
+  } catch (e) {
+    console.error(`[extension-credits] chargeService ${reference} failed: ${(e as Error).message}`);
+    return { ok: false, reason: "error", available: 0 };
+  }
+}
+
+/** Give back what chargeService took under `reference`, once (refund:<reference>). Never throws. */
+export async function refundService(reference: string, description: string): Promise<{ refunded: number }> {
+  try {
+    const db = createServerClient();
+    const { data: charge } = await db.from("extension_credit_transactions").select("user_id, amount").eq("reference", reference).maybeSingle();
+    const amount = charge ? -Number(charge.amount) : 0;
+    if (!charge || amount <= 0) return { refunded: 0 };
+    const refundRef = `refund:${reference}`;
+    const { error: txError } = await db.from("extension_credit_transactions").insert({
+      user_id: charge.user_id, type: "refund", amount, balance_after: 0, reference: refundRef, description,
+    });
+    if (txError) {
+      if (txError.code === "23505") return { refunded: 0 };
+      throw new Error(txError.message);
+    }
+    const newBalance = await addToBalance(String(charge.user_id), amount);
+    if (newBalance === null) {
+      await db.from("extension_credit_transactions").delete().eq("reference", refundRef);
+      throw new Error("balance update failed");
+    }
+    await db.from("extension_credit_transactions").update({ balance_after: newBalance }).eq("reference", refundRef);
+    return { refunded: amount };
+  } catch (e) {
+    console.error(`[extension-credits] refundService ${reference} failed: ${(e as Error).message}`);
     return { refunded: 0 };
   }
 }

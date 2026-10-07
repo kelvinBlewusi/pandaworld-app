@@ -24,8 +24,7 @@ import { fingerprintListingContent, logFeedOutcome, type FeedOutcomeKind } from 
 import type { PreflightNote } from "@/lib/jumia/preflight";
 import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import type { ListingRow, ListingStatus, VariantRow } from "@/lib/supabase/types";
-import { chargeLiveListing, creditsDueForSubmission } from "@/lib/billing/extension-credits";
-import { LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
+import { chargeLiveListing, creditsDueForSubmission, listingCreditCost } from "@/lib/billing/extension-credits";
 import { hasFeature } from "@/lib/billing/features";
 import { isUnlistableCategoryError } from "@/lib/jumia/unlistable-categories";
 import { priceMinimumFor, isBelowMinimum, money } from "@/lib/jumia/price-minimums";
@@ -354,12 +353,14 @@ export async function pushListingToJumia(
   // listings than they can pay for. Nothing is taken here: the amount is
   // recorded on the listing below and charged by refreshPendingFeedStatus
   // once Jumia confirms it live (lib/billing/extension-credits.ts).
-  const credits = await creditsDueForSubmission(userId, listingId, LIVE_LISTING_CREDIT_COST);
+  // The seller's own country's price (3 in Nigeria, 5 in Morocco, else 2).
+  const listingCost = await listingCreditCost(userId);
+  const credits = await creditsDueForSubmission(userId, listingId, listingCost);
   if (!credits.ok) {
     return {
       ok: false,
       code: "insufficient_credits",
-      message: `Not enough credits: a listing costs ${LIVE_LISTING_CREDIT_COST} credits when it goes live on Jumia, and you have ${Math.max(0, credits.available)} available. Buy credits from your dashboard to submit it.`,
+      message: `Not enough credits: a listing costs ${listingCost} credits when it goes live on Jumia, and you have ${Math.max(0, credits.available)} available. Buy credits from your dashboard to submit it.`,
     };
   }
 

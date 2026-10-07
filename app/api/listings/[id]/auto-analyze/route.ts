@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { runAutoAnalyze } from "@/lib/actions/auto-analyze";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
-import { availableCredits } from "@/lib/billing/extension-credits";
-import { LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
+import { availableCredits, listingCreditCost } from "@/lib/billing/extension-credits";
 
 // ─── POST /api/listings/[id]/auto-analyze ────────────────────────────────────
 //
@@ -14,7 +13,7 @@ import { LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
 // rate-limit, check credits, parse the optional userPrompt override,
 // call the shared function, map its result to an HTTP response.
 //
-// Credits: drafting is free. The listing is charged LIVE_LISTING_CREDIT_COST
+// Credits: drafting is free. The listing is charged its price (listingCreditCost)
 // when it goes live on Jumia (lib/billing/extension-credits.ts), so a draft
 // only needs the seller to have that much available — the same check a
 // WhatsApp draft makes. Nothing is checked while billing is off.
@@ -52,12 +51,12 @@ export async function POST(
   const blocked = checkRateLimit(`auto-analyze:${userId}`, RATE_LIMITS.autoAnalyze);
   if (blocked) return blocked;
 
-  const available = await availableCredits(userId);
-  if (available < LIVE_LISTING_CREDIT_COST) {
+  const [available, listingCost] = await Promise.all([availableCredits(userId), listingCreditCost(userId)]);
+  if (available < listingCost) {
     return NextResponse.json(
       {
-        error:     `Not enough credits: a listing costs ${LIVE_LISTING_CREDIT_COST} credits when it goes live on Jumia, and you have ${Math.max(0, available)} available. Buy credits from your dashboard to continue.`,
-        needed:    LIVE_LISTING_CREDIT_COST,
+        error:     `Not enough credits: a listing costs ${listingCost} credits when it goes live on Jumia, and you have ${Math.max(0, available)} available. Buy credits from your dashboard to continue.`,
+        needed:    listingCost,
         available,
       },
       { status: 402 },

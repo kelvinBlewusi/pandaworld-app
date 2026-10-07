@@ -12,7 +12,7 @@
 import { useState } from "react";
 import { X, Check, Loader2, Lock } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CREDIT_PACKS, POPULAR_PACK_ID, packFeatures, packReach } from "@/lib/billing/credit-packs";
+import { CREDIT_PACKS, LIVE_LISTING_CREDIT_COST, POPULAR_PACK_ID, packFeatures, packReach } from "@/lib/billing/credit-packs";
 
 interface Tier {
   id: string;
@@ -49,9 +49,12 @@ export function BuyCreditsModal({
   onClose,
   signedIn = true,
   signInHref,
+  listingCost = LIVE_LISTING_CREDIT_COST,
 }: {
   open: boolean;
   onClose: () => void;
+  /** What a listing costs this seller (their country's price); the usual price otherwise. */
+  listingCost?: number;
   // False when shown to a logged-out visitor (the /extension marketing
   // page's "Pricing" popup) — the dashboard's own usage is always signed
   // in, so this defaults to true and that caller needs no changes.
@@ -145,7 +148,7 @@ export function BuyCreditsModal({
                   </span>
                   <span className="shrink-0 text-sm font-semibold text-zinc-900">{t.price}</span>
                 </span>
-                <span className="mt-0.5 block text-xs text-zinc-500">About {t.reach}</span>
+                <span className="mt-0.5 block text-xs text-zinc-500">About {listingCost === LIVE_LISTING_CREDIT_COST ? t.reach : `${packReach(t.credits, listingCost).listings}+ listings`}</span>
                 {(t.unlocks.length > 0 || t.soon.length > 0) && (
                   <span className="mt-2 flex flex-wrap gap-1.5">
                     {t.unlocks.map((u) => (

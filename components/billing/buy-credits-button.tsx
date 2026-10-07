@@ -5,7 +5,7 @@ import { BuyCreditsModal } from "@/components/extension/buy-credits-modal";
 import { cn } from "@/lib/utils";
 
 /** "Buy credits" button + the Paystack pack picker, for server-rendered pages. */
-export function BuyCreditsButton({ className, label = "Buy credits" }: { className?: string; label?: string }) {
+export function BuyCreditsButton({ className, label = "Buy credits", listingCost }: { className?: string; label?: string; listingCost?: number }) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -19,7 +19,7 @@ export function BuyCreditsButton({ className, label = "Buy credits" }: { classNa
       >
         {label}
       </button>
-      <BuyCreditsModal open={open} onClose={() => setOpen(false)} />
+      <BuyCreditsModal open={open} onClose={() => setOpen(false)} listingCost={listingCost} />
     </>
   );
 }

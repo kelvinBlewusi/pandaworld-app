@@ -10,13 +10,18 @@ import {
   CREDIT_PACKS,
   FREE_SIGNUP_CREDITS,
   IMAGE_CREDIT_COST,
-  LISTING_CREDIT_COST,
+  LABEL_CREDIT_COST,
   comingSoonLabels,
+  creditCosts,
   LIVE_LISTING_CREDIT_COST,
   POPULAR_PACK_ID,
   packFeatures,
   packReach,
 } from "@/lib/billing/credit-packs";
+import { listingCreditCost } from "@/lib/billing/extension-credits";
+import { sellerCountry } from "@/lib/jumia/unlistable-categories";
+import { jumiaCountryByCode } from "@/lib/marketing/countries";
+import { COUNTRY_FACTOR, DAILY_ALLOWANCE } from "@/lib/whatsapp/assistant-limits";
 
 // ─── Public pricing: credit packs ─────────────────────────────────────────────
 //
@@ -55,23 +60,18 @@ export const metadata: import("next").Metadata = {
 
 const DASHBOARD_REDIRECT = "/extension/dashboard";
 
-const COSTS = [
-  {
-    what:    "WhatsApp listing",
-    detail:  "Photos in, a complete listing submitted to Jumia. Charged only when it goes live.",
-    credits: LIVE_LISTING_CREDIT_COST,
-  },
-  {
-    what:    "Chrome extension autofill",
-    detail:  "One product's form filled in on Vendor Center",
-    credits: LISTING_CREDIT_COST,
-  },
-];
-
 
 export default async function PricingPage() {
   const { userId } = await auth();
   const billingOn = await isBillingEnabled();
+  // A seller connected from a country with its own listing price sees it
+  // here; everyone else, and the page's metadata, the usual price (owner,
+  // 2026-10-07: "the country pricing only visible to those connected from the country").
+  const countryCode = userId ? (await sellerCountry(userId).catch(() => null))?.toUpperCase() ?? null : null;
+  const listingCost = userId ? await listingCreditCost(userId).catch(() => LIVE_LISTING_CREDIT_COST) : LIVE_LISTING_CREDIT_COST;
+  const ownCountry = listingCost !== LIVE_LISTING_CREDIT_COST ? jumiaCountryByCode(countryCode)?.name ?? null : null;
+  // Chat replies a day, as this seller gets them (fewer where WhatsApp costs more).
+  const replies = (pack: keyof typeof DAILY_ALLOWANCE) => Math.max(1, Math.floor(DAILY_ALLOWANCE[pack] * (COUNTRY_FACTOR[countryCode ?? ""] ?? 1)));
 
   const signInHref = `/sign-in?redirect_url=${DASHBOARD_REDIRECT}`;
   const signUpHref = `/sign-up?redirect_url=${DASHBOARD_REDIRECT}`;
@@ -130,11 +130,14 @@ export default async function PricingPage() {
       {/* What costs credits */}
       <section className="bg-white">
         <div className="mx-auto max-w-4xl px-6 py-16">
-          <h2 className="text-2xl font-bold sm:text-3xl">What a listing costs</h2>
+          <h2 className="text-2xl font-bold sm:text-3xl">What costs credits</h2>
+          {ownCountry && (
+            <p className="mt-2 text-sm text-zinc-500">Prices for your shop in {ownCountry}.</p>
+          )}
           <div className="mt-6 overflow-hidden rounded-2xl border border-zinc-200">
             <table className="w-full text-left">
               <tbody className="divide-y divide-zinc-100">
-                {COSTS.map((c) => (
+                {creditCosts(listingCost).map((c) => (
                   <tr key={c.what}>
                     <td className="px-5 py-4">
                       <p className="font-semibold text-zinc-900">{c.what}</p>
@@ -149,7 +152,7 @@ export default async function PricingPage() {
             </table>
           </div>
           <p className="mt-3 text-sm text-zinc-500">
-            Drafts, redrafts and fixes are free. If Jumia rejects a listing, it costs nothing.
+            Drafts, redrafts and fixes are free. If Jumia rejects a listing, it costs nothing. Chatting with the bot is free.
           </p>
         </div>
       </section>
@@ -160,7 +163,7 @@ export default async function PricingPage() {
           <h2 className="text-2xl font-bold sm:text-3xl">Credit packs</h2>
           <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
             {CREDIT_PACKS.map((p) => {
-              const { autofills, listings } = packReach(p.credits);
+              const { autofills, listings } = packReach(p.credits, listingCost);
               const popular = p.id === POPULAR_PACK_ID;
               return (
                 <div
@@ -180,12 +183,14 @@ export default async function PricingPage() {
                   <ul className="mt-5 flex-1 space-y-2.5 text-sm text-zinc-700">
                     <li className="flex items-start gap-2">
                       <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-                      {listings} live WhatsApp listings
+                      {listings === autofills ? `${listings} listings, on WhatsApp or the extension` : `${listings} live WhatsApp listings`}
                     </li>
-                    <li className="flex items-start gap-2">
-                      <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-                      or {autofills} extension autofills
-                    </li>
+                    {listings !== autofills && (
+                      <li className="flex items-start gap-2">
+                        <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+                        or {autofills} extension autofills
+                      </li>
+                    )}
                     <li className="flex items-start gap-2">
                       <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
                       Never expires
@@ -202,7 +207,7 @@ export default async function PricingPage() {
                   </ul>
                   <div className="mt-6">
                     {billingOn && userId ? (
-                      <BuyCreditsButton className="h-11 w-full rounded-lg" label="Buy credits" />
+                      <BuyCreditsButton className="h-11 w-full rounded-lg" label="Buy credits" listingCost={listingCost} />
                     ) : (
                       <Link
                         href={userId ? DASHBOARD_REDIRECT : signUpHref}
@@ -235,15 +240,19 @@ export default async function PricingPage() {
             />
             <FAQ
               q="When is a WhatsApp listing charged?"
-              a={`When Jumia accepts it. Drafting, redrafting and fixing are free, and a listing Jumia rejects costs nothing. While a listing waits for Jumia's review, its ${LIVE_LISTING_CREDIT_COST} credits are set aside so you can't submit more than your balance covers.`}
+              a={`When Jumia accepts it. Drafting, redrafting and fixing are free, and a listing Jumia rejects costs nothing. While a listing waits for Jumia's review, its ${listingCost} credits are set aside so you can't submit more than your balance covers.`}
             />
             <FAQ
               q="What do the bigger packs unlock?"
-              a={`The Standard pack and bigger include Jumia QC rejection alerts and guided fixes: when Jumia's quality check rejects a listing after accepting it, we tell you why, return its credits, and help you fix and resubmit it. Pro and Business add two tools to the Chrome extension: image polish, which turns your rough photos into four product images (${IMAGE_CREDIT_COST} credits per image), and the Jumia fee calculator for your country. Your features come from the last pack you bought, and they work while you have credits: at 0 they pause until you top up. Not available yet: ${comingSoonLabels().join(", ")}.`}
+              a={`The Standard pack and bigger include Jumia QC rejection alerts and guided fixes (when Jumia's quality check rejects a listing after accepting it, we tell you why, return its credits, and help you fix and resubmit it), and your Jumia orders and shipping labels on WhatsApp (${LABEL_CREDIT_COST} credits a label). Pro and Business add new-order alerts, your live Jumia products, payouts and fees on WhatsApp, and two tools on the Chrome extension: image polish, which turns your rough photos into four product images (${IMAGE_CREDIT_COST} credits per image), and the Jumia fee calculator for your country. Your features come from the last pack you bought, and they work while you have credits: at 0 they pause until you top up. Not available yet: ${comingSoonLabels().join(", ")}.`}
             />
             <FAQ
               q="Why is the Chrome extension charged per autofill?"
-              a="With the extension you submit the product on Vendor Center yourself, so we can't see whether it went live. Each autofill is charged instead, at a lower price."
+              a="With the extension you submit the product on Vendor Center yourself, so we can't see whether it went live. Each autofill is charged instead."
+            />
+            <FAQ
+              q="Is chatting with the WhatsApp bot charged?"
+              a={`No. Each day your pack includes chat replies: ${replies("none")} on free credits, ${replies("starter")} on Starter, ${replies("standard")} on Standard, ${replies("pro")} on Pro and ${replies("business")} on Business. After that the bot keeps to its usual steps until the next day: listing from photos, your orders and the buttons all still work.`}
             />
             <FAQ
               q="Do the same credits work on WhatsApp and the Chrome extension?"

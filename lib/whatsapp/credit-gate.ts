@@ -20,7 +20,7 @@
  * Admins and everyone while billing is off pass straight through.
  */
 
-import { availableCredits, getOrCreateCreditBalance, isUnmetered, storedBalance } from "@/lib/billing/extension-credits";
+import { availableCredits, getOrCreateCreditBalance, isUnmetered, listingCreditCost, storedBalance } from "@/lib/billing/extension-credits";
 import { LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
 import {
   BOT_MIN_CREDITS, LOW_CREDITS, claimLowWhatsAppWarning, claimOutOfCreditsReply, creditReach, onBalanceSeen, outOfCreditsReplied,
@@ -35,17 +35,17 @@ const STILL_ANSWERED = new Set(["disconnect", "confirm_disconnect", "keep_connec
 const credits = (n: number) => `${n} credit${n === 1 ? "" : "s"}`;
 
 /** The one reply when the seller can't afford a listing. */
-export function outOfCreditsMessage(balance: number): string {
+export function outOfCreditsMessage(balance: number, listingCost = LIVE_LISTING_CREDIT_COST): string {
   const why = balance <= 0
     ? "You've used all your PandaWorld credits"
-    : `You have ${credits(balance)} left, and a WhatsApp listing needs ${LIVE_LISTING_CREDIT_COST}`;
+    : `You have ${credits(balance)} left, and a WhatsApp listing needs ${listingCost}`;
   return `${why}, so I'll stay quiet until you top up. Buy credits on your dashboard, then send me a message to carry on.\n\n` +
     "Updates about listings already with Jumia will still come here.";
 }
 
-export function lowCreditsMessage(balance: number): string {
-  return `💡 Heads up: you have ${credits(balance)} left, ${creditReach(balance)} ` +
-    `(a listing costs ${LIVE_LISTING_CREDIT_COST} credits when it goes live on Jumia). Top up to keep listing.`;
+export function lowCreditsMessage(balance: number, listingCost = LIVE_LISTING_CREDIT_COST): string {
+  return `💡 Heads up: you have ${credits(balance)} left, ${creditReach(balance, listingCost)} ` +
+    `(a listing costs ${listingCost} credits when it goes live on Jumia). Top up to keep listing.`;
 }
 
 /** Whether the bot is paused for this seller: they can't afford one WhatsApp listing. */
@@ -64,7 +64,7 @@ export async function creditGate(userId: string, phoneNumber: string, text: stri
 
   if (balance >= BOT_MIN_CREDITS) {
     if (balance < LOW_CREDITS && (await claimLowWhatsAppWarning(userId))) {
-      await sendCtaUrlIfConfigured(phoneNumber, lowCreditsMessage(balance), "Buy credits", buyCreditsUrl());
+      await sendCtaUrlIfConfigured(phoneNumber, lowCreditsMessage(balance, await listingCreditCost(userId)), "Buy credits", buyCreditsUrl());
     }
     return "go";
   }
@@ -72,7 +72,7 @@ export async function creditGate(userId: string, phoneNumber: string, text: stri
   const cmd = text ? parseGlobalCommand(text) : null;
   if (cmd && STILL_ANSWERED.has(cmd.type)) return "go";
   if (await claimOutOfCreditsReply(userId)) {
-    await sendCtaUrlIfConfigured(phoneNumber, outOfCreditsMessage(balance), "Buy credits", buyCreditsUrl());
+    await sendCtaUrlIfConfigured(phoneNumber, outOfCreditsMessage(balance, await listingCreditCost(userId)), "Buy credits", buyCreditsUrl());
   }
   return "stop";
 }
@@ -94,19 +94,20 @@ export async function isCreditQuiet(userId: string): Promise<boolean> {
 /**
  * When a seller says how many products they're listing: refused, before any
  * photo is accepted, if their credits can't list them all
- * (LIVE_LISTING_CREDIT_COST each when live; credits held for listings still
+ * (the seller's listing price each when live; credits held for listings still
  * with Jumia don't count). Says how many they can, so they can reply with
  * that or buy credits. Null when the count is fine, or they aren't charged.
  */
 export async function batchCreditRefusal(userId: string, count: number): Promise<string | null> {
   const available = await availableCredits(userId);
   if (!Number.isFinite(available)) return null;
-  const affordable = Math.max(0, Math.floor(available / LIVE_LISTING_CREDIT_COST));
+  const listingCost = await listingCreditCost(userId);
+  const affordable = Math.max(0, Math.floor(available / listingCost));
   if (affordable >= count) return null;
   const held = Math.max(0, Math.round(((await getOrCreateCreditBalance(userId)) - available) * 100) / 100);
   const shown = Math.max(0, available);
   const have = `You have ${credits(shown)} available` + (held > 0 ? ` (${held} more held for listings waiting on Jumia)` : "");
-  const each = `${LIVE_LISTING_CREDIT_COST} credits each when it goes live on Jumia`;
+  const each = `${listingCost} credits each when it goes live on Jumia`;
   return affordable === 0
     ? `⚠️ ${have}: not enough to list a product (${each}). Buy credits${held > 0 ? ", or wait for Jumia's verdict on those listings" : ""}, then tell me how many products you're listing.`
     : `⚠️ ${have}: enough to list ${affordable} of your ${count} products (${each}). Reply *${affordable}* to list those now, or buy credits to list all ${count}.`;

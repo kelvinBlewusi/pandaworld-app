@@ -140,7 +140,7 @@ export function faqSections(billingOn: boolean): FaqSection[] {
         ),
         plain(
           "And for the Chrome extension?",
-          `${LISTING_CREDIT_COST} credit per autofill. You submit the product on Vendor Center yourself, so we can't see whether it went live and charge per fill instead.`,
+          `${LISTING_CREDIT_COST} credits per autofill. You submit the product on Vendor Center yourself, so we can't see whether it went live and charge per fill instead.`,
         ),
         plain(
           "Do new accounts get free credits?",

@@ -12,11 +12,13 @@ export interface CreditPack {
 }
 
 /**
- * Launch pricing, set 2026-10-01: 1 credit = GHS 0.35 at the Starter
- * price, so a live WhatsApp / web listing (LIVE_LISTING_CREDIT_COST = 2)
- * is GHS 0.70, an extension autofill (1 credit) GHS 0.35 and an AI image
- * (4 credits) GHS 1.40. Bigger packs carry up to 15% extra credits; at the
- * Business rate a listing is about GHS 0.60. Costs it was set against
+ * Pricing since 2026-10-07: Starter is 80 credits for GHS 35 (GHS 0.44 a
+ * credit; it was 100), the other packs as set 2026-10-01 (GHS 0.30 to 0.33
+ * a credit). A live WhatsApp / web listing and an extension autofill are 2
+ * credits each (3 and 5 in Nigeria and Morocco, COUNTRY_LISTING_CREDIT_COST):
+ * GHS 0.88 on Starter, about GHS 0.60 on Business. An AI image is 4
+ * credits. Launch pricing, 2026-10-01: 1 credit = GHS 0.35 at the Starter
+ * price, a listing GHS 0.70, an autofill (1 credit) GHS 0.35. Costs it was set against
  * (per live WhatsApp listing, measured): AI drafting ~GHS 0.05, WhatsApp
  * messages ~GHS 0.18 (Meta charges per bot message from 2026-10-01),
  * Paystack 1.95%; plus ~GHS 530 a month fixed (Vercel Pro, Supabase Pro).
@@ -26,7 +28,8 @@ export interface CreditPack {
  * 30 / 50 / 100), 2026-09-28 to 2026-10-01.
  */
 export const CREDIT_PACKS: CreditPack[] = [
-  { id: "starter",  credits: 100, amountGhs: 35 },
+  // 80 credits for GHS 35 from 2026-10-07 (owner: "reduce the 100 credits to 80 for same price").
+  { id: "starter",  credits: 80,  amountGhs: 35 },
   { id: "standard", credits: 210, amountGhs: 70 },
   { id: "pro",      credits: 440, amountGhs: 140 },
   { id: "business", credits: 940, amountGhs: 280 },
@@ -64,7 +67,8 @@ export interface PackFeature {
 export const PACK_FEATURES: PackFeature[] = [
   { id: "qc_fix",                 label: "Jumia QC rejection alerts and guided fixes",  short: "QC alerts & fixes",          minPack: "standard" },
   { id: "order_alerts",           label: "Order alerts on WhatsApp",                    short: "Order alerts",               minPack: "pro", comingSoon: true },
-  { id: "shipping_labels",        label: "Shipping labels on WhatsApp",                 short: "Shipping labels",            minPack: "pro", comingSoon: true },
+  // Standard from 2026-10-07, since each label is charged (owner: "the label download to WhatsApp should be added to the GHS 70 pack").
+  { id: "shipping_labels",        label: "Shipping labels on WhatsApp",                 short: "Shipping labels",            minPack: "standard", comingSoon: true },
   { id: "shop_whatsapp",          label: "Live Jumia products and payouts on WhatsApp", short: "Shop on WhatsApp", minPack: "pro", comingSoon: true },
   { id: "fee_calc_whatsapp",      label: "Jumia fee calculator on WhatsApp",            short: "Fee calculator on WhatsApp", minPack: "pro", comingSoon: true },
   { id: "fee_calc_extension",     label: "Jumia fee calculator on the extension panel", short: "Fee calculator in the extension", minPack: "pro" },
@@ -88,11 +92,13 @@ export function getCreditPack(id: string): CreditPack | undefined {
 
 /**
  * Credit amounts of earlier packs (100/280/600 until 2026-09-13, 150/330/650
- * until 2026-09-28, 120/200/400 until 2026-10-01) — kept so a purchase
+ * until 2026-09-28, 120/200/400 until 2026-10-01, Starter 100 until
+ * 2026-10-07) — kept so a purchase
  * transaction recorded back then still resolves to the nearest pack today
  * instead of showing no "Plan" pill. (100 is today's Starter as well.)
  */
 const LEGACY_CREDIT_AMOUNTS: Record<number, string> = {
+  100: "starter",
   280: "standard", 600: "pro",
   150: "starter", 330: "standard", 650: "pro",
   120: "starter", 200: "standard", 400: "pro",
@@ -114,14 +120,19 @@ export function getCreditPackByCredits(credits: number): CreditPack | undefined 
 
 /**
  * Every sign-up starts with this many free credits, spendable on the
- * extension and WhatsApp alike (lib/billing/extension-credits.ts): 10 free
- * WhatsApp listings, or 20 autofills. 20 as of 2026-10-01 (25 from
- * 2026-09-28, 10 before).
+ * extension and WhatsApp alike (lib/billing/extension-credits.ts): 6 free
+ * listings either way. 12 for sign-ups from 2026-10-07 (owner: "reduce the
+ * free tier to 6 listings, 12 credits, for upcoming sign ups"); balances
+ * already given stay. 20 from 2026-10-01, 25 from 2026-09-28, 10 before.
  */
-export const FREE_SIGNUP_CREDITS = 20;
+export const FREE_SIGNUP_CREDITS = 12;
 
-/** One extension autofill costs this many credits: GHS 0.35. 1 as of 2026-10-01 (1.5 from 2026-09-28, 2.5 before). */
-export const LISTING_CREDIT_COST = 1;
+/**
+ * One extension autofill costs this many credits, the same as a WhatsApp
+ * listing. 2 as of 2026-10-07 (owner: "extension fills should also be 2
+ * credits"); 1 from 2026-10-01, 1.5 from 2026-09-28, 2.5 before.
+ */
+export const LISTING_CREDIT_COST = 2;
 
 /**
  * A WhatsApp or web listing costs this many credits, charged once, when
@@ -135,6 +146,35 @@ export const LISTING_CREDIT_COST = 1;
 export const LIVE_LISTING_CREDIT_COST = 2;
 
 /**
+ * Where WhatsApp costs us more per message (Meta's 2026 rates: Nigeria about
+ * twice Ghana, Morocco about five times), a live listing costs more there,
+ * by the seller's Jumia country. Shown only to sellers connected from that
+ * country: public pages show LIVE_LISTING_CREDIT_COST (owner, 2026-10-07).
+ */
+export const COUNTRY_LISTING_CREDIT_COST: Record<string, number> = { NG: 3, MA: 5 };
+
+/** What a live listing costs a seller in this Jumia country ("GH", "NG"…; unknown is the usual price). */
+export function listingCostFor(country: string | null | undefined): number {
+  return COUNTRY_LISTING_CREDIT_COST[(country ?? "").trim().toUpperCase()] ?? LIVE_LISTING_CREDIT_COST;
+}
+
+/**
+ * WhatsApp services charged as they're used (owner, 2026-10-07: "no
+ * credits for alerts, but charge credits to get labels, for live changes,
+ * and for alerts the bot sends on its own"). New-order alerts and the
+ * assistant's replies are free (the assistant has a daily allowance,
+ * lib/whatsapp/assistant-limits.ts). Each is charged once per reference
+ * (chargeService in lib/billing/extension-credits.ts), never for admins or
+ * while billing is off.
+ */
+/** One order's shipping label sent on WhatsApp; the same label again is free. */
+export const LABEL_CREDIT_COST = 0.5;
+/** One confirmed change to live Jumia products (one tap, up to 20 products); given back if Jumia refuses it all. */
+export const LIVE_CHANGE_CREDIT_COST = 0.5;
+/** A message the bot sends on its own, other than a new-order alert: order updates, "Jumia paid you". */
+export const NOTICE_CREDIT_COST = 0.2;
+
+/**
  * One AI image (a photo polished or rebuilt on the review page, or one
  * generated from text) costs this many credits. Image models bill per
  * image, about $0.04 each (Gemini image edit, Imagen 3), several times a
@@ -145,11 +185,28 @@ export const LIVE_LISTING_CREDIT_COST = 2;
  */
 export const IMAGE_CREDIT_COST = 4;
 
-/** How far a number of credits goes: whole autofills, or whole live WhatsApp / web listings. */
-export function packReach(credits: number): { autofills: number; listings: number } {
+/** One line of "what costs credits", for the pricing and billing pages. */
+export interface CreditCost { what: string; detail: string; credits: number }
+
+/**
+ * Everything that costs credits, with this seller's listing price (their
+ * country's, listingCostFor; the usual price on public pages).
+ */
+export function creditCosts(listingCost = LIVE_LISTING_CREDIT_COST): CreditCost[] {
+  return [
+    { what: "WhatsApp or web listing", detail: "Photos in, a complete listing submitted to Jumia. Charged only when it goes live.", credits: listingCost },
+    { what: "Chrome extension autofill", detail: "One product's form filled in on Vendor Center.", credits: LISTING_CREDIT_COST },
+    { what: "Shipping label on WhatsApp", detail: "One order's label PDF. The same label again is free.", credits: LABEL_CREDIT_COST },
+    { what: "Change to a live Jumia product", detail: "Stock, price, a sale or on/off, confirmed with one tap, for up to 20 products at once. Given back if Jumia refuses it.", credits: LIVE_CHANGE_CREDIT_COST },
+    { what: "Order updates and payout messages", detail: "Delivered, returned, failed or cancelled orders, and \"Jumia paid you\". New-order alerts are free.", credits: NOTICE_CREDIT_COST },
+  ];
+}
+
+/** How far a number of credits goes: whole autofills, or whole live WhatsApp / web listings at `listingCost`. */
+export function packReach(credits: number, listingCost = LIVE_LISTING_CREDIT_COST): { autofills: number; listings: number } {
   return {
     autofills: Math.floor(credits / LISTING_CREDIT_COST),
-    listings:  Math.floor(credits / LIVE_LISTING_CREDIT_COST),
+    listings:  Math.floor(credits / listingCost),
   };
 }
 

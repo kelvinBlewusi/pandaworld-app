@@ -7,6 +7,7 @@ import {
   getRecentTransactions,
   getMostRecentCreditPack,
   getNotificationsSeenAt,
+  listingCreditCost,
 } from "@/lib/billing/extension-credits";
 import { getUserNotices } from "@/lib/notices";
 import { ExtensionShell } from "@/components/extension/shell";
@@ -31,13 +32,14 @@ export default async function ExtensionAppLayout({
   const { userId } = await auth();
   if (!userId) redirect("/sign-in?redirect_url=/extension/dashboard");
 
-  const [billingOn, balance, notifications, recentPack, notificationsSeenAt, notices] = await Promise.all([
+  const [billingOn, balance, notifications, recentPack, notificationsSeenAt, notices, listingCost] = await Promise.all([
     isBillingEnabled(),
     getOrCreateCreditBalance(userId),
     getRecentTransactions(userId),
     getMostRecentCreditPack(userId),
     getNotificationsSeenAt(userId),
     getUserNotices(userId, 5),
+    listingCreditCost(userId),
   ]);
 
   // The pack the seller last bought, or "Free" until they buy one.
@@ -51,6 +53,7 @@ export default async function ExtensionAppLayout({
       creditsLabel={creditsLabel}
       // Buying only makes sense once credits are being spent.
       canBuyCredits={billingOn && !isAdmin(userId)}
+      listingCost={listingCost}
       notifications={notifications}
       notices={notices}
       notificationsSeenAt={notificationsSeenAt}

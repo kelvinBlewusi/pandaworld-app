@@ -117,6 +117,17 @@ export default function TermsPage() {
             an AI-generated or edited image each time one is produced.
           </p>
           <p>
+            On WhatsApp, a shipping label (the first time it is sent), a
+            change to your live Jumia products that you confirm (returned
+            if Jumia refuses all of it), and the order-update and payout
+            messages we send you unasked also use credits. New-order alerts
+            and chatting with the bot don&apos;t; chat replies have a daily
+            limit that depends on your pack. The credits a listing uses can
+            depend on the country your Jumia account is connected from: your
+            own price is shown on the pricing and billing pages when you are
+            signed in.
+          </p>
+          <p>
             Some features come with particular packs, as shown on the
             pricing page, and stay available once you have bought that
             pack or a larger one. With Jumia QC rejection alerts (the

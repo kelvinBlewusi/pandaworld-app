@@ -23,10 +23,13 @@ import {
   availableCredits,
   creditsDueForSubmission,
   chargeLiveListing,
+  chargeService,
+  listingCreditCost,
   refundLiveListing,
+  refundService,
 } from "@/lib/billing/extension-credits";
 import { isBillingEnabled, setBillingEnabled, _resetBillingModeCache } from "@/lib/billing/mode";
-import { CREDIT_PACKS, FREE_SIGNUP_CREDITS, LISTING_CREDIT_COST, LIVE_LISTING_CREDIT_COST, packReach } from "@/lib/billing/credit-packs";
+import { CREDIT_PACKS, FREE_SIGNUP_CREDITS, LISTING_CREDIT_COST, LIVE_LISTING_CREDIT_COST, getCreditPackByCredits, listingCostFor, packReach } from "@/lib/billing/credit-packs";
 import { summarizeCosts, searchOverageUsd } from "@/lib/billing/costs";
 
 const ADMIN = "user_admin";
@@ -99,6 +102,47 @@ describe("billing on", () => {
     expect(await creditPurchase(args)).toEqual({ ok: true, balance: 204 });
     expect(await creditPurchase(args)).toEqual({ ok: true, balance: 204, alreadyProcessed: true });
     expect(ledger().filter((t) => t.type === "purchase")).toEqual([expect.objectContaining({ balance_after: 204 })]);
+  });
+});
+
+describe("WhatsApp services, charged as used (owner, 2026-10-07)", () => {
+  beforeEach(() => setSwitch(true));
+
+  it("charges once per reference: the same label again is free", async () => {
+    db.tables.extension_credits = [{ user_id: SELLER, balance: 5 }];
+    expect(await chargeService(SELLER, 0.5, "label:o1", "Shipping label")).toEqual({ ok: true, charged: 0.5 });
+    expect(await chargeService(SELLER, 0.5, "label:o1", "Shipping label")).toEqual({ ok: true, charged: 0 });
+    expect(balances()[0].balance).toBe(4.5);
+    expect(ledger().filter((t) => t.reference === "label:o1")).toEqual([expect.objectContaining({ amount: -0.5, balance_after: 4.5 })]);
+  });
+
+  it("refuses, charging nothing, when the seller can't cover it", async () => {
+    db.tables.extension_credits = [{ user_id: SELLER, balance: 0.3 }];
+    expect(await chargeService(SELLER, 0.5, "lchg:c1", "Change")).toEqual({ ok: false, reason: "insufficient", available: 0.3 });
+    expect(balances()[0].balance).toBe(0.3);
+  });
+
+  it("gives a charge back once", async () => {
+    db.tables.extension_credits = [{ user_id: SELLER, balance: 5 }];
+    await chargeService(SELLER, 0.5, "lgrp:g1", "Change");
+    expect(await refundService("lgrp:g1", "Refund")).toEqual({ refunded: 0.5 });
+    expect(await refundService("lgrp:g1", "Refund")).toEqual({ refunded: 0 });
+    expect(balances()[0].balance).toBe(5);
+    expect(await refundService("nothing:here", "Refund")).toEqual({ refunded: 0 });
+  });
+
+  it("never for an admin", async () => {
+    expect(await chargeService(ADMIN, 0.5, "label:o2", "Shipping label")).toEqual({ ok: true, charged: 0 });
+    expect(ledger()).toHaveLength(0);
+  });
+
+  it("a listing's price follows the seller's Jumia country", async () => {
+    db.tables.jumia_connections = [{ user_id: SELLER, country: "NG" }];
+    expect(await listingCreditCost(SELLER)).toBe(3);
+    db.tables.jumia_connections = [{ user_id: SELLER, country: "GH" }];
+    expect(await listingCreditCost(SELLER)).toBe(2);
+    db.tables.jumia_connections = [];
+    expect(await listingCreditCost(SELLER)).toBe(2);
   });
 });
 
@@ -250,15 +294,30 @@ describe("costs", () => {
 
   // Launch pricing, 2026-10-01: GHS 0.70 a live listing in the Starter
   // pack, at most 15% less in bigger ones (costs are ~GHS 0.25 a listing).
-  it("prices a live listing at GHS 0.70, and no more than 15% less in bigger packs", () => {
+  it("prices a live listing at about GHS 0.88 on Starter (80 credits, 2026-10-07), less in each bigger pack", () => {
     const perListing = CREDIT_PACKS.map((p) => (p.amountGhs / p.credits) * LIVE_LISTING_CREDIT_COST);
-    expect(perListing[0]).toBeCloseTo(0.7, 10);
+    expect(perListing[0]).toBeCloseTo(0.875, 10);
     for (let i = 1; i < perListing.length; i++) expect(perListing[i]).toBeLessThan(perListing[i - 1]);
-    expect(Math.min(...perListing)).toBeGreaterThanOrEqual(0.7 * 0.85);
-    expect(CREDIT_PACKS.map((p) => p.amountGhs)).toEqual([35, 70, 140, 280]);
+    expect(Math.min(...perListing)).toBeGreaterThan(0.59);
+    expect(CREDIT_PACKS.map((p) => [p.credits, p.amountGhs])).toEqual([[80, 35], [210, 70], [440, 140], [940, 280]]);
   });
 
-  it("says how far a pack goes", () => {
-    expect(packReach(210)).toEqual({ autofills: 210, listings: 105 });
+  it("says how far a pack goes, at the seller's listing price", () => {
+    expect(packReach(210)).toEqual({ autofills: 105, listings: 105 });
+    expect(packReach(210, 3)).toEqual({ autofills: 105, listings: 70 });
+  });
+
+  it("a Starter bought at 100 credits before 2026-10-07 is still Starter", () => {
+    expect(getCreditPackByCredits(100)?.id).toBe("starter");
+    expect(getCreditPackByCredits(80)?.id).toBe("starter");
+  });
+
+  it("listing prices by country, free credits and autofills (2026-10-07)", () => {
+    expect(listingCostFor("GH")).toBe(2);
+    expect(listingCostFor("ng")).toBe(3);
+    expect(listingCostFor("MA")).toBe(5);
+    expect(listingCostFor(null)).toBe(2);
+    expect(FREE_SIGNUP_CREDITS).toBe(12);
+    expect(LISTING_CREDIT_COST).toBe(2);
   });
 });
