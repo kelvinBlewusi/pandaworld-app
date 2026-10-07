@@ -11,6 +11,9 @@
  *     the QC follow-up that refunds a rejected listing (which is what lets
  *     a seller at 0 carry on), and the wording of listing updates.
  *
+ * Features for EVERYONE (the chat's: the live shop, fees, QC fixes) need no
+ * pack, only credits above 0 (owner, 2026-10-07).
+ *
  * The owner can also give one seller a feature without the pack
  * (lib/billing/feature-grants.ts). Admins have everything, and so does
  * everyone while billing is off: off means PandaWorld is free, features
@@ -20,7 +23,7 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { isAdmin } from "@/lib/auth/is-admin";
 import { isBillingEnabled } from "@/lib/billing/mode";
-import { PACK_FEATURES, getCreditPackByCredits, packRank, type CreditPack } from "@/lib/billing/credit-packs";
+import { EVERYONE, PACK_FEATURES, getCreditPackByCredits, packRank, type CreditPack } from "@/lib/billing/credit-packs";
 import { activeFeatureGrant } from "@/lib/billing/feature-grants";
 import { isOutOfCredits } from "@/lib/billing/extension-credits";
 
@@ -56,8 +59,9 @@ export async function featureAccess(
   if (isAdmin(userId) || !(await isBillingEnabled())) return { ok: true };
 
   const minPack = PACK_FEATURES.find((f) => f.id === feature)?.minPack;
-  let included = false;
-  if (minPack) {
+  // On every plan (the chat's features, owner 2026-10-07): only the balance decides.
+  let included = minPack === EVERYONE;
+  if (!included && minPack) {
     const pack = await currentPack(userId);
     included = !!pack && packRank(pack.id) >= packRank(minPack);
   }
@@ -75,5 +79,5 @@ export async function hasFeature(userId: string, feature: FeatureId, opts: { ign
 /** The pack a feature starts at, for telling a seller where to get it. */
 export function featureMinPackName(feature: FeatureId): string {
   const id = PACK_FEATURES.find((f) => f.id === feature)?.minPack ?? "";
-  return id ? id.charAt(0).toUpperCase() + id.slice(1) : "";
+  return id && id !== EVERYONE ? id.charAt(0).toUpperCase() + id.slice(1) : "";
 }

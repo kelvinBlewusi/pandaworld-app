@@ -54,6 +54,12 @@ export function packRank(id: string | null | undefined): number {
  * like the others (owner's call, 2026-10-03; they were greyed out before),
  * so the pricing FAQ and the Terms name them as not available yet
  * (comingSoonLabels).
+ *
+ * `minPack: EVERYONE`: on every plan, free sign-up credits included, and
+ * charged per use like the rest (owner, 2026-10-07: "make all the
+ * capabilities available to all plans in the chat and charge credits for
+ * those we charge ... except the label and the alert on WhatsApp"). They
+ * still pause at 0 credits. Not listed as a pack's own (packFeatures).
  */
 export interface PackFeature {
   id:          string;
@@ -64,13 +70,18 @@ export interface PackFeature {
   comingSoon?: boolean;
 }
 
+export const EVERYONE = "everyone";
+
 export const PACK_FEATURES: PackFeature[] = [
-  { id: "qc_fix",                 label: "Jumia QC rejection alerts and guided fixes",  short: "QC alerts & fixes",          minPack: "standard" },
-  { id: "order_alerts",           label: "Order alerts on WhatsApp",                    short: "Order alerts",               minPack: "pro", comingSoon: true },
+  { id: "qc_fix",                 label: "Jumia QC rejection alerts and guided fixes",  short: "QC alerts & fixes",          minPack: EVERYONE },
+  // The alerts the bot sends on its own: new orders, order updates, payouts.
+  { id: "order_alerts",           label: "Order and payout alerts on WhatsApp",         short: "Order & payout alerts",      minPack: "pro", comingSoon: true },
   // Standard from 2026-10-07, since each label is charged (owner: "the label download to WhatsApp should be added to the GHS 70 pack").
   { id: "shipping_labels",        label: "Shipping labels on WhatsApp",                 short: "Shipping labels",            minPack: "standard", comingSoon: true },
-  { id: "shop_whatsapp",          label: "Live Jumia products and payouts on WhatsApp", short: "Shop on WhatsApp", minPack: "pro", comingSoon: true },
-  { id: "fee_calc_whatsapp",      label: "Jumia fee calculator on WhatsApp",            short: "Fee calculator on WhatsApp", minPack: "pro", comingSoon: true },
+  // In the chat (WhatsApp and the Jumia Listing Assistant): products, orders
+  // (packing, ready to ship, cancelling), reports, payouts, the warehouse.
+  { id: "shop_whatsapp",          label: "Your live Jumia shop in chat: products, orders, reports and payouts", short: "Shop in chat", minPack: EVERYONE, comingSoon: true },
+  { id: "fee_calc_whatsapp",      label: "Jumia fee calculator in chat",                short: "Fee calculator in chat",     minPack: EVERYONE, comingSoon: true },
   { id: "fee_calc_extension",     label: "Jumia fee calculator on the extension panel", short: "Fee calculator in the extension", minPack: "pro" },
   { id: "image_polish_extension", label: "Jumia image polish on the Chrome extension",  short: "Image polish in the extension",   minPack: "pro" },
 ];
@@ -80,10 +91,15 @@ export function comingSoonLabels(): string[] {
   return PACK_FEATURES.filter((f) => f.comingSoon).map((f) => f.label);
 }
 
-/** What a pack includes, in PACK_FEATURES order. */
+/** What a pack includes, in PACK_FEATURES order (what every plan has is everyoneFeatures). */
 export function packFeatures(packId: string): PackFeature[] {
   const rank = packRank(packId);
-  return PACK_FEATURES.filter((f) => packRank(f.minPack) <= rank);
+  return PACK_FEATURES.filter((f) => f.minPack !== EVERYONE && packRank(f.minPack) <= rank);
+}
+
+/** What every plan has, free sign-up credits included. */
+export function everyoneFeatures(): PackFeature[] {
+  return PACK_FEATURES.filter((f) => f.minPack === EVERYONE);
 }
 
 export function getCreditPack(id: string): CreditPack | undefined {

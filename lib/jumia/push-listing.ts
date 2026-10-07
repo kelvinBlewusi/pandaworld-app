@@ -741,8 +741,8 @@ async function askedForRefusedCategory(phoneNumber: string, listingId: string, e
 }
 
 //
-// `qcAlerts` is whether the seller has QC follow-up (the Standard pack and
-// up, lib/billing/features.ts). Without it nothing will report the QC
+// `qcAlerts` is whether the seller has QC follow-up (every plan since
+// 2026-10-07, lib/billing/features.ts). Without it nothing will report the QC
 // verdict, so acceptance doesn't promise one.
 function resolutionLine(name: string, newStatus: string, errorMsg: string | null, counts: ResolutionCounts, qcAlerts = true): string {
   if (newStatus === QC_APPROVED) return `🎉 "${name}" passed Jumia QC and is now live on Jumia!`;

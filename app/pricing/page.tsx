@@ -13,6 +13,7 @@ import {
   LABEL_CREDIT_COST,
   comingSoonLabels,
   creditCosts,
+  everyoneFeatures,
   LIVE_LISTING_CREDIT_COST,
   POPULAR_PACK_ID,
   packFeatures,
@@ -161,6 +162,11 @@ export default async function PricingPage() {
       <section className="bg-zinc-50">
         <div className="mx-auto max-w-6xl px-6 py-16">
           <h2 className="text-2xl font-bold sm:text-3xl">Credit packs</h2>
+          {/* What every plan has, free credits included (owner, 2026-10-07). */}
+          <p className="mt-3 max-w-3xl text-sm text-zinc-600">
+            On every pack, and on your free credits: {everyoneFeatures().map((f) => f.label.charAt(0).toLowerCase() + f.label.slice(1)).join("; ")}.
+            The bigger packs add what&apos;s listed on each card.
+          </p>
           <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
             {CREDIT_PACKS.map((p) => {
               const { autofills, listings } = packReach(p.credits, listingCost);
@@ -244,7 +250,7 @@ export default async function PricingPage() {
             />
             <FAQ
               q="What do the bigger packs unlock?"
-              a={`The Standard pack and bigger include Jumia QC rejection alerts and guided fixes (when Jumia's quality check rejects a listing after accepting it, we tell you why, return its credits, and help you fix and resubmit it), and your Jumia orders and shipping labels on WhatsApp (${LABEL_CREDIT_COST} credits a label). Pro and Business add new-order alerts, your live Jumia products, payouts and fees on WhatsApp, and two tools on the Chrome extension: image polish, which turns your rough photos into four product images (${IMAGE_CREDIT_COST} credits per image), and the Jumia fee calculator for your country. Your features come from the last pack you bought, and they work while you have credits: at 0 they pause until you top up. Not available yet: ${comingSoonLabels().join(", ")}.`}
+              a={`Everything in the chat works on every pack, free credits included: Jumia QC rejection alerts and guided fixes (when Jumia's quality check rejects a listing after accepting it, we tell you why, return its credits, and help you fix and resubmit it), your live Jumia products, orders (packing, ready to ship, cancelling), reports, payouts and fees, charged per use as listed above. The Standard pack and bigger add shipping labels on WhatsApp (${LABEL_CREDIT_COST} credits a label). Pro and Business add new-order, order-update and payout alerts on WhatsApp, and two tools on the Chrome extension: image polish, which turns your rough photos into four product images (${IMAGE_CREDIT_COST} credits per image), and the Jumia fee calculator for your country. Your pack's features come from the last pack you bought, and everything works while you have credits: at 0 it pauses until you top up. Not available yet: ${comingSoonLabels().join(", ")}.`}
             />
             <FAQ
               q="Why is the Chrome extension charged per autofill?"

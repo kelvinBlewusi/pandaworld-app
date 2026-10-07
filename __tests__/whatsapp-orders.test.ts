@@ -25,7 +25,7 @@ let blockedBy: "pack" | "credits" = "pack";
 jest.mock("@/lib/billing/features", () => ({
   hasFeature: jest.fn(async () => featureOn),
   featureAccess: jest.fn(async () => (featureOn ? { ok: true } : { ok: false, blockedBy })),
-  featureMinPackName: () => "Pro",
+  featureMinPackName: (f: string) => (f === "shipping_labels" ? "Standard" : "Pro"),
 }));
 
 type Sent = { kind: string; to: string; body?: string; buttons?: { id: string; title: string }[]; rows?: { id: string; title: string; description?: string }[]; bytes?: Uint8Array; filename?: string; caption?: string; template?: string; values?: string[]; payloads?: string[] };
@@ -223,13 +223,14 @@ describe("formatting, for every country", () => {
   });
 });
 
-describe("gated by pack", () => {
-  it("a seller without the pack is told which pack has it, and nothing is read or changed", async () => {
+describe("gated", () => {
+  // Orders are on every plan since 2026-10-07; this is only if they were ever turned off.
+  it("an account without orders is told, and nothing is read or changed", async () => {
     featureOn = false;
     expect(await say("orders")).toBe(true);
     expect(await say(`opack:${O1}`)).toBe(true);
     expect(sent.map((s) => s.kind)).toEqual(["cta", "cta"]);
-    expect(sent[0].body).toContain("come with the Pro pack");
+    expect(sent[0].body).toContain("aren't on for your account yet");
     expect(calls).toHaveLength(0);
   });
 
@@ -457,12 +458,62 @@ describe("labels cost credits when billing is on (owner, 2026-10-07)", () => {
     expect(balance()).toBe(0.6);
   });
 
-  it("the Standard pack (labels, no alerts) can still open its orders", async () => {
-    (featureAccess as jest.Mock).mockImplementation(async (_u: string, f: string) => (f === "shipping_labels" ? { ok: true } : { ok: false, blockedBy: "pack" }));
-    orders = [];
+});
+
+describe("on every plan, labels from Standard (owner, 2026-10-07)", () => {
+  // "make all the capabilities available to all plans in the chat ... except
+  // the label and the alert on WhatsApp": the chat's orders on, labels and alerts off.
+  const plan = (on: string[]) =>
+    (featureAccess as jest.Mock).mockImplementation(async (_u: string, f: string) => (on.includes(f) ? { ok: true } : { ok: false, blockedBy: "pack" }));
+  afterEach(() => (featureAccess as jest.Mock).mockImplementation(async () => (featureOn ? { ok: true } : { ok: false, blockedBy })));
+
+  it("free credits or Starter: the waiting orders, with Pack all (no labels)", async () => {
+    plan(["shop_whatsapp"]);
     await say("orders");
-    expect(last("text").body).toBe("✅ No Jumia orders waiting for you. Type *orders* any time to check.");
-    (featureAccess as jest.Mock).mockImplementation(async () => (featureOn ? { ok: true } : { ok: false, blockedBy }));
+    const msg = last("buttons");
+    expect(msg.body).toContain("To pack (2)");
+    expect(msg.buttons!.map((b) => [b.id, b.title])).toEqual([["orders:packall", "Pack all"], ["orders:pick", "Pick orders"]]);
+  });
+
+  it("packs every order on WhatsApp without a label or a charge, and names the pack that has labels", async () => {
+    plan(["shop_whatsapp"]);
+    await say("orders:packall");
+    expect(writes().filter((c) => c.path === "/orders/pack")).toHaveLength(2);
+    expect(calls.some((c) => c.path === "/orders/print-labels")).toBe(false);
+    expect(sent.some((s) => s.kind === "document")).toBe(false);
+    const msg = last("buttons");
+    expect(msg.body).toContain("✅ Packed 2 orders");
+    expect(msg.body).toContain("🏷️ Shipping labels on WhatsApp come with the Standard pack and up. You can print them in Jumia Vendor Center.");
+    expect(msg.buttons!.map((b) => b.id)).toEqual(["orders:rtsall", "orders:pick"]);
+    expect(((db.tables.extension_credit_transactions ?? []) as unknown[])).toHaveLength(0);
+  });
+
+  it("one order: Pack, then Ready to ship and Cancel, no Get label; a label asked for says which pack", async () => {
+    plan(["shop_whatsapp"]);
+    await say(`order:${O1}`);
+    expect(last("buttons").buttons!.map((b) => b.title)).toEqual(["Pack order", "Cancel order"]);
+    await say(`opack:${O1}`);
+    await say(`order:${O1}`);
+    expect(last("buttons").buttons!.map((b) => b.title)).toEqual(["Ready to ship", "Cancel order"]);
+    sent.length = 0;
+    await say(`olabel:${O1}`);
+    await say("orders:labels");
+    expect(calls.some((c) => c.path === "/orders/print-labels")).toBe(false);
+    expect(sent.every((s) => s.body!.includes("come with the Standard pack and up"))).toBe(true);
+  });
+
+  it("the Standard pack (labels, no alerts): labels as before", async () => {
+    plan(["shop_whatsapp", "shipping_labels"]);
+    await say("orders:packall");
+    expect(last("document").filename).toMatch(/^Jumia-labels-2-orders-/);
+  });
+
+  it("at 0 credits the orders pause like everything else", async () => {
+    (featureAccess as jest.Mock).mockImplementation(async () => ({ ok: false, blockedBy: "credits" }));
+    await say("orders");
+    expect(sent.map((s) => s.kind)).toEqual(["cta"]);
+    expect(sent[0].body).toContain("out of credits");
+    expect(calls).toHaveLength(0);
   });
 });
 

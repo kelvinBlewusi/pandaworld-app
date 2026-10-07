@@ -18,8 +18,9 @@
  *     product's name, description, highlights or brand (proposeContentChange),
  *     each with the same one tap (owner, 2026-10-07).
  *
- * Gated by pack (lib/billing/features.ts): products, stock and payouts need
- * `shop_whatsapp`, orders and sales `order_alerts` (both Pro and up). Every
+ * Gated by `shop_whatsapp` (lib/billing/features.ts), on every plan since
+ * 2026-10-07 (owner: "all the capabilities available to all plans in the
+ * chat"; charged per use as before, paused at 0 credits). Every
  * tap id names the change it acts on (`lchg:<id>`), so a tap works whatever
  * the conversation is doing.
  */
@@ -948,7 +949,7 @@ const shortDate = (iso: string | undefined | null, jc?: JumiaCountry) => {
 
 /** One order by its number: where it is, item by item. */
 export async function answerOrderStatus(userId: string, phone: string, number: string): Promise<string> {
-  const ctx = await shopContext(userId, phone, "order_alerts", "your Jumia orders");
+  const ctx = await shopContext(userId, phone, "shop_whatsapp", "your Jumia orders");
   if (!ctx) return "blocked";
   const r = await findOrderByNumber(ctx.token, number);
   if (!r.ok) {
@@ -1002,7 +1003,7 @@ const PERIOD_WORDS: Record<Period, string> = {
  * its own request, the way the worker's single-status reads were checked live.
  */
 export async function answerSales(userId: string, phone: string, period: Period, status: string | string[] | null = null): Promise<string> {
-  const ctx = await shopContext(userId, phone, "order_alerts", "your Jumia orders");
+  const ctx = await shopContext(userId, phone, "shop_whatsapp", "your Jumia orders");
   if (!ctx) return "blocked";
   const tz = ctx.jc?.timeZone ?? "UTC";
   const when = PERIOD_WORDS[period];

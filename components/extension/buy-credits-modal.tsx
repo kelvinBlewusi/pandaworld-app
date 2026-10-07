@@ -41,9 +41,6 @@ const TIERS: Tier[] = CREDIT_PACKS.map((p) => {
   };
 });
 
-/** The packs the not-yet-built tools come with, e.g. "Pro and Business". */
-const SOON_PACKS = TIERS.filter((t) => t.soon.length > 0).map((t) => t.name).join(" and ");
-
 export function BuyCreditsModal({
   open,
   onClose,
@@ -109,7 +106,7 @@ export function BuyCreditsModal({
         <div className="flex items-start justify-between">
           <div>
             <h2 className="text-lg font-bold text-zinc-900">Buy extra credits</h2>
-            <p className="text-xs text-zinc-500">Added instantly · never expire</p>
+            <p className="text-xs text-zinc-500">Added instantly · never expire · everything in the chat on every pack</p>
           </div>
           <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600" aria-label="Close">
             <X className="h-5 w-5" />
@@ -158,7 +155,7 @@ export function BuyCreditsModal({
                     ))}
                     {t.soon.length > 0 && (
                       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
-                        <Check className="h-3 w-3" /> {t.soon.length} more tools
+                        <Check className="h-3 w-3" /> {t.soon.length} more {t.soon.length === 1 ? "tool" : "tools"}
                       </span>
                     )}
                   </span>
@@ -170,7 +167,7 @@ export function BuyCreditsModal({
 
         {tier.soon.length > 0 && (
           <p className="mt-3 rounded-lg bg-zinc-50 px-3 py-2 text-[11px] leading-relaxed text-zinc-600">
-            With {SOON_PACKS}: {tier.soon.join(" · ")}
+            With {tier.name}: {tier.soon.join(" · ")}
           </p>
         )}
 

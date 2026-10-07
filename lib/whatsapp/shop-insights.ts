@@ -14,8 +14,9 @@
  *     (`wh:<id>`, recorded in jumia_warehouse_orders): Jumia has no call to
  *     read a delivery order back.
  *
- * Gated like the rest of the live shop (`shop_whatsapp`, Pro and up); the
- * brand and category answers are for everyone, as they help listing.
+ * Gated like the rest of the live shop (`shop_whatsapp`, every plan since
+ * 2026-10-07, paused at 0 credits); the brand and category answers need no
+ * Jumia connection.
  */
 
 import { createServerClient } from "@/lib/supabase/server";

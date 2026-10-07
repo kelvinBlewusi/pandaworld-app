@@ -10,7 +10,8 @@
  *     (`order_alerts`): grouped, at most every ORDER_UPDATES_GAP_MS, except a
  *     cancellation, which goes out at once (an item not to ship). Their own
  *     cancellations through the bot aren't told back (orders.ts marks them).
- *   - A Jumia payout that was paid (`shop_whatsapp`), checked every
+ *   - A Jumia payout that was paid (`order_alerts`: the alerts stay with the
+ *     pack that has them, owner 2026-10-07), checked every
  *     PAYOUT_CHECK_MS.
  *
  * Each order-updates or payout message costs NOTICE_CREDIT_COST (owner,
@@ -232,17 +233,16 @@ export async function runShopNotices(now = new Date(), budgetMs = 20_000): Promi
     if (Date.now() > deadline) break;
     const phone = byUser.get(userId)!;
     try {
-      const wantsOrders = await hasFeature(userId, "order_alerts");
-      const wantsPayouts = await hasFeature(userId, "shop_whatsapp");
-      if (!wantsOrders && !wantsPayouts) continue;
+      // Both are alerts the bot sends on its own: the Pro pack's (order_alerts).
+      if (!(await hasFeature(userId, "order_alerts"))) continue;
       if (await botPausedForCredits(userId)) continue;
       const inbound = await lastInboundAt(phone);
       if (inbound == null || now.getTime() - inbound >= WINDOW_MS) continue;
       const creds = await getValidJumiaCredentials(userId);
       const country = jumiaCountryByCode(creds.country);
       if (inQuietHours(now, country?.timeZone ?? "UTC")) continue;
-      if (wantsOrders) await orderUpdates(userId, phone, creds.accessToken, country, now, run);
-      if (wantsPayouts) await payoutUpdates(userId, phone, creds.accessToken, country, now, run);
+      await orderUpdates(userId, phone, creds.accessToken, country, now, run);
+      await payoutUpdates(userId, phone, creds.accessToken, country, now, run);
     } catch (e) {
       run.failed++;
       console.warn(`[shop notices] ${userId}: ${(e as Error).message}`);

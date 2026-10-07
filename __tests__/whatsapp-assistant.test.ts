@@ -285,12 +285,16 @@ describe("its own replies (owner, 2026-10-06)", () => {
 
     const prompt = aiPrompts[0];
     expect(prompt).toContain("- List products on Jumia from WhatsApp");
-    expect(prompt).toContain("(Standard pack and up), here or on WhatsApp. Shipping label PDFs only on WhatsApp. Pro and up also: alerts for new Jumia orders on WhatsApp");
+    expect(prompt).toContain("pack them, mark them ready to ship, or cancel, here or on WhatsApp");
+    expect(prompt).toContain("Shipping label PDFs only on WhatsApp (Standard pack and up). Pro and up also: alerts for new Jumia orders on WhatsApp");
+    expect(prompt).toContain("- Everything in the chat works on every pack, free credits included, charged per use as below, and pauses at 0 credits.");
     expect(prompt).toContain("up to 200 products");
     expect(prompt).toContain("- Country: Ghana");
     expect(prompt).toContain("- No pack bought yet: on their free sign-up credits.");
-    expect(prompt).toContain("- Orders and shipping labels on WhatsApp: not on their pack (Standard and up)");
-    expect(prompt).toContain("- New-order alerts on WhatsApp: not on their pack (Pro and up)");
+    // Every plan since 2026-10-07: the chat's features; labels and alerts keep their packs.
+    expect(prompt).toContain("- The chat's shop features (products, orders, reports, payouts, fees, QC fixes): on");
+    expect(prompt).toContain("- Shipping label PDFs on WhatsApp: not on their pack (Standard and up)");
+    expect(prompt).toContain("- New-order, order-update and payout alerts on WhatsApp: not on their pack (Pro and up)");
     expect(prompt).toContain("a shipping label 0.5 credits (the same label again is free)");
     expect(prompt).toContain("- Credits: 9 available, enough for about 4 WhatsApp listings");
     expect(prompt).toContain("- home: PandaWorld's home page");
@@ -305,7 +309,8 @@ describe("its own replies (owner, 2026-10-06)", () => {
     aiReplies.push('{"type":"reply","text":"Hello!","link":null}');
     await runAssistant("seller", "233", session(), "hi", "idle");
     expect(aiPrompts[0]).toContain("- Pack: Pro (the last one they bought)");
-    expect(aiPrompts[0]).toContain("- Orders and shipping labels on WhatsApp: on");
+    expect(aiPrompts[0]).toContain("- Shipping label PDFs on WhatsApp: on");
+    expect(aiPrompts[0]).toContain("- New-order, order-update and payout alerts on WhatsApp: on");
   });
 
   it("an account that isn't charged has everything on", async () => {
@@ -362,8 +367,8 @@ describe("the live shop, through the assistant (owner, 2026-10-07)", () => {
   it("is told what the live shop can do, and whether the seller's pack has it", async () => {
     aiReplies.push('{"type":"reply","text":"Hi!","link":null}');
     await runAssistant("seller", "233", session(), "hi", "idle");
-    expect(aiPrompts[0]).toContain("- Their live Jumia products (Pro pack and up)");
-    expect(aiPrompts[0]).toContain("- Live products, stock and payouts on WhatsApp: not on their pack (Pro and up)");
+    expect(aiPrompts[0]).toContain("- Their live Jumia products, found by name");
+    expect(aiPrompts[0]).toContain("- The chat's shop features (products, orders, reports, payouts, fees, QC fixes): on");
     expect(aiPrompts[0]).toContain('{"type":"live_change"');
   });
 
@@ -549,7 +554,7 @@ describe("what the owner's second test showed (2026-10-07, round 3)", () => {
     expect(aiPrompts[0]).toContain('"did I have orders today?" → {"type":"sales","period":"today","status":null}');
     expect(aiPrompts[0]).toContain('{"type":"product_info"');
     expect(aiPrompts[0]).toContain('{"type":"fees"');
-    expect(aiPrompts[0]).toContain("- Jumia fees on WhatsApp: not on their pack (Pro and up)");
+    expect(aiPrompts[0]).toContain("- The chat's shop features (products, orders, reports, payouts, fees, QC fixes): on");
   });
 
   it("a bare number answers \"What should its stock be?\"", async () => {
