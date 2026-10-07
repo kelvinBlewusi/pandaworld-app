@@ -3634,7 +3634,7 @@ describe("the assistant, on the pilot's accounts", () => {
     await handleLinkedMessage(USER, PHONE, "m1", { text: "make the fridge a bit cheaper" });
 
     expect(listings()[0].selling_price).toBe(4500);
-    expect(sent[0].body).toBe("⚠️ I couldn't find the price in your message: write it out, e.g. \"quantity 20\".");
+    expect(sent[0].body).toBe("⚠️ I couldn't see the new price in your message. Write it out, e.g. \"price 150\".");
   });
 
   it("offers submitting as a button, never submits on the AI's word", async () => {
@@ -3721,7 +3721,7 @@ describe("the assistant, on the pilot's accounts", () => {
       await handleLinkedMessage(USER, PHONE, "m1", { text: "I have 2 questions" });
 
       expect(session().state).toBe("awaiting_count");
-      expect(sent[0].body).toBe("⚠️ I need a number to get started — reply with how many products you're listing today (1–10), e.g. *3*.");
+      expect(sent[0].body).toBe("Sorry, I didn't catch that. Tell me what you'd like to do for your Jumia shop, or tap how many products you're listing.");
     });
 
     it("still says the cap for a count above it", async () => {
@@ -3759,4 +3759,49 @@ describe("the assistant, on the pilot's accounts", () => {
       expect(session()).toMatchObject({ state: "awaiting_photos", batch_size: 2 });
     });
   });
+
+  describe("a question right after starting a batch (owner's live test, 2026-10-07)", () => {
+    function starting(patch: Record<string, unknown> = {}) {
+      seedSession({ state: "awaiting_photos", batch_id: "batch-9", batch_size: 2, batch_seq: 1, listing_id: null, batch_quiet: false, ...patch });
+      db.tables.app_settings = [{ key: "assistant_users", value: [USER] }];
+      db.tables.whatsapp_assistant_log = [];
+      db.tables.listings = [];
+      sent.length = 0;
+    }
+
+    it("is answered, with where they are, and isn't saved as product 1's notes", async () => {
+      starting();
+      aiReplies.push('{"type":"reply","text":"Not yet: no payout in the last week.","link":null}');
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "Has JUMIA payed me ?" });
+      expect(sent.map((m) => m.body)).toEqual([
+        "Not yet: no payout in the last week.",
+        "📸 I'm still ready for product 1 of 2: send its photos when you're ready, or say *restart* to stop.",
+      ]);
+      expect(session().pending_notes ?? null).toBeNull();
+    });
+
+    it("calling it off stops the batch", async () => {
+      starting({ batch_quiet: true });
+      aiReplies.push('{"type":"restart"}');
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "I won't list again" });
+      expect(session().state).toBe("awaiting_count");
+      expect(sent.at(-1)!.body).toBe("OK, I've stopped this batch. Tell me what you'd like to do for your Jumia shop, or how many products you're listing when you're ready.");
+    });
+
+    it("what the AI reads as the product's details stays a note", async () => {
+      starting();
+      aiReplies.push('{"type":"note"}');
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "is it fine if the price is 200?" });
+      expect(session().pending_notes).toContain("price is 200");
+      expect(sent.at(-1)!.body).toBe("Got it — noted for product 1. Send a photo to get started.");
+    });
+
+    it("notes that aren't a question never reach the AI", async () => {
+      starting();
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "Price 200, sizes M and L" });
+      expect(aiPrompts).toHaveLength(0);
+      expect(session().pending_notes).toContain("Price 200");
+    });
+  });
 });
+

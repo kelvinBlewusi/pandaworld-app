@@ -383,12 +383,12 @@ const day = (offsetDays: number, from = Date.now()) => new Date(from + offsetDay
 /** Jumia's "yyyy-MM-dd HH:mm:ss", in UTC. */
 export const jumiaTime = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 
-/** Orders created since `since` (YYYY-MM-DD), newest first, up to `pages` of 100. */
-export async function ordersCreatedSince(accessToken: string, since: string, pages = 10): Promise<JumiaCall<JumiaOrder[]>> {
+/** Orders created since `since` and before `before` (YYYY-MM-DD; default tomorrow), newest first, up to `pages` of 100. */
+export async function ordersCreatedSince(accessToken: string, since: string, pages = 10, before?: string): Promise<JumiaCall<JumiaOrder[]>> {
   const orders: JumiaOrder[] = [];
   let token: string | undefined;
   for (let page = 0; page < pages; page++) {
-    const r = await listOrders(accessToken, { createdAfter: since, createdBefore: day(1), size: 100, sort: "DESC", token });
+    const r = await listOrders(accessToken, { createdAfter: since, createdBefore: before ?? day(1), size: 100, sort: "DESC", token });
     if (!r.ok) return r;
     orders.push(...(r.data.orders ?? []));
     if (r.data.isLastPage || !r.data.nextToken) break;
@@ -417,6 +417,21 @@ export async function findOrderByNumber(
     await sleep(PACE_MS);
   }
   return { ok: true, data: null };
+}
+
+/** Orders whose items moved to `status` between two days (YYYY-MM-DD, the second exclusive), newest first. */
+export async function ordersWithStatus(accessToken: string, status: string, after: string, before: string): Promise<JumiaCall<JumiaOrder[]>> {
+  const orders: JumiaOrder[] = [];
+  let token: string | undefined;
+  for (let page = 0; page < 5; page++) {
+    const r = await listOrders(accessToken, { status: [status], updatedAfter: after, updatedBefore: before, size: 100, sort: "DESC", token });
+    if (!r.ok) return r;
+    orders.push(...(r.data.orders ?? []));
+    if (r.data.isLastPage || !r.data.nextToken) break;
+    token = r.data.nextToken;
+    await sleep(PACE_MS);
+  }
+  return { ok: true, data: orders };
 }
 
 /** The statuses whose change the seller hears about (lib/whatsapp/shop-notices.ts). */

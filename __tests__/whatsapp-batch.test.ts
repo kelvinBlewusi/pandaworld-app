@@ -532,3 +532,15 @@ Start and end date is 30th September 2026 to 31 December 2025`;
     expect(extractSalePrice("discount 20% off everything", NOW)).toBeNull();
   });
 });
+
+// The bot's own example "sale 80 from 20 Oct to 30 Oct" didn't read as a
+// sale price (found 2026-10-07).
+describe("extractSalePrice — the ways sellers write a sale", () => {
+  const now = new Date("2026-10-07T10:00:00Z");
+  it("sale 80, on sale at 100, on sale for 100", () => {
+    expect(extractSalePrice("sale 80 from 20 Oct to 30 Oct", now)).toEqual({ salePrice: 80, startDate: "2026-10-20", endDate: "2026-10-30" });
+    expect(extractSalePrice("put the boots on sale at 100 from 10 Oct to 20 Oct", now)).toEqual({ salePrice: 100, startDate: "2026-10-10", endDate: "2026-10-20" });
+    expect(extractSalePrice("on sale for 100", now)).toEqual({ salePrice: 100 });
+    expect(extractSalePrice("sale price 90", now)).toEqual({ salePrice: 90 });
+  });
+});

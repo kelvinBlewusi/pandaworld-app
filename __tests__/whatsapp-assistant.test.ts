@@ -57,7 +57,7 @@ jest.mock("@/lib/jumia/categories", () => ({
 }));
 
 import {
-  assistantEnabled, assistantLinks, cleanReply, countBacked, messageNumbers, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
+  assistantEnabled, assistantLinks, cleanReply, countBacked, fitsDraft, looksLikeQuestion, messageNumbers, recentConversation, saleWindow, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { parseVariations } from "@/lib/whatsapp/variation-question";
 import type { ListingRow } from "@/lib/supabase/types";
@@ -110,9 +110,13 @@ describe("what the message backs up", () => {
     expect(verifyChanges({ variations: ["M", "XL"] }, "add XL too", known).changes).toEqual({ variations: ["M", "XL"] });
   });
 
-  it("drops the whole variation list rather than quietly losing one of them", () => {
-    const r = verifyChanges({ variations: ["Huge", "Large"] }, "make it Large", { options: [], variations: [] });
-    expect(r).toEqual({ changes: {}, dropped: ["variations"] });
+  it("keeps the variations the message backs, and leaves out one the AI made up", () => {
+    expect(verifyChanges({ variations: ["Huge", "Large"] }, "make it Large", { options: [], variations: [] }))
+      .toEqual({ changes: { variations: ["Large"] }, dropped: [] });
+    // "Can you add Blue variant to the wig" (live, 2026-10-07): the current one and the new one.
+    expect(verifyChanges({ variations: ["24 Inch", "Blue"] }, "Can you add Blue variant to the wig product you drafted?", { options: [], variations: ["24 Inch"] }))
+      .toEqual({ changes: { variations: ["24 Inch", "Blue"] }, dropped: [] });
+    expect(verifyChanges({ variations: ["Huge"] }, "make it Large", { options: [], variations: [] })).toEqual({ changes: {}, dropped: ["variations"] });
   });
 
   it("a size's name becomes the category's own spelling of it, both ways", () => {
@@ -336,9 +340,9 @@ describe("the live shop, through the assistant (owner, 2026-10-07)", () => {
     aiReplies.push('{"type":"payouts"}');
     await runAssistant("seller", "233", session(), "has jumia paid me", "idle");
     expect(shopCalls).toEqual([
-      ["proposeLiveChange", "Hisense fridge", { kind: "stock", stock: 20 }],
+      ["proposeLiveChange", "Hisense fridge", { kind: "stock", stock: 20 }, { preferSid: null }],
       ["answerOrderStatus", "355926919"],
-      ["answerSales", "today"],
+      ["answerSales", "today", null],
       ["answerPayouts"],
     ]);
     expect(db.tables.whatsapp_assistant_log[0]).toMatchObject({ outcome: "offered" });
@@ -358,3 +362,84 @@ describe("the live shop, through the assistant (owner, 2026-10-07)", () => {
   });
 });
 
+describe("what the owner's live test showed (2026-10-07)", () => {
+  const EARRINGS = product(1, "Asymmetrical Irregular Statement Earrings - Shell Inlay, Gold Tone");
+  const WIG = product(2, "Kinky Curly Wig - 24 Inch Length, Full Lace");
+
+  it("a draft is only changed when the seller's words name it", () => {
+    expect(fitsDraft("gold medal", EARRINGS.listing.title)).toBe(false);
+    expect(fitsDraft("the wigs", WIG.listing.title)).toBe(true);
+    expect(fitsDraft("the second one", WIG.listing.title)).toBe(true);
+  });
+
+  it("\"set the gold medal to 25\" in review is a live product, not the gold-tone earrings draft", () => {
+    expect(parseAction(
+      '{"type":"edit","edits":[{"products":[1],"said":"gold medal","changes":{"price":25},"ask":false}]}',
+      "Set the gold medal to 25", [EARRINGS, WIG],
+    )).toEqual({ type: "live_change", product: "gold medal", change: { kind: "price", price: 25 } });
+    expect(parseAction(
+      '{"type":"edit","edits":[{"products":[2],"said":"wigs","changes":{"price":10},"ask":false}]}',
+      "Change the wigs price to Ghs10", [EARRINGS, WIG],
+    )).toEqual({ type: "edit", edits: [{ seqs: [2], changes: { price: 10 }, ask: false }], dropped: [] });
+  });
+
+  it("the sale window a seller leaves to us", () => {
+    const now = new Date("2026-10-07T10:00:00Z");
+    expect(saleWindow("sale 80 from 20 Oct to 30 Oct", now)).toEqual({ start: "2026-10-20", end: "2026-10-30" });
+    expect(saleWindow("choose your own start and end date within this month", now)).toEqual({ start: "2026-10-07", end: "2026-10-31" });
+    expect(saleWindow("just for this week", now)).toEqual({ start: "2026-10-07", end: "2026-10-13" });
+    expect(saleWindow("make it 100", now)).toBeNull();
+  });
+
+  it("a question to the bot, not a product's notes", () => {
+    for (const t of ["Has JUMIA payed me ?", "I won't list again", "You remember which one I last used?", "cancel"]) expect(looksLikeQuestion(t)).toBe(true);
+    for (const t of ["Price 200, sizes M and L", "Brand new, black", "150"]) expect(looksLikeQuestion(t)).toBe(false);
+  });
+
+  it("reads the recent conversation, oldest first, without the message being answered", async () => {
+    db.tables.whatsapp_message_log = [
+      { phone_number: "233", direction: "outbound", message_type: "button", body_text: "⚠️ 30 is more than I can draft in one go — the most is 20 at a time.", created_at: "2026-10-07T01:29:10Z" },
+      { phone_number: "233", direction: "inbound", message_type: "text", body_text: "I would like to list like 30 products", created_at: "2026-10-07T01:28:56Z" },
+      { phone_number: "233", direction: "inbound", message_type: "interactive", body_text: "lpick:565dc00b-32d4-4737-a553-d08991fc0508:2", created_at: "2026-10-07T01:29:20Z" },
+      { phone_number: "233", direction: "inbound", message_type: "text", body_text: "Let's do five then", created_at: "2026-10-07T01:29:38Z" },
+    ];
+    expect(await recentConversation("233", "Let's do five then")).toEqual([
+      "Seller: I would like to list like 30 products",
+      "Bot: ⚠️ 30 is more than I can draft in one go — the most is 20 at a time.",
+      "Seller: [tapped a button]",
+    ]);
+  });
+
+  it("the prompt carries the conversation, the rules and the examples", async () => {
+    db.tables.whatsapp_message_log = [
+      { phone_number: "233", direction: "outbound", message_type: "text", body_text: "the most is 20 at a time", created_at: "2026-10-07T01:29:10Z" },
+    ];
+    aiReplies.push('{"type":"list","count":5}');
+    const session = { phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: "b0" } as WhatsAppSession;
+    expect(await runAssistant("seller", "233", session, "Let's do five then", "sent")).toEqual({ list: 5 });
+    expect(aiPrompts[0]).toContain("Recent conversation (oldest first; \"Bot\" is you):\nBot: the most is 20 at a time");
+    expect(aiPrompts[0]).toContain("Never reply that you can or will check or do something: do it with the action.");
+    expect(aiPrompts[0]).toContain('"has jumia paid me?" or "shop statement" → {"type":"payouts"}');
+    expect(db.tables.whatsapp_assistant_log[0]).toMatchObject({ raw: '{"type":"list","count":5}' });
+  });
+
+  it("the model can be switched in app_settings, to known ones only", async () => {
+    const { assistantModel } = await import("@/lib/whatsapp/assistant");
+    expect(await assistantModel()).toBe("gemini-2.5-flash-lite");
+    db.tables.app_settings = [{ key: "assistant_model", value: "gemini-2.5-flash" }];
+    expect(await assistantModel()).toBe("gemini-2.5-flash");
+    db.tables.app_settings = [{ key: "assistant_model", value: "some-other-model" }];
+    expect(await assistantModel()).toBe("gemini-2.5-flash-lite");
+  });
+
+  it("starting a batch: a note stays a note; a question is answered with where they are", async () => {
+    const session = { phoneNumber: "233", userId: "seller", state: "awaiting_photos", batchId: "b1", batchSize: 2, batchSeq: 1, lastSubmittedBatchId: null } as WhatsAppSession;
+    aiReplies.push('{"type":"note"}');
+    expect(await runAssistant("seller", "233", session, "is it ok if the price is 200?", "starting")).toBe("default");
+    expect(sent).toEqual([]);
+    aiReplies.push('{"type":"payouts"}');
+    expect(await runAssistant("seller", "233", session, "Has JUMIA payed me ?", "starting")).toBe("handled");
+    expect(shopCalls).toEqual([["answerPayouts"]]);
+    expect(sent.at(-1)!.body).toBe("📸 I'm still ready for product 1 of 2: send its photos when you're ready, or say *restart* to stop.");
+  });
+});

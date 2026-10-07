@@ -427,12 +427,25 @@ export function extractSalePrice(text: string, now: Date = new Date(), currency:
   // by "%", so the guard alone would let "discount 20% off" through as
   // salePrice=2). (?!\d) rejects any match that isn't the full digit run,
   // closing that backtrack path.
+  // "sale 80" and "on sale at 100" too: the bot's own examples say "sale 80
+  // from 20 Oct to 30 Oct", and that never read as a sale price before
+  // (found 2026-10-07).
   const priceMatch = text.match(
-    new RegExp(`(?:sales?\\s*price|promo(?:tion(?:al)?)?\\s*price|discount(?:ed)?\\s*(?:price)?)\\s*(?:is|was|to|of|at)?\\s*[:=]?\\s*(?:${spec.prefix})?\\s*(\\d+(?:\\.\\d+)?)(?!\\d)(?!\\s*%)`, "i"),
+    new RegExp(`(?:sales?\\s*price|promo(?:tion(?:al)?)?\\s*price|discount(?:ed)?\\s*(?:price)?|on\\s+sale|\\bsale)\\s*(?:is|was|to|of|at|for)?\\s*[:=]?\\s*(?:${spec.prefix})?\\s*(\\d+(?:\\.\\d+)?)(?!\\d)(?!\\s*%)`, "i"),
   );
   if (!priceMatch) return null;
-  const result: SalePriceExtraction = { salePrice: parseFloat(priceMatch[1]) };
+  const result: SalePriceExtraction = { salePrice: parseFloat(priceMatch[1]), ...extractDateRange(text, now) };
+  return result;
+}
 
+/**
+ * A sale window in the text ("from 10 Oct to 20 Oct", "until 30 Oct"), on its
+ * own: the dates, or a warning when they're the wrong way round. Shared by
+ * extractSalePrice and the assistant (lib/whatsapp/assistant.ts), which reads
+ * the sale price itself.
+ */
+export function extractDateRange(text: string, now: Date = new Date()): Pick<SalePriceExtraction, "startDate" | "endDate" | "dateWarning"> {
+  const result: Pick<SalePriceExtraction, "startDate" | "endDate" | "dateWarning"> = {};
   const range = text.match(DATE_RANGE_RE);
   if (range) {
     const start = parseDatePhrase(range[1], now);
