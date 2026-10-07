@@ -1284,6 +1284,100 @@ quantity of the fridge to 20" (ask which fridge if there are two) and
   pilot's accounts" in whatsapp-intake-flow.test.ts (gemini-client mocked
   with scripted replies).
 
+### The live Jumia shop on WhatsApp (owner, 2026-10-07)
+
+"Leave [several shops / countries] and [Fulfilled by Jumia] and let's
+implement the rest from the API AND WIRE IT CONVERSATIONALLY." Everything below
+is reached by talking to the assistant (so, for now, only on its pilot
+accounts; the worker's notices go to every seller with the pack).
+
+- **API layer**: lib/jumia/shop.ts, from Jumia's spec
+  (vendorcenter.jumia.com/api-docs/openapi.yaml). `call` is shared with
+  lib/jumia/orders.ts.
+  - **Catalog**: GET /catalog/products as one row per variation
+    (`productsFromCatalog`), using the seller's own country's business client
+    ("jumia-gh") for status, QC and price. Stock comes from GET
+    /catalog/stock.
+  - **Sync**: kept in `jumia_products`; `syncCatalog` re-reads it when it's
+    older than 3 hours and the assistant needs it, paced under Jumia's
+    4 requests a second.
+  - **Finding a product**: `findProducts` matches the seller's words: exact
+    SKU first, otherwise the products whose name, variation, brand and SKU
+    hold the most of the words. Deleted products are left out.
+  - **Live changes**: `sendLiveChange` sends stock (POST
+    /feeds/products/stock), price or a sale with dates, or ending a sale
+    (/feeds/products/price, for the seller's country too), and on/off
+    (/feeds/products/status).
+    - Feeds take the VARIATION's id (`variations[].id`) with its sellerSku.
+      The product set's `id` is not the one they take.
+  - **Payouts**: GET /payout-statement with currency=LOCAL.
+  - **Orders**: one order by its number (`findOrderByNumber`, last 89 days);
+    orders created since a date; orders changed since a time
+    (`ordersChangedSince`, `updatedAfter` + DELIVERED, RETURNED, FAILED,
+    CANCELED).
+- **WhatsApp**: lib/whatsapp/shop.ts.
+  - **Live changes**: `proposeLiveChange` finds the product and offers ONE
+    tap before anything reaches Jumia: "Yes, change it ✅" (`lchg:<id>`) or
+    No (`lchgno:<id>`). If several products fit, a list where tapping one
+    (`lpick:<id>:<n>`) applies the change.
+    - Every change is a `jumia_product_changes` row: pending, then sent,
+      done, failed or cancelled. It's also the record of who changed what.
+    - Offers expire after 30 minutes and can only be tapped by their owner.
+    - A price below Jumia's minimum is refused before any of this.
+  - **Taps** are handled globally in intake (`handleShopTap`, right after
+    the order taps) and keep no conversation state.
+  - **Answers**: `answerStock` (a product's stock, out of stock, low = 3 or
+    fewer), `answerProducts` (overview, turned off, rejected with Jumia's
+    reason), `answerOrderStatus` (item by item, with tracking; a waiting
+    order gets the usual order view and buttons), `answerSales` (today / 7
+    days / 30 days in the seller's timezone, by status; the total leaves out
+    cancelled orders), `answerPayouts` (last paid with its reference, the
+    open statement with sales, fees and refunds).
+- **The assistant** (assistant.ts):
+  - **Actions**: `live_change` (stock | price | sale true/"end" | active),
+    `stock`, `shop`, `order_status`, `sales`, `payouts`.
+  - **Checks**: the product must be named in the message
+    (`productBacked`). Numbers must be written in it; stock 0 is allowed for
+    "sold out" and the like. A sale needs its price and both dates in one
+    message, otherwise it says so. An order number must be in the message.
+  - **Drafts vs live**: `edit` stays for the drafts in review; `live_change`
+    is for products already on Jumia.
+  - **Context**: `capabilities()` and `sellerFacts` describe all of this,
+    including whether their pack has it.
+  - `assistant_users = ["*"]` in app_settings switches the assistant on for
+    every seller.
+- **Told without asking**: lib/whatsapp/shop-notices.ts, run by the same
+  10-minute worker after the order alerts (route budgets: 30s for alerts,
+  20s for these).
+  - **Refused changes**: a change Jumia refused, or didn't confirm within a
+    day, is told. One it applied updates `jumia_products` quietly.
+  - **Order updates** (`order_alerts`): delivered, returned, failed and
+    cancelled orders, grouped, at most every 2 hours. A cancellation goes
+    out at once ("don't ship these"). The seller's own cancellation through
+    the bot isn't told back (orders.ts `markNoticed`).
+  - **Payouts** (`shop_whatsapp`): a paid payout, checked every 6 hours.
+  - **Same rules as order alerts**: WhatsApp linked and Jumia connected,
+    not while paused for credits, quiet 10pm to 7am, and only inside the 24
+    hours (no template for these, so they wait).
+  - **First run**: what's already there is taken as known, so nothing old
+    is announced. Each thing is told once (`shop_notices`).
+  - **Low stock** with new-order alerts (`shop_whatsapp`, our own message
+    only): `lowStockNote` reads the ordered products' stock live, using the
+    sids from the catalog copy.
+- **Pack**: products, stock and payouts are the new `shop_whatsapp` feature
+  ("Live Jumia products and payouts on WhatsApp", Pro and up, comingSoon
+  like the order features until the owner tests). Orders and sales come
+  under `order_alerts`.
+- Migration 2026-10-07_jumia-shop.sql (applied): jumia_products,
+  jumia_catalog_syncs, jumia_product_changes, shop_notices.
+- **Not yet tried against the live API**: the stock, price and status feeds,
+  /payout-statement, and /orders with `updatedAfter` plus a status list.
+  Watch the first "[shop notices]" logs and the first confirmed change on
+  the owner's shop.
+- Tests: __tests__/jumia-shop.test.ts (Jumia's answers shaped as in its
+  spec), plus "the live shop, through the assistant" in
+  whatsapp-assistant.test.ts.
+
 ### Feature expansion (when relevant)
 9. **Cloud Vision OCR** (Tier 1.2 of GCP plan) — dedicated OCR for packaging text.
    $1.50/1000 images, first 1000 free monthly. Improves spec-text accuracy.

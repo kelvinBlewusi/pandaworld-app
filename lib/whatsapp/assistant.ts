@@ -59,6 +59,8 @@ import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
 import { jumiaCountryByCode } from "@/lib/marketing/countries";
 import { sellerCountry } from "@/lib/jumia/unlistable-categories";
 import { currentPack, featureAccess, featureMinPackName, type FeatureId } from "@/lib/billing/features";
+import { answerOrderStatus, answerPayouts, answerProducts, answerSales, answerStock, proposeLiveChange } from "@/lib/whatsapp/shop";
+import type { LiveChange } from "@/lib/jumia/shop";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
 import { updateSession, type AssistantPending, type WhatsAppSession } from "@/lib/whatsapp/session";
@@ -77,13 +79,16 @@ const EDITABLE = new Set(["draft", "awaiting_review", "failed"]);
 
 // ─── Who has it ───────────────────────────────────────────────────────────
 
-/** The pilot: admins, and the user ids in app_settings `assistant_users`. */
+/**
+ * The pilot: admins, and the user ids in app_settings `assistant_users`.
+ * `["*"]` there switches it on for every seller.
+ */
 export async function assistantEnabled(userId: string): Promise<boolean> {
   if (isAdmin(userId)) return true;
   try {
     const { data } = await createServerClient().from("app_settings").select("value").eq("key", "assistant_users").maybeSingle();
     const ids = data?.value;
-    return Array.isArray(ids) && ids.includes(userId);
+    return Array.isArray(ids) && (ids.includes("*") || ids.includes(userId));
   } catch {
     return false;
   }
@@ -137,6 +142,12 @@ export type AssistantAction =
   | { type: "credits" }
   | { type: "help" }
   | { type: "reply"; text: string; link: string | null }
+  | { type: "live_change"; product: string; change: LiveChange }
+  | { type: "stock"; product: string | null; filter: "out" | "low" | null }
+  | { type: "shop"; filter: "all" | "inactive" | "rejected" }
+  | { type: "order_status"; number: string }
+  | { type: "sales"; period: "today" | "week" | "month" }
+  | { type: "payouts" }
   | { type: "unclear" };
 
 const STATUS_WORDS: Record<string, string> = {
@@ -167,7 +178,7 @@ function productLine(p: ProductFacts, currency: string): string {
 
 const STAGE_TEXT: Record<Stage, string> = {
   review: "The products below are drafted and waiting for the seller to check them and submit them to Jumia.",
-  sent:   "The seller has just submitted the products below to Jumia. They can no longer be changed here: a product with Jumia is changed in Jumia Vendor Center.",
+  sent:   "The seller has just submitted the products below to Jumia. They're no longer drafts: once live, their stock, price, sale and on/off can be changed with live_change; anything else in Jumia Vendor Center.",
   idle:   "The seller is between batches: no products are being listed right now. To start, they say how many products they're listing.",
 };
 
@@ -182,12 +193,14 @@ function capabilities(): string {
     "- Ask for what Jumia needs that the photos don't show: a missing price, weight or other required detail, the variation, the category when unsure.",
     "- Edit drafts in chat before they're submitted: price, quantity, variations or sizes, name, brand, colour, a sale price with its dates. Anything else in the editor on the review page.",
     "- Submit to Jumia and report back when each product goes live or is rejected; fix common rejections itself (banned words, restricted brands) and guide the seller through the rest with Fix & resubmit (QC fixes: Standard pack and up).",
-    "- Orders on WhatsApp (Pro pack and up): alerts for new Jumia orders, grouped and quiet at night; \"orders\" shows orders waiting to be packed; pack them and get the shipping label PDF, mark them ready to ship, or cancel.",
+    "- Orders on WhatsApp (Pro pack and up): alerts for new Jumia orders, grouped and quiet at night; \"orders\" shows orders waiting to be packed; pack them and get the shipping label PDF, mark them ready to ship, or cancel; where any order is, by its number; orders and sales for today, the week or the month; a message when orders are delivered, returned, fail delivery or are cancelled.",
+    "- Their live Jumia products (Pro pack and up), found by name among everything in their shop: change a product's stock, price, a sale price with its dates, or turn it on or off, with one tap to confirm; how many are left; what's out of stock or low; which products are turned off or rejected by Jumia's quality check; a low-stock warning with new orders.",
+    "- Payouts (Pro pack and up): the last Jumia payout and the statement not yet paid; a message when Jumia pays.",
     `- Credits: tell the balance; a WhatsApp listing costs ${LIVE_LISTING_CREDIT_COST} credits, charged only when it goes live on Jumia; warn when running low. Credits are bought on the dashboard.`,
     "- The PandaWorld Chrome extension fills Jumia's Vendor Center product form on a laptop; image polish and a fee calculator in it on Pro.",
     "- A free Jumia price calculator, Jumia commission rates, how-to guides and an FAQ on the website.",
     "- Words the bot always knows: \"status\" (where they are), \"restart\", \"help\", \"orders\", \"disconnect\" (Jumia).",
-    "- Products already with Jumia are changed in Jumia Vendor Center, not here.",
+    "- Other changes to products already on Jumia (name, photos, description, category) are made in Jumia Vendor Center.",
   ].join("\n");
 }
 
@@ -241,6 +254,7 @@ export async function sellerFacts(userId: string): Promise<{ lines: string[]; co
       return a.ok ? "on" : a.blockedBy === "credits" ? "paused until they buy credits" : `not on their pack (${featureMinPackName(f)} and up)`;
     };
     lines.push(`- Orders and shipping labels on WhatsApp: ${await access("shipping_labels")}`);
+    lines.push(`- Live products, stock and payouts on WhatsApp: ${await access("shop_whatsapp")}`);
     lines.push(`- QC rejection fixes: ${await access("qc_fix")}`);
     const credits = Math.max(0, Math.round((await availableCredits(userId)) * 100) / 100);
     lines.push(`- Credits: ${credits} available, ${creditReach(credits)}`);
@@ -294,7 +308,15 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '  "2 shirts and a fridge" is 3. Without a number, use restart.',
     '{"type":"restart"} - they want to list something (no number given), start a new batch, or start over',
     '{"type":"review"} - see or open their drafts or listings',
-    '{"type":"orders"} - their Jumia orders',
+    '{"type":"orders"} - their Jumia orders waiting to be packed',
+    '{"type":"live_change","product":"<the seller\'s words for the product>","stock":<number>} - change a product already live on Jumia',
+    '  (never one of the drafts above). Instead of "stock", exactly one of: "price":<number>, "sale":true (a sale price with its',
+    '  dates, read from the message), "sale":"end" (end its sale), "active":true or false (turn it on or off). Values from the message only.',
+    '{"type":"stock","product":"<their words>" or null,"filter":"out" or "low" or null} - how many are left of a product, or what is out of stock or low',
+    '{"type":"shop","filter":"all" or "inactive" or "rejected"} - their Jumia products: an overview, the ones turned off, or the ones rejected',
+    '{"type":"order_status","number":"<the order number from the message>"} - where one order is',
+    '{"type":"sales","period":"today" or "week" or "month"} - how many orders or sales they had',
+    '{"type":"payouts"} - money from Jumia: the last payout, what\'s not paid yet, statements',
     '{"type":"credits"} - their credit balance (sent with a Buy credits button)',
     '{"type":"reply","text":"<your message>","link":"<a key above, or null>"} - everything else. You write the message:',
     "  - Greetings, thanks, small talk, \"what can you do\", or something you can't match: in your own words (vary it, never a set",
@@ -426,9 +448,15 @@ export function cleanReply(text: string, links: Record<string, AssistantLink>): 
   return cleaned.length > 900 ? `${cleaned.slice(0, 899).replace(/\s+\S*$/, "")}…` : cleaned;
 }
 
+/** Whether the seller's message names the product: at least one of its words is in it. */
+export function productBacked(product: string, message: string): boolean {
+  const said = new Set(message.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 2));
+  return product.toLowerCase().split(/[^a-z0-9]+/).some((w) => w.length >= 2 && (said.has(w) || said.has(w.replace(/s$/, "")) || said.has(`${w}s`)));
+}
+
 /** The AI's reply as an action our code can carry out, or unclear. */
 export function parseAction(
-  raw: string, message: string, products: ProductFacts[], links: Record<string, AssistantLink> = {},
+  raw: string, message: string, products: ProductFacts[], links: Record<string, AssistantLink> = {}, currency = "GHS",
 ): AssistantAction {
   const match = raw.match(/\{[\s\S]*\}/);
   if (!match) return { type: "unclear" };
@@ -449,6 +477,47 @@ export function parseAction(
       if (!text) return link ? { type: "reply", text: `Here's the ${links[link].label.toLowerCase()}:`, link } : { type: "unclear" };
       return { type: "reply", text, link };
     }
+    case "live_change": {
+      const product = typeof parsed.product === "string" ? parsed.product.trim().slice(0, 120) : "";
+      if (!product || !productBacked(product, message)) return { type: "unclear" };
+      const numbers = messageNumbers(message);
+      if (parsed.stock != null) {
+        const n = Number(parsed.stock);
+        const outWords = /\b(out of stock|sold out|none left|finished|no more)\b/i.test(message);
+        return Number.isInteger(n) && n >= 0 && (numbers.includes(n) || (n === 0 && outWords))
+          ? { type: "live_change", product, change: { kind: "stock", stock: n } } : { type: "unclear" };
+      }
+      if (parsed.price != null) {
+        const n = Number(parsed.price);
+        return n > 0 && numbers.includes(n) ? { type: "live_change", product, change: { kind: "price", price: n } } : { type: "unclear" };
+      }
+      if (parsed.sale === "end") return { type: "live_change", product, change: { kind: "sale", sale: null } };
+      if (parsed.sale === true) {
+        const sale = extractSalePrice(message, new Date(), currency);
+        if (sale?.startDate && sale.endDate) {
+          return { type: "live_change", product, change: { kind: "sale", sale: { price: sale.salePrice, start: sale.startDate, end: sale.endDate } } };
+        }
+        return { type: "reply", link: null, text: "A sale on Jumia needs its price and both dates in one message, e.g. \"put the fridge on sale at 4000 from 10 Oct to 20 Oct\"." };
+      }
+      if (typeof parsed.active === "boolean") return { type: "live_change", product, change: { kind: "status", active: parsed.active } };
+      return { type: "unclear" };
+    }
+    case "stock": {
+      const product = typeof parsed.product === "string" && parsed.product.trim() && productBacked(parsed.product, message) ? parsed.product.trim().slice(0, 120) : null;
+      const filter = parsed.filter === "out" || parsed.filter === "low" ? parsed.filter : null;
+      return { type: "stock", product, filter };
+    }
+    case "shop":
+      return { type: "shop", filter: parsed.filter === "inactive" || parsed.filter === "rejected" ? parsed.filter : "all" };
+    case "order_status": {
+      const number = String(parsed.number ?? "").replace(/\D/g, "");
+      return number.length >= 5 && message.replace(/\D/g, " ").split(/\s+/).includes(number)
+        ? { type: "order_status", number } : { type: "unclear" };
+    }
+    case "sales":
+      return { type: "sales", period: parsed.period === "today" || parsed.period === "month" ? parsed.period : "week" };
+    case "payouts":
+      return { type: "payouts" };
     case "list": {
       const count = Number(parsed.count);
       return Number.isInteger(count) && count >= 1 && countBacked(count, message) ? { type: "list", count } : { type: "unclear" };
@@ -530,7 +599,7 @@ export async function interpret(
   const prompt = buildPrompt(stage, message, { products, currency, seller: seller.lines, links, hintSeq: opts.hintSeq });
   const { text } = await withAiUsageContext({ feature: "assistant", userId }, () =>
     callGeminiBackend(ASSISTANT_MODEL, [{ text: prompt }]));
-  return { action: parseAction(text, message, products, links), links };
+  return { action: parseAction(text, message, products, links, currency), links };
 }
 
 // ─── Carrying it out ──────────────────────────────────────────────────────
@@ -853,6 +922,18 @@ async function carryOut(
         { id: "disconnect", title: "Disconnect" },
       ]);
       return "sent help";
+    case "live_change":
+      return proposeLiveChange(userId, phone, action.product, action.change);
+    case "stock":
+      return answerStock(userId, phone, action.product, action.filter);
+    case "shop":
+      return answerProducts(userId, phone, action.filter);
+    case "order_status":
+      return answerOrderStatus(userId, phone, action.number);
+    case "sales":
+      return answerSales(userId, phone, action.period);
+    case "payouts":
+      return answerPayouts(userId, phone);
     case "reply": {
       // The AI's own words. With a link, it's the button; in review, the
       // reply keeps the step's own two buttons.

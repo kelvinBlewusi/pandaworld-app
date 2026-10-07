@@ -122,7 +122,7 @@ describe("at 0 credits", () => {
 
 describe("what each pack lists", () => {
   // The extension's two went live 2026-10-02; the WhatsApp three are still to come.
-  it("adds QC fixes from Standard, and from Pro the extension's two tools and three to come", () => {
+  it("adds QC fixes from Standard, and from Pro the extension's two tools and four to come", () => {
     expect(packFeatures("starter")).toEqual([]);
     expect(packFeatures("standard").map((f) => f.id)).toEqual(["qc_fix"]);
     const pro = packFeatures("pro");
@@ -130,6 +130,7 @@ describe("what each pack lists", () => {
     expect(pro.filter((f) => f.comingSoon).map((f) => f.label)).toEqual([
       "Order alerts on WhatsApp",
       "Shipping labels on WhatsApp",
+      "Live Jumia products and payouts on WhatsApp",
       "Jumia fee calculator on WhatsApp",
     ]);
     expect(packFeatures("business")).toEqual(pro);

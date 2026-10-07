@@ -40,6 +40,16 @@ jest.mock("@/lib/ai/gemini-client", () => ({
   },
 }));
 
+const shopCalls: unknown[][] = [];
+jest.mock("@/lib/whatsapp/shop", () => ({
+  proposeLiveChange: async (...a: unknown[]) => { shopCalls.push(["proposeLiveChange", ...a.slice(2)]); return "offered"; },
+  answerStock:       async (...a: unknown[]) => { shopCalls.push(["answerStock", ...a.slice(2)]); return "stock"; },
+  answerProducts:    async (...a: unknown[]) => { shopCalls.push(["answerProducts", ...a.slice(2)]); return "overview"; },
+  answerOrderStatus: async (...a: unknown[]) => { shopCalls.push(["answerOrderStatus", ...a.slice(2)]); return "order"; },
+  answerSales:       async (...a: unknown[]) => { shopCalls.push(["answerSales", ...a.slice(2)]); return "sales"; },
+  answerPayouts:     async (...a: unknown[]) => { shopCalls.push(["answerPayouts", ...a.slice(2)]); return "payouts"; },
+}));
+
 const SIZES = ["S", "M", "L", "XL", "XXL"];
 jest.mock("@/lib/jumia/categories", () => ({
   getCategoryAttributes: async (code: number) =>
@@ -66,6 +76,7 @@ beforeEach(() => {
   orderCalls.length = 0;
   aiReplies.length = 0;
   aiPrompts.length = 0;
+  shopCalls.length = 0;
   aiCalls = 0;
 });
 
@@ -309,6 +320,41 @@ describe("its own replies (owner, 2026-10-06)", () => {
     aiReplies.push('{"type":"reply","text":"Sorry, I can\'t book deliveries. I can change your fridge\'s price, quantity or size, or submit it.","link":null}');
     await runAssistant("seller", "233", session({ state: "awaiting_confirmation", batchId: "b1" }), "book me a delivery truck", "review");
     expect(sent).toEqual([{ kind: "buttons", body: "Sorry, I can't book deliveries. I can change your fridge's price, quantity or size, or submit it.", rows: ["submit all", "review"] }]);
+  });
+});
+
+describe("the live shop, through the assistant (owner, 2026-10-07)", () => {
+  const session = () => ({ phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null }) as WhatsAppSession;
+
+  it("hands a live change, and each question, to the shop module", async () => {
+    aiReplies.push('{"type":"live_change","product":"Hisense fridge","stock":20}');
+    expect(await runAssistant("seller", "233", session(), "set the Hisense fridge stock to 20", "idle")).toBe("handled");
+    aiReplies.push('{"type":"order_status","number":"355926919"}');
+    await runAssistant("seller", "233", session(), "where is order 355926919", "idle");
+    aiReplies.push('{"type":"sales","period":"today"}');
+    await runAssistant("seller", "233", session(), "how did I do today", "idle");
+    aiReplies.push('{"type":"payouts"}');
+    await runAssistant("seller", "233", session(), "has jumia paid me", "idle");
+    expect(shopCalls).toEqual([
+      ["proposeLiveChange", "Hisense fridge", { kind: "stock", stock: 20 }],
+      ["answerOrderStatus", "355926919"],
+      ["answerSales", "today"],
+      ["answerPayouts"],
+    ]);
+    expect(db.tables.whatsapp_assistant_log[0]).toMatchObject({ outcome: "offered" });
+  });
+
+  it("is told what the live shop can do, and whether the seller's pack has it", async () => {
+    aiReplies.push('{"type":"reply","text":"Hi!","link":null}');
+    await runAssistant("seller", "233", session(), "hi", "idle");
+    expect(aiPrompts[0]).toContain("- Their live Jumia products (Pro pack and up)");
+    expect(aiPrompts[0]).toContain("- Live products, stock and payouts on WhatsApp: not on their pack (Pro and up)");
+    expect(aiPrompts[0]).toContain('{"type":"live_change"');
+  });
+
+  it("everyone, when assistant_users is [\"*\"]", async () => {
+    db.tables.app_settings = [{ key: "assistant_users", value: ["*"] }];
+    expect(await assistantEnabled("anyone")).toBe(true);
   });
 });
 

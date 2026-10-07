@@ -15,6 +15,8 @@
  *     app_settings `order_alert_template` ({"name": "jumia_new_order",
  *     "language": "en"}). With no template set, outside the window the alert
  *     waits until the seller next writes (WhatsApp wouldn't deliver it).
+ *   - with `shop_whatsapp`, a line for each ordered product now low on stock
+ *     on Jumia (lib/whatsapp/shop.ts lowStockNote; our own message only).
  * Each order is alerted once (order_alerts).
  */
 
@@ -25,6 +27,7 @@ import { jumiaCountryByCode } from "@/lib/marketing/countries";
 import { toPackItems, waitingOrders } from "@/lib/jumia/order-flow";
 import { sendOrderAlert, sendOrderAlertTemplate } from "@/lib/whatsapp/orders";
 import { botPausedForCredits } from "@/lib/whatsapp/credit-gate";
+import { lowStockNote } from "@/lib/whatsapp/shop";
 
 export const ALERT_GAP_MS = 30 * 60_000;
 export const WINDOW_MS    = 23 * 3_600_000;
@@ -47,7 +50,7 @@ async function orderAlertTemplate(): Promise<{ name: string; language: string } 
     : null;
 }
 
-async function lastInboundAt(phone: string): Promise<number | null> {
+export async function lastInboundAt(phone: string): Promise<number | null> {
   const { data } = await createServerClient()
     .from("whatsapp_message_log")
     .select("created_at")
@@ -104,7 +107,11 @@ export async function runOrderAlerts(now = new Date(), budgetMs = 45_000): Promi
 
       const inbound = await lastInboundAt(phone);
       if (inbound != null && now.getTime() - inbound < WINDOW_MS) {
-        await sendOrderAlert(phone, fresh, country);
+        // What these orders leave in stock, when it's low (shop_whatsapp).
+        const note = (await hasFeature(userId, "shop_whatsapp"))
+          ? await lowStockNote(userId, creds.accessToken, fresh).catch(() => null)
+          : null;
+        await sendOrderAlert(phone, fresh, country, note);
       } else if (template) {
         await sendOrderAlertTemplate(phone, fresh, country, template);
       } else {

@@ -153,15 +153,24 @@ export class FakeDb {
         return updateBuilder([]);
       },
 
-      upsert(payload: FakeRow | FakeRow[], opts: { onConflict: string }) {
+      upsert(payload: FakeRow | FakeRow[], opts: { onConflict: string; ignoreDuplicates?: boolean }) {
         // onConflict may name several columns ("category_code,name").
         const keys = opts.onConflict.split(",").map((k) => k.trim());
+        const written: FakeRow[] = [];
         for (const row of Array.isArray(payload) ? payload : [payload]) {
           const existing = rows().find((r) => keys.every((k) => r[k] === row[k]));
-          if (existing) Object.assign(existing, row);
-          else db.insertRows(table, [row]);
+          if (existing) {
+            // ignoreDuplicates: ON CONFLICT DO NOTHING, and nothing returned.
+            if (!opts.ignoreDuplicates) { Object.assign(existing, row); written.push(existing); }
+          } else {
+            const r = db.insertRows(table, [row]);
+            if (!("error" in r)) written.push(...r.data);
+          }
         }
         return {
+          select() {
+            return { then(resolve: (v: unknown) => unknown) { return Promise.resolve({ data: written.map((r) => ({ ...r })), error: null }).then(resolve); } };
+          },
           then(resolve: (v: unknown) => unknown) {
             return Promise.resolve({ data: null, error: null }).then(resolve);
           },
@@ -172,6 +181,7 @@ export class FakeDb {
         const deleteBuilder = (filters: Filter[]) => ({
           eq(col: string, val: unknown) { return deleteBuilder([...filters, { col, val, op: "eq" }]); },
           in(col: string, val: unknown[]) { return deleteBuilder([...filters, { col, val, op: "in" }]); },
+          lt(col: string, val: unknown) { return deleteBuilder([...filters, { col, val, op: "lt" }]); },
           then(resolve: (v: unknown) => unknown) {
             db.tables[table] = rows().filter((r) => !db.match(r, filters));
             return Promise.resolve({ data: null, error: null }).then(resolve);
