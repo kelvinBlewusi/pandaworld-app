@@ -2990,13 +2990,23 @@ export async function finalizeBatch(
         // a seller should never be handed a button that would fail or ship
         // something other than what they typed. The editor is the action.
         const askable = (assessment.missingFields?.length ?? 0) > 0 || !only.selling_price || reasons.some(isVariationBlock);
+        // The draft and its question as one message, the way the price
+        // question already was: "✅ Product drafted… What variation(s) do
+        // you have?" (owner, 2026-10-07: fewer messages per listing; Meta
+        // charges per message).
+        const asked = askable && (await askForNextMissingValue(phoneNumber, batchId, {
+          known:   new Map([[only.id, assessment.missingFields ?? []]]),
+          reasons: new Map([[only.id, reasons]]),
+          prefix:  `✅ Product drafted: ${only.title}.`,
+        }));
+        if (asked) return;
         await replyCtaOrSplit(
           phoneNumber,
-          `✅ Product drafted: ${only.title}.${heldText}\n\n` +
-            (askable ? "Answer the question below, or fix it in the editor, then reply *submit*." : "Fix it in the editor, then reply *submit*."),
+          `✅ Product drafted: ${only.title}.${heldText}\n\nFix it in the editor, then reply *submit*.`,
           "Edit product",
           focusedEditorUrl(only.id),
         );
+        return;
       }
       // A missing price, then any other field the category requires, is
       // asked for right here rather than left as a warning: each is one

@@ -84,13 +84,23 @@ describe("refreshPendingFeedStatus — skipNotify", () => {
 
   it("still notifies as before when skipNotify is omitted — every other caller is unaffected", async () => {
     seedListing({ whatsapp_batch_id: "batch-1", title: "Kettle", user_id: "user_1" });
+    feedStatusResult = { status: "FAILED", total: 1, success: 0, failed: 1, errors: ["Invalid brand"], raw: null };
+    feedProductDetailsResult = [{ sellerSku: "SKU-1", productSid: null, qcStatus: "rejected", errors: ["Invalid brand"] }];
+
+    await refreshPendingFeedStatus("tok", { id: "listing-1", status: "pending_approval", jumia_ref: "feed-1" });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body).toContain('"Kettle" was rejected by Jumia');
+  });
+
+  it("an accepted listing isn't told yet when its QC result will follow (2026-10-07)", async () => {
+    seedListing({ whatsapp_batch_id: "batch-1", title: "Kettle", user_id: "user_1" });
     feedStatusResult = { status: "DONE", total: 1, success: 1, failed: 0, errors: [], raw: null };
     feedProductDetailsResult = [{ sellerSku: "SKU-1", productSid: "sid-1", qcStatus: "approved", errors: [] }];
 
     await refreshPendingFeedStatus("tok", { id: "listing-1", status: "pending_approval", jumia_ref: "feed-1" });
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].body).toBe('✅ "Kettle": Jumia accepted it — Will alert you if it passes Jumia QC');
+    expect(sent).toHaveLength(0);
   });
 
   // Live, 2026-10-02: Jumia's feed error held every product error word
@@ -149,12 +159,12 @@ describe("notifyBatchResolved", () => {
       notice({ listingId: "listing-1", title: "Electric Kettle", whatsappSeq: 1, newStatus: "live" }),
       notice({ listingId: "listing-2", title: "Baby Carrier", whatsappSeq: 2, newStatus: "failed", errorMsg: "Attribute [variation] with invalid value [Navy Blue]" }),
       notice({ listingId: "listing-3", title: "Blender", whatsappSeq: 3, newStatus: "live" }),
-    ]);
+    ], { qcAlerts: false });
 
     const texts = sent.filter((m) => m.kind === "text");
     expect(texts).toHaveLength(1);
     expect(texts[0].body).toContain("Since your last update: 2 accepted, 1 rejected.");
-    expect(texts[0].body).toContain('"Electric Kettle": Jumia accepted it — Will alert you if it passes Jumia QC');
+    expect(texts[0].body).toContain('"Electric Kettle": Jumia accepted it. Jumia\'s quality check comes next');
     expect(texts[0].body).toContain('"Baby Carrier" was rejected by Jumia: Attribute [variation]');
     expect(texts[0].body).toContain('"Blender": Jumia accepted it');
 
@@ -171,11 +181,35 @@ describe("notifyBatchResolved", () => {
     await notifyBatchResolved(PHONE, "batch-1", [
       notice({ listingId: "listing-1", newStatus: "live" }),
       notice({ listingId: "listing-2", newStatus: "live" }),
-    ]);
+    ], { qcAlerts: false });
 
     expect(sent).toHaveLength(1);
     expect(sent[0].kind).toBe("text");
-    expect(sent[0].body).toContain("Since your last update: Jumia accepted 2 products — Will alert you as they pass Jumia QC");
+    expect(sent[0].body).toContain("Since your last update: Jumia accepted 2 products.");
+  });
+
+  // Owner, 2026-10-07: fewer messages per listing. With QC alerts, "passed
+  // Jumia QC and is live" (or the rejection) is what the seller hears.
+  it("with QC alerts to follow, acceptance isn't told; a rejection beside it still is, and a partial acceptance", async () => {
+    await notifyBatchResolved(PHONE, "batch-1", [
+      notice({ listingId: "listing-1", newStatus: "live" }),
+      notice({ listingId: "listing-2", newStatus: "live" }),
+    ]);
+    expect(sent).toHaveLength(0);
+
+    await notifyBatchResolved(PHONE, "batch-1", [
+      notice({ listingId: "listing-1", title: "Electric Kettle", whatsappSeq: 1, newStatus: "live" }),
+      notice({ listingId: "listing-2", title: "Baby Carrier", whatsappSeq: 2, newStatus: "failed", errorMsg: "Attribute [variation] with invalid value [Navy Blue]" }),
+    ]);
+    expect(sent.map((m) => m.kind)).toEqual(["buttons"]);
+    expect(sent[0].body).toContain('"Baby Carrier" was rejected by Jumia');
+    expect(sent[0].body).not.toContain("Electric Kettle");
+
+    sent.length = 0;
+    await notifyBatchResolved(PHONE, "batch-1", [
+      notice({ listingId: "listing-1", newStatus: "live", counts: { liveCount: 1, totalCount: 2, rejectedSkus: ["SKU-2"] } }),
+    ]);
+    expect(sent[0].body).toContain("Jumia accepted 1 of 2 variants");
   });
 
   // Without QC alerts (below the Standard pack) nothing will report the
@@ -344,9 +378,9 @@ describe("notifyResolvedListings", () => {
 
   it("groups resolutions by whatsapp_batch_id and sends one message per batch", async () => {
     await notifyResolvedListings("user_1", [
-      notice({ listingId: "l1", batchId: "batch-A", title: "A1" }),
-      notice({ listingId: "l2", batchId: "batch-A", title: "A2" }),
-      notice({ listingId: "l3", batchId: "batch-B", title: "B1" }),
+      notice({ listingId: "l1", batchId: "batch-A", title: "A1", newStatus: QC_APPROVED }),
+      notice({ listingId: "l2", batchId: "batch-A", title: "A2", newStatus: QC_APPROVED }),
+      notice({ listingId: "l3", batchId: "batch-B", title: "B1", newStatus: QC_APPROVED }),
     ]);
 
     expect(sent).toHaveLength(2);
