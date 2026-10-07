@@ -15,7 +15,8 @@ import { WhatsAppIcon } from "@/components/whatsapp/whatsapp-icon";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { UserButton, useUser } from "@clerk/nextjs";
-import {LayoutDashboard, Calculator, ListChecks, HelpCircle, BookOpen, Settings, ArrowRight, X, MessageSquare, AlertTriangle, Ban, Sparkles} from "lucide-react";
+import {LayoutDashboard, Calculator, ListChecks, HelpCircle, BookOpen, Settings, ArrowRight, X, MessageSquare, AlertTriangle, Ban} from "lucide-react";
+import { PandaLogoIcon } from "@/components/assistant/panda-logo-icon";
 import { cn } from "@/lib/utils";
 import { Wordmark } from "@/components/marketing/wordmark";
 import { COMMUNITY_WHATSAPP_URL } from "@/lib/constants/support";
@@ -34,7 +35,7 @@ const primaryNav = [
 // The Listing Assistant (app/extension/(app)/assistant): shown to the sellers
 // it's on for (lib/whatsapp/listing-assistant.ts), first on the list (owner,
 // 2026-10-07).
-const assistantItem = { href: "/extension/assistant", label: "Jumia Listing Assistant", icon: Sparkles };
+const assistantItem = { href: "/extension/assistant", label: "Jumia Listing Assistant", icon: PandaLogoIcon };
 
 // Public, like Guides, so the same answers reach sellers before they sign up.
 const faqItem = { href: "/faq", label: "FAQ", icon: HelpCircle };

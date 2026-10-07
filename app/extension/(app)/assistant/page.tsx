@@ -1,7 +1,7 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { Sparkles } from "lucide-react";
+import Image from "next/image";
 import { ListingAssistant } from "@/components/assistant/listing-assistant";
 import { listingAssistantFor } from "@/lib/whatsapp/listing-assistant";
 
@@ -26,8 +26,8 @@ export default async function ListingAssistantPage() {
   if (!(await listingAssistantFor(userId))) {
     return (
       <div className="mx-auto max-w-lg rounded-2xl border border-zinc-200 bg-white p-8 text-center shadow-sm">
-        <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-50 text-orange-500">
-          <Sparkles className="h-6 w-6" />
+        <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-50">
+          <Image src="/brand/panda-p-logo-trimmed.png" alt="PandaWorld" width={634} height={562} className="h-8 w-auto" />
         </span>
         <h2 className="mt-4 text-lg font-semibold text-zinc-900">The Jumia Listing Assistant is coming soon</h2>
         <p className="mt-2 text-sm leading-relaxed text-zinc-600">
