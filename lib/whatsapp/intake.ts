@@ -88,7 +88,7 @@ import { rememberRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
 import { handleShopTap } from "@/lib/whatsapp/shop";
 import { chatChannelOf, isWebAddress } from "@/lib/whatsapp/channel";
-import { carryPriceToVariants, carryStockToVariants, chatPrice, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
+import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPrice, dropVariantSalesFrom, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import { answerLiveValue, answerPendingQuestion, assistantEnabled, looksLikeQuestion, plainQuickEdit, runAssistant } from "@/lib/whatsapp/assistant";
 import { batchCreditRefusal, creditGate } from "@/lib/whatsapp/credit-gate";
 
@@ -470,7 +470,7 @@ async function applyNotes(listingId: string, text: string): Promise<void> {
   // helper already said append; the write must match.
   const { data: existingRow } = await db
     .from("listings")
-    .select("user_prompt")
+    .select("user_prompt, sale_price, sale_start_date, sale_end_date")
     .eq("id", listingId)
     .maybeSingle();
   const existing = String((existingRow?.user_prompt as string | null) ?? "").trim();
@@ -509,6 +509,10 @@ async function applyNotes(listingId: string, text: string): Promise<void> {
     updates.sale_end_date   = sale.endDate;
   }
   await db.from("listings").update(updates).eq("id", listingId);
+  // Usually before drafting, with no variants yet; a drafted product's follow.
+  if (updates.sale_price != null && sale) {
+    await carrySaleToVariants(listingId, existingRow ?? {}, { salePrice: sale.salePrice, startDate: sale.startDate!, endDate: sale.endDate! });
+  }
 }
 
 /**
@@ -3977,6 +3981,7 @@ async function handleEdit(
       .eq("id", listing.id);
     if (price != null) await carryPriceToVariants(listing.id, listing.selling_price, price);
     if (stock != null) await carryStockToVariants(listing.id, listing.quantity, stock);
+    if (saleComplete) await carrySaleToVariants(listing.id, listing, { salePrice: sale!.salePrice, startDate: sale!.startDate!, endDate: sale!.endDate! });
   }
 
   let ack = applied.length > 0 ? `✅ Updated product ${seq}'s ${applied.join(" and ")}. ` : "";
@@ -4720,6 +4725,7 @@ async function applyQcAnswer(userId: string, phoneNumber: string, q: QcQuestion,
       field_sources: { ...sources, selling_price: "user" },
     }).eq("id", q.listingId);
     await carryPriceToVariants(q.listingId, row.selling_price, n);
+    await dropVariantSalesFrom(q.listingId, n);
     await updateSession(phoneNumber, { awaitingQcAnswer: null });
     await replyText(phoneNumber, `🔧 ${label}: price set to ${n}. Resubmitting…`);
     await pushAndReport(userId, phoneNumber, q.listingId, label);
