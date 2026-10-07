@@ -32,7 +32,7 @@ import {
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { appUrl } from "@/lib/whatsapp/app-url";
 import { featureAccess, featureMinPackName, type FeatureId } from "@/lib/billing/features";
-import { LIVE_CHANGE_CREDIT_COST } from "@/lib/billing/credit-packs";
+import { LIVE_CHANGE_CREDIT_COST, REPORT_CREDIT_COST } from "@/lib/billing/credit-packs";
 import { chargeService, isUnmetered, refundService } from "@/lib/billing/extension-credits";
 import { COUNTRY_CURRENCY, getValidJumiaCredentials } from "@/lib/jumia/api";
 import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
@@ -810,6 +810,8 @@ export async function answerProducts(userId: string, phone: string, filter: "all
     `• Rejected: ${rejected.length}`,
     "",
     "Ask me about any of them: stock, price, a sale, or turning one on or off.",
+    // Where "give me insight" goes next (owner's test, 2026-10-07).
+    `How sales are going: *sales week*. A full health check of your shop: *report* (${REPORT_CREDIT_COST} credits).`,
   ].join("\n"));
   return "overview";
 }

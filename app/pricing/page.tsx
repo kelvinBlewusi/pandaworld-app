@@ -12,7 +12,6 @@ import {
   POLISH_CREDIT_COST,
   REPORT_CREDIT_COST,
   LABEL_CREDIT_COST,
-  comingSoonLabels,
   creditCosts,
   everyoneFeatures,
   LIVE_LISTING_CREDIT_COST,
@@ -204,9 +203,7 @@ export default async function PricingPage() {
                       <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
                       Never expires
                     </li>
-                    {/* What the pack includes while it's the last one bought (lib/billing/features.ts).
-                        Features not built yet look like the rest (owner's call,
-                        2026-10-03); the FAQ below names them as not available yet. */}
+                    {/* What the pack includes while it's the last one bought (lib/billing/features.ts). */}
                     {packFeatures(p.id).map((f) => (
                       <li key={f.id} className="flex items-start gap-2 font-medium">
                         <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
@@ -253,7 +250,7 @@ export default async function PricingPage() {
             />
             <FAQ
               q="What do the bigger packs unlock?"
-              a={`Every pack, and your free credits, include listing on WhatsApp and the website, the Jumia Listing Assistant (chatting is free), your Jumia orders (packing, ready to ship, cancelling), reading your shop (products, stock, sales, reports, payouts, fees), the shop health report (${REPORT_CREDIT_COST} credits) and image polish, which turns your own photos into four product images in the chat or the Chrome extension (${POLISH_CREDIT_COST} credits an image). The Standard pack and bigger add changes to your live Jumia products from the chat, Jumia QC rejection alerts and guided fixes (when Jumia's quality check rejects a listing after accepting it, we tell you why, return its credits, and help you fix and resubmit it), and shipping labels on WhatsApp (${LABEL_CREDIT_COST} credits a label). Pro and Business add order alerts on WhatsApp and the Jumia fee calculator for your country in the Chrome extension. To buy a pack, link your WhatsApp and connect your Jumia account first. Your pack's features come from the last pack you bought, and everything works while you have credits: at 0 it pauses until you top up. Not available yet: ${comingSoonLabels().join(", ")}.`}
+              a={`Every pack, and your free credits, include listing on WhatsApp and the website, the Jumia Listing Assistant (chatting is free), your Jumia orders (packing, ready to ship, cancelling), reading your shop (products, stock, sales, reports, payouts, fees), the shop health report (${REPORT_CREDIT_COST} credits) and image polish, which turns your own photos into four product images in the chat or the Chrome extension (${POLISH_CREDIT_COST} credits an image). The Standard pack and bigger add changes to your live Jumia products from the chat, Jumia QC rejection alerts and guided fixes (when Jumia's quality check rejects a listing after accepting it, we tell you why, return its credits, and help you fix and resubmit it), and shipping labels on WhatsApp (${LABEL_CREDIT_COST} credits a label). Pro and Business add order alerts on WhatsApp and the Jumia fee calculator for your country in the Chrome extension. To buy a pack, link your WhatsApp and connect your Jumia account first. Your pack's features come from the last pack you bought, and everything works while you have credits: at 0 it pauses until you top up.`}
             />
             <FAQ
               q="Why is the Chrome extension charged per autofill?"

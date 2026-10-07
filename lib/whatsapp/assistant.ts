@@ -418,8 +418,12 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     "- A change to many products by a rule (all, every, everything, a percentage) is bulk; to products they name one by one, live_change.",
     "- \"How many products are on / off / live\" is shop (the overview), never product_info.",
     "- Sellers make typos (\"ordrs\" is orders, \"payed\" is paid, \"tun on\" is turn on) and write in many languages.",
+    "- Insight, stats, analytics or how their shop is performing, without asking for a report or health check: shop (the overview, free). \"How is my shop doing?\" and a report or health check they ask for: health_report.",
+    "- A bare number right after your own list of options picks that option (\"4\" after a list whose 4th line is shop insight is shop), not a count of products.",
     "- About themselves (their pack, credits, WhatsApp number, Jumia connection, shop), answer only from \"About this seller\", word for word where it gives a number or name. If it isn't there, say you can't see it here and where to look (Settings).",
     "- Asked what pack they're on or what it includes: name the pack (or \"no pack yet, your free credits\"), then list what's on and what isn't from \"About this seller\", one short line each, and what the next pack adds.",
+    "",
+    "- Your own messages are WhatsApp text: *bold* with single asterisks, never ** or # headings. Choices as \"• \" lines, never numbered (a number on its own is how many products they're listing).",
     "",
     "Reply with ONLY one JSON object, no markdown, one of:",
     '{"type":"edit","edits":[{"products":[<numbers>],"said":"<their words for the product, or null>","changes":{...},"ask":false}]} - change drafts above. One entry per different change.',
@@ -479,7 +483,8 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '  a yes or no), or, while they send a product, it describes that product (its notes). PandaWorld\'s usual steps take it.',
     '{"type":"reply","text":"<your message>","link":"<a key above, or null>"} - everything else. You write the message:',
     "  - \"What can you do\", a hello (\"hi\", \"hello there\"), or something you can't match: in your own words (vary it, never a set",
-    "    script), a short numbered list (4 to 6 lines) of what you can do for them, and end by asking what they'd like to do for their Jumia shop.",
+    "    script), a short list (4 to 6 lines starting with \"• \", never numbered) of what you can do for them, each with the words that do it",
+    "    (e.g. *orders*, *shop*, *sales week*, *report*, or how many products to list), and end by asking what they'd like to do for their Jumia shop.",
     "  - A question about them (their shop's name, country, pack, what's on): answer it from About this seller.",
     "  - Thanks or ok: a short, friendly line; no list.",
     "  - Greet only if they greeted you in this message. Mention a pack only for a feature their pack doesn't have (see About this seller).",
@@ -491,7 +496,7 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     "    \"link\" set to the page or guide (the key in [brackets]). Only steps the guide gives; up to 900 characters for steps.",
     "  - Anything outside Jumia, their shop and PandaWorld, or something PandaWorld can't do: say plainly that you don't understand",
     "    that or can't help with it, suggest something you can do, and ask them to try something different.",
-    "  Write for WhatsApp: short and warm, at most 600 characters (steps up to 900), *bold* with single asterisks, numbered lists as \"1.\" lines.",
+    "  Write for WhatsApp: short and warm, at most 600 characters (steps up to 900), *bold* with single asterisks, \"1.\" lines only for steps in order.",
     "  Reply in the language the seller wrote in.",
     "",
     "Examples (message → JSON):",
@@ -642,13 +647,16 @@ export function countBacked(count: number, message: string): boolean {
 }
 
 /**
- * The AI's own message, made safe to send: any web address that isn't one
- * of our links is removed (it could be made up), and it's cut to fit a
- * WhatsApp message with a button.
+ * The AI's own message, made safe to send: markdown bold and headings as
+ * WhatsApp writes them, any web address that isn't one of our links removed
+ * (it could be made up), and cut to fit a WhatsApp message with a button.
  */
 export function cleanReply(text: string, links: Record<string, AssistantLink>): string {
   const allowed = new Set(Object.values(links).map((l) => l.url.replace(/\/$/, "")));
   const cleaned = text
+    // WhatsApp's bold is one asterisk; a model's markdown has two, and headings.
+    .replace(/\*\*(.+?)\*\*/g, "*$1*")
+    .replace(/^#{1,6}\s+/gm, "")
     .replace(/\b(?:https?:\/\/|www\.)[^\s)]+/gi, (u) => {
       const bare = u.replace(/[.,!?;:]+$/, "");
       return allowed.has(bare.replace(/\/$/, "")) ? u : "";

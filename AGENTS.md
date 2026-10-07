@@ -565,11 +565,12 @@ per image that comes back) and its price calculator for the seller's own
 country (`fee_calc_extension`), both live 2026-10-02: GET
 /api/extension/account returns `features` and `country`
 for the panel, and the polish route checks `hasFeature` itself. They also
-list three features not built yet (order alerts, shipping labels and the
-fee calculator on WhatsApp), shown like the others with no "soon" label
-(owner's call, 2026-10-03; greyed out before). So the pricing FAQ and
-Terms §4 name them as not available yet (`comingSoonLabels()`); keep that
-while any are.
+listed features not built yet, shown like the others with no "soon" label
+(owner's call, 2026-10-03; greyed out before), and the pricing FAQ and
+Terms §4 named them as not available yet. That ended on 2026-10-07 (owner:
+"don't mention the 'not available yet'"): order alerts and shipping labels
+are on for their packs, and `comingSoon` / `comingSoonLabels()` are gone.
+Don't bring back a "not available yet" list.
 
 **Every plan in the chat (owner, 2026-10-07: "make all the capabilities
 available to all plans in the chat and charge credits for those we
@@ -1916,16 +1917,59 @@ journey" — then "AI for all sellers and remove daily limit".
   confirmed live change, an order-updates message (0.2), image polish (per
   image back), the health report. Free: new-order alerts, payout messages,
   chatting. All of these were checked in code on 2026-10-07.
-- **Order alerts and labels are built but still flagged `comingSoon`**
-  (PACK_FEATURES), so the pricing page and the Buy credits window call them
-  "not available yet" and help leaves them out. Order alerts run every 10
-  minutes for Pro and up and send inside WhatsApp's 24 hours; outside it
-  they wait for app_settings `order_alert_template` (not set: Meta's
-  `jumia_new_order` was still in review). When Meta approves it: set
-  `{"name":"jumia_new_order","language":"en"}`, send one test, then flip
-  `comingSoon` off for order_alerts. Order-update messages have no template
-  and only go inside the 24 hours. Labels: flip after one real order's
-  label has gone through on the owner's shop.
+- **Order alerts and labels are on for their packs** (`comingSoon` removed
+  later the same day, see "Labels and alerts for every pack that has
+  them"). Order alerts run every 10 minutes for Pro and up and send inside
+  WhatsApp's 24 hours; outside it they wait for app_settings
+  `order_alert_template` (not set: Meta's `jumia_new_order` was still in
+  review). When Meta approves it: set
+  `{"name":"jumia_new_order","language":"en"}` and send one test.
+  Order-update messages have no template and only go inside the 24 hours.
+
+### Labels and alerts for every pack that has them (owner, 2026-10-07)
+
+Owner: "test the label on my shop - note i cancelled the order ... don't
+mention the 'not available yet' ... after that let's make the new
+improvement global".
+
+- **Label test on the owner's shop passed.** Order #355926919 (cancelled
+  through the bot on 2026-10-06; 3 items, one package,
+  DS-GKC-355926919-5316): Jumia's print-labels still returns the label of a
+  cancelled order that was packed. `labelsPdf` gave one 48 KB PDF, and it
+  reached the owner's WhatsApp inside its message (`sendButtonsWithDocument`)
+  at 21:02 UTC; the owner tapped its Menu button. Nothing on the order
+  changed; no credits.
+- **How to run it again:** POST /api/worker/label-test (Bearer CRON_SECRET,
+  by pg_net with the vault's `cron_secret`) reads app_settings `label_test`
+  `{ userId, orderId }` (an admin's own order only), empties it to `{}`
+  (app_settings.value is NOT NULL), asks for the label with the bot's own
+  `labelsPdf`, sends the PDF to that admin's linked WhatsApp, and answers
+  with what Jumia said (read it in net._http_response). Read-only: it never
+  packs, ships or cancels. The bot's own `orders` list shows waiting orders
+  only, so a cancelled order is tested this way.
+- **No "not available yet" anywhere.** `comingSoon` and `comingSoonLabels()`
+  are gone: the pricing FAQ and Terms §4 no longer list unavailable
+  features, help lists labels (Standard+) and order alerts (Pro+) like the
+  rest, and the Buy credits window shows each pack's first 3 features as
+  chips, "N more tools", and the full list under the chosen pack.
+  Gating was never on the flag (lib/billing/features.ts), only the words.
+- **Still true for alerts:** outside WhatsApp's 24 hours a new-order alert
+  waits until app_settings `order_alert_template` is set (Meta's
+  `jumia_new_order` in review).
+- **Fixes from the owner's AI test the same evening** (WhatsApp, 20:43):
+  - The prompt told the AI to answer "what can you do" with a *numbered*
+    list; the owner's "4" (option 4, shop insight) then went the plain-number
+    way and became "4 products". Now: choices as "• " lines with the words
+    that do each (steps alone keep "1." lines), and a number typed right
+    after a bot text that listed "1." options and ended with a question goes
+    to the AI (`pickedFromList` in intake.ts) with that list in its
+    conversation.
+  - "Give me insight": vague insight / stats / performance is `shop` (the
+    free overview), whose last line now points to *sales week* and *report*
+    (REPORT_CREDIT_COST). "How is my shop doing?" and an asked-for report
+    stay `health_report`, which charges at once.
+  - `cleanReply` turns the model's `**bold**` into WhatsApp's `*bold*` and
+    drops `#` headings.
 
 ### The chat knows the website (owner, 2026-10-07)
 
@@ -2213,8 +2257,7 @@ categories, which are for everyone.
       `{"name":"jumia_new_order","language":"en"}` (WhatsApp account
       1080436151465743, template in review on 2026-10-06); until then an
       alert outside the 24 hours waits for the seller's next message.
-      PACK_FEATURES still marks both features comingSoon: flip that after
-      the owner's test.
+      Both are on for their packs since 2026-10-07 (no comingSoon).
     - **The label comes INSIDE its message** (owner, 2026-10-06: "can the
       pdf and its message be one message"): `sendButtonsWithDocument`
       (lib/whatsapp/client.ts), a button message with the merged PDF as a

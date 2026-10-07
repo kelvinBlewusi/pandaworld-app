@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { MarketingFooter } from "@/components/marketing/footer";
 import { Wordmark } from "@/components/marketing/wordmark";
-import { comingSoonLabels } from "@/lib/billing/credit-packs";
 
 // ─── Public Terms of Service ─────────────────────────────────────────────────
 //
@@ -142,9 +141,7 @@ export default function TermsPage() {
             accepted, and if Jumia rejects it there, the credits are
             returned. Without that feature, the quality-check result is
             shown in your Jumia Vendor Center only. Features pause while
-            your balance is 0. These features
-            listed on the pricing page are not yet available:{" "}
-            {comingSoonLabels().join(", ")}.
+            your balance is 0.
           </p>
           <p>
             Credits don&apos;t expire, have no cash value, can&apos;t be

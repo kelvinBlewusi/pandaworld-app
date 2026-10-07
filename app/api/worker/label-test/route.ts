@@ -36,7 +36,8 @@ export async function POST(req: NextRequest) {
   const userId = typeof ask?.userId === "string" ? ask.userId : "";
   const orderId = typeof ask?.orderId === "string" ? ask.orderId : "";
   if (!userId || !orderId) return NextResponse.json({ ok: false, error: "nothing asked" });
-  await db.from("app_settings").update({ value: null }).eq("key", "label_test");
+  // {} rather than null: app_settings.value can't be null.
+  await db.from("app_settings").update({ value: {} }).eq("key", "label_test");
   if (!isAdmin(userId)) return NextResponse.json({ ok: false, error: "admins' own orders only" }, { status: 403 });
   if (!/^[0-9a-f-]{36}$/i.test(orderId)) return NextResponse.json({ ok: false, error: "not an order id" }, { status: 400 });
 

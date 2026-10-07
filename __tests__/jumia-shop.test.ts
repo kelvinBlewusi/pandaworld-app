@@ -319,6 +319,7 @@ describe("answers", () => {
     expect(last().body).toBe([
       "🛍️ Your Jumia shop: 5 products", "• On: 4", "• Off: 1", "• Out of stock: 1", "• Waiting for Jumia's check: 0", "• Rejected: 1",
       "", "Ask me about any of them: stock, price, a sale, or turning one on or off.",
+      "How sales are going: *sales week*. A full health check of your shop: *report* (2 credits).",
     ].join("\n"));
     await answerProducts(USER, PHONE, "rejected");
     expect(last().body).toContain("• Nasco Blender 1.5L: Poor image quality");

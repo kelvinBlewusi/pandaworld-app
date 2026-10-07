@@ -50,10 +50,9 @@ export function packRank(id: string | null | undefined): number {
  * set "highest pack ever" on 2026-10-01 and changed it to this on
  * 2026-10-06).
  *
- * `comingSoon` features are not built yet. They are listed with the packs
- * like the others (owner's call, 2026-10-03; they were greyed out before),
- * so the pricing FAQ and the Terms name them as not available yet
- * (comingSoonLabels).
+ * Every feature listed is available: order alerts and shipping labels were
+ * marked "not available yet" until 2026-10-07 (owner: "don't mention the
+ * 'not available yet' ... let's make the new improvement global").
  *
  * `minPack: EVERYONE`: on every plan, free sign-up credits included, and
  * charged per use like the rest (owner, 2026-10-07: "make all the
@@ -77,7 +76,6 @@ export interface PackFeature {
   /** For tight spaces such as the Buy credits modal's pack rows. */
   short:       string;
   minPack:     string;
-  comingSoon?: boolean;
 }
 
 export const EVERYONE = "everyone";
@@ -89,9 +87,9 @@ export const PACK_FEATURES: PackFeature[] = [
   // updates, and the free "Jumia paid you" message (named for orders only,
   // owner 2026-10-07: "change to Order alerts on WhatsApp even though we
   // still alert for payouts").
-  { id: "order_alerts",           label: "Order alerts on WhatsApp",                    short: "Order alerts",               minPack: "pro", comingSoon: true },
+  { id: "order_alerts",           label: "Order alerts on WhatsApp",                    short: "Order alerts",               minPack: "pro" },
   // Standard from 2026-10-07, since each label is charged (owner: "the label download to WhatsApp should be added to the GHS 70 pack").
-  { id: "shipping_labels",        label: "Shipping labels on WhatsApp",                 short: "Shipping labels",            minPack: "standard", comingSoon: true },
+  { id: "shipping_labels",        label: "Shipping labels on WhatsApp",                 short: "Shipping labels",            minPack: "standard" },
   // In the chat (the Jumia Listing Assistant, and WhatsApp's menu): reading
   // their products, stock, sales, reports and payouts, and their orders
   // (packing, ready to ship, cancelling).
@@ -103,11 +101,6 @@ export const PACK_FEATURES: PackFeature[] = [
   { id: "shop_changes",           label: "Changes to your live Jumia products from the chat", short: "Live product changes", minPack: "standard" },
   { id: "fee_calc_extension",     label: "Jumia fee calculator on the extension panel", short: "Fee calculator in the extension", minPack: "pro" },
 ];
-
-/** The pack features not built yet, by label, for the pages that must say so. */
-export function comingSoonLabels(): string[] {
-  return PACK_FEATURES.filter((f) => f.comingSoon).map((f) => f.label);
-}
 
 /** What a pack includes, in PACK_FEATURES order (what every plan has is everyoneFeatures). */
 export function packFeatures(packId: string): PackFeature[] {
