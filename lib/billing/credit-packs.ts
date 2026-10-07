@@ -58,8 +58,9 @@ export function packRank(id: string | null | undefined): number {
  * `minPack: EVERYONE`: on every plan, free sign-up credits included, and
  * charged per use like the rest (owner, 2026-10-07: "make all the
  * capabilities available to all plans in the chat and charge credits for
- * those we charge ... except the label and the alert on WhatsApp"). They
- * still pause at 0 credits. Not listed as a pack's own (packFeatures).
+ * those we charge ... except the label and the alert on WhatsApp"); QC
+ * alerts and fixes stayed on Standard. They still pause at 0 credits. Not
+ * listed as a pack's own (packFeatures).
  */
 export interface PackFeature {
   id:          string;
@@ -73,7 +74,8 @@ export interface PackFeature {
 export const EVERYONE = "everyone";
 
 export const PACK_FEATURES: PackFeature[] = [
-  { id: "qc_fix",                 label: "Jumia QC rejection alerts and guided fixes",  short: "QC alerts & fixes",          minPack: EVERYONE },
+  // Back to Standard the same day (owner, 2026-10-07: "yes QC on standard and up").
+  { id: "qc_fix",                 label: "Jumia QC rejection alerts and guided fixes",  short: "QC alerts & fixes",          minPack: "standard" },
   // The alerts the bot sends on its own: new orders, order updates, payouts.
   { id: "order_alerts",           label: "Order and payout alerts on WhatsApp",         short: "Order & payout alerts",      minPack: "pro", comingSoon: true },
   // Standard from 2026-10-07, since each label is charged (owner: "the label download to WhatsApp should be added to the GHS 70 pack").
@@ -214,7 +216,7 @@ export function creditCosts(listingCost = LIVE_LISTING_CREDIT_COST): CreditCost[
     { what: "Chrome extension autofill", detail: "One product's form filled in on Vendor Center.", credits: LISTING_CREDIT_COST },
     { what: "Shipping label on WhatsApp", detail: "One order's label PDF. The same label again is free.", credits: LABEL_CREDIT_COST },
     { what: "Change to a live Jumia product", detail: "Stock, price, a sale or on/off, confirmed with one tap, for up to 20 products at once. Given back if Jumia refuses it.", credits: LIVE_CHANGE_CREDIT_COST },
-    { what: "Order updates and payout messages", detail: "Delivered, returned, failed or cancelled orders, and \"Jumia paid you\". New-order alerts are free.", credits: NOTICE_CREDIT_COST },
+    { what: "Order updates on WhatsApp", detail: "Delivered, returned, failed or cancelled orders. New-order alerts and \"Jumia paid you\" messages are free.", credits: NOTICE_CREDIT_COST },
   ];
 }
 

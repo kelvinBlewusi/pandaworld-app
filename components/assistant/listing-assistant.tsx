@@ -13,8 +13,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, ImagePlus, Loader2, RotateCw, X } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, ImagePlus, Loader2, Lock, RotateCw, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { BuyCreditsButton } from "@/components/billing/buy-credits-button";
 
 interface Message {
   id:        string;
@@ -94,6 +95,8 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  // At 0 credits: the bot says to top up once, then the chat locks until the balance is above 0 (owner, 2026-10-07).
+  const [locked, setLocked] = useState(false);
   const lastAt = useRef<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -117,8 +120,9 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
       const q = lastAt.current ? `?after=${encodeURIComponent(lastAt.current)}` : "";
       const res = await fetch(`/api/listing-assistant/messages${q}`, { cache: "no-store" });
       if (!res.ok) return;
-      const { messages: got } = (await res.json()) as { messages: Message[] };
+      const { messages: got, locked: isLocked } = (await res.json()) as { messages: Message[]; locked?: boolean };
       merge(got);
+      setLocked(Boolean(isLocked));
     } catch {
       // The next poll tries again.
     } finally {
@@ -235,7 +239,7 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
   }
 
   async function send(override?: { text: string; label?: string }) {
-    if (sending) return;
+    if (sending || locked) return;
     const typed = (override?.text ?? text).trim();
     const photos = override ? [] : attachments;
     if (!typed && photos.length === 0) return;
@@ -336,9 +340,9 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
         "sm:relative sm:inset-auto sm:z-auto sm:h-[calc(100dvh-13rem)] sm:min-h-[520px] sm:rounded-2xl sm:border sm:shadow-sm lg:h-[calc(100dvh-12rem)]",
         dragging ? "sm:border-orange-400 sm:ring-2 sm:ring-orange-200" : "sm:border-zinc-200",
       )}
-      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+      onDragOver={(e) => { e.preventDefault(); if (!locked) setDragging(true); }}
       onDragLeave={() => setDragging(false)}
-      onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
+      onDrop={(e) => { e.preventDefault(); setDragging(false); if (!locked) addFiles(e.dataTransfer.files); }}
     >
       <div className="flex items-center gap-1 border-b border-zinc-100 px-2 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))] sm:gap-3 sm:px-5 sm:py-3">
         <Link
@@ -388,7 +392,7 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
           </div>
         )}
 
-        {messages.map((m) => <Bubble key={m.id} m={m} onTap={tap} onResend={resend} disabled={sending} onMedia={onMedia} />)}
+        {messages.map((m) => <Bubble key={m.id} m={m} onTap={tap} onResend={resend} disabled={sending || locked} onMedia={onMedia} />)}
 
         {waiting && (
           <div className="flex items-center gap-2 pl-1 text-sm text-zinc-400">
@@ -422,6 +426,17 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
         </div>
       )}
 
+      {locked ? (
+        <div className="border-t border-zinc-100 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4">
+          <div className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="flex items-start gap-2 text-sm text-amber-900">
+              <Lock className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>You&apos;re out of credits, so the chat is locked. It unlocks as soon as you top up, or when a refund from Jumia&apos;s quality check comes in.</span>
+            </p>
+            <BuyCreditsButton className="shrink-0 self-start sm:self-auto" />
+          </div>
+        </div>
+      ) : (
       <div className="border-t border-zinc-100 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4">
         {attachments.length > 0 && (
           <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
@@ -490,6 +505,7 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
           </button>
         </div>
       </div>
+      )}
 
       {dragging && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-orange-50/80 text-sm font-semibold text-orange-700">

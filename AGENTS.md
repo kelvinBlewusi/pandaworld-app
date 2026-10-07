@@ -575,17 +575,17 @@ while any are.
 available to all plans in the chat and charge credits for those we
 charge ... except the label and the alert on WhatsApp").** `minPack:
 EVERYONE` in `PACK_FEATURES` means every plan, free sign-up credits
-included: `qc_fix`, `shop_whatsapp` (live products, orders with packing,
-ready to ship and cancelling, reports, payouts, warehouse, bulk and content
-changes) and `fee_calc_whatsapp`. `featureAccess` only checks the balance
-for them (blocked at 0, `blockedBy: "credits"`); `qc_fix` with
-`ignoreBalance` is therefore always on, so every seller now gets QC
-follow-up and its refund. Charges are unchanged (live change or bulk tap
-0.5, notices 0.2, listings at the country price). Still by pack:
-`shipping_labels` (Standard+, the label PDF on WhatsApp only, never on the
-web) and `order_alerts` (Pro+: new-order alerts, order-update notices and
-payout-paid notices, `runShopNotices` skips a seller without it); and the
-extension's two Pro tools. `packFeatures(pack)` leaves out the every-plan
+included: `shop_whatsapp` (live products, orders with packing, ready to
+ship and cancelling, reports, payouts, warehouse, bulk and content changes)
+and `fee_calc_whatsapp`. `featureAccess` only checks the balance for them
+(blocked at 0, `blockedBy: "credits"`). Charges are unchanged (live change
+or bulk tap 0.5, order-update notices 0.2, listings at the country price);
+the payout-paid message is free (owner, same day: "let us not bill payout
+message"). Still by pack: `qc_fix` (Standard+, put back the same day: "yes
+QC on standard and up"), `shipping_labels` (Standard+, the label PDF on
+WhatsApp only, never on the web) and `order_alerts` (Pro+: new-order
+alerts, order-update notices and payout-paid notices, `runShopNotices`
+skips a seller without it); and the extension's two Pro tools. `packFeatures(pack)` leaves out the every-plan
 ones (`everyoneFeatures()`); the pricing page lists those in a line of
 their own, the FAQ and Terms §4 say so, and `featureMinPackName` is "" for
 them. In `lib/whatsapp/orders.ts` the orders gate is `shop_whatsapp`;
@@ -1172,6 +1172,19 @@ Listed by priority. Pick from here when looking for "what to do next".
 
 ### Credit rules (owner, 2026-10-06)
 
+**Since 2026-10-07 the chat locks at 0, not below a listing's cost**
+(owner: "at zero credit the chat should tell the user they need to top up
+and lock after that"): `chatLocked` in lib/billing/credit-status.ts,
+used by credit-gate.ts. One reply ("🔒 ... this chat is locked until you
+top up"), then silence on WhatsApp; on the web,
+GET /api/listing-assistant/messages returns `locked` (creditLock in
+lib/whatsapp/listing-assistant.ts, which also puts the one reply in the
+conversation the first time) and the page swaps the composer for a Buy
+credits banner until the balance is above 0 (a purchase or a refund). Above
+0 and below a listing's cost the chat answers; a batch count it can't cover
+is refused before any photo (batchCreditRefusal), without the "running
+low" warning on the same message. The notes below describe the old line.
+
 - **The WhatsApp bot goes quiet below one listing's cost**
   (`BOT_MIN_CREDITS` = LIVE_LISTING_CREDIT_COST = 2; metered sellers only:
   never admins, never while billing is off). It sends ONE reply ("You have
@@ -1695,6 +1708,20 @@ labels." It is the WhatsApp bot itself, not a copy:
   the dark active row) and the coming-soon card.
 - **Scroll down**: a round down-arrow, centred over the composer, shows once the chat is
   scrolled up from the bottom; tapping it goes back to the newest message.
+
+### The chat knows the website (owner, 2026-10-07)
+
+"Let the chat know our site very well ... connect WhatsApp, use extension,
+regenerate key, the entire flow": lib/whatsapp/site-guide.ts is in the
+assistant's prompt, page by page (the dashboard's menu, what each page
+holds) and each flow as steps with the pages' own button words (link
+WhatsApp, connect Jumia, the extension, regenerating the API key, buying
+credits, the 0-credit lock, rejected products, support). Its [keys] are
+assistantLinks keys (assistant, calculator_app, connect_jumia,
+guide_link_whatsapp and community were added; `listings` is Autofill
+Activity). A how-to answer may run to 900 characters (cleanReply cuts at
+1,000, under WhatsApp's 1,024 for a message with a button). Keep the guide
+in step with the pages when they change.
 
 ### More of the Jumia API in chat (owner, 2026-10-07: "do all")
 

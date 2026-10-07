@@ -29,7 +29,8 @@ jest.mock("@/lib/whatsapp/assistant", () => ({ assistantEnabled: async () => pil
 import { sendButtonsIfConfigured, sendCtaUrlIfConfigured, sendTextIfConfigured, sendTemplateIfConfigured } from "@/lib/whatsapp/client";
 import { ingestWhatsAppImage } from "@/lib/whatsapp/media";
 import { isWebAddress, webAddress, chatChannelOf } from "@/lib/whatsapp/channel";
-import { assistantMessages, receiveAssistantMessage } from "@/lib/whatsapp/listing-assistant";
+import { assistantMessages, creditLock, receiveAssistantMessage } from "@/lib/whatsapp/listing-assistant";
+import { _resetBillingModeCache } from "@/lib/billing/mode";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
 
 const USER = "user_web1";
@@ -127,6 +128,42 @@ describe("the conversation the page reads", () => {
       ["2", "outbound", "How many?", null],
     ]);
     expect((await assistantMessages(USER, { after: "2026-10-07T10:00:01Z" })).map((m) => m.id)).toEqual(["2"]);
+  });
+});
+
+describe("at 0 credits (owner, 2026-10-07: \"tell the user they need to top up and lock after that\")", () => {
+  const billing = (balance: number) => {
+    db.tables.app_settings = [{ key: "billing_enabled", value: true }];
+    db.tables.extension_credits = [{ user_id: USER, balance }];
+    db.tables.credit_notices = [];
+    _resetBillingModeCache();
+  };
+  afterEach(() => { db.tables.app_settings = []; _resetBillingModeCache(); });
+
+  it("the page is told it's locked, and the bot's one 'top up' reply is in the conversation, once", async () => {
+    billing(0);
+    expect(await creditLock(USER)).toBe(true);
+    expect(await creditLock(USER)).toBe(true);
+    const said = (await assistantMessages(USER)).filter((m) => m.direction === "outbound");
+    expect(said).toHaveLength(1);
+    expect(said[0].text).toContain("🔒 You've used all your PandaWorld credits, so this chat is locked until you top up.");
+    expect(said[0].payload).toMatchObject({ buttonText: "Buy credits" });
+  });
+
+  it("unlocks as soon as the balance is above 0 (a purchase or a refund)", async () => {
+    billing(0);
+    await creditLock(USER);
+    billing(0.5);
+    expect(await creditLock(USER)).toBe(false);
+  });
+
+  it("not locked with credits, or while billing is off", async () => {
+    billing(3);
+    expect(await creditLock(USER)).toBe(false);
+    db.tables.app_settings = [];
+    db.tables.extension_credits = [{ user_id: USER, balance: 0 }];
+    _resetBillingModeCache();
+    expect(await creditLock(USER)).toBe(false);
   });
 });
 

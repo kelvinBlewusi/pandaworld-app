@@ -119,9 +119,9 @@ export default function TermsPage() {
           <p>
             On WhatsApp, a shipping label (the first time it is sent), a
             change to your live Jumia products that you confirm (returned
-            if Jumia refuses all of it), and the order-update and payout
-            messages we send you unasked also use credits. New-order alerts
-            and chatting with the bot don&apos;t; chat replies have a daily
+            if Jumia refuses all of it), and the order-update messages we
+            send you unasked also use credits. New-order alerts, payout
+            messages and chatting with the bot don&apos;t; chat replies have a daily
             limit that depends on your pack. The credits a listing uses can
             depend on the country your Jumia account is connected from: your
             own price is shown on the pricing and billing pages when you are
@@ -131,10 +131,13 @@ export default function TermsPage() {
             Some features come with particular packs, as shown on the
             pricing page, and stay available while the last pack you bought
             is that pack or a larger one; others are on every pack and on
-            free credits. With Jumia QC rejection alerts (every pack), we
+            free credits. With Jumia QC rejection alerts (the Standard pack
+            and up), we
             check Jumia&apos;s quality-check result after a listing is
             accepted, and if Jumia rejects it there, the credits are
-            returned. Features pause while your balance is 0. These features
+            returned. Without that feature, the quality-check result is
+            shown in your Jumia Vendor Center only. Features pause while
+            your balance is 0. These features
             listed on the pricing page are not yet available:{" "}
             {comingSoonLabels().join(", ")}.
           </p>

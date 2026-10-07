@@ -1,9 +1,10 @@
 /**
  * The owner's credit rules of 2026-10-06 (lib/billing/credit-status.ts,
  * lib/whatsapp/credit-gate.ts, the hooks in lib/billing/extension-credits.ts):
- *   - below what one WhatsApp listing costs (2), the bot sends ONE reply
- *     about credits, then stays quiet (no reply, no "typing…") until they
- *     can afford a listing again; only disconnecting Jumia still answers;
+ *   - at 0 credits (owner, 2026-10-07; below a listing's cost before), the
+ *     chat sends ONE reply saying to top up, then it's locked (no reply, no
+ *     "typing…") until the balance is above 0: a purchase or a refund; only
+ *     disconnecting Jumia still answers;
  *   - below 6, one WhatsApp warning at the next message, and one notice in
  *     the dashboard bell and extension panel when a charge takes them there;
  *   - a purchase or a refund resets all of it, so the next drop is told again;
@@ -44,7 +45,8 @@ describe("at 0 credits", () => {
     balance(0);
     expect(await creditGate("seller", PHONE, "hi")).toBe("stop");
     expect(sent).toHaveLength(1);
-    expect(sent[0].body).toContain("You've used all your PandaWorld credits");
+    expect(sent[0].body).toContain("🔒 You've used all your PandaWorld credits, so this chat is locked until you top up.");
+    expect(sent[0].body).toContain("A refund from Jumia's quality check unlocks it too.");
     expect(sent[0].body).toContain("Updates about listings already with Jumia will still come here");
     expect(sent[0].button).toBe("Buy credits");
 
@@ -104,24 +106,39 @@ describe("at 0 credits", () => {
   });
 });
 
-describe("below one listing's cost (the owner's test seller had 1 credit)", () => {
-  it("1 credit: the one reply says a listing needs 2, then silence", async () => {
+describe("above 0 but below one listing's cost (the owner's test seller had 1 credit)", () => {
+  it("1 credit: the chat still answers (its features cost less), with the running-low warning", async () => {
     balance(1);
-    expect(await creditGate("seller", PHONE, "hi")).toBe("stop");
+    expect(await creditGate("seller", PHONE, "hi")).toBe("go");
     expect(sent).toHaveLength(1);
-    expect(sent[0].body).toContain("You have 1 credit left, and a WhatsApp listing needs 2, so I'll stay quiet until you top up");
-    expect(await creditGate("seller", PHONE, "3")).toBe("stop");
-    expect(await isCreditQuiet("seller")).toBe(true);
-    expect(sent).toHaveLength(1);
-    expect(await botPausedForCredits("seller")).toBe(true);
+    expect(sent[0].body).toContain("💡 Heads up: you have 1 credit left");
+    expect(await isCreditQuiet("seller")).toBe(false);
+    expect(await botPausedForCredits("seller")).toBe(false);
   });
 
-  it("a refund of 2 (one listing's cost) brings the bot back", async () => {
+  it("but a listing it can't cover is refused before any photo", async () => {
     balance(1);
+    expect(await batchCreditRefusal("seller", 1)).toContain("not enough to list a product");
+  });
+
+  it("a refund from 0 unlocks the chat, and the next lock is told again", async () => {
+    balance(0);
     await creditGate("seller", PHONE, "hi");
-    balance(3);
+    expect(await botPausedForCredits("seller")).toBe(true);
+    balance(0.5); // a refunded live change
     expect(await creditGate("seller", PHONE, "hi")).toBe("go");
     expect(await botPausedForCredits("seller")).toBe(false);
+    sent.length = 0;
+    balance(0);
+    expect(await creditGate("seller", PHONE, "hi")).toBe("stop");
+    expect(sent).toHaveLength(1);
+  });
+
+  it("the web chat's reply doesn't ask for a message to carry on: the page unlocks itself", async () => {
+    balance(0);
+    await creditGate("seller", "web:seller", undefined);
+    expect(sent[0].body).toContain("it unlocks straight away.");
+    expect(sent[0].body).not.toContain("send me a message");
   });
 });
 
@@ -170,6 +187,7 @@ describe("dashboard and extension notices, from charges", () => {
     await deductCredits("seller", 2, "b"); // 0: out
     expect(open("credits_low")).toHaveLength(0);
     expect(open("credits_out")).toHaveLength(1);
+    expect(open("credits_out")[0].body).toContain("Your chat (WhatsApp and the Jumia Listing Assistant), order alerts and pack features are locked until you buy credits.");
     expect(open("credits_out")[0].body).toContain("a refund from Jumia's quality check brings everything back");
   });
 

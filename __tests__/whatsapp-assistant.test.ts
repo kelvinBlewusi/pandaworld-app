@@ -276,6 +276,24 @@ describe("its own replies (owner, 2026-10-06)", () => {
   const session = (patch: Partial<WhatsAppSession> = {}) =>
     ({ phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null, ...patch }) as WhatsAppSession;
 
+  // Owner, 2026-10-07: "let the chat know our site very well ... connect WhatsApp, use extension, regenerate key".
+  it("knows the website, page by page, and how each thing is done, with the page to send", async () => {
+    aiReplies.push('{"type":"reply","text":"1. Open your Extension Dashboard.\\n2. Tap *Regenerate key*.","link":"dashboard"}');
+    await runAssistant("seller", "233", session(), "how do I regenerate my api key", "idle");
+    const prompt = aiPrompts[0];
+    expect(prompt).toContain("The website (pandaworld's dashboard, after signing in");
+    expect(prompt).toContain("- Link WhatsApp [guide_link_whatsapp]: Settings → WhatsApp → \"Connect WhatsApp\"");
+    expect(prompt).toContain("- Connect Jumia [guide_connect]");
+    expect(prompt).toContain("- Use the Chrome extension [guide_extension]");
+    expect(prompt).toContain("- Regenerate the API key");
+    expect(prompt).toContain("+233548534323");
+    for (const key of ["assistant", "calculator_app", "connect_jumia", "guide_link_whatsapp", "community", "settings", "dashboard"]) {
+      expect(prompt).toContain(`- ${key}: `);
+    }
+    expect(prompt).toContain("How to do something on PandaWorld, or where to find it");
+    expect(sent[0]).toMatchObject({ kind: "cta", body: "1. Open your Extension Dashboard.\n2. Tap *Regenerate key*." });
+  });
+
   it("is told what PandaWorld does, and what this seller's pack and credits give them", async () => {
     db.tables.extension_credits = [{ user_id: "seller", balance: 9 }];
     db.tables.jumia_connections = [{ user_id: "seller", country: "GH" }];
@@ -292,7 +310,8 @@ describe("its own replies (owner, 2026-10-06)", () => {
     expect(prompt).toContain("- Country: Ghana");
     expect(prompt).toContain("- No pack bought yet: on their free sign-up credits.");
     // Every plan since 2026-10-07: the chat's features; labels and alerts keep their packs.
-    expect(prompt).toContain("- The chat's shop features (products, orders, reports, payouts, fees, QC fixes): on");
+    expect(prompt).toContain("- The chat's shop features (products, orders, reports, payouts, fees): on");
+    expect(prompt).toContain("- Jumia QC rejection alerts and guided fixes: not on their pack (Standard and up)");
     expect(prompt).toContain("- Shipping label PDFs on WhatsApp: not on their pack (Standard and up)");
     expect(prompt).toContain("- New-order, order-update and payout alerts on WhatsApp: not on their pack (Pro and up)");
     expect(prompt).toContain("a shipping label 0.5 credits (the same label again is free)");
@@ -368,7 +387,7 @@ describe("the live shop, through the assistant (owner, 2026-10-07)", () => {
     aiReplies.push('{"type":"reply","text":"Hi!","link":null}');
     await runAssistant("seller", "233", session(), "hi", "idle");
     expect(aiPrompts[0]).toContain("- Their live Jumia products, found by name");
-    expect(aiPrompts[0]).toContain("- The chat's shop features (products, orders, reports, payouts, fees, QC fixes): on");
+    expect(aiPrompts[0]).toContain("- The chat's shop features (products, orders, reports, payouts, fees): on");
     expect(aiPrompts[0]).toContain('{"type":"live_change"');
   });
 
@@ -554,7 +573,7 @@ describe("what the owner's second test showed (2026-10-07, round 3)", () => {
     expect(aiPrompts[0]).toContain('"did I have orders today?" → {"type":"sales","period":"today","status":null}');
     expect(aiPrompts[0]).toContain('{"type":"product_info"');
     expect(aiPrompts[0]).toContain('{"type":"fees"');
-    expect(aiPrompts[0]).toContain("- The chat's shop features (products, orders, reports, payouts, fees, QC fixes): on");
+    expect(aiPrompts[0]).toContain("- The chat's shop features (products, orders, reports, payouts, fees): on");
   });
 
   it("a bare number answers \"What should its stock be?\"", async () => {

@@ -55,7 +55,8 @@ import {
 } from "@/lib/whatsapp/batch";
 import { helpMessage } from "@/lib/whatsapp/onboarding";
 import { appUrl } from "@/lib/whatsapp/app-url";
-import { CHROME_WEB_STORE_URL } from "@/lib/constants/support";
+import { CHROME_WEB_STORE_URL, COMMUNITY_WHATSAPP_URL } from "@/lib/constants/support";
+import { siteGuide } from "@/lib/whatsapp/site-guide";
 import { jumiaCountryByCode } from "@/lib/marketing/countries";
 import { sellerCountry } from "@/lib/jumia/unlistable-categories";
 import { currentPack, featureAccess, featureMinPackName, type FeatureId } from "@/lib/billing/features";
@@ -238,8 +239,8 @@ function capabilities(listingCost = LIVE_LISTING_CREDIT_COST): string {
     `- List products on Jumia from WhatsApp: the seller says how many (1 to ${MAX_BATCH_SIZE}), sends each product's photos with the price and notes as the caption, and AI drafts each listing (name, description, category, details) for them to check and submit. Two ways to send: all at once, or guided step by step.`,
     "- Ask for what Jumia needs that the photos don't show: a missing price, weight or other required detail, the variation, the category when unsure.",
     "- Edit drafts in chat before they're submitted: price, quantity, variations or sizes, name, brand, colour, a sale price with its dates. Anything else in the editor on the review page.",
-    "- Everything in the chat works on every pack, free credits included, charged per use as below, and pauses at 0 credits. Only these need a pack: shipping label PDFs on WhatsApp (Standard and up), the alerts the bot sends on its own (Pro and up), and the Chrome extension's image polish and fee calculator (Pro and up).",
-    "- Submit to Jumia and report back when each product goes live or is rejected; fix common rejections itself (banned words, restricted brands) and guide the seller through the rest with Fix & resubmit.",
+    "- Everything in the chat works on every pack, free credits included, charged per use as below, and pauses at 0 credits. Only these need a pack: Jumia QC rejection alerts and guided fixes (Standard and up), shipping label PDFs on WhatsApp (Standard and up), the alerts the bot sends on its own (Pro and up), and the Chrome extension's image polish and fee calculator (Pro and up).",
+    "- Submit to Jumia and report back when each product goes live or is rejected; fix common rejections itself (banned words, restricted brands) and guide the seller through the rest with Fix & resubmit. After Jumia accepts a listing, its quality-check verdict is followed up (and the credits returned if QC rejects it) with the Standard pack and up.",
     "- Orders: \"orders\" shows orders waiting to be packed; pack them, mark them ready to ship, or cancel, here or on WhatsApp; where any order is, by its number; orders and sales for today, the week, the month or 90 days. Shipping label PDFs only on WhatsApp (Standard pack and up). Pro and up also: alerts for new Jumia orders on WhatsApp, grouped and quiet at night, and a message when orders are delivered, returned, fail delivery or are cancelled.",
     `- Their live Jumia products, found by name among everything in their shop: change a product's stock, price, a sale price with its dates, or turn it on or off, with one tap to confirm, for one product or several named together (up to ${MAX_GROUP}); where a product is (on or off, Jumia's quality check, price, sale, stock); how many are left; what's out of stock or low; which products are turned off or rejected by Jumia's quality check.`,
     `- Rules for many products at once, shown in full before one tap: prices up or down by a percentage, a sale a percentage off (with dates), a stock or price, ending sales, turning on or off; for all their products, the ones out of stock, low, off or on, or all that match words ("all perfumes"); up to ${BULK_MAX} products.`,
@@ -249,7 +250,7 @@ function capabilities(listingCost = LIVE_LISTING_CREDIT_COST): string {
     "- Before listing: whether a brand is on Jumia and allowed in a category; what a kind of product needs on Jumia (its category, the details asked, variation options, commission).",
     "- The shops under their Jumia account. Jumia's warehouse (for sellers who stock it): what it holds of a product, a delivery order into it (products and quantities, with a tap), and telling Jumia one has shipped with its tracking number.",
     "- Fees: what Jumia takes when one of their products sells (commission for its category, the per-item shipping contribution) and what they receive, at its price or a price they give.",
-    `- Credits: tell the balance; a WhatsApp listing or an extension autofill costs ${listingCost} credits for this seller, a listing charged only when it goes live on Jumia; a shipping label ${LABEL_CREDIT_COST} credits (the same label again is free), a confirmed change to live products ${LIVE_CHANGE_CREDIT_COST} (back if Jumia refuses it), an order-updates or payout message ${NOTICE_CREDIT_COST}; new-order alerts and chatting are free (chat replies have a daily limit by pack); warn when running low. Credits are bought on the dashboard.`,
+    `- Credits: tell the balance; a WhatsApp listing or an extension autofill costs ${listingCost} credits for this seller, a listing charged only when it goes live on Jumia; a shipping label ${LABEL_CREDIT_COST} credits (the same label again is free), a confirmed change to live products ${LIVE_CHANGE_CREDIT_COST} (back if Jumia refuses it), an order-updates message ${NOTICE_CREDIT_COST}; new-order alerts, payout messages and chatting are free (chat replies have a daily limit by pack); warn when running low. Credits are bought on the dashboard.`,
     "- The PandaWorld Chrome extension fills Jumia's Vendor Center product form on a laptop; image polish and a fee calculator in it on Pro.",
     "- A free Jumia price calculator, Jumia commission rates, how-to guides and an FAQ on the website.",
     "- Words the bot always knows: \"status\" (where they are), \"restart\", \"help\", \"orders\", \"disconnect\" (Jumia).",
@@ -270,13 +271,17 @@ export function assistantLinks(opts: { batchId?: string | null; countrySlug?: st
     home:            { label: "Home page",         url: `${base}/`, what: "PandaWorld's home page" },
     pricing:         { label: "Credit packs",      url: `${base}/pricing`, what: "credit packs and what each one includes" },
     dashboard:       { label: "Dashboard",         url: buyCreditsUrl(), what: "their dashboard: credits, buying credits, notices" },
-    listings:        { label: "My listings",       url: `${base}/extension/listings`, what: "all their PandaWorld listings" },
+    assistant:       { label: "Listing Assistant", url: `${base}/extension/assistant`, what: "the Jumia Listing Assistant: this chat on the website" },
+    listings:        { label: "Autofill activity", url: `${base}/extension/listings`, what: "the products the Chrome extension autofilled" },
+    calculator_app:  { label: "Calculator",        url: `${base}/extension/calculator`, what: "the fee calculator in their dashboard" },
+    connect_jumia:   { label: "Connect Jumia",     url: `${base}/onboarding/connect`, what: "the page to connect their Jumia account" },
     review:          { label: "Review listings",   url: whatsappListingsUrl(opts.batchId ?? undefined), what: opts.batchId ? "this batch's drafts, to check and edit" : "their WhatsApp drafts" },
-    settings:        { label: "Settings",          url: `${base}/extension/settings`, what: "account settings, the Jumia connection" },
+    settings:        { label: "Settings",          url: `${base}/extension/settings`, what: "settings: the Jumia connection, WhatsApp, the API key" },
     faq:             { label: "FAQ",               url: `${base}/faq`, what: "frequently asked questions" },
     guides:          { label: "How-to guides",     url: `${base}/how-to`, what: "all the step-by-step guides" },
     guide_whatsapp:  { label: "WhatsApp guide",    url: `${base}/how-to/list-on-jumia-from-whatsapp`, what: "how to list from WhatsApp, with an example" },
     guide_connect:   { label: "Connect guide",     url: `${base}/how-to/connect-jumia-vendor-center`, what: "how to connect Jumia Vendor Center" },
+    guide_link_whatsapp: { label: "Link WhatsApp guide", url: `${base}/how-to/link-whatsapp`, what: "how to link a WhatsApp number" },
     guide_extension: { label: "Extension guide",   url: `${base}/how-to/chrome-extension-autofill`, what: "how to list from a laptop with the extension" },
     extension:       { label: "Get the extension", url: CHROME_WEB_STORE_URL, what: "the PandaWorld Chrome extension on the Chrome Web Store" },
     calculator:      { label: "Price calculator",  url: `${base}/jumia-price-calculator`, what: "Jumia selling price and fee calculator" },
@@ -285,6 +290,7 @@ export function assistantLinks(opts: { batchId?: string | null; countrySlug?: st
     vendor_center:   { label: "Vendor Center",     url: "https://vendorcenter.jumia.com", what: "Jumia Vendor Center, where products already with Jumia are changed" },
     privacy:         { label: "Privacy policy",    url: `${base}/privacy`, what: "privacy policy" },
     terms:           { label: "Terms",             url: `${base}/terms`, what: "terms of service" },
+    community:       { label: "Community group",   url: COMMUNITY_WHATSAPP_URL, what: "PandaWorld's community WhatsApp group" },
   };
 }
 
@@ -309,8 +315,9 @@ export async function sellerFacts(userId: string): Promise<{ lines: string[]; co
       const a = await featureAccess(userId, f).catch(() => ({ ok: false as const, blockedBy: "pack" as const }));
       return a.ok ? "on" : a.blockedBy === "credits" ? "paused until they buy credits" : `not on their pack (${featureMinPackName(f)} and up)`;
     };
-    // Every plan has the chat's features (owner, 2026-10-07); only labels and the alerts need a pack.
-    lines.push(`- The chat's shop features (products, orders, reports, payouts, fees, QC fixes): ${await access("shop_whatsapp")}`);
+    // Every plan has the chat's features (owner, 2026-10-07); QC, labels and the alerts need a pack.
+    lines.push(`- The chat's shop features (products, orders, reports, payouts, fees): ${await access("shop_whatsapp")}`);
+    lines.push(`- Jumia QC rejection alerts and guided fixes: ${await access("qc_fix")}`);
     lines.push(`- Shipping label PDFs on WhatsApp: ${await access("shipping_labels")}`);
     lines.push(`- New-order, order-update and payout alerts on WhatsApp: ${await access("order_alerts")}`);
     const credits = Math.max(0, Math.round((await availableCredits(userId)) * 100) / 100);
@@ -355,6 +362,8 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     "",
     "What PandaWorld can do (all true; never claim anything else):",
     capabilities(listingCost),
+    "",
+    siteGuide(),
     "",
     "Links you can send (put the key in \"link\"; the seller gets a button):",
     ...Object.entries(links).map(([key, l]) => `- ${key}: ${l.what}`),
@@ -435,9 +444,12 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     "  - A question about selling on Jumia, their shop or PandaWorld: answer it from what's above. Don't state fees, commission",
     "    rates, prices, dates or Jumia rules that aren't given above: send the link that has them instead.",
     "  - A request for a page or link: one short line, with \"link\" set. Never write a web address in the text.",
+    "  - How to do something on PandaWorld, or where to find it (link WhatsApp, connect Jumia, the extension, the API key, buying",
+    "    credits, a page): the steps from the website guide above, in order, as \"1.\" lines with the page's own button words, and",
+    "    \"link\" set to the page or guide (the key in [brackets]). Only steps the guide gives; up to 900 characters for steps.",
     "  - Anything outside Jumia, their shop and PandaWorld, or something PandaWorld can't do: say plainly that you don't understand",
     "    that or can't help with it, suggest something you can do, and ask them to try something different.",
-    "  Write for WhatsApp: short and warm, at most 600 characters, *bold* with single asterisks, numbered lists as \"1.\" lines.",
+    "  Write for WhatsApp: short and warm, at most 600 characters (steps up to 900), *bold* with single asterisks, numbered lists as \"1.\" lines.",
     "  Reply in the language the seller wrote in.",
     "",
     "Examples (message → JSON):",
@@ -457,6 +469,7 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '"also tun on the drone" → {"type":"live_change","product":"drone","active":true}',
     '"hi there" → {"type":"reply","text":"Hi! 👋 Here\'s what I can do for your shop:\\n1. …\\n2. …\\n…\\nWhat would you like to do today?","link":null}',
     '"what\'s my shop name?" → {"type":"reply","text":"Your Jumia shop is <the name in About this seller>.","link":null}',
+    '"how do I regenerate my key?" → {"type":"reply","text":"1. Open your Extension Dashboard.\\n2. On the API key card, tap *Regenerate key* and confirm.\\n3. Copy the new key and paste it into the extension again: the old one stops working.","link":"dashboard"}',
     '"how many listings have I done today?" → {"type":"listings","period":"today"}',
     '"check if I have stock for creatine" → {"type":"stock","product":"creatine","filter":null}',
     '"what is out of stock" → {"type":"stock","product":null,"filter":"out"}',
@@ -601,7 +614,8 @@ export function cleanReply(text: string, links: Record<string, AssistantLink>): 
     .replace(/[ \t]{2,}/g, " ")
     .replace(/\s+([.,!?])/g, "$1")
     .trim();
-  return cleaned.length > 900 ? `${cleaned.slice(0, 899).replace(/\s+\S*$/, "")}…` : cleaned;
+  // Under WhatsApp's 1,024 for a message with a button: steps (site-guide.ts) can run to 900.
+  return cleaned.length > 1000 ? `${cleaned.slice(0, 999).replace(/\s+\S*$/, "")}…` : cleaned;
 }
 
 const DRAFT_STOP = new Set([
