@@ -516,8 +516,9 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
     <div className={cn("flex flex-col", mine ? "items-end" : "items-start")}>
       <div
         className={cn(
-          "max-w-[85%] overflow-hidden rounded-2xl text-sm leading-relaxed shadow-sm sm:max-w-[70%]",
-          mine ? "rounded-br-md bg-orange-500 text-white" : "rounded-bl-md bg-white text-zinc-800 ring-1 ring-zinc-100",
+          "max-w-[85%] overflow-hidden rounded-2xl text-sm leading-relaxed sm:max-w-[70%]",
+          // The seller's own messages in a soft grey (owner, 2026-10-07), the bot's in white.
+          mine ? "rounded-br-md bg-[#efefed] text-zinc-900" : "rounded-bl-md bg-white text-zinc-800 shadow-sm ring-1 ring-zinc-100",
           m.failed && "opacity-60",
         )}
       >
