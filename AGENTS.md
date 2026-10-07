@@ -1663,7 +1663,7 @@ labels." It is the WhatsApp bot itself, not a copy:
   says labels are printed on WhatsApp ("orders") or in Vendor Center, and
   `orders:labels` / `olabel:` there answer the same without asking Jumia.
   New-order alerts still only go to whatsapp_connections numbers.
-- **Scroll down**: a round down-arrow over the composer shows once the chat is
+- **Scroll down**: a round down-arrow, centred over the composer, shows once the chat is
   scrolled up from the bottom; tapping it goes back to the newest message.
 
 ### More of the Jumia API in chat (owner, 2026-10-07: "do all")
