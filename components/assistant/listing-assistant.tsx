@@ -253,7 +253,7 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
         </span>
         <div className="min-w-0">
           <p className="font-semibold text-zinc-900">Listing Assistant</p>
-          <p className="truncate text-xs text-zinc-500">List from photos, edit and submit drafts, update live products, ask about your shop. Orders and labels stay on WhatsApp.</p>
+          <p className="truncate text-xs text-zinc-500">List from photos, edit and submit drafts, update live products, ask about your shop.</p>
         </div>
       </div>
 
@@ -376,7 +376,6 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
             {sending ? <Loader2 className="h-5 w-5 animate-spin" /> : <ArrowUp className="h-5 w-5" />}
           </button>
         </div>
-        <p className="mt-2 hidden text-xs text-zinc-400 sm:block">Enter to send, Shift+Enter for a new line. Drop or paste photos anywhere in the chat.</p>
       </div>
 
       {dragging && (
