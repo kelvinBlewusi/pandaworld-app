@@ -76,6 +76,15 @@ export interface Ctx {
   shopId?:  string | null;
 }
 
+/**
+ * Changes to live Jumia products from the chat: the Standard pack and up
+ * (owner, 2026-10-07: Starter and free credits "can not make changes to
+ * listings on Jumia via the chat"). Reading the shop is `shop_whatsapp`,
+ * every plan.
+ */
+export const CHANGES_FEATURE: FeatureId = "shop_changes";
+export const CHANGES = "changes to your live Jumia products";
+
 /** Feature and Jumia connection, said to the seller when one's missing. Null then. */
 export async function shopContext(userId: string, phone: string, feature: FeatureId, what: string): Promise<Ctx | null> {
   const access = await featureAccess(userId, feature);
@@ -84,7 +93,7 @@ export async function shopContext(userId: string, phone: string, feature: Featur
     if (access.blockedBy === "credits") {
       await sendCtaUrlIfConfigured(phone, `You're out of credits: buy credits to use ${what} ${where} again.`, "Buy credits", `${appUrl()}/extension/dashboard`);
     } else {
-      await sendCtaUrlIfConfigured(phone, `${capitalise(what)} ${where} come with the ${featureMinPackName(feature)} pack.`, "See packs", `${appUrl()}/pricing`);
+      await sendCtaUrlIfConfigured(phone, `${capitalise(what)} ${where} come with the ${featureMinPackName(feature)} pack and up.`, "See packs", `${appUrl()}/pricing`);
     }
     return null;
   }
@@ -226,7 +235,7 @@ function confirmText(products: ShopProduct[], change: LiveChange, ctx: { currenc
 export async function proposeLiveChange(
   userId: string, phone: string, query: string | string[], change: LiveChange, opts: { preferSid?: string | null; all?: boolean } = {},
 ): Promise<string> {
-  const ctx = await shopContext(userId, phone, "shop_whatsapp", "your live products");
+  const ctx = await shopContext(userId, phone, CHANGES_FEATURE, CHANGES);
   if (!ctx) return "blocked";
   if (change.kind === "price" || change.kind === "sale") {
     const value = change.kind === "price" ? change.price : change.sale?.price;
@@ -377,7 +386,7 @@ const SCOPE_WORDS: Record<BulkScope, string> = {
 export async function proposeBulkChange(
   userId: string, phone: string, scope: BulkScope, words: string | null, change: LiveChange,
 ): Promise<string> {
-  const ctx = await shopContext(userId, phone, "shop_whatsapp", "your live products");
+  const ctx = await shopContext(userId, phone, CHANGES_FEATURE, CHANGES);
   if (!ctx) return "blocked";
   const products = await catalog(ctx);
   if (!products) return "no catalog";
@@ -482,7 +491,7 @@ export async function rewriteContent(
  * Jumia knows, and not forbidden in the product's category.
  */
 export async function proposeContentChange(userId: string, phone: string, query: string, req: ContentRequest): Promise<string> {
-  const ctx = await shopContext(userId, phone, "shop_whatsapp", "your live products");
+  const ctx = await shopContext(userId, phone, CHANGES_FEATURE, CHANGES);
   if (!ctx) return "blocked";
   const products = await catalog(ctx);
   if (!products) return "no catalog";
@@ -620,7 +629,7 @@ async function handleGroupTap(userId: string, phone: string, groupId: string, co
     await sendTextIfConfigured(phone, "OK, nothing changed on Jumia.");
     return;
   }
-  const ctx = await shopContext(userId, phone, "shop_whatsapp", "your live products");
+  const ctx = await shopContext(userId, phone, CHANGES_FEATURE, CHANGES);
   if (!ctx) return;
   // In chunks: a rule can change up to BULK_MAX products with this one tap.
   const products: ShopProduct[] = [];
@@ -678,7 +687,7 @@ export async function handleShopTap(userId: string, phone: string, text: string 
   }
 
   const sid = tap.kind === "pick" ? ((change.candidates as string[] | null) ?? [])[tap.index] : String(change.product_sid ?? "");
-  const ctx = await shopContext(userId, phone, "shop_whatsapp", "your live products");
+  const ctx = await shopContext(userId, phone, CHANGES_FEATURE, CHANGES);
   if (!ctx) return true;
   const { data: prow } = await db.from("jumia_products").select("*").eq("user_id", userId).eq("product_sid", sid ?? "").maybeSingle();
   if (!sid || !prow) {

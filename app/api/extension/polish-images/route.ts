@@ -8,11 +8,12 @@
  * PRODUCT_SHOTS: main image on white, angle, lifestyle, detail) as public
  * URLs; the panel puts them into the form's image slots.
  *
- * Auth: a PandaWorld API key, like /api/extension/fill. Comes with the Pro
- * and Business packs (PACK_FEATURES image_polish_extension, from
- * 2026-10-02; admins only before), and costs IMAGE_CREDIT_COST per image
- * that comes back, like the review page's photo tools: checked for all
- * four up front, charged after for those that came back. Admins and
+ * Auth: a PandaWorld API key, like /api/extension/fill. On every plan, free
+ * credits included, since 2026-10-07 (owner: "all packs can use Chrome
+ * image generation tool even free packs"; Pro and Business before, admins
+ * only before 2026-10-02), and costs POLISH_CREDIT_COST per image that
+ * comes back, the same as polish in the chat: checked for all four up
+ * front, charged after for those that came back. Admins and
  * everyone while billing is off pay nothing (lib/billing/mode.ts), nor does
  * a seller the owner gave it free (lib/billing/feature-grants.ts).
  *
@@ -27,7 +28,7 @@ import { generateProductShots, isGeminiImageEnabled, PRODUCT_SHOTS } from "@/lib
 import { featureAccess, featureMinPackName } from "@/lib/billing/features";
 import { activeFeatureGrant, recordGrantUse } from "@/lib/billing/feature-grants";
 import { deductCredits, getOrCreateCreditBalance } from "@/lib/billing/extension-credits";
-import { IMAGE_CREDIT_COST, serializeCredits } from "@/lib/billing/credit-packs";
+import { POLISH_CREDIT_COST, serializeCredits } from "@/lib/billing/credit-packs";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -76,11 +77,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Image generation isn't configured on the server." }, { status: 503, headers: CORS });
   }
 
-  const needed = PRODUCT_SHOTS.length * IMAGE_CREDIT_COST;
+  const needed = PRODUCT_SHOTS.length * POLISH_CREDIT_COST;
   const balance = await getOrCreateCreditBalance(userId);
   if (!free && balance < needed) {
     return NextResponse.json(
-      { error: `Polishing makes ${PRODUCT_SHOTS.length} images at ${IMAGE_CREDIT_COST} credits each (${needed}), and you have ${balance}. Buy credits from your dashboard to continue.`, needed, balance },
+      { error: `Polishing makes ${PRODUCT_SHOTS.length} images at ${POLISH_CREDIT_COST} credits each (${needed}), and you have ${balance}. Buy credits from your dashboard to continue.`, needed, balance },
       { status: 402, headers: CORS },
     );
   }
@@ -118,7 +119,7 @@ export async function POST(req: Request) {
   if (free) {
     await recordGrantUse(grant!.id).catch(() => {});
   } else {
-    const charged = await deductCredits(userId, made * IMAGE_CREDIT_COST, `Polished ${made} product image${made === 1 ? "" : "s"} in the extension`);
+    const charged = await deductCredits(userId, made * POLISH_CREDIT_COST, `Polished ${made} product image${made === 1 ? "" : "s"} in the extension`);
     if (!charged.ok) console.error(`[polish-images] credit deduction failed for ${userId}: ${charged.error}`);
     after = charged.balance;
   }

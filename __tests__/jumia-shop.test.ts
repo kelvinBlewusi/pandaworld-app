@@ -272,11 +272,28 @@ describe("changing a live product on WhatsApp", () => {
     expect(last().body).toBe('I couldn\'t find "washing machine" among your 5 Jumia products. Try its name as it shows on Jumia, or its SKU.');
   });
 
-  it("needs the pack", async () => {
-    off.add("shop_whatsapp");
+  // Owner, 2026-10-07: Starter and free credits "can not make changes to listings on Jumia via the chat".
+  it("needs the pack that has live changes (Standard and up), and asks Jumia nothing without it", async () => {
+    off.add("shop_changes");
     await proposeLiveChange(USER, PHONE, "fridge", { kind: "stock", stock: 5 });
-    expect(last()).toMatchObject({ kind: "cta", body: "Your live products on WhatsApp come with the Pro pack." });
+    expect(last()).toMatchObject({ kind: "cta", body: "Changes to your live Jumia products on WhatsApp come with the Pro pack and up." });
     expect(calls).toHaveLength(0);
+  });
+
+  it("a confirm tap without the pack changes nothing either", async () => {
+    await proposeLiveChange(USER, PHONE, "fridge", { kind: "stock", stock: 5 });
+    const tap = last().ids![0];
+    calls.length = 0;
+    off.add("shop_changes");
+    await handleShopTap(USER, PHONE, tap);
+    expect(last().body).toContain("come with the Pro pack and up");
+    expect(calls.filter((c) => c.method !== "GET")).toHaveLength(0);
+  });
+
+  it("reading the shop needs no pack (every plan)", async () => {
+    off.add("shop_changes");
+    await answerStock(USER, PHONE, "fridge", null);
+    expect(last().body).not.toContain("come with the");
   });
 
   it("taps are read only in their own shape", () => {
@@ -358,9 +375,9 @@ describe("answers", () => {
     calls.length = 0;
     off.add("shop_whatsapp");
     await answerSales(USER, PHONE, "today");
-    expect(last().body).toBe("Your Jumia orders on WhatsApp come with the Pro pack.");
+    expect(last().body).toBe("Your Jumia orders on WhatsApp come with the Pro pack and up.");
     await answerPayouts(USER, PHONE);
-    expect(last().body).toBe("Your Jumia payouts on WhatsApp come with the Pro pack.");
+    expect(last().body).toBe("Your Jumia payouts on WhatsApp come with the Pro pack and up.");
     expect(calls).toHaveLength(0);
   });
 
@@ -700,7 +717,7 @@ describe("round 3: several products, product info, fees (owner's second test, 20
     expect(last().body).toContain("I couldn't match *Nasco Blender 1.5L*'s Jumia category (Hard Hats) to Jumia's fee table.");
     off.add("fee_calc_whatsapp");
     await answerFees(USER, PHONE, "blender", null);
-    expect(last().body).toBe("Jumia's fees on WhatsApp come with the Pro pack.");
+    expect(last().body).toBe("Jumia's fees on WhatsApp come with the Pro pack and up.");
   });
 
   it("a Jumia category to the fee table's", () => {

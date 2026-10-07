@@ -28,7 +28,8 @@ import { activeFeatureGrant } from "@/lib/billing/feature-grants";
 import { isOutOfCredits } from "@/lib/billing/extension-credits";
 
 export type FeatureId =
-  | "qc_fix" | "image_polish_extension" | "fee_calc_extension" | "order_alerts" | "shipping_labels" | "shop_whatsapp" | "fee_calc_whatsapp";
+  | "qc_fix" | "image_polish_extension" | "fee_calc_extension" | "order_alerts" | "shipping_labels" | "shop_whatsapp" | "fee_calc_whatsapp"
+  | "shop_changes";
 
 /** Why a seller can't use a feature: their pack doesn't include it, or they're out of credits. */
 export type FeatureBlock = "pack" | "credits";

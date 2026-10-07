@@ -13,6 +13,7 @@ import { auth, currentUser } from "@clerk/nextjs/server";
 import { randomBytes } from "node:crypto";
 import { getCreditPack } from "@/lib/billing/credit-packs";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
+import { purchaseBlock } from "@/lib/billing/connections";
 
 export const runtime = "nodejs";
 
@@ -24,6 +25,12 @@ export async function POST(req: Request) {
   // own Paystack account with pending initialized transactions.
   const limited = checkRateLimit(`extension-checkout:${userId}`, RATE_LIMITS.extensionCheckout);
   if (limited) return limited;
+
+  // Every pack needs WhatsApp linked and Jumia connected first (owner,
+  // 2026-10-07; lib/billing/connections.ts). The modal checks this before it
+  // shows a Buy button; this is the real check.
+  const block = await purchaseBlock(userId);
+  if (block) return NextResponse.json({ error: block.message, connect: block.missing }, { status: 403 });
 
   const user = await currentUser();
   const email = user?.primaryEmailAddress?.emailAddress;
