@@ -154,6 +154,7 @@ jest.mock("@/lib/billing/features", () => ({
   hasFeature:         async () => qcFeature,
   featureAccess:      async () => (qcFeature ? { ok: true } : { ok: false, blockedBy: "pack" }),
   featureMinPackName: () => "Standard",
+  currentPack:        async () => null,
 }));
 
 // The AI's replies, scripted per test (the assistant's pilot). With none
