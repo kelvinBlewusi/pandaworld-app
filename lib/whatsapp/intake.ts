@@ -87,7 +87,7 @@ import { restrictedWordsInJumiaRejection, restrictedBrandWordsInRejection } from
 import { rememberRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
 import { handleShopTap } from "@/lib/whatsapp/shop";
-import { chatChannelOf } from "@/lib/whatsapp/channel";
+import { chatChannelOf, isWebAddress } from "@/lib/whatsapp/channel";
 import { carryPriceToVariants, carryStockToVariants, chatPrice, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import { answerLiveValue, answerPendingQuestion, assistantEnabled, looksLikeQuestion, plainQuickEdit, runAssistant } from "@/lib/whatsapp/assistant";
 import { batchCreditRefusal, creditGate } from "@/lib/whatsapp/credit-gate";
@@ -1704,7 +1704,8 @@ async function appendPhotoToListing(
  * seller who keeps trickling photos in one at a time forever isn't a case
  * worth blocking a whole invocation over indefinitely.
  */
-async function settlePhotosBeforeClose(listingId: string): Promise<void> {
+async function settlePhotosBeforeClose(listingId: string, phoneNumber: string): Promise<void> {
+  if (!albumsArriveLoose(phoneNumber)) return;
   for (let i = 0; i < 3; i++) {
     const age = await msSinceLastPhoto(listingId);
     if (!Number.isFinite(age) || age >= PHOTO_SETTLE_MS) return;
@@ -1719,6 +1720,15 @@ async function settlePhotosBeforeClose(listingId: string): Promise<void> {
  */
 const PHOTO_IN_FLIGHT_MS = 10_000;
 const PHOTO_IN_FLIGHT_POLL_MS = 1_000;
+
+/**
+ * Whether a photo can still be on its way when "done" or a product number
+ * arrives: true on WhatsApp, whose album deliveries are separate and
+ * unordered. The Jumia Listing Assistant's page sends one photo at a time
+ * and waits for each to be stored, so on a web address nothing is ever in
+ * flight, and the waits below would only hold up the seller's Done.
+ */
+const albumsArriveLoose = (phoneNumber: string) => !isWebAddress(phoneNumber);
 
 /** Whether an inbound photo from this number reached the webhook since
  *  `sinceMs`. The webhook logs every message on arrival, before handling
@@ -1752,7 +1762,7 @@ async function slotListingOnceInFlightPhotoLands(
   seq:         number,
 ): Promise<string | null> {
   const found = await findBatchSlotListing(userId, batchId, seq);
-  if (found || !(await photoReceivedSince(phoneNumber, Date.now() - PHOTO_IN_FLIGHT_MS))) return found;
+  if (found || !albumsArriveLoose(phoneNumber) || !(await photoReceivedSince(phoneNumber, Date.now() - PHOTO_IN_FLIGHT_MS))) return found;
   const deadline = Date.now() + PHOTO_IN_FLIGHT_MS;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, PHOTO_IN_FLIGHT_POLL_MS));
@@ -1788,6 +1798,7 @@ async function latestPhotoReceivedAt(phoneNumber: string, sinceMs: number): Prom
  * batch it would have landed on the next product. True when it waited.
  */
 async function awaitPhotoInFlight(listingId: string, phoneNumber: string): Promise<boolean> {
+  if (!albumsArriveLoose(phoneNumber)) return false;
   const received = await latestPhotoReceivedAt(phoneNumber, Date.now() - PHOTO_IN_FLIGHT_MS);
   if (received == null) return false;
   const deadline = Date.now() + PHOTO_IN_FLIGHT_MS;
@@ -1911,7 +1922,7 @@ async function handleQuietBatchMessage(
   // every "Price 40\n1" look like a photo had just landed, holding up a
   // close that was never actually racing an album. Same ordering bug the
   // interactive flow's own "done" handling already had to learn once.
-  await settlePhotosBeforeClose(listingId);
+  await settlePhotosBeforeClose(listingId, phoneNumber);
 
   if (notes) await applyNotes(listingId, notes);
   await applyParkedNotes(userId, phoneNumber, listingId);
@@ -2108,11 +2119,11 @@ async function handleAwaitingPhotos(
     // photo first", twice. Wait for it, and for the rest of its album.
     if (!listingId) {
       listingId = await slotListingOnceInFlightPhotoLands(userId, phoneNumber, session.batchId, seq);
-      if (listingId) await settlePhotosBeforeClose(listingId);
+      if (listingId) await settlePhotosBeforeClose(listingId, phoneNumber);
     } else if (await awaitPhotoInFlight(listingId, phoneNumber)) {
       // A further photo was still arriving: wait for it and the rest of
       // its album rather than close on the count so far.
-      await settlePhotosBeforeClose(listingId);
+      await settlePhotosBeforeClose(listingId, phoneNumber);
     }
     const lastPhotoAgeMs = listingId ? await msSinceLastPhoto(listingId) : Infinity;
 
@@ -2184,7 +2195,7 @@ async function handleAwaitingPhotos(
     //
     // Notes are already saved above, so nothing the seller typed is at
     // risk while they wait.
-    if (listingId && lastPhotoAgeMs < PHOTO_SETTLE_MS) {
+    if (listingId && lastPhotoAgeMs < PHOTO_SETTLE_MS && albumsArriveLoose(phoneNumber)) {
       await replyButtons(
         phoneNumber,
         `📸 Still receiving your photos for product ${seq} — give it a couple of seconds, then tap *Done*.`,
@@ -2608,6 +2619,8 @@ async function askForNextMissingValue(
     variationBlocked?: Set<string>;
     /** The answer sends the product straight back to Jumia (a stopped submit). */
     resubmit?: boolean;
+    /** The prefix already names the product ("✅ Product drafted: X."), so the question doesn't again. */
+    named?: boolean;
   } = {},
 ): Promise<boolean> {
   const listings = await getBatchListings(batchId);
@@ -2624,6 +2637,7 @@ async function askForNextMissingValue(
       reasons:          opts.reasons?.get(l.id),
       variationBlocked: opts.variationBlocked?.has(l.id),
       resubmit:         opts.resubmit,
+      named:            opts.named,
     });
     if (asked) return true;
   }
@@ -2651,9 +2665,15 @@ async function askBlockingValue(
   phoneNumber: string,
   l:           ListingRow,
   who:         string,
-  opts: { prefix?: string; known?: JumiaCategoryAttribute[]; reasons?: string[]; variationBlocked?: boolean; resubmit?: boolean } = {},
+  opts: { prefix?: string; known?: JumiaCategoryAttribute[]; reasons?: string[]; variationBlocked?: boolean; resubmit?: boolean; named?: boolean } = {},
 ): Promise<boolean> {
   const code = Number(l.category_code);
+  // Live, 2026-10-07: "✅ Product drafted: X." then "*X*" on the next line.
+  // When the prefix has named the product, the question's own name line goes.
+  const unnamed = (body: string) => {
+    const first = body.indexOf("\n");
+    return opts.named && first > 0 && body.slice(0, first).includes(`*${who}*`) ? body.slice(first).replace(/^\n+/, "") : body;
+  };
   const resubmit = opts.resubmit ? { resubmit: true } : {};
   let reasons = opts.reasons;
   let fields = opts.known;
@@ -2670,7 +2690,7 @@ async function askBlockingValue(
   if (attr) {
     await updateSession(phoneNumber, { awaitingValueFor: { listingId: l.id, field: attr.name, ...resubmit } });
     const question = missingValueQuestion(attr, who);
-    const body = await prefixedBody(phoneNumber, opts.prefix, question.body);
+    const body = await prefixedBody(phoneNumber, opts.prefix, unnamed(question.body));
     if (question.options.length <= 3) {
       await replyButtons(phoneNumber, body, question.options);
     } else {
@@ -2687,7 +2707,7 @@ async function askBlockingValue(
   if (!variationBlocked) return false;
 
   await updateSession(phoneNumber, { awaitingValueFor: { listingId: l.id, field: VARIATION_FIELD, ...resubmit } });
-  const body = await prefixedBody(phoneNumber, opts.prefix, variationQuestion(who, await variationOptions(code)));
+  const body = await prefixedBody(phoneNumber, opts.prefix, unnamed(variationQuestion(who, await variationOptions(code))));
   await replyCta(phoneNumber, body, "Pick in the editor", focusedEditorUrl(l.id));
   return true;
 }
@@ -3002,6 +3022,7 @@ export async function finalizeBatch(
           known:   new Map([[only.id, assessment.missingFields ?? []]]),
           reasons: new Map([[only.id, reasons]]),
           prefix:  `✅ Product drafted: ${only.title}.`,
+          named:   true,
         }));
         if (asked) return;
         await replyCtaOrSplit(

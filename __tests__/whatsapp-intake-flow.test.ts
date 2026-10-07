@@ -551,6 +551,18 @@ describe("tapping done while the album is still arriving", () => {
     expect(sent.some((m) => m.body.includes("Still receiving your photos"))).toBe(true);
     expect(String(listings()[0].user_prompt ?? "")).toContain("250");
   });
+
+  // The Jumia Listing Assistant's page sends one photo at a time and waits
+  // for each to be stored: nothing is ever still arriving, so Done goes at once.
+  it("doesn't hold on the web, where no photo is ever in flight", async () => {
+    const WEB = `web:${USER}`;
+    seedSession({ phone_number: WEB, batch_size: 2, batch_seq: 1 });
+    await handleLinkedMessage(USER, WEB, "web-m1", photo("a"));
+    await handleLinkedMessage(USER, WEB, "web-m2", { text: "done" });
+
+    expect(session().batch_seq).toBe(2);
+    expect(session().listing_id).toBeNull();
+  });
 });
 
 describe("asking for a missing price in chat", () => {
@@ -882,6 +894,9 @@ describe("a field the category requires, filled or asked for in chat", () => {
     // The draft and its question are one message (owner, 2026-10-07: fewer messages per listing).
     expect(sent).toHaveLength(1);
     expect(ask!.body.startsWith("✅ Product drafted: ")).toBe(true);
+    // Named once: the draft line names it, so the question's own name line goes (live, 2026-10-07).
+    expect(ask!.body.split("Olive & Milk Shower Cream").length - 1).toBe(1);
+    expect(ask!.body).toContain(".\n\nJumia needs its *Weight (kg)*");
     expect(session().awaiting_value_for).toEqual({ listingId: "listing-1", field: "product_weight" });
 
     sent.length = 0;
