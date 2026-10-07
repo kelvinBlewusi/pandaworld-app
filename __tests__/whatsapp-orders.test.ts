@@ -50,6 +50,8 @@ import { inQuietHours, runOrderAlerts } from "@/lib/whatsapp/order-alerts";
 import type { JumiaOrderItem } from "@/lib/jumia/orders";
 import type { WaitingOrder } from "@/lib/jumia/order-flow";
 import { jumiaCountryByCode } from "@/lib/marketing/countries";
+import { featureAccess } from "@/lib/billing/features";
+import { _resetBillingModeCache } from "@/lib/billing/mode";
 
 const PHONE = "233200000000";
 const O1 = "11111111-0000-4000-8000-000000000001";
@@ -83,6 +85,7 @@ beforeAll(async () => { labelPdf = await tinyPdf("label"); });
 
 beforeEach(() => {
   db = new FakeDb();
+  _resetBillingModeCache();
   sent.length = 0;
   calls.length = 0;
   featureOn = true;
@@ -422,5 +425,43 @@ describe("alerts", () => {
     expect(sent).toHaveLength(0);
     await runOrderAlerts(at("2026-10-06T04:05:00Z")); // 07:05 in Nairobi
     expect(sent).toHaveLength(1);
+  });
+});
+
+describe("labels cost credits when billing is on (owner, 2026-10-07)", () => {
+  const billing = (balance: number) => {
+    db.tables.app_settings = [{ key: "billing_enabled", value: true }];
+    db.tables.extension_credits = [{ user_id: "user_seller", balance }];
+    _resetBillingModeCache();
+  };
+  const balance = () => Number(db.tables.extension_credits[0].balance);
+
+  it("each order's label is charged the first time it's sent; the same labels again are free", async () => {
+    billing(5);
+    await say("orders:packall");
+    expect(last("document").filename).toMatch(/^Jumia-labels-2-orders-/);
+    expect(balance()).toBe(4);
+    await say("orders:labels");
+    expect(last("document")).toBeDefined();
+    expect(balance()).toBe(4);
+    expect((db.tables.extension_credit_transactions ?? []).map((t) => t.reference)).toEqual([`label:${O1}`, `label:${O2}`]);
+  });
+
+  it("not enough credits: packed, but no label until they top up", async () => {
+    billing(0.6);
+    await say("orders:packall");
+    expect(sent.map((m) => m.kind)).toEqual(["buttons"]);
+    expect(last("buttons").body).toContain("🏷️ 2 labels cost 1 credit, and you have 0.6. Buy credits, then tap Get labels.");
+    expect(last("buttons").buttons!.map((b) => b.id)).toContain("orders:labels");
+    expect(calls.some((c) => c.path === "/orders/print-labels")).toBe(false);
+    expect(balance()).toBe(0.6);
+  });
+
+  it("the Standard pack (labels, no alerts) can still open its orders", async () => {
+    (featureAccess as jest.Mock).mockImplementation(async (_u: string, f: string) => (f === "shipping_labels" ? { ok: true } : { ok: false, blockedBy: "pack" }));
+    orders = [];
+    await say("orders");
+    expect(last("text").body).toBe("✅ No Jumia orders waiting for you. Type *orders* any time to check.");
+    (featureAccess as jest.Mock).mockImplementation(async () => (featureOn ? { ok: true } : { ok: false, blockedBy }));
   });
 });

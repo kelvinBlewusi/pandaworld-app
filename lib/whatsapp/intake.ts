@@ -15,8 +15,7 @@ import {
 import { createListingForUser } from "@/lib/listings/create";
 import { isAdmin } from "@/lib/auth/is-admin";
 import { runAutoAnalyze } from "@/lib/actions/auto-analyze";
-import { availableCredits } from "@/lib/billing/extension-credits";
-import { LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
+import { availableCredits, listingCreditCost } from "@/lib/billing/extension-credits";
 import { pushListingToJumia, missingFieldLabels, refreshPendingFeedStatus } from "@/lib/jumia/push-listing";
 import { assessListingPushReadiness, type ListingReadinessResult } from "@/lib/whatsapp/readiness";
 import { autoFillMissingFields, missingValueQuestion, parseMissingValue, saveMissingValue } from "@/lib/whatsapp/missing-value";
@@ -2281,14 +2280,14 @@ async function reserveDraftCapacity(
     (limited.success ? withQuota : overQuota).push(listing);
   }
 
-  // Drafting is free — a listing is charged LIVE_LISTING_CREDIT_COST only
+  // Drafting is free — a listing is charged its price (listingCreditCost) only
   // when it goes live on Jumia (lib/billing/extension-credits.ts) — but a
   // seller can only draft as many as their credits could list, less what
   // is already held for listings waiting on Jumia. Checked before anything
   // is queued so a seller who's run out finds out now, not at submit.
-  const creditBalance = await availableCredits(userId);
+  const [creditBalance, listingCost] = await Promise.all([availableCredits(userId), listingCreditCost(userId)]);
   const affordableCount = Number.isFinite(creditBalance)
-    ? Math.max(0, Math.floor(creditBalance / LIVE_LISTING_CREDIT_COST))
+    ? Math.max(0, Math.floor(creditBalance / listingCost))
     : withQuota.length;
   const overCredit = withQuota.splice(affordableCount);
 
@@ -2312,7 +2311,7 @@ async function reserveDraftCapacity(
     // Same shape: top up, then tap Retry — no photo is re-sent.
     await replyError(
       phoneNumber,
-      `⚠️ Product ${listing.whatsapp_seq}: not enough credits to list it (${LIVE_LISTING_CREDIT_COST} are charged when it goes live on Jumia). Top up, then tap Retry.`,
+      `⚠️ Product ${listing.whatsapp_seq}: not enough credits to list it (${listingCost} are charged when it goes live on Jumia). Top up, then tap Retry.`,
       {
         retryId: `retry product ${listing.whatsapp_seq}`,
         cta:     { label: "Buy credits", url: buyCreditsUrl() },
@@ -3593,6 +3592,7 @@ async function handleSubmit(
   // swallowed — pushListingToJumia below surfaces the same failure
   // per-listing either way.
   await getValidJumiaCredentials(userId).catch(() => {});
+  const listingCost = await listingCreditCost(userId);
 
   try {
     // Pushed concurrently, not sequentially — a "submit all" on a large
@@ -3659,7 +3659,7 @@ async function handleSubmit(
             messages[i] = `Product ${seq}: ⚠️ Not submitted — ${result.message}`;
           } else if (result.code === "insufficient_credits") {
             shortOfCredits = true;
-            messages[i] = `Product ${seq}: ⚠️ Not submitted — not enough credits (${LIVE_LISTING_CREDIT_COST} are charged when it goes live).`;
+            messages[i] = `Product ${seq}: ⚠️ Not submitted — not enough credits (${listingCost} are charged when it goes live).`;
           } else if (result.needsReconnect) {
             reconnectCount++;
             messages[i] = `Product ${seq}: ⚠️ Not submitted — Jumia needs to be reconnected.`;
@@ -3744,7 +3744,7 @@ async function handleSubmit(
     if (shortOfCredits) {
       await replyCta(
         phoneNumber,
-        `You only pay for listings that go live on Jumia: ${LIVE_LISTING_CREDIT_COST} credits each. Top up, then reply *submit all* to send the rest.`,
+        `You only pay for listings that go live on Jumia: ${listingCost} credits each. Top up, then reply *submit all* to send the rest.`,
         "Buy credits",
         buyCreditsUrl(),
       );

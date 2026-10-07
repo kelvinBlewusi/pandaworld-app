@@ -254,7 +254,9 @@ const UPDATE_NEWS: [title: string, line: string][] = [
   ["Fix and resubmit in the chat.", "If Jumia rejects a listing, tap Fix & resubmit and answer the bot's question."],
   ["We tell you when it's live.", "The bot messages you as each listing goes live on Jumia."],
   ["Pay only when your listing goes live.",
-    `A WhatsApp listing is ${LIVE_LISTING_CREDIT_COST} credits and an autofill is ${LISTING_CREDIT_COST}. ` +
+    (LISTING_CREDIT_COST === LIVE_LISTING_CREDIT_COST
+      ? `A WhatsApp listing or an autofill is ${LIVE_LISTING_CREDIT_COST} credits. `
+      : `A WhatsApp listing is ${LIVE_LISTING_CREDIT_COST} credits and an autofill is ${LISTING_CREDIT_COST}. `) +
     `Drafts, fixes and rejected listings are free. New accounts get ${FREE_SIGNUP_CREDITS} free credits, and credits never expire.`],
   ["Free price calculator for every Jumia country.", "See what you keep after Jumia's commission and fees, before you set your price."],
 ];

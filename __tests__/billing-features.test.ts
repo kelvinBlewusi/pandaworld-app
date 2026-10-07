@@ -122,9 +122,10 @@ describe("at 0 credits", () => {
 
 describe("what each pack lists", () => {
   // The extension's two went live 2026-10-02; the WhatsApp three are still to come.
-  it("adds QC fixes from Standard, and from Pro the extension's two tools and four to come", () => {
+  it("adds QC fixes and shipping labels from Standard, and from Pro the extension's two tools and the rest to come", () => {
     expect(packFeatures("starter")).toEqual([]);
-    expect(packFeatures("standard").map((f) => f.id)).toEqual(["qc_fix"]);
+    // Labels from Standard since 2026-10-07: each one is charged.
+    expect(packFeatures("standard").map((f) => f.id)).toEqual(["qc_fix", "shipping_labels"]);
     const pro = packFeatures("pro");
     expect(pro.filter((f) => !f.comingSoon).map((f) => f.id)).toEqual(["qc_fix", "fee_calc_extension", "image_polish_extension"]);
     expect(pro.filter((f) => f.comingSoon).map((f) => f.label)).toEqual([

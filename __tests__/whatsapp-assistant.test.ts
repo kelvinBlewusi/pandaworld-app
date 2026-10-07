@@ -282,10 +282,12 @@ describe("its own replies (owner, 2026-10-06)", () => {
 
     const prompt = aiPrompts[0];
     expect(prompt).toContain("- List products on Jumia from WhatsApp");
-    expect(prompt).toContain("- Orders on WhatsApp (Pro pack and up)");
+    expect(prompt).toContain("(Standard pack and up). Pro and up also: alerts for new Jumia orders");
     expect(prompt).toContain("- Country: Ghana");
     expect(prompt).toContain("- No pack bought yet: on their free sign-up credits.");
-    expect(prompt).toContain("- Orders and shipping labels on WhatsApp: not on their pack (Pro and up)");
+    expect(prompt).toContain("- Orders and shipping labels on WhatsApp: not on their pack (Standard and up)");
+    expect(prompt).toContain("- New-order alerts on WhatsApp: not on their pack (Pro and up)");
+    expect(prompt).toContain("a shipping label 0.5 credits (the same label again is free)");
     expect(prompt).toContain("- Credits: 9 available, enough for about 4 WhatsApp listings");
     expect(prompt).toContain("- home: PandaWorld's home page");
     expect(prompt).toContain("- country: selling on Jumia in their country");

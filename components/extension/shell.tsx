@@ -76,6 +76,7 @@ export function ExtensionShell({
   notificationsSeenAt,
   isAdmin = false,
   canBuyCredits = false,
+  listingCost,
 }: {
   children: React.ReactNode;
   planLabel: string;
@@ -87,6 +88,8 @@ export function ExtensionShell({
   isAdmin?: boolean;
   /** Show "Buy credits" — only while billing is on (lib/billing/mode.ts). */
   canBuyCredits?: boolean;
+  /** What a listing costs this seller, for the pack picker. */
+  listingCost?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [buyOpen, setBuyOpen] = useState(false);
@@ -331,7 +334,7 @@ export function ExtensionShell({
           <div className="min-h-full p-4 sm:p-6 lg:p-8">{children}</div>
         </main>
       </div>
-      {canBuyCredits && <BuyCreditsModal open={buyOpen} onClose={() => setBuyOpen(false)} />}
+      {canBuyCredits && <BuyCreditsModal open={buyOpen} onClose={() => setBuyOpen(false)} listingCost={listingCost} />}
     </div>
   );
 }

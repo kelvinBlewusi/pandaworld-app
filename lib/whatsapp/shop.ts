@@ -27,6 +27,8 @@ import {
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { appUrl } from "@/lib/whatsapp/app-url";
 import { featureAccess, featureMinPackName, type FeatureId } from "@/lib/billing/features";
+import { LIVE_CHANGE_CREDIT_COST } from "@/lib/billing/credit-packs";
+import { chargeService, isUnmetered, refundService } from "@/lib/billing/extension-credits";
 import { COUNTRY_CURRENCY, getValidJumiaCredentials } from "@/lib/jumia/api";
 import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
 import { promptJumiaConnection } from "@/lib/whatsapp/jumia-connect";
@@ -56,6 +58,8 @@ interface Ctx {
   country:  string;
   currency: string;
   jc?:      JumiaCountry;
+  /** Charged credits (not an admin, billing on): the price goes in a change's question. */
+  charged?: boolean;
 }
 
 /** Feature and Jumia connection, said to the seller when one's missing. Null then. */
@@ -75,6 +79,7 @@ async function shopContext(userId: string, phone: string, feature: FeatureId, wh
     return {
       userId, phone, token: creds.accessToken, country,
       currency: creds.currency || COUNTRY_CURRENCY[country] || "", jc: jumiaCountryByCode(country),
+      charged: !(await isUnmetered(userId)),
     };
   } catch {
     const kind = await getJumiaConnectionKind(userId);
@@ -151,14 +156,15 @@ export function groupTargets(
 }
 
 /** The confirm question for a change, one line per product. */
-function confirmText(products: ShopProduct[], change: LiveChange, ctx: { currency: string; jc?: JumiaCountry }): string {
+function confirmText(products: ShopProduct[], change: LiveChange, ctx: { currency: string; jc?: JumiaCountry; charged?: boolean }): string {
+  const cost = ctx.charged ? ` (${LIVE_CHANGE_CREDIT_COST} credits)` : "";
   if (products.length === 1) {
     const one = products[0];
-    return `Change *${shorten(label(one), 120)}* (SKU ${one.sellerSku}): ${describeLiveChange(change, one, ctx)}?\n\nThis changes it on Jumia.`;
+    return `Change *${shorten(label(one), 120)}* (SKU ${one.sellerSku}): ${describeLiveChange(change, one, ctx)}?\n\nThis changes it on Jumia${cost}.`;
   }
   const lines = products.map((p) => `• ${shorten(label(p), 50)}: ${describeLiveChange(change, p, ctx)}`);
   const head = `Change these ${products.length} products on Jumia?`;
-  const tail = "One tap changes them all.";
+  const tail = `One tap changes them all${cost}.`;
   let body = [head, ...lines, "", tail].join("\n");
   for (let shown = lines.length - 1; body.length > INTERACTIVE_BODY_MAX - 20 && shown > 0; shown--) {
     body = [head, ...lines.slice(0, shown), `+${products.length - shown} more`, "", tail].join("\n");
@@ -293,6 +299,25 @@ export function parseShopTap(text: string | undefined): ShopTap | null {
   return null;
 }
 
+/**
+ * The change's credits (LIVE_CHANGE_CREDIT_COST, one tap whatever the number
+ * of products), taken before it reaches Jumia; given back when Jumia refuses
+ * it all (here, or the worker: lib/whatsapp/shop-notices.ts). False, and
+ * said, when the seller can't cover it: the offer stays for its tap.
+ */
+async function payForChange(ctx: Ctx, reference: string, description: string): Promise<boolean> {
+  const paid = await chargeService(ctx.userId, LIVE_CHANGE_CREDIT_COST, reference, description);
+  if (paid.ok) return true;
+  if (paid.reason === "insufficient") {
+    await sendCtaUrlIfConfigured(ctx.phone,
+      `A change on Jumia costs ${LIVE_CHANGE_CREDIT_COST} credits, and you have ${Math.max(0, Math.round(paid.available * 100) / 100)}. Buy credits, then tap Yes again.`,
+      "Buy credits", `${appUrl()}/extension/dashboard`);
+  } else {
+    await sendTextIfConfigured(ctx.phone, "I couldn't get that ready just now. Tap Yes again in a moment.");
+  }
+  return false;
+}
+
 /** The tap on a several-products change: every product in one feed, or none. */
 async function handleGroupTap(userId: string, phone: string, groupId: string, confirm: boolean): Promise<void> {
   const db = createServerClient();
@@ -326,8 +351,10 @@ async function handleGroupTap(userId: string, phone: string, groupId: string, co
     return;
   }
   const keptProducts = kept.map((r) => products.find((p) => p.sid === r.product_sid)!);
+  if (!(await payForChange(ctx, `lgrp:${groupId}`, `Change on Jumia: ${keptProducts.length} products`))) return;
   const sent = await sendLiveChanges(ctx.token, keptProducts, live, { country: ctx.country, currency: ctx.currency });
   if (!sent.ok) {
+    await refundService(`lgrp:${groupId}`, "Refund: Jumia didn't take the change");
     await db.from("jumia_product_changes").update({ status: "failed", error: sent.message, updated_at: now() }).in("id", ids);
     await sendTextIfConfigured(phone, `⚠️ Jumia didn't take that change: ${sent.message}`);
     return;
@@ -390,9 +417,11 @@ export async function handleShopTap(userId: string, phone: string, text: string 
     );
     return true;
   }
+  if (!(await payForChange(ctx, `lchg:${tap.id}`, `Change on Jumia: ${shorten(label(product), 60)}`))) return true;
   const sent = await sendLiveChange(ctx.token, product, live, { country: ctx.country, currency: ctx.currency });
   const now = new Date().toISOString();
   if (!sent.ok) {
+    await refundService(`lchg:${tap.id}`, "Refund: Jumia didn't take the change");
     await db.from("jumia_product_changes").update({ status: "failed", error: sent.message, product_sid: sid, seller_sku: product.sellerSku, name: label(product), updated_at: now }).eq("id", tap.id);
     await sendTextIfConfigured(phone, `⚠️ Jumia didn't take that change to ${shorten(label(product), 80)}: ${sent.message}`);
     return true;

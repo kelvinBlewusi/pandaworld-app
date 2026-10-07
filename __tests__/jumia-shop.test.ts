@@ -53,6 +53,7 @@ import { COUNTRY_FEES, feeCategoryForPath } from "@/lib/marketing/country-fees";
 import { orderUpdatesText, runShopNotices } from "@/lib/whatsapp/shop-notices";
 import { parseAction, productBacked } from "@/lib/whatsapp/assistant";
 import { _resetPriceMinimumCache } from "@/lib/jumia/price-minimums";
+import { _resetBillingModeCache } from "@/lib/billing/mode";
 
 const USER = "seller";
 const PHONE = "233200000000";
@@ -92,6 +93,7 @@ beforeEach(() => {
   feed = { status: "DONE", failed: 0, errors: [] };
   feedReads = 0;
   _resetPriceMinimumCache();
+  _resetBillingModeCache();
   catalog = [
     set("f", "Hisense 205L Double Door Fridge", "Hisense", [{ id: FRIDGE, sku: "HIS-205" }]),
     set("f2", "LG 250L Top Freezer Fridge", "LG", [{ id: FRIDGE2, sku: "LG-250", price: 5200 }]),
@@ -416,6 +418,22 @@ describe("told without asking", () => {
     expect(last().body).not.toContain("#444");
   });
 
+  it("each order-updates message costs credits; one the seller can't cover waits for a top-up", async () => {
+    seed();
+    db.tables.app_settings = [{ key: "billing_enabled", value: true }];
+    db.tables.extension_credits = [{ user_id: USER, balance: 0.1 }];
+    _resetBillingModeCache();
+    orders = [];
+    await runShopNotices(at("2026-10-07T10:00:00Z"));
+    orders = [order("o1", 111, "Delivered")];
+    await runShopNotices(at("2026-10-07T10:10:00Z"));
+    expect(sent).toHaveLength(0);
+    db.tables.extension_credits[0].balance = 5;
+    await runShopNotices(at("2026-10-07T10:20:00Z"));
+    expect(last().body).toContain("#111");
+    expect(Number(db.tables.extension_credits[0].balance)).toBe(4.8);
+  });
+
   it("nothing outside WhatsApp's 24 hours, or at night", async () => {
     seed();
     orders = [];
@@ -675,5 +693,58 @@ describe("round 3: several products, product info, fees (owner's second test, 20
 
   it("the last 90 days", () => {
     expect(periodStart("quarter", "Africa/Accra", new Date("2026-10-07T10:00:00Z"))).toBe("2026-07-10");
+  });
+});
+
+describe("live changes cost credits when billing is on (owner, 2026-10-07)", () => {
+  const billing = (balance: number) => {
+    db.tables.app_settings = [{ key: "billing_enabled", value: true }];
+    db.tables.extension_credits = [{ user_id: USER, balance }];
+    _resetBillingModeCache();
+  };
+  const balance = () => Number(db.tables.extension_credits[0].balance);
+
+  it("the question says the price; the tap pays it, once", async () => {
+    billing(5);
+    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "stock", stock: 20 });
+    expect(last().body).toContain("This changes it on Jumia (0.5 credits).");
+    const yes = last().ids![0];
+    await handleShopTap(USER, PHONE, yes);
+    expect(writes()).toHaveLength(1);
+    expect(balance()).toBe(4.5);
+    await handleShopTap(USER, PHONE, yes);
+    expect(balance()).toBe(4.5);
+  });
+
+  it("several products are one charge", async () => {
+    billing(5);
+    await proposeLiveChange(USER, PHONE, ["Hisense fridge", "blender"], { kind: "stock", stock: 10 });
+    expect(last().body).toContain("One tap changes them all (0.5 credits).");
+    await handleShopTap(USER, PHONE, last().ids![0]);
+    expect(balance()).toBe(4.5);
+  });
+
+  it("not enough credits: nothing reaches Jumia, and the offer stays", async () => {
+    billing(0.2);
+    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "stock", stock: 20 });
+    const yes = last().ids![0];
+    await handleShopTap(USER, PHONE, yes);
+    expect(writes()).toHaveLength(0);
+    expect(last()).toMatchObject({ kind: "cta", body: "A change on Jumia costs 0.5 credits, and you have 0.2. Buy credits, then tap Yes again." });
+    expect(db.tables.jumia_product_changes[0].status).toBe("pending");
+  });
+
+  it("Jumia refusing all of it gives the credits back", async () => {
+    billing(5);
+    db.tables.whatsapp_connections = [{ user_id: USER, phone_number: PHONE }];
+    await proposeLiveChange(USER, PHONE, "Hisense fridge", { kind: "stock", stock: 20 });
+    await handleShopTap(USER, PHONE, last().ids![0]);
+    expect(balance()).toBe(4.5);
+    const row = db.tables.jumia_product_changes[0];
+    row.updated_at = row.created_at = new Date(Date.now() - 5 * 60_000).toISOString();
+    feed = { status: "ERROR", failed: 1, errors: ["Product is not approved"] };
+    await runShopNotices(new Date());
+    expect(balance()).toBe(5);
+    expect(sent.at(-1)!.body).toContain("Your 0.5 credits for it are back.");
   });
 });

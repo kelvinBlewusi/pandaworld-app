@@ -3,14 +3,8 @@ import { redirect } from "next/navigation";
 import { Coins, Sparkles } from "lucide-react";
 import { isAdmin } from "@/lib/auth/is-admin";
 import { isBillingEnabled } from "@/lib/billing/mode";
-import { availableCredits, getOrCreateCreditBalance, getRecentTransactions } from "@/lib/billing/extension-credits";
-import {
-  CREDIT_PACKS,
-  FREE_SIGNUP_CREDITS,
-  LISTING_CREDIT_COST,
-  LIVE_LISTING_CREDIT_COST,
-  packReach,
-} from "@/lib/billing/credit-packs";
+import { availableCredits, getOrCreateCreditBalance, getRecentTransactions, listingCreditCost } from "@/lib/billing/extension-credits";
+import { CREDIT_PACKS, FREE_SIGNUP_CREDITS, creditCosts, packReach } from "@/lib/billing/credit-packs";
 import { BuyCreditsButton } from "@/components/billing/buy-credits-button";
 
 // ─── /settings/billing — credits ──────────────────────────────────────────────
@@ -22,20 +16,17 @@ import { BuyCreditsButton } from "@/components/billing/buy-credits-button";
 
 export const dynamic = "force-dynamic";
 
-const COSTS = [
-  { label: "WhatsApp or web listing, when it goes live on Jumia", credits: LIVE_LISTING_CREDIT_COST },
-  { label: "Chrome extension autofill",                           credits: LISTING_CREDIT_COST },
-];
-
 export default async function BillingSettingsPage() {
   const { userId } = await auth();
   if (!userId) redirect("/sign-in?redirect_url=/settings/billing");
 
-  const [billingOn, balance, available, activity] = await Promise.all([
+  const [billingOn, balance, available, activity, listingCost] = await Promise.all([
     isBillingEnabled(),
     getOrCreateCreditBalance(userId),
     availableCredits(userId),
     getRecentTransactions(userId, 20),
+    // Their own country's listing price (shown only to them; public pages show the usual one).
+    listingCreditCost(userId),
   ]);
   const admin = isAdmin(userId);
   const unlimited = !Number.isFinite(balance);
@@ -73,16 +64,19 @@ export default async function BillingSettingsPage() {
             )}
           </div>
         </div>
-        {billingOn && !admin && <BuyCreditsButton />}
+        {billingOn && !admin && <BuyCreditsButton listingCost={listingCost} />}
       </section>
 
       <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
         <h2 className="font-semibold text-zinc-900">What costs credits</h2>
         <ul className="mt-3 divide-y divide-zinc-100 text-sm">
-          {COSTS.map((c) => (
-            <li key={c.label} className="flex items-center justify-between gap-4 py-2.5">
-              <span className="text-zinc-600">{c.label}</span>
-              <span className="shrink-0 font-semibold text-zinc-900">{c.credits} credits</span>
+          {creditCosts(listingCost).map((c) => (
+            <li key={c.what} className="flex items-center justify-between gap-4 py-2.5">
+              <span>
+                <span className="text-zinc-700">{c.what}</span>
+                <span className="block text-xs text-zinc-400">{c.detail}</span>
+              </span>
+              <span className="shrink-0 font-semibold text-zinc-900">{c.credits} {c.credits === 1 ? "credit" : "credits"}</span>
             </li>
           ))}
         </ul>
@@ -95,7 +89,7 @@ export default async function BillingSettingsPage() {
         <h2 className="font-semibold text-zinc-900">Credit packs</h2>
         <ul className="mt-3 divide-y divide-zinc-100 text-sm">
           {CREDIT_PACKS.map((p) => {
-            const { listings } = packReach(p.credits);
+            const { listings } = packReach(p.credits, listingCost);
             return (
               <li key={p.id} className="flex items-center justify-between gap-4 py-2.5">
                 <span>

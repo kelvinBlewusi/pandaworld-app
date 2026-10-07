@@ -16,7 +16,8 @@
  */
 
 import { createServerClient } from "@/lib/supabase/server";
-import { LISTING_CREDIT_COST, LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
+import { LISTING_CREDIT_COST, LIVE_LISTING_CREDIT_COST, listingCostFor } from "@/lib/billing/credit-packs";
+import { sellerCountry } from "@/lib/jumia/unlistable-categories";
 
 /** Below this, a seller is warned they're running low: about 3 WhatsApp listings. */
 export const LOW_CREDITS = 6;
@@ -61,9 +62,9 @@ async function claim(userId: string, flag: Flag): Promise<boolean> {
   return (data ?? []).length > 0;
 }
 
-/** "about 2 WhatsApp listings", or what 1 credit still buys. */
-export function creditReach(balance: number): string {
-  const listings = Math.floor(balance / LIVE_LISTING_CREDIT_COST);
+/** "about 2 WhatsApp listings" at `listingCost` (the seller's country's price), or what's left still buys. */
+export function creditReach(balance: number, listingCost = LIVE_LISTING_CREDIT_COST): string {
+  const listings = Math.floor(balance / listingCost);
   if (listings >= 1) return `enough for about ${listings} WhatsApp listing${listings === 1 ? "" : "s"}`;
   const autofills = Math.floor(balance / LISTING_CREDIT_COST);
   return autofills >= 1
@@ -113,7 +114,7 @@ export async function onBalanceDropped(userId: string, balance: number): Promise
       userId,
       "credits_low",
       "You're running low on credits",
-      `You have *${plural(balance)}* left: ${creditReach(balance)}.` +
+      `You have *${plural(balance)}* left: ${creditReach(balance, listingCostFor(await sellerCountry(userId).catch(() => null)))}.` +
         (balance < BOT_MIN_CREDITS ? " Your WhatsApp bot is paused until you top up." : "") +
         `\n\n*Buy credits* from your dashboard to keep listing.`,
     );

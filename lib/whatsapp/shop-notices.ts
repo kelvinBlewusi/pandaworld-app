@@ -13,6 +13,11 @@
  *   - A Jumia payout that was paid (`shop_whatsapp`), checked every
  *     PAYOUT_CHECK_MS.
  *
+ * Each order-updates or payout message costs NOTICE_CREDIT_COST (owner,
+ * 2026-10-07: "charge for alerts the bot sends on its own"; new-order alerts
+ * stay free); a refused change is told free, and its credits given back when
+ * none of it applied.
+ *
  * The same rules as order alerts: only sellers with WhatsApp linked and Jumia
  * connected, not while the bot is paused for credits, never from 10pm to 7am
  * in their country, and only inside WhatsApp's 24 hours since their last
@@ -23,6 +28,8 @@
 
 import { createServerClient } from "@/lib/supabase/server";
 import { hasFeature } from "@/lib/billing/features";
+import { NOTICE_CREDIT_COST } from "@/lib/billing/credit-packs";
+import { chargeService, refundService } from "@/lib/billing/extension-credits";
 import { getFeedStatus, getValidJumiaCredentials } from "@/lib/jumia/api";
 import { jumiaCountryByCode, type JumiaCountry } from "@/lib/marketing/countries";
 import { sendTextIfConfigured } from "@/lib/whatsapp/client";
@@ -108,11 +115,16 @@ async function checkSentChanges(now: Date, deadline: number, run: ShopNoticesRun
         }
       }
       if (refusedLines.length > 0) {
+        // Nothing of it applied: its credits back (lib/whatsapp/shop.ts charged the tap).
+        const back = refusedLines.length === group.length
+          ? (await refundService(first.group_id ? `lgrp:${String(first.group_id)}` : `lchg:${String(first.id)}`, "Refund: Jumia didn't apply the change")).refunded
+          : 0;
+        const credits = back > 0 ? `\n\nYour ${back} credits for it are back.` : "";
         const phone = await phoneOf(userId);
         if (phone) {
-          await sendTextIfConfigured(phone, refusedLines.length === 1
+          await sendTextIfConfigured(phone, (refusedLines.length === 1
             ? `⚠️ Jumia didn't apply the change to ${refusedLines[0]}`
-            : ["⚠️ Jumia didn't apply these changes:", ...refusedLines.slice(0, 15).map((l) => `• ${l}`), ...(refusedLines.length > 15 ? [`+${refusedLines.length - 15} more`] : [])].join("\n"));
+            : ["⚠️ Jumia didn't apply these changes:", ...refusedLines.slice(0, 15).map((l) => `• ${l}`), ...(refusedLines.length > 15 ? [`+${refusedLines.length - 15} more`] : [])].join("\n")) + credits);
         }
       }
     } catch (e) {
@@ -163,6 +175,8 @@ async function orderUpdates(userId: string, phone: string, token: string, countr
   const last = await lastMarker(userId, "order_updates_sent");
   if (!urgent && last != null && now.getTime() - last < ORDER_UPDATES_GAP_MS) return;
 
+  // Charged (NOTICE_CREDIT_COST): a seller who can't cover it hears once they top up.
+  if (!(await chargeService(userId, NOTICE_CREDIT_COST, `notice:orders:${userId}:${now.toISOString()}`, "Order updates on WhatsApp")).ok) return;
   await sendTextIfConfigured(phone, orderUpdatesText(fresh, country));
   for (const o of fresh) await markNoticed(userId, "order", ref(o));
   await markNoticed(userId, "order_updates_sent", now.toISOString(), now);
@@ -191,6 +205,7 @@ async function payoutUpdates(userId: string, phone: string, token: string, count
     return;
   }
   for (const s of fresh) {
+    if (!(await chargeService(userId, NOTICE_CREDIT_COST, `notice:payout:${userId}:${s.number}`, "Payout notice on WhatsApp")).ok) return;
     await sendTextIfConfigured(phone, payoutText(s, country));
     await markNoticed(userId, "payout", s.number);
     run.payouts++;

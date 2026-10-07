@@ -42,8 +42,8 @@ import { createServerClient } from "@/lib/supabase/server";
 import { isAdmin } from "@/lib/auth/is-admin";
 import { callGeminiBackend } from "@/lib/ai/gemini-client";
 import { withAiUsageContext } from "@/lib/ai/usage";
-import { availableCredits, isUnmetered } from "@/lib/billing/extension-credits";
-import { LIVE_LISTING_CREDIT_COST } from "@/lib/billing/credit-packs";
+import { availableCredits, isUnmetered, listingCreditCost } from "@/lib/billing/extension-credits";
+import { LABEL_CREDIT_COST, LIVE_CHANGE_CREDIT_COST, LIVE_LISTING_CREDIT_COST, NOTICE_CREDIT_COST } from "@/lib/billing/credit-packs";
 import { creditReach } from "@/lib/billing/credit-status";
 import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
 import { priceMinimumForUser, isBelowMinimum, money } from "@/lib/jumia/price-minimums";
@@ -215,17 +215,17 @@ const STAGE_TEXT: Record<Stage, string> = {
  * code does (lib/whatsapp/intake.ts, orders.ts, credit-gate.ts, the
  * extension), so the AI never promises what isn't there.
  */
-function capabilities(): string {
+function capabilities(listingCost = LIVE_LISTING_CREDIT_COST): string {
   return [
     `- List products on Jumia from WhatsApp: the seller says how many (1 to ${MAX_BATCH_SIZE}), sends each product's photos with the price and notes as the caption, and AI drafts each listing (name, description, category, details) for them to check and submit. Two ways to send: all at once, or guided step by step.`,
     "- Ask for what Jumia needs that the photos don't show: a missing price, weight or other required detail, the variation, the category when unsure.",
     "- Edit drafts in chat before they're submitted: price, quantity, variations or sizes, name, brand, colour, a sale price with its dates. Anything else in the editor on the review page.",
     "- Submit to Jumia and report back when each product goes live or is rejected; fix common rejections itself (banned words, restricted brands) and guide the seller through the rest with Fix & resubmit (QC fixes: Standard pack and up).",
-    "- Orders on WhatsApp (Pro pack and up): alerts for new Jumia orders, grouped and quiet at night; \"orders\" shows orders waiting to be packed; pack them and get the shipping label PDF, mark them ready to ship, or cancel; where any order is, by its number; orders and sales for today, the week or the month; a message when orders are delivered, returned, fail delivery or are cancelled.",
+    "- Orders on WhatsApp: \"orders\" shows orders waiting to be packed; pack them and get the shipping label PDF, mark them ready to ship, or cancel (Standard pack and up). Pro and up also: alerts for new Jumia orders, grouped and quiet at night; where any order is, by its number; orders and sales for today, the week, the month or 90 days; a message when orders are delivered, returned, fail delivery or are cancelled.",
     `- Their live Jumia products (Pro pack and up), found by name among everything in their shop: change a product's stock, price, a sale price with its dates, or turn it on or off, with one tap to confirm, for one product or several named together (up to ${MAX_GROUP} at a time, never their whole shop at once); where a product is (on or off, Jumia's quality check, price, sale, stock); how many are left; what's out of stock or low; which products are turned off or rejected by Jumia's quality check; a low-stock warning with new orders.`,
     "- Payouts (Pro pack and up): the last Jumia payout and the statement not yet paid; a message when Jumia pays.",
     "- Fees (Pro pack and up): what Jumia takes when one of their products sells (commission for its category, the per-item shipping contribution) and what they receive, at its price or a price they give.",
-    `- Credits: tell the balance; a WhatsApp listing costs ${LIVE_LISTING_CREDIT_COST} credits, charged only when it goes live on Jumia; warn when running low. Credits are bought on the dashboard.`,
+    `- Credits: tell the balance; a WhatsApp listing or an extension autofill costs ${listingCost} credits for this seller, a listing charged only when it goes live on Jumia; a shipping label ${LABEL_CREDIT_COST} credits (the same label again is free), a confirmed change to live products ${LIVE_CHANGE_CREDIT_COST} (back if Jumia refuses it), an order-updates or payout message ${NOTICE_CREDIT_COST}; new-order alerts and chatting are free (chat replies have a daily limit by pack); warn when running low. Credits are bought on the dashboard.`,
     "- The PandaWorld Chrome extension fills Jumia's Vendor Center product form on a laptop; image polish and a fee calculator in it on Pro.",
     "- A free Jumia price calculator, Jumia commission rates, how-to guides and an FAQ on the website.",
     "- Words the bot always knows: \"status\" (where they are), \"restart\", \"help\", \"orders\", \"disconnect\" (Jumia).",
@@ -287,11 +287,12 @@ export async function sellerFacts(userId: string): Promise<{ lines: string[]; co
       return a.ok ? "on" : a.blockedBy === "credits" ? "paused until they buy credits" : `not on their pack (${featureMinPackName(f)} and up)`;
     };
     lines.push(`- Orders and shipping labels on WhatsApp: ${await access("shipping_labels")}`);
+    lines.push(`- New-order alerts on WhatsApp: ${await access("order_alerts")}`);
     lines.push(`- Live products, stock and payouts on WhatsApp: ${await access("shop_whatsapp")}`);
     lines.push(`- Jumia fees on WhatsApp: ${await access("fee_calc_whatsapp")}`);
     lines.push(`- QC rejection fixes: ${await access("qc_fix")}`);
     const credits = Math.max(0, Math.round((await availableCredits(userId)) * 100) / 100);
-    lines.push(`- Credits: ${credits} available, ${creditReach(credits)}`);
+    lines.push(`- Credits: ${credits} available, ${creditReach(credits, await listingCreditCost(userId))}`);
   } catch (e) {
     console.warn(`[assistant] seller facts for ${userId}: ${(e as Error).message}`);
   }
@@ -308,10 +309,12 @@ export interface PromptContext {
   hintSeq?: number;
   /** The last messages, oldest first: "Seller: …" / "Bot: …". */
   conversation?: string[];
+  /** What a listing costs this seller (their country's price). */
+  listingCost?: number;
 }
 
 export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): string {
-  const { products, currency, seller, links, hintSeq, conversation = [] } = ctx;
+  const { products, currency, seller, links, hintSeq, conversation = [], listingCost } = ctx;
   return [
     "You are PandaWorld's assistant on WhatsApp. PandaWorld lists sellers' products on Jumia (Africa's online marketplace) and helps them run their Jumia shop.",
     "You choose ONE action as JSON, and PandaWorld's code checks it and carries it out.",
@@ -321,7 +324,7 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     ...(seller.length > 0 ? ["", "About this seller:", ...seller] : []),
     "",
     "What PandaWorld can do (all true; never claim anything else):",
-    capabilities(),
+    capabilities(listingCost),
     "",
     "Links you can send (put the key in \"link\"; the seller gets a button):",
     ...Object.entries(links).map(([key, l]) => `- ${key}: ${l.what}`),
@@ -921,10 +924,12 @@ export async function interpret(
   message: string,
   opts: { batchId?: string | null; hintSeq?: number; conversation?: string[] } = {},
 ): Promise<{ action: AssistantAction; links: Record<string, AssistantLink>; raw: string }> {
-  const [currency, seller, model] = await Promise.all([shopCurrencyForUser(userId), sellerFacts(userId), assistantModel()]);
+  const [currency, seller, model, listingCost] = await Promise.all([
+    shopCurrencyForUser(userId), sellerFacts(userId), assistantModel(), listingCreditCost(userId).catch(() => LIVE_LISTING_CREDIT_COST),
+  ]);
   const links = assistantLinks({ batchId: opts.batchId, countrySlug: seller.countrySlug });
   const conversation = opts.conversation ?? [];
-  const prompt = buildPrompt(stage, message, { products, currency, seller: seller.lines, links, hintSeq: opts.hintSeq, conversation });
+  const prompt = buildPrompt(stage, message, { products, currency, seller: seller.lines, links, hintSeq: opts.hintSeq, conversation, listingCost });
   const { text } = await withAiUsageContext({ feature: "assistant", userId }, () =>
     callGeminiBackend(model, [{ text: prompt }], model.startsWith("gemini-3") ? { preferBackend: "ai-studio" } : {}));
   const action = parseAction(text, message, products, links, currency, { context: conversation.join("\n"), stage });
@@ -1146,9 +1151,10 @@ async function creditsReply(userId: string, phone: string): Promise<void> {
   }
   const available = Math.max(0, await availableCredits(userId));
   const shown = Math.round(available * 100) / 100;
+  const cost = await listingCreditCost(userId);
   await sendCtaUrlIfConfigured(
     phone,
-    `You have ${shown} credit${shown === 1 ? "" : "s"}: ${creditReach(shown)}. A listing costs ${LIVE_LISTING_CREDIT_COST} credits when it goes live on Jumia.`,
+    `You have ${shown} credit${shown === 1 ? "" : "s"}: ${creditReach(shown, cost)}. A listing costs ${cost} credits when it goes live on Jumia.`,
     "Buy credits",
     buyCreditsUrl(),
   );
