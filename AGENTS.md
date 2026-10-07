@@ -1378,6 +1378,82 @@ accounts; the worker's notices go to every seller with the pack).
   spec), plus "the live shop, through the assistant" in
   whatsapp-assistant.test.ts.
 
+### Assistant, after the owner's live test (2026-10-07)
+
+The owner talked to the pilot for about an hour (whatsapp_assistant_log,
+whatsapp_message_log). The live API calls worked: a stock change on the
+Wellington boot was applied. What went wrong, and what changed:
+
+- **It promised instead of acting**: "Any orders cancelled today?" was
+  answered "I can check that for you", and nothing followed. Same for
+  "Has JUMIA payed me?", "Shop statement" and "how many listings today".
+  Fixes:
+  - **Rules in the prompt**: act, don't promise; read the new message with
+    the recent conversation; a product that isn't a draft is a live one;
+    expect typos.
+  - **15 worked examples** in the prompt (message → JSON).
+  - **New answers**: `sales` with a status and "yesterday" (`answerSales`
+    lists the orders that moved to that status), `listings`
+    (`answerListings`, PandaWorld listings by period).
+  - The shop's name is now in `sellerFacts`.
+- **No memory of the conversation**:
+  - "Let's do five then" (after the 20-a-time limit) became "submit all".
+  - "Yes check" (after "I can check") became "submit" and sent two drafts.
+  - Fix: `recentConversation` puts the last 8 messages in the prompt.
+    Button ids read as "[tapped a button]".
+  - A live product named only in the conversation is accepted, marked
+    `fromContext`; "it" then means the last product changed in the last 30
+    minutes (`lastChangedSid` → `preferSid`). An order number may come from
+    the conversation too.
+- **Wrong draft**: "Set the gold medal to 25" changed the gold-tone
+  earrings draft. Fix: edits carry `said`, the seller's words for the
+  product, and the draft must fit them (`fitsDraft`: more than half of the
+  words in its name). If no draft fits, a price or quantity becomes a
+  `live_change` for that product, which still needs the confirm tap.
+- **A change nobody asked for reached Jumia**: "Change the sales price of
+  the Wellington boot to 100" came back as `sale: "end"`, and one tap on a
+  list row applied it (the size 44 boot's sale was ended; the 100 sale was
+  never set). Fixes:
+  - **Seller's own words required**: "end" needs end-sale words
+    (`END_SALE_WORDS`), off/on need `OFF_WORDS` / `ON_WORDS`.
+  - **Picking from a list now leads to the Yes/No confirm** (two taps when
+    several products fit).
+  - **Sale price**: the AI gives `sale_price`, checked against the
+    message's numbers. Dates come from `saleWindow`: written ones
+    (`extractDateRange`), or "this month" / "this week" / "you choose", which
+    run from today to the end of the month or week. Otherwise it asks for
+    them.
+  - **`extractSalePrice`** now reads "sale 80", "on sale at 100" and "on
+    sale for 100". The bot's own example, "sale 80 from 20 Oct to 30 Oct",
+    didn't read before.
+- **Silence right after starting a batch**: "Has JUMIA payed me ?", "I
+  won't list again" and "You remember which one I last used?" were taken
+  as product 1's notes. Now, on the pilot, a message that `looksLikeQuestion`
+  (a "?", or starting with has/what/how/cancel/I won't…) sent before any
+  photo of the batch goes to the assistant in stage `starting`:
+  - `note` keeps it as the product's notes, as before;
+  - restart stops the batch;
+  - anything else is answered, followed by "I'm still ready for product 1
+    of N".
+  From the first photo on, nothing changes.
+- **Smaller fixes**:
+  - variations keep the words the message backs and leave out the AI's own
+    ("add Blue variant" was refused);
+  - the "couldn't see the new …" message gives an example per field;
+  - stock lists are capped at 15;
+  - the idle fallback says "Sorry, I didn't catch that…" instead of "I need
+    a number";
+  - no "Hi there!" unless greeted, and no pack warnings for features the
+    seller has.
+- **Watching it**:
+  - `whatsapp_assistant_log.raw` now keeps the AI's own answer before our
+    checks (migration 2026-10-07_assistant-log-raw.sql, applied).
+  - The model can be switched without a deploy: app_settings
+    `assistant_model` = "gemini-2.5-flash" (better reading, roughly 5 to 7
+    times the cost) or "gemini-3.1-flash-lite" (AI Studio). Default
+    "gemini-2.5-flash-lite".
+  - Measured in the test: 32 calls, $0.0071, about $0.0002 a message.
+
 ### Feature expansion (when relevant)
 9. **Cloud Vision OCR** (Tier 1.2 of GCP plan) — dedicated OCR for packaging text.
    $1.50/1000 images, first 1000 free monthly. Improves spec-text accuracy.

@@ -45,7 +45,7 @@ import {
   findProducts, productsFromCatalog, sendLiveChange, statementsFrom, summarizeOrders, syncCatalog, type ShopProduct,
 } from "@/lib/jumia/shop";
 import {
-  answerOrderStatus, answerPayouts, answerProducts, answerSales, answerStock, handleShopTap, lowStockNote, parseShopTap,
+  answerListings, answerOrderStatus, answerPayouts, answerProducts, answerSales, answerStock, handleShopTap, lowStockNote, parseShopTap,
   periodStart, proposeLiveChange,
 } from "@/lib/whatsapp/shop";
 import { orderUpdatesText, runShopNotices } from "@/lib/whatsapp/shop-notices";
@@ -209,15 +209,28 @@ describe("changing a live product on WhatsApp", () => {
     expect(writes()).toHaveLength(1);
   });
 
-  it("several fit: a list, and the tap on one changes it", async () => {
+  it("several fit: a list, then the one picked is confirmed before anything changes", async () => {
     await proposeLiveChange(USER, PHONE, "fridge", { kind: "price", price: 4100 });
     const list = last();
     expect(list.kind).toBe("list");
+    expect(list.body).toContain("I'll ask you to confirm before anything changes on Jumia");
     expect(list.ids).toHaveLength(2);
     const pick = list.ids!.find((id) => id.endsWith(":1"))!;
     await handleShopTap(USER, PHONE, pick);
+    // Live 2026-10-07: one tap on a row once sent a change nobody asked for.
+    expect(writes()).toHaveLength(0);
+    const confirm = last();
+    expect(confirm).toMatchObject({ kind: "buttons" });
+    expect(confirm.body).toMatch(/^Change \*.+\* \(SKU .+\): price GHS [\d,]+ → GHS 4,100\?/);
+    await handleShopTap(USER, PHONE, confirm.ids![0]);
     expect(writes()).toHaveLength(1);
     expect(writes()[0].path).toBe("/feeds/products/price");
+  });
+
+  it("\"it\" is the product just changed", async () => {
+    await proposeLiveChange(USER, PHONE, "fridge", { kind: "stock", stock: 9 }, { preferSid: FRIDGE2 });
+    expect(last()).toMatchObject({ kind: "buttons" });
+    expect(last().body).toContain("LG 250L Top Freezer Fridge");
   });
 
   it("No changes nothing", async () => {
@@ -454,26 +467,74 @@ describe("what the assistant may hand over", () => {
   it("a live change only with the product named and the value written", () => {
     expect(productBacked("Hisense fridge", msg)).toBe(true);
     expect(parseAction('{"type":"live_change","product":"Hisense fridge","stock":20}', msg, [])).toEqual({ type: "live_change", product: "Hisense fridge", change: { kind: "stock", stock: 20 } });
-    expect(parseAction('{"type":"live_change","product":"Hisense fridge","stock":25}', msg, [])).toEqual({ type: "unclear" });
-    expect(parseAction('{"type":"live_change","product":"Samsung TV","stock":20}', msg, [])).toEqual({ type: "unclear" });
+    expect(parseAction('{"type":"live_change","product":"Hisense fridge","stock":25}', msg, [])).toMatchObject({ type: "reply", text: expect.stringContaining("What should its stock be?") });
+    expect(parseAction('{"type":"live_change","product":"Samsung TV","stock":20}', msg, [])).toMatchObject({ type: "reply", text: expect.stringContaining("Which product do you mean?") });
     expect(parseAction('{"type":"live_change","product":"blender","stock":0}', "the blender is sold out", [])).toEqual({ type: "live_change", product: "blender", change: { kind: "stock", stock: 0 } });
     expect(parseAction('{"type":"live_change","product":"blender","active":false}', "turn off the blender", [])).toEqual({ type: "live_change", product: "blender", change: { kind: "status", active: false } });
   });
 
-  it("a sale needs its dates in the message", () => {
-    const action = parseAction('{"type":"live_change","product":"fridge","sale":true}', "put the fridge on sale at 4000", [], {}, "GHS");
-    expect(action).toMatchObject({ type: "reply", text: expect.stringContaining("needs its price and both dates") });
+  it("a sale needs its dates, written or left to us", () => {
+    const now = new Date("2026-10-07T10:00:00Z");
+    expect(parseAction('{"type":"live_change","product":"fridge","sale_price":4000}', "put the fridge on sale at 4000", [], {}, "GHS", { now }))
+      .toMatchObject({ type: "reply", text: expect.stringContaining("A sale on Jumia needs its dates") });
+    expect(parseAction('{"type":"live_change","product":"fridge","sale_price":4000}', "put the fridge on sale at 4000 from 10 Oct to 20 Oct", [], {}, "GHS", { now }))
+      .toEqual({ type: "live_change", product: "fridge", change: { kind: "sale", sale: { price: 4000, start: "2026-10-10", end: "2026-10-20" } } });
+    // "choose your own start and end date within this month" (live, 2026-10-07).
+    expect(parseAction('{"type":"live_change","product":"boot","sale_price":100}', "sale price of the boot to 100 and choose your own start and end date within this month", [], {}, "GHS", { now }))
+      .toEqual({ type: "live_change", product: "boot", change: { kind: "sale", sale: { price: 100, start: "2026-10-07", end: "2026-10-31" } } });
+  });
+
+  it("ending a sale or turning off only on the seller's own words", () => {
+    // Live 2026-10-07: "Change the sales price of the Wellington boot to 100" came back as "end its sale".
+    expect(parseAction('{"type":"live_change","product":"Wellington boot","sale":"end"}', "Change the sales price of the Wellington boot to 100", [])).toEqual({ type: "unclear" });
+    expect(parseAction('{"type":"live_change","product":"boot","sale":"end"}', "end the sale on the boot", [])).toEqual({ type: "live_change", product: "boot", change: { kind: "sale", sale: null } });
+    expect(parseAction('{"type":"live_change","product":"blender","active":false}', "what about the blender", [])).toEqual({ type: "unclear" });
+    expect(parseAction('{"type":"live_change","product":"blender","active":true}', "turn the blender back on", [])).toEqual({ type: "live_change", product: "blender", change: { kind: "status", active: true } });
+  });
+
+  it("the product may come from the conversation, and is then marked so", () => {
+    const context = "Bot: ✅ Sent to Jumia: *Wellington Boot (43)*, stock 4 → 30.";
+    expect(parseAction('{"type":"live_change","product":"Wellington Boot","price":120}', "and make its price 120", [], {}, "GHS", { context }))
+      .toEqual({ type: "live_change", product: "Wellington Boot", change: { kind: "price", price: 120 }, fromContext: true });
   });
 
   it("an order number only as written", () => {
     expect(parseAction('{"type":"order_status","number":"355926919"}', "where is order 355926919?", [])).toEqual({ type: "order_status", number: "355926919" });
-    expect(parseAction('{"type":"order_status","number":"355926918"}', "where is order 355926919?", [])).toEqual({ type: "unclear" });
+    expect(parseAction('{"type":"order_status","number":"355926918"}', "where is order 355926919?", [])).toMatchObject({ type: "reply", text: expect.stringContaining("Which order?") });
   });
 
   it("stock, shop, sales and payouts", () => {
     expect(parseAction('{"type":"stock","product":null,"filter":"out"}', "what's out of stock", [])).toEqual({ type: "stock", product: null, filter: "out" });
     expect(parseAction('{"type":"shop","filter":"rejected"}', "which were rejected", [])).toEqual({ type: "shop", filter: "rejected" });
-    expect(parseAction('{"type":"sales","period":"today"}', "sales today?", [])).toEqual({ type: "sales", period: "today" });
+    expect(parseAction('{"type":"sales","period":"today"}', "sales today?", [])).toEqual({ type: "sales", period: "today", status: null });
+    expect(parseAction('{"type":"sales","period":"yesterday","status":"cancelled"}', "check cancelled orders yesterday", [])).toEqual({ type: "sales", period: "yesterday", status: "CANCELED" });
+    expect(parseAction('{"type":"listings","period":"today"}', "how many listings have I done today?", [])).toEqual({ type: "listings", period: "today" });
     expect(parseAction('{"type":"payouts"}', "when does jumia pay me", [])).toEqual({ type: "payouts" });
+  });
+});
+
+describe("asked in the live test (2026-10-07)", () => {
+  it("cancelled orders yesterday: the orders that moved there, one line each", async () => {
+    orders = [{ id: "c1", number: 401, status: "Canceled", updatedAt: "2026-10-06T15:00:00Z", totalAmountLocal: { currency: "GHS", value: 90 } }];
+    await answerSales(USER, PHONE, "yesterday", "CANCELED");
+    const q = calls.find((c) => c.path === "/orders")!.query;
+    expect(q.get("status")).toBe("CANCELED");
+    expect(q.get("updatedAfter")).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(last().body).toBe("📦 1 cancelled Jumia order yesterday\n• #401 · GHS 90 · 6 Oct\n\nAsk me about one by its number for the details.");
+    orders = [];
+    await answerSales(USER, PHONE, "today", "CANCELED");
+    expect(last().body).toBe("No cancelled Jumia orders today.");
+  });
+
+  it("how many products they listed with PandaWorld today", async () => {
+    const today = new Date().toISOString();
+    db.tables.listings = [
+      { id: "l1", user_id: USER, status: "pending_approval", created_at: today },
+      { id: "l2", user_id: USER, status: "live", created_at: today },
+      { id: "l3", user_id: USER, status: "draft", created_at: "2020-01-01T00:00:00Z" },
+      { id: "l4", user_id: "someone-else", status: "live", created_at: today },
+    ];
+    await answerListings(USER, PHONE, "today");
+    expect(last().body).toBe("🛍️ 2 products listed with PandaWorld today: 1 live on Jumia, 1 waiting for Jumia.");
   });
 });

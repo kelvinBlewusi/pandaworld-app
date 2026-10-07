@@ -89,7 +89,7 @@ import { rememberRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
 import { handleShopTap } from "@/lib/whatsapp/shop";
 import { carryPriceToVariants, carryStockToVariants, chatPrice, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
-import { answerPendingQuestion, assistantEnabled, plainQuickEdit, runAssistant } from "@/lib/whatsapp/assistant";
+import { answerPendingQuestion, assistantEnabled, looksLikeQuestion, plainQuickEdit, runAssistant } from "@/lib/whatsapp/assistant";
 import { batchCreditRefusal, creditGate } from "@/lib/whatsapp/credit-gate";
 
 /**
@@ -1206,7 +1206,7 @@ async function handleAwaitingCount(
     if (outcome === "handled") return;
     if (typeof outcome === "object") understood = outcome.list;
     else if (outcome === "default" && !session.lastSubmittedBatchId) {
-      await replyButtons(phoneNumber, `⚠️ I need a number to get started — reply with how many products you're listing today (1–${max}), e.g. *3*.`, COUNT_QUICK_PICKS);
+      await replyButtons(phoneNumber, "Sorry, I didn't catch that. Tell me what you'd like to do for your Jumia shop, or tap how many products you're listing.", COUNT_QUICK_PICKS);
       return;
     }
   }
@@ -1992,6 +1992,23 @@ async function handleAwaitingPhotos(
       console.warn(`[whatsapp intake] quiet-mode example image failed for ${phoneNumber}: ${(e as Error).message}`);
       await replyText(phoneNumber, `${instruction}.`);
     }
+    return;
+  }
+
+  // ── A question before the first photo ───────────────────────────────────
+  // Owner's live test, 2026-10-07: "Has JUMIA payed me ?" and "I won't list
+  // again", sent right after starting a batch, were taken as product 1's
+  // notes in silence. On the assistant's pilot, a message that reads as a
+  // question to the bot, before any photo of the batch, goes to it; it
+  // answers (or stops the batch), and anything it reads as the product's
+  // details stays a note, as always. From the first photo on, nothing
+  // changes.
+  const early = content.text?.trim();
+  if (early && !content.imageMediaId && seq === 1 && !listingId && looksLikeQuestion(early)
+    && !isProductNumber(early, batchSize) && !endsWithDoneSignal(early)
+    && (await assistantEnabled(userId))
+    && !(await findBatchSlotListing(userId, session.batchId, 1))
+    && (await runAssistant(userId, phoneNumber, session, early, "starting")) === "handled") {
     return;
   }
 
