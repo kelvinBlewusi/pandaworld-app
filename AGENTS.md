@@ -1663,6 +1663,10 @@ labels." It is the WhatsApp bot itself, not a copy:
   says labels are printed on WhatsApp ("orders") or in Vendor Center, and
   `orders:labels` / `olabel:` there answer the same without asking Jumia.
   New-order alerts still only go to whatsapp_connections numbers.
+- **Logo, not a sparkle** (owner, 2026-10-07): the PandaWorld "P" in the
+  chat header on desktop, the sidebar item (`PandaLogoIcon`,
+  components/assistant/panda-logo-icon.tsx, on a white tile so it shows on
+  the dark active row) and the coming-soon card.
 - **Scroll down**: a round down-arrow, centred over the composer, shows once the chat is
   scrolled up from the bottom; tapping it goes back to the newest message.
 
