@@ -56,7 +56,7 @@ import {
 import {
   COUNT_QUICK_PICKS, MAX_BATCH_SIZE, buyCreditsUrl, extractDateRange, extractSalePrice, findDateIn, focusedEditorUrl, whatsappListingsUrl,
 } from "@/lib/whatsapp/batch";
-import { helpMessage } from "@/lib/whatsapp/onboarding";
+import { sendHelp } from "@/lib/whatsapp/help";
 import { appUrl } from "@/lib/whatsapp/app-url";
 import { CHROME_WEB_STORE_URL, COMMUNITY_WHATSAPP_URL } from "@/lib/constants/support";
 import { siteGuide } from "@/lib/whatsapp/site-guide";
@@ -1617,11 +1617,7 @@ async function carryOut(
       await creditsReply(userId, phone);
       return "sent credits";
     case "help":
-      await sendButtonsIfConfigured(phone, helpMessage(), [
-        { id: "status", title: "Status" },
-        { id: "restart", title: "Restart 🔄" },
-        { id: "disconnect", title: "Disconnect" },
-      ]);
+      await sendHelp(userId, phone);
       return "sent help";
     case "live_change":
       return proposeLiveChange(userId, phone, action.others ? [action.product, ...action.others] : action.product, action.change, {

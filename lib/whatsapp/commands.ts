@@ -39,7 +39,9 @@ export type GlobalCommand =
   // Clearing the web chat (lib/whatsapp/chat-clear.ts): asked, then the tap that clears it or keeps it.
   | { type: "clear"; step: "ask" | "now" | "keep" }
   // "Change" or "edit" alone: what to say after it.
-  | { type: "edit_help" };
+  | { type: "edit_help" }
+  // "Put a stop to this product creation": start over? (asked, then restart).
+  | { type: "stop_ask" };
 
 /** What the menu's shop commands read. */
 export type ShopRead = "shop" | "out_of_stock" | "low_stock" | "sales_today" | "sales_week" | "payouts";
@@ -88,6 +90,10 @@ const POLISH_RE = /^polish(?:\s+(?:product\s*)?(\d{1,2}))?(?:\s+(?:photos?|pictu
 const CLEAR_RE = /^(clear|clear (the |my |this )?(chat|conversation|history|messages)|delete (the |my |this )?chat)[.!]?$/i;
 const CLEAR_NOW_RE = /^clear chat now$/i;
 const KEEP_CHAT_RE = /^keep (the |my )?chat$/i;
+// Words for stopping the batch in a sentence (live 2026-10-07: "Put a stop to
+// this product creation" got the editor's link). Asked before anything
+// stops; never about an order, a sale or the alerts.
+const STOP_ASK_RE = /^(?:please\s+)?(?:put a stop to|stop|cancel|abort|discard|scrap|delete|quit|end|terminate)\b(?!.*\b(?:orders?|sales?|alerts?|promo)\b).{0,40}\b(?:this|it|the|my)\b.{0,30}\b(?:products?|listings?|batch|creation|upload(?:ing)?|process|drafts?)\b[.!]*$/i;
 const EDIT_HELP_RE = /^(change|edit|edit (live )?on jumia|edit live|change a live product)[.!?]?$/i;
 const REPORT_RE = /^(report|shop report|health report|shop health(?: report| check)?|health check)[.!?]?$/i;
 const SHOP_READS: [RegExp, ShopRead][] = [
@@ -124,6 +130,7 @@ export function parseGlobalCommand(text: string): GlobalCommand | null {
   if (KEEP_CHAT_RE.test(t)) return { type: "clear", step: "keep" };
   if (CLEAR_RE.test(t)) return { type: "clear", step: "ask" };
   if (EDIT_HELP_RE.test(t)) return { type: "edit_help" };
+  if (t.split(/\s+/).length <= 12 && STOP_ASK_RE.test(t)) return { type: "stop_ask" };
   for (const [re, what] of SHOP_READS) if (re.test(t)) return { type: "shop_read", what };
   return null;
 }

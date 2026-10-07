@@ -1,7 +1,7 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { sendTextIfConfigured, sendCtaUrlIfConfigured, sendButtonsIfConfigured, sendListIfConfigured, sendImageIfConfigured, LIST_MAX_ROWS } from "@/lib/whatsapp/client";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
-import { VARIATION_FIELD, isVariationBlock, variationOptions, variationMayBlock, variationQuestion, parseVariations, saveVariations } from "@/lib/whatsapp/variation-question";
+import { VARIATION_FIELD, isVariationBlock, variationOptions, variationMayBlock, variationQuestion, parseVariations, saveVariations, optionsShown } from "@/lib/whatsapp/variation-question";
 import { ingestWhatsAppImage } from "@/lib/whatsapp/media";
 import {
   getOrCreateSession,
@@ -51,9 +51,9 @@ import { extractVariantClaim } from "@/lib/whatsapp/variant-claims";
 import {
   guideHowToListMessage,
   guideControlsMessage,
-  helpMessage,
   unsupportedMediaMessage,
 } from "@/lib/whatsapp/onboarding";
+import { sendHelp } from "@/lib/whatsapp/help";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { endsWithDoneSignal, stripDoneSignal, isDoneWord, isProductNumber } from "@/lib/whatsapp/draft";
 import { removeBrandWords } from "@/lib/jumia/auto-resubmit";
@@ -199,6 +199,30 @@ async function replyCtaOrSplit(to: string, bodyText: string, buttonText: string,
   await replyLongText(to, bodyText);
   await replyCta(to, "Tap below:", buttonText, url);
 }
+
+/**
+ * A question with the editor's link written in and reply buttons under it,
+ * where a cta_url message could only hold the link (owner, 2026-10-07:
+ * "let's offer restart buttons on sort of error messages like enter price
+ * and variation messages"). Split when the body is too long for one.
+ */
+async function replyLinkButtons(
+  to: string,
+  bodyText: string,
+  linkLabel: string,
+  url: string,
+  buttons: { id: string; title: string }[],
+): Promise<void> {
+  const full = `${bodyText}\n\n${linkLabel}: ${url}`;
+  if (full.length <= INTERACTIVE_BODY_MAX) {
+    await replyButtons(to, full, buttons);
+    return;
+  }
+  await replyLongText(to, bodyText);
+  await replyButtons(to, `${linkLabel}: ${url}`, buttons);
+}
+
+const RESTART_BUTTON = { id: "restart", title: "Restart 🔄" };
 
 /** Up to 10 tappable rows in one message, where replyButtons holds three.
  *  Same contract: the row id IS the command phrase, so a tapped row and a
@@ -576,7 +600,10 @@ export async function handleLinkedMessage(
     // for every real media type (video, voice note, document, sticker),
     // the seller still gets an answer.
     const midPhotoBurst =
-      session.state === "awaiting_photos" || session.state === "analyzing";
+      session.state === "awaiting_photos" || session.state === "analyzing"
+      // Before a count too: the photos right behind it get the one answer
+      // (handleAwaitingCount), so this one would be a second (live 2026-10-07).
+      || session.state === "awaiting_count";
     if (!(content.platformError && midPhotoBurst)) {
       await replyText(phoneNumber, unsupportedMediaMessage(content.unsupported));
     }
@@ -731,11 +758,8 @@ async function handleGlobalCommand(
       await sendStatusReply(phoneNumber, await describeStatus(session));
       return;
     case "help":
-      await replyButtons(phoneNumber, helpMessage(), [
-        { id: "status", title: "Status" },
-        { id: "restart", title: "Restart 🔄" },
-        { id: "disconnect", title: "Disconnect" },
-      ]);
+      // For their own pack (owner, 2026-10-07): lib/whatsapp/help.ts.
+      await sendHelp(userId, phoneNumber);
       return;
     case "disconnect":
       await replyButtons(
@@ -749,6 +773,16 @@ async function handleGlobalCommand(
       return;
     case "confirm_disconnect":
       await handleGlobalConfirmDisconnect(userId, phoneNumber);
+      return;
+    case "stop_ask":
+      await replyButtons(
+        phoneNumber,
+        "Stop this and start over? Anything already drafted stays on the review page.",
+        [
+          { id: "restart", title: "Yes, start over" },
+          { id: "status", title: "No, keep going" },
+        ],
+      );
       return;
     case "keep_connected":
       // Declining the disconnect must not leave the seller hanging on a
@@ -1196,6 +1230,23 @@ async function describeStatus(
   }
 }
 
+/**
+ * Whether this photo is the first of a burst sent before a count, so the
+ * one reply goes once: the session's last_image_at is moved on only if it
+ * still holds what this message read (a compare-and-set), and a burst is
+ * photos within a minute of each other.
+ */
+async function claimPhotoNudge(phoneNumber: string, seen: string | null): Promise<boolean> {
+  if (seen && Date.now() - Date.parse(seen) < 60_000) {
+    await updateSession(phoneNumber, { lastImageAt: new Date().toISOString() });
+    return false;
+  }
+  let q = createServerClient().from("whatsapp_sessions").update({ last_image_at: new Date().toISOString() }).eq("phone_number", phoneNumber);
+  q = seen ? q.eq("last_image_at", seen) : q.is("last_image_at", null);
+  const { data, error } = await q.select();
+  return !error && ((data ?? []) as unknown[]).length > 0;
+}
+
 async function handleAwaitingCount(
   userId: string,
   phoneNumber: string,
@@ -1211,6 +1262,19 @@ async function handleAwaitingCount(
   const kind = await getJumiaConnectionKind(userId);
   if (kind !== "connected") {
     await promptJumiaConnection(userId, phoneNumber, kind);
+    return;
+  }
+
+  // Photos before a count: one answer for the whole album, not one per
+  // photo (live 2026-10-07: five photos, five "I need a number").
+  if (content.imageMediaId && !content.text?.trim()) {
+    if (await claimPhotoNudge(phoneNumber, session.lastImageAt)) {
+      await replyButtons(
+        phoneNumber,
+        "📸 Got your photos. First, how many products are you listing? Tap a number below, then send each product's photos again with its price.",
+        COUNT_QUICK_PICKS,
+      );
+    }
     return;
   }
 
@@ -1305,6 +1369,8 @@ async function handleAwaitingCount(
     lastSubmittedBatchId: null,
     // Not picked yet: handleAwaitingPhotos falls back to the last pick.
     batchQuiet: null,
+    // Photos sent before the count (claimPhotoNudge) aren't this batch's.
+    lastImageAt: null,
   });
 
   // A single product has no "in between" for quiet mode to skip — the
@@ -2623,13 +2689,28 @@ async function askForNextMissingPrice(
   const lead = opts.drafted ?? (isBelowMinimum(next.selling_price, minimum)
     ? `💰 *${who}*\n⚠️ *${capitalise(belowMinimumText(next.selling_price as number, minimum))}.*`
     : `💰 *${who}*\n⚠️ *needs price.*`);
-  await replyCtaOrSplit(
+  await replyLinkButtons(
     phoneNumber,
     `${opts.prefix ? `${opts.prefix}\n\n` : ""}${lead}\n\n*What price are you selling it at? Reply with just the amount (Eg. 1500)*`,
     "Or enter it here",
     focusedEditorUrl(next.id),
+    [{ id: "skip price", title: "Skip for now" }, RESTART_BUTTON],
   );
   return true;
+}
+
+/**
+ * A "Sizes: …" (or "Variations: …") line in a reply, saved as the product's
+ * variations when every one is one of its category's options. Quietly
+ * nothing otherwise: the variation question still comes if it's needed.
+ */
+async function variationsFromAnswer(listingId: string, text: string): Promise<void> {
+  const line = text.match(/^\s*(?:sizes?|variations?|variants?)\s*[:=-]\s*(.+)$/im);
+  if (!line) return;
+  const { data: row } = await createServerClient().from("listings").select("category_code").eq("id", listingId).maybeSingle();
+  if (!row?.category_code) return;
+  const parsed = parseVariations(await variationOptions(Number(row.category_code)), line[1].replace(/[.]+$/, ""));
+  if (parsed.ok && parsed.values.length > 0) await saveVariations(listingId, parsed.values).catch(() => false);
 }
 
 /** The "Skip for now" button's id, and the word a seller would type. */
@@ -2764,7 +2845,7 @@ async function askBlockingValue(
 
   await updateSession(phoneNumber, { awaitingValueFor: { listingId: l.id, field: VARIATION_FIELD, ...resubmit } });
   const body = await prefixedBody(phoneNumber, opts.prefix, unnamed(variationQuestion(who, await variationOptions(code))));
-  await replyCta(phoneNumber, body, "Pick in the editor", focusedEditorUrl(l.id));
+  await replyLinkButtons(phoneNumber, body, "Or pick in the editor", focusedEditorUrl(l.id), [{ id: "skip value", title: "Skip for now" }, RESTART_BUTTON]);
   return true;
 }
 
@@ -2810,12 +2891,12 @@ async function answerMissingValue(
     if (!parsed.ok) {
       // A sentence about something else isn't an answer: handled as usual.
       if (text.trim().split(/\s+/).length > 6) return false;
-      const shown = options.length > 12 ? `${options.slice(0, 12).join(", ")} and ${options.length - 12} more` : options.join(", ");
+      const shown = optionsShown(options, 12);
       const named = parsed.unknown.map((u) => `"${u}"`).join(", ");
       await replyButtons(
         phoneNumber,
         `⚠️ ${named} ${parsed.unknown.length === 1 ? "isn't" : "aren't"} one of this category's options. Reply with one or more of: ${shown}.`,
-        [{ id: "skip value", title: "Skip for now" }],
+        [{ id: "skip value", title: "Skip for now" }, RESTART_BUTTON],
       );
       return true;
     }
@@ -2834,7 +2915,7 @@ async function answerMissingValue(
 
   const parsed = parseMissingValue(attr, text);
   if (!parsed.ok) {
-    await replyButtons(phoneNumber, `⚠️ ${parsed.hint}`, [{ id: "skip value", title: "Skip for now" }]);
+    await replyButtons(phoneNumber, `⚠️ ${parsed.hint}`, [{ id: "skip value", title: "Skip for now" }, RESTART_BUTTON]);
     return true;
   }
   if (!(await saveMissingValue(question.listingId, attr, parsed.value, "user"))) {
@@ -3411,6 +3492,10 @@ async function handleAwaitingBatchConfirmation(
         await replyText(phoneNumber, tooLowAgain(price, minimum));
         return;
       }
+      // Sizes in the same answer are the product's variations (live
+      // 2026-10-07: "Price: 130gh / Sizes: Large, Medium, Small" was then
+      // asked "What variation(s) do you have?").
+      await variationsFromAnswer(priceFor, text);
       await applyChatPrice(phoneNumber, batchId, priceFor, price);
       return;
     }
@@ -4060,11 +4145,12 @@ async function handleEdit(
   if (sale != null && !saleComplete) {
     ack += `I didn't set the sale price of ${await chatPrice(userId, sale.salePrice)} — Jumia needs a start AND end date with it. Tell me both together (e.g. "sale 80 from 20 Sept to 30 Sept") and I'll set it. `;
   }
-  await replyCta(
+  await replyLinkButtons(
     phoneNumber,
-    `${ack}For anything else, edit product ${seq} here:`,
+    `${ack}For anything else, edit product ${seq} in the editor, or tell me what to change (e.g. "${seq}: price 150").`,
     "Edit product",
     focusedEditorUrl(listing.id),
+    [{ id: "submit all", title: "Submit all ✅" }, RESTART_BUTTON],
   );
 }
 

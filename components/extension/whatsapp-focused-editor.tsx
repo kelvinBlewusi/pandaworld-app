@@ -25,7 +25,8 @@ import type { VariantRow, AxisDef } from "@/lib/jumia/variant-types";
  * the WhatsApp bot sends once a chat-drafted product finishes analysis
  * (see lib/whatsapp/intake.ts). Deliberately much simpler than the full
  * editor (app/(main)/listings/[id]/review/review-client.tsx): no AI-assist
- * tooling, no quality score, no image add/remove/reorder, no bulk
+ * tooling, no quality score, no image add or reorder (a photo can be
+ * removed, owner 2026-10-07: "an x icon on the image cards"), no bulk
  * variant actions — just this product's fields, editable, with Save and
  * Submit. A category picker WAS added later (CategoryDrawer below) so a
  * WhatsApp-only seller isn't forced out to the full editor just to fix
@@ -263,6 +264,28 @@ export function WhatsAppFocusedEditor({
   const [previewing, setPreviewing] = useState(false);
   const [preview, setPreview] = useState<JumiaPreview | null>(null);
   const [message, setMessage] = useState<{ type: "ok" | "error"; text: string } | null>(null);
+  // The photos that go to Jumia: one can be removed (the X on its card), never the last.
+  const [images, setImages] = useState<string[]>(initialListing.images ?? []);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const photosEditable = !["pending_approval", "processing", "live"].includes(status);
+
+  async function removeImage(url: string) {
+    if (images.length <= 1 || removing) return;
+    const before = images;
+    const next = images.filter((u) => u !== url);
+    setImages(next);
+    setRemoving(url);
+    try {
+      const saved = await updateListing(listing.id, { images: next });
+      setListing(saved);
+      setMessage({ type: "ok", text: "Photo removed: it won't be sent to Jumia." });
+    } catch {
+      setImages(before);
+      setMessage({ type: "error", text: "That photo wasn't removed. Check your connection and try again." });
+    } finally {
+      setRemoving(null);
+    }
+  }
 
   function handleFieldChange(attributeName: string, value: string) {
     if (columnFor(attributeName)) {
@@ -525,11 +548,25 @@ export function WhatsAppFocusedEditor({
         <StatusPill status={status} />
       </div>
 
-      {listing.images.length > 0 && (
-        <div className="flex gap-2 overflow-x-auto">
-          {listing.images.map((url, i) => (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img key={i} src={url} alt="" className="h-20 w-20 shrink-0 rounded-lg object-cover" />
+      {images.length > 0 && (
+        <div className="flex gap-2 overflow-x-auto pt-1">
+          {images.map((url, i) => (
+            <div key={url} className={cn("relative h-20 w-20 shrink-0", removing === url && "opacity-50")}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={url} alt={`Photo ${i + 1}`} className="h-20 w-20 rounded-lg object-cover" />
+              {photosEditable && images.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => void removeImage(url)}
+                  disabled={removing != null}
+                  aria-label={`Remove photo ${i + 1}`}
+                  title="Remove this photo"
+                  className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-full bg-black/65 text-white shadow transition-colors hover:bg-red-600 disabled:opacity-50"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
           ))}
         </div>
       )}

@@ -61,7 +61,7 @@ function Badge({ phone, onClick, dark }: { phone: Phone; onClick: () => void; da
       onClick={onClick}
       aria-haspopup="dialog"
       className={cn(
-        "inline-flex h-12 min-w-[164px] items-center gap-2.5 rounded-xl border px-3.5 text-left transition-colors",
+        "inline-flex h-12 min-w-[146px] items-center gap-2 rounded-xl border px-3 text-left transition-colors",
         dark ? "border-zinc-900 bg-zinc-900 text-white hover:bg-zinc-800" : "border-zinc-300 bg-white text-zinc-900 hover:border-zinc-900",
       )}
     >

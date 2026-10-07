@@ -40,6 +40,7 @@ import { MENU_ROWS, runChatCommand } from "@/lib/whatsapp/chat-commands";
 import { notesAskForPolish, verifyNoteIntent } from "@/lib/whatsapp/note-intent";
 import type { WhatsAppSession } from "@/lib/whatsapp/session";
 import { endsWithDoneSignal } from "@/lib/whatsapp/draft";
+import { helpFor, sendQueuedHelp } from "@/lib/whatsapp/help";
 import { looksLikeBrokenClientId } from "@/lib/jumia/self-auth";
 import { PALETTE, matchingCommands, slashCommand, slashToText, unfinishedFill } from "@/components/assistant/chat-commands";
 import type { ShopProduct } from "@/lib/jumia/shop";
@@ -168,6 +169,57 @@ describe("what the owner's web test showed (2026-10-07)", () => {
   });
 });
 
+describe("help, for the seller's own pack (owner, 2026-10-07)", () => {
+  it("free credits: what every plan has, and what bigger packs add", async () => {
+    db.tables.extension_credits[0].balance = 9;
+    const text = await helpFor("seller", PHONE);
+    expect(text).toContain("on your free credits");
+    expect(text).toContain("*polish 2*");
+    expect(text).toContain("*Bigger packs add*");
+    expect(text).toContain("Live product changes: Standard pack and up");
+    expect(text).not.toContain("*On your pack*");
+    expect(text).toContain("Credits: 9 available");
+    expect(text).toContain("type *menu*");
+  });
+
+  it("Standard: live changes and QC are on, and named as such; the web says / and /clear", async () => {
+    db.tables.extension_credit_transactions = [{ user_id: "seller", type: "purchase", amount: 210, created_at: "2026-10-01T00:00:00Z" }];
+    const text = await helpFor("seller", "web:seller");
+    expect(text).toContain("on your Standard pack");
+    expect(text).toContain("*On your pack*");
+    expect(text).toContain("set the stock of the blue kettle to 10");
+    expect(text).toContain("Fee calculator in the extension: Pro pack and up");
+    expect(text).toContain("type / or tap +");
+    expect(text).toContain("/clear");
+  });
+
+  it("the outbox sends each named seller their help once, to their WhatsApp number", async () => {
+    db.tables.app_settings = [{ key: "help_outbox", value: ["seller"] }];
+    db.tables.whatsapp_connections = [{ user_id: "seller", phone_number: "+233206987692" }];
+    expect(await sendQueuedHelp()).toEqual(["seller"]);
+    expect(sent.at(-1)).toMatchObject({ kind: "buttons", to: "233206987692" });
+    expect(sent.at(-1)?.body).toContain("Here's what you can do, on your free credits.");
+    expect(db.tables.app_settings[0].value).toEqual([]);
+    expect(await sendQueuedHelp()).toEqual([]);
+  });
+
+  it("polish on the web says nothing of the credits it took", async () => {
+    await queuePolish("l1");
+    db.tables.listings[0].chat_channel = "web";
+    const push = jest.requireMock("@/lib/jumia/push-listing") as { chatAddressFor: () => Promise<string> };
+    const before = push.chatAddressFor;
+    push.chatAddressFor = async () => "web:seller";
+    try {
+      expect(await polishListing("l1")).toBe("done");
+    } finally {
+      push.chatAddressFor = before;
+    }
+    const caption = sent.find((m) => m.kind === "image" && m.body)?.body ?? "";
+    expect(caption).toContain("3 polished photos (main image, angle, detail). They replace your own photos");
+    expect(caption).not.toContain("credits");
+  });
+});
+
 describe("polish from the seller's note", () => {
   it("a note that asks for it, in their own words, is read; one that doesn't isn't", () => {
     const asked = verifyNoteIntent({ polish_images: { value: true, quote: "polish the photos" } }, "300 cedis, polish the photos please");
@@ -178,20 +230,21 @@ describe("polish from the seller's note", () => {
     expect(notesAskForPolish("nice picture frame")).toBe(false);
   });
 
-  it("is queued once, and polished by the worker: 2 credits an image that came back, new photos first", async () => {
+  it("is queued once, and polished by the worker: 2 credits an image that came back, replacing the seller's photos", async () => {
     expect(await queuePolish("l1")).toBe(true);
     expect(await queuePolish("l1")).toBe(false);
     expect(await polishQueue(2)).toEqual(["l1"]);
     expect(await polishListing("l1")).toBe("done");
     const row = db.tables.listings[0];
     expect(row.polish_status).toBe("done");
-    expect(row.images).toEqual(["https://cdn.test/main.png", "https://cdn.test/angle.png", "https://cdn.test/detail.png", "https://cdn.test/a.jpg", "https://cdn.test/b.jpg"]);
+    // The new ones replace the seller's (owner, 2026-10-07: "it must replace them entirely").
+    expect(row.images).toEqual(["https://cdn.test/main.png", "https://cdn.test/angle.png", "https://cdn.test/detail.png"]);
     expect(row.original_images).toEqual(["https://cdn.test/a.jpg", "https://cdn.test/b.jpg"]);
     expect(balance()).toBe(20 - 3 * 2);
     // On WhatsApp, the main photo with the caption (each photo is a paid message there).
     const images = sent.filter((m) => m.kind === "image");
     expect(images).toHaveLength(1);
-    expect(images[0].body).toContain("Product 2: 3 polished photos (main image, angle, detail), 6 credits.");
+    expect(images[0].body).toContain("Product 2: 3 polished photos (main image, angle, detail), 6 credits. They replace your own photos");
     // Run again: nothing claimed, nothing charged.
     expect(await polishListing("l1")).toBe("busy");
     expect(balance()).toBe(14);

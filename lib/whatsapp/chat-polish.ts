@@ -15,8 +15,11 @@
  *
  * POLISH_CREDIT_COST an image that came back, on every plan; checked for
  * all four first, charged once per request (`polish:<id>:<requested_at>`).
- * The new photos go first on the listing, the seller's own after them (up
- * to Jumia's 8); original_images keeps the seller's as they were. A product
+ * The new photos replace the seller's own on the listing (owner,
+ * 2026-10-07: "it must replace them entirely"); original_images keeps the
+ * seller's as they were. The reply says nothing of the credits it took on
+ * the web (owner, 2026-10-07: "don't mention credit spent after an
+ * action"); WhatsApp's still says, as each reply there does. A product
  * already with Jumia isn't polished (its photos change in Vendor Center),
  * and one whose photos are still being polished isn't submitted until
  * they're done (lib/jumia/push-listing.ts).
@@ -182,11 +185,12 @@ export async function polishListing(listingId: string, phone: string | null = nu
     return "skipped";
   }
 
-  const images = [...made.map((s) => s.url), ...originals].slice(0, MAX_IMAGES);
+  const images = made.map((s) => s.url).slice(0, MAX_IMAGES);
   await finish("done", { images, original_images: originals });
   if (to) {
-    const caption = `✨ ${name}: ${made.length} polished photo${made.length === 1 ? "" : "s"} (${made.map((s) => s.label.toLowerCase()).join(", ")}), ${cost} credits. ` +
-      `They're first on its listing now, your own photos after them.`;
+    const spent = isWebAddress(to) ? "" : `, ${cost} credits`;
+    const caption = `✨ ${name}: ${made.length} polished photo${made.length === 1 ? "" : "s"} (${made.map((s) => s.label.toLowerCase()).join(", ")})${spent}. ` +
+      `They replace your own photos on its listing.`;
     // Each photo is a paid message on WhatsApp: the main one there, all of them here.
     const shown = isWebAddress(to) ? made : made.slice(0, 1);
     for (let i = 0; i < shown.length; i++) await sendImageIfConfigured(to, shown[i].url, i === 0 ? caption : undefined);

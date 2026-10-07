@@ -1749,8 +1749,11 @@ labels." It is the WhatsApp bot itself, not a copy:
   changes to live products; the rest is free. The assistant has the same
   two as actions (polish, health_report) when a seller asks in words.
 - **Polish in the chat** (lib/whatsapp/chat-polish.ts): the extension's
-  four PRODUCT_SHOTS made from a draft's own photos, new ones first and the
-  seller's after (up to 8), originals kept in listings.original_images.
+  four PRODUCT_SHOTS made from a draft's own photos, which REPLACE the
+  seller's on the listing (owner, 2026-10-07: "it must replace them
+  entirely"), originals kept in listings.original_images. On the web its
+  reply names no credits (nor does the report's footer): "don't mention
+  credit spent after an action". WhatsApp's replies still do.
   From the note: note-intent.ts `polish_images` (the AI reads it, the quote
   must name the photos, notesAskForPolish) queues the listing at drafting
   (auto-analyze, chat listings only) and nudges
@@ -1782,6 +1785,64 @@ labels." It is the WhatsApp bot itself, not a copy:
   Jumia Listing Assistant item ("Talk to your Listing Assistant", no close)
   and, on phones, a pill at the bottom right; the home page's floating nav
   has it as its first of five links (a row from xl, the menu below that).
+
+### Chat round 4: the owner's web test and a seller's WhatsApp day (2026-10-07)
+
+- **Command menu** (components/assistant/chat-commands.ts): /change became
+  **/edit "Edit live on Jumia"** (`aliases: ["change"]` keeps /change
+  typing); no credit badges on the right; **/clear** (`action: "clear"`)
+  opens a "Clear this chat?" dialog. A bare "Change" isn't sent: the page
+  says what to add (`unfinishedFill`); the bot reads a bare change/edit as
+  `edit_help` too.
+- **Clear chat** (lib/whatsapp/chat-clear.ts, POST
+  /api/listing-assistant/clear): sets whatsapp_sessions.chat_cleared_at
+  (2026-10-07_chat-cleared-at.sql) and resets the session (restart). The
+  log keeps every message; GET .../messages and recentConversation read
+  only those after it, and return `clearedAt` so open tabs drop the rest.
+  Typed "clear (my) chat" asks with buttons (`clear chat now` / `keep
+  chat`); on WhatsApp it says how to clear the chat on the phone.
+- **Help for the seller's pack** (lib/whatsapp/help.ts, `sendHelp`): what
+  every plan has, "On your pack" and "Bigger packs add" from PACK_FEATURES
+  (coming-soon ones left out), credits. app_settings `help_outbox` (user
+  ids) + POST /api/worker/help-outbox (CRON_SECRET; not on a schedule, call
+  it once by pg_net) sends it unasked, within WhatsApp's 24-hour window.
+- **What the assistant knows about the seller** (sellerFacts): WhatsApp
+  linked and its number, Jumia connected, the pack ("none bought yet").
+  Rules: answer about themselves only from those lines; asked about their
+  pack, name it and list what's on and off.
+- **Daily chat replies** tripled (30/40/60/100/200). Past them runAssistant
+  returns `limited`; at the count step a question then gets limitedText
+  (the commands still work) instead of "I need a number".
+- **Fixed-flow fixes**: credits words ("remaining credit", "credits left",
+  "how many credits…"); "dine"/"dne"/… alone are done (draft.ts
+  isDoneWord, never mid-caption); "submit it" while asked for a price
+  submits once priced, else asks again; a Client ID pasted twice or cut
+  off (looksLikeBrokenClientId) is caught before Jumia; a sale price from
+  the notes must say sale/promo/discount/was/now and can't equal the price
+  (note-intent.ts SALE_WORDS: "Ghc 160" had set both); photos before a
+  count get one reply per album (claimPhotoNudge, a compare-and-set on
+  last_image_at), and Meta's album container there gets none; "Sizes: …"
+  with a price answer saves the variations (variationsFromAnswer); "put a
+  stop to this product creation" (STOP_ASK_RE, ≤12 words, never orders or
+  sales) asks before restarting; the variation options list plain sizes
+  first (commonFirst).
+- **Restart on the questions**: the price question, the variation question,
+  their "isn't one of the options" replies and the "edit it in the editor"
+  fallback are button messages with the editor's link written in
+  (replyLinkButtons): Skip for now / Submit all, and Restart.
+- **Listing editor**: an X on each photo (not the last; not once the
+  product is with Jumia) removes it from the listing at once.
+- **Pricing**: a Free card first (FREE_SIGNUP_CREDITS, what they reach,
+  everyoneFeatures), "Every pack includes everything on the Free card".
+- **Install** (components/install/install-app.tsx, app/manifest.ts,
+  public/icons): "iPhone & iPad" and "Android" buttons in Settings and the
+  footer's "Get the app", each sliding up that phone's Add to Home Screen
+  steps (Android's has Install now when Chrome offers its prompt). No
+  store names or logos: there's no store app, and Apple's and Google's
+  badges are for store listings only. root metadata `appleWebApp`.
+- **Model**: the assistant runs gemini-2.5-flash-lite (about $0.0004 a
+  turn). app_settings `assistant_model` switches it (MODELS): what went
+  wrong in these tests was flow and facts, not the model.
 
 ### The chat knows the website (owner, 2026-10-07)
 
