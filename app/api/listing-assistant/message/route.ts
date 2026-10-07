@@ -18,7 +18,7 @@ export const maxDuration = 60;
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
-  if (!(await listingAssistantFor(userId))) return NextResponse.json({ error: "The Listing Assistant isn't on for your account yet." }, { status: 403 });
+  if (!(await listingAssistantFor(userId))) return NextResponse.json({ error: "The Jumia Listing Assistant isn't on for your account yet." }, { status: 403 });
   const blocked = checkRateLimit(`assistant-message:${userId}`, RATE_LIMITS.assistantMessage);
   if (blocked) return blocked;
 
