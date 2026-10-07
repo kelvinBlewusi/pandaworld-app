@@ -33,7 +33,7 @@ const primaryNav = [
 
 // The Listing Assistant (app/extension/(app)/assistant): shown to the sellers
 // it's on for (lib/whatsapp/listing-assistant.ts), right under the dashboard.
-const assistantItem = { href: "/extension/assistant", label: "Listing Assistant", icon: Sparkles };
+const assistantItem = { href: "/extension/assistant", label: "Jumia Listing Assistant", icon: Sparkles };
 
 // Public, like Guides, so the same answers reach sellers before they sign up.
 const faqItem = { href: "/faq", label: "FAQ", icon: HelpCircle };

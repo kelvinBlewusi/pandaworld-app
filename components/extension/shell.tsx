@@ -36,7 +36,7 @@ import {
 
 const PAGE_TITLES: Record<string, string> = {
   "/extension/dashboard": "Extension Dashboard",
-  "/extension/assistant": "Listing Assistant",
+  "/extension/assistant": "Jumia Listing Assistant",
   "/extension/whatsapp-listings": "List from WhatsApp",
   "/extension/calculator": "Calculator",
   "/extension/listings": "Autofill Activity",

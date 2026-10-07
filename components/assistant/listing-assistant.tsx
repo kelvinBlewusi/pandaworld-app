@@ -11,6 +11,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import { ArrowUp, ExternalLink, ImagePlus, Loader2, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -252,7 +253,7 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
           <Sparkles className="h-4.5 w-4.5" />
         </span>
         <div className="min-w-0">
-          <p className="font-semibold text-zinc-900">Listing Assistant</p>
+          <p className="font-semibold text-zinc-900">Jumia Listing Assistant</p>
           <p className="truncate text-xs text-zinc-500">List from photos, edit and submit drafts, update live products, ask about your shop.</p>
         </div>
       </div>
@@ -265,10 +266,8 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
         )}
         {empty && (
           <div className="mx-auto max-w-md pt-6 text-center">
-            <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-50 text-orange-500">
-              <Sparkles className="h-6 w-6" />
-            </span>
-            <p className="mt-4 text-lg font-semibold text-zinc-900">{greeting}I&apos;m your Listing Assistant.</p>
+            <Image src="/brand/panda-p-logo-trimmed.png" alt="PandaWorld" width={634} height={562} className="mx-auto h-14 w-auto" priority />
+            <p className="mt-4 text-lg font-semibold text-zinc-900">{greeting}I&apos;m your Jumia Listing Assistant.</p>
             <p className="mt-2 text-sm leading-relaxed text-zinc-600">
               Tell me how many products you&apos;re listing, then upload each one&apos;s photos with its price and notes.
               I write the listings and send them to Jumia when you say so. Ask me about your stock, sales, payouts or credits too.

@@ -13,7 +13,7 @@ import { listingAssistantFor } from "@/lib/whatsapp/listing-assistant";
 // lib/whatsapp/channel.ts for how the same bot runs here.
 
 export const metadata: import("next").Metadata = {
-  title: "Listing Assistant",
+  title: "Jumia Listing Assistant",
   robots: { index: false },
 };
 
@@ -29,7 +29,7 @@ export default async function ListingAssistantPage() {
         <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-50 text-orange-500">
           <Sparkles className="h-6 w-6" />
         </span>
-        <h2 className="mt-4 text-lg font-semibold text-zinc-900">The Listing Assistant is coming soon</h2>
+        <h2 className="mt-4 text-lg font-semibold text-zinc-900">The Jumia Listing Assistant is coming soon</h2>
         <p className="mt-2 text-sm leading-relaxed text-zinc-600">
           It&apos;s being tried by a few sellers first. Meanwhile, list from WhatsApp: it does the same.
         </p>

@@ -320,7 +320,7 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
   const { products, currency, seller, links, hintSeq, conversation = [], listingCost, web } = ctx;
   return [
     web
-      ? "You are PandaWorld's Listing Assistant, a chat on the PandaWorld website. PandaWorld lists sellers' products on Jumia (Africa's online marketplace) and helps them run their Jumia shop."
+      ? "You are PandaWorld's Jumia Listing Assistant, a chat on the PandaWorld website. PandaWorld lists sellers' products on Jumia (Africa's online marketplace) and helps them run their Jumia shop."
       : "You are PandaWorld's assistant on WhatsApp. PandaWorld lists sellers' products on Jumia (Africa's online marketplace) and helps them run their Jumia shop.",
     ...(web ? [
       "This chat works like the WhatsApp bot: the seller uploads product photos with the image button, adds the price and notes as text, and you draft, edit and submit them to Jumia.",
