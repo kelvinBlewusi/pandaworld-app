@@ -177,7 +177,7 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
   }
 
   /** One message to the bot. The placeholder shows at once; the server's copy replaces it. */
-  async function post(body: { text?: string; mediaId?: string; label?: string }, placeholder: Omit<Message, "id" | "clientId" | "direction" | "at">) {
+  async function post(body: { text?: string; mediaId?: string; label?: string; last?: boolean }, placeholder: Omit<Message, "id" | "clientId" | "direction" | "at">) {
     const id = newId();
     const local: Message = { ...placeholder, id, clientId: id, direction: "inbound", at: new Date().toISOString(), local: true };
     setMessages((prev) => [...prev, local]);
@@ -227,7 +227,9 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
           return;
         }
         const caption = i === 0 && typed ? typed : undefined;
-        if (!(await post({ mediaId: data.mediaId, ...(caption ? { text: caption } : {}) }, { type: "image", text: caption ?? null, payload: { link: data.url } }))) return;
+        // `last` marks the end of the upload: the bot answers it with the product's photo count.
+        const body = { mediaId: data.mediaId, last: i === photos.length - 1, ...(caption ? { text: caption } : {}) };
+        if (!(await post(body, { type: "image", text: caption ?? null, payload: { link: data.url } }))) return;
       }
       if (typed && photos.length === 0) {
         await post(

@@ -1819,6 +1819,25 @@ async function runAutoAnalyzeUnmetered(
     variations = variations.slice(0, 1);
   }
 
+  // The seller named the variation and the Describe pass left it out. Live,
+  // 2026-10-07: "Variation is 100ml and the price is GHS 140" drafted with
+  // no variant, and the bot then asked "What variation(s) do you have?".
+  // The note intent had read it (read=selling_price,variants), each value
+  // checked against the note itself, but nothing used it. It stands in when
+  // the Describe pass gave none; a claim that couldn't be resolved still
+  // keeps nothing.
+  const noted = (intent.variants?.value ?? []).map((v) => v.trim()).filter(Boolean);
+  if (variations.length === 0 && reconciled.kind !== "unresolved" && noted.length > 0) {
+    const suffixes = new Set<string>();
+    variations = Array.from(new Set(noted)).slice(0, 20).map((label, i) => {
+      let sku_suffix = label.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6) || "V";
+      if (suffixes.has(sku_suffix)) sku_suffix = `${sku_suffix.slice(0, 5)}${i + 1}`;
+      suffixes.add(sku_suffix);
+      return { label, sku_suffix };
+    });
+    console.info(`[auto-analyze] listing=${listingId} variants from the seller's note: ${variations.map((v) => v.label).join(", ")}`);
+  }
+
   if (variations.length > 0) {
     try {
       const baseSku    = (listing.sku as string | undefined) ?? listingId.slice(0, 8).toUpperCase();

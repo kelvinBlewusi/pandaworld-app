@@ -17,8 +17,10 @@ const db = new FakeDb();
 jest.mock("@/lib/supabase/server", () => ({ createServerClient: () => db }));
 
 const handled: unknown[][] = [];
+/** What the bot does with a message, for the tests that need it to do something. */
+let mockBot: () => Promise<void> = async () => {};
 jest.mock("@/lib/whatsapp/intake", () => ({
-  handleLinkedMessage: async (...a: unknown[]) => { handled.push(a); },
+  handleLinkedMessage: async (...a: unknown[]) => { handled.push(a); await mockBot(); },
 }));
 jest.mock("@/lib/actions/upload", () => ({ validateImageBuffer: async () => ({ mime: "image/jpeg", ext: "jpg" }) }));
 let pilot = true;
@@ -36,6 +38,9 @@ const log = () => (db.tables.whatsapp_message_log ?? []) as Record<string, unkno
 
 beforeEach(() => {
   db.tables.whatsapp_message_log = [];
+  db.tables.whatsapp_sessions = [];
+  db.tables.listings = [];
+  mockBot = async () => {};
   handled.length = 0;
   pilot = true;
   delete process.env.WHATSAPP_ACCESS_TOKEN;
@@ -131,5 +136,70 @@ describe("orders and labels", () => {
     expect(log()[0].body_text).toContain("orders, packing and shipping labels are on WhatsApp");
     expect(await handleOrderMessage(USER, ADDRESS, "list 3 products")).toBe(false);
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("while a product's photos come in", () => {
+  // The bot says nothing to a photo on WhatsApp (each reply is a paid
+  // message); here, silence after an upload read as "it didn't work"
+  // (owner, 2026-10-07). Timestamps a moment apart, as the database's are.
+  const later = () => new Promise((r) => setTimeout(r, 5));
+  const collecting = (seq: number, size: number) => {
+    db.tables.whatsapp_sessions = [{ phone_number: ADDRESS, user_id: USER, state: "awaiting_photos", batch_id: "b1", batch_seq: seq, batch_size: size }];
+  };
+  const product = (seq: number, photos: number, notes: string | null) => ({
+    id: `l${seq}`, user_id: USER, whatsapp_batch_id: "b1", whatsapp_seq: seq, images: Array.from({ length: photos }, (_, i) => `u${i}`), user_prompt: notes,
+  });
+  const photo = `web:${USER}/assistant/1.jpg`;
+  const replies = () => log().filter((r) => r.direction === "outbound");
+
+  it("the last photo of an upload gets the product's count and a Done button", async () => {
+    collecting(1, 1);
+    mockBot = async () => { await later(); db.tables.listings = [product(1, 1, "Variation is 100ml and the price is GHS 140")]; };
+    await receiveAssistantMessage(USER, { id: "web-photo0002", mediaId: photo, text: "Variation is 100ml and the price is GHS 140", last: true });
+    expect(replies().map((r) => r.body_text)).toEqual(["📷 Your product: 1 photo, notes saved. Upload more photos, or tap *Done* when it's complete."]);
+    expect(replies()[0].payload).toEqual({ buttons: [{ id: "done", title: "Done ✅" }] });
+  });
+
+  it("asks for the price when the photos came without notes, and names the product in a batch", async () => {
+    collecting(2, 3);
+    mockBot = async () => { db.tables.listings = [product(2, 3, null)]; };
+    await receiveAssistantMessage(USER, { id: "web-photo0003", mediaId: photo, last: true });
+    expect(replies().map((r) => r.body_text)).toEqual(["📷 Product 2 of 3: 3 photos. Type its price and any notes, or tap *Done* when it's complete."]);
+  });
+
+  it("the photos before an upload's last get nothing", async () => {
+    collecting(1, 1);
+    mockBot = async () => { db.tables.listings = [product(1, 1, null)]; };
+    await receiveAssistantMessage(USER, { id: "web-photo0004", mediaId: photo, last: false });
+    expect(replies()).toHaveLength(0);
+  });
+
+  it("a product closed in silence (the quiet way) is confirmed, with the next one named", async () => {
+    collecting(1, 3);
+    db.tables.listings = [product(1, 2, "price 50")];
+    mockBot = async () => { db.tables.whatsapp_sessions[0].batch_seq = 2; };
+    await receiveAssistantMessage(USER, { id: "web-text0001", text: "1" });
+    expect(replies().map((r) => r.body_text)).toEqual([
+      "✅ Product 1 saved (2 photos, notes saved). Next: product 2 of 3. Upload its photos with the price and notes.",
+    ]);
+  });
+
+  it("says nothing more when the bot answered itself", async () => {
+    collecting(1, 1);
+    db.tables.whatsapp_message_log.push({ id: "old", phone_number: ADDRESS, direction: "outbound", message_type: "text", body_text: "Let's go", created_at: "2026-10-07T08:00:00Z" });
+    mockBot = async () => {
+      await later();
+      db.tables.listings = [product(1, 1, null)];
+      await sendTextIfConfigured(ADDRESS, "⚠️ That photo didn't come through cleanly");
+    };
+    await receiveAssistantMessage(USER, { id: "web-photo0005", mediaId: photo, last: true });
+    expect(replies().map((r) => r.body_text)).toEqual(["Let's go", "⚠️ That photo didn't come through cleanly"]);
+  });
+
+  it("outside a batch's photos, adds nothing", async () => {
+    db.tables.whatsapp_sessions = [{ phone_number: ADDRESS, user_id: USER, state: "awaiting_confirmation", batch_id: "b1", batch_seq: 1, batch_size: 1 }];
+    await receiveAssistantMessage(USER, { id: "web-photo0006", mediaId: photo, last: true });
+    expect(replies()).toHaveLength(0);
   });
 });

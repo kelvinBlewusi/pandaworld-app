@@ -796,7 +796,13 @@ only appear while billing is off.
   "colours: …", "3 sizes", "variations: …"), and never saves one without a
   label. The Describe prompt already asked for this; a single product
   still drafted as two variants, the second unlabelled, and its submit
-  stopped on "Variant 2 has no Variation label".
+  stopped on "Variant 2 has no Variation label". When the Describe pass
+  gives no variant but the note intent read the seller's (verified against
+  the note), those are used (2026-10-07: "Variation is 100ml" drafted with
+  none and the bot asked "What variation(s) do you have?").
+- **Named once (2026-10-07)**: a single product's "✅ Product drafted: X."
+  with its missing-value or variation question drops the question's own
+  "*X*" line (`named` in askForNextMissingValue / askBlockingValue).
 - **Prices in chat (2026-10-03)**: a price the bot says back goes through
   `chatPrice` (intake.ts): the seller's own symbol from their shop's
   country ("GH₵150", "₦15,000", "KSh 500"), or the bare number when the
@@ -1618,6 +1624,19 @@ labels." It is the WhatsApp bot itself, not a copy:
   phone (below `sm`) the chat is fixed full screen over the shell's top bar
   and title card, with one slim row (back arrow to the dashboard + title);
   from `sm` up it's a card in the page.
+- **Never silent while collecting photos** (owner: "I uploaded an image and
+  got no response"). WhatsApp says nothing to a photo (paid per message) and
+  the quiet way (I) moves between products in silence; on the web,
+  `sayWhereWeAre` in listing-assistant.ts fills that in when the bot sent
+  nothing (reply count unchanged) during awaiting_photos: the upload's last
+  photo (the page sends `last: false` on the others) gets "📷 Product N of
+  M: 3 photos, notes saved. Upload more photos, or tap *Done*…" with a Done
+  button (no notes: "Type its price and any notes…"); a product closed in
+  silence gets "✅ Product N saved (…). Next: product N+1 of M…"; a quiet-mode
+  note gets "📝 Noted for product N". WhatsApp is unchanged.
+- **No photo-settle waits on the web** (`albumsArriveLoose` in intake.ts):
+  the page sends one photo at a time and waits for each, so the in-flight
+  waits and the "Still receiving your photos" hold only apply to WhatsApp.
 - **Who**: the assistant's pilot (`assistantEnabled`: admins and
   app_settings `assistant_users`, `["*"]` for everyone; off with the kill
   switch). Others see "coming soon" with a link to WhatsApp. Its messages
