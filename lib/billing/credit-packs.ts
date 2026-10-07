@@ -196,8 +196,8 @@ export function listingCostFor(country: string | null | undefined): number {
  * WhatsApp services charged as they're used (owner, 2026-10-07: "no
  * credits for alerts, but charge credits to get labels, for live changes,
  * and for alerts the bot sends on its own"). New-order alerts and the
- * assistant's replies are free (the assistant has a daily allowance,
- * lib/whatsapp/assistant-limits.ts). Each is charged once per reference
+ * assistant's replies are free and unlimited (only a ceiling for all
+ * sellers together, lib/whatsapp/assistant-limits.ts). Each is charged once per reference
  * (chargeService in lib/billing/extension-credits.ts), never for admins or
  * while billing is off.
  */

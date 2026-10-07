@@ -92,7 +92,7 @@ import { findBrandExact, getBrandCount, searchBrandsFromDB } from "@/lib/jumia/b
 import { chatChannelOf, isWebAddress } from "@/lib/whatsapp/channel";
 import { limitedText } from "@/lib/whatsapp/assistant-limits";
 import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPrice, dropVariantSalesFrom, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
-import { answerLiveValue, answerPendingQuestion, assistantFor, looksLikeQuestion, plainQuickEdit, runAssistant } from "@/lib/whatsapp/assistant";
+import { answerLiveValue, answerPendingQuestion, assistantFor, plainQuickEdit, runAssistant, type AssistantOutcome, type Stage } from "@/lib/whatsapp/assistant";
 import { batchCreditRefusal, creditGate } from "@/lib/whatsapp/credit-gate";
 import { runChatCommand } from "@/lib/whatsapp/chat-commands";
 
@@ -543,6 +543,88 @@ async function applyNotes(listingId: string, text: string): Promise<void> {
   }
 }
 
+/** A message as the handlers get it: what the seller sent, and the AI's reading of it when it had one. */
+type Incoming = {
+  text?: string;
+  imageMediaId?: string;
+  /** A button or list tap (its id as text): it means one thing already. */
+  tapped?: boolean;
+  /** What the AI made of the typed text before the usual steps (handleLinkedMessage). */
+  aiRead?: Exclude<AssistantOutcome, "handled">;
+};
+
+/** Where the seller is, for the AI; null where it doesn't read messages (connecting Jumia: codes; an error). */
+function aiStage(session: WhatsAppSession): Stage | null {
+  switch (session.state) {
+    case "awaiting_count":        return session.lastSubmittedBatchId ? "sent" : "idle";
+    case "awaiting_photos":       return !session.listingId && (session.batchSeq ?? 1) === 1 ? "starting" : "collecting";
+    case "analyzing":             return "drafting";
+    case "awaiting_confirmation": return "review";
+    default:                      return null;
+  }
+}
+
+const CURRENCY_WORD = "(?:gh₵|ghs|ghc|gh|cedis?|₵|ngn|₦|naira|kes|ksh|egp|mad|xof|ugx|tzs)";
+/** A number on its own ("150", "GHS 150", "150gh", "#2"): a count, a price or a product number, read as always. */
+const PLAIN_NUMBER_RE = new RegExp(`^(?:product\\s*)?#?\\*?(?:${CURRENCY_WORD}\\s*)?\\d[\\d,]*(?:\\.\\d+)?(?:\\s*${CURRENCY_WORD})?\\*?[.!]?$`, "i");
+/** "submit", "submit all", "submit 1 and 3": the review step's own words. */
+const EXACT_SUBMIT_RE = /^submit(?:\s+all|\s+\d{1,2}(?:\s*(?:,|and|&)?\s*\d{1,2})*)?[.!]?$/i;
+
+/**
+ * The typed text the AI should read first, or null when the message means
+ * one thing already: a photo, a tap, a button id, a plain number (or a
+ * count in words between batches), a command's own words, "submit", "done"
+ * while sending photos, or a plain "2: price 150" in review. Also null
+ * where the AI doesn't read (aiStage). With it, the product number a review
+ * edit starts with ("2: …").
+ */
+async function aiReadable(
+  userId: string,
+  session: WhatsAppSession,
+  content: Incoming & { unsupported?: string },
+): Promise<{ text: string; hintSeq?: number } | null> {
+  const text = content.text?.trim();
+  if (!text || content.imageMediaId || content.unsupported || content.tapped || !aiStage(session)) return null;
+  if (/^[a-z_]+:\S+$/i.test(text) || PLAIN_NUMBER_RE.test(text) || EXACT_SUBMIT_RE.test(text)) return null;
+  const cmd = parseGlobalCommand(text);
+  // Sentences the commands only guess at go to the AI; the regexes stay as the fallback.
+  if (cmd && cmd.type !== "stop_ask" && cmd.type !== "edit_help") return null;
+  if (session.state === "awaiting_count" && plainCount(text) != null) return null;
+  if (session.state === "awaiting_photos" && endsWithDoneSignal(text) && text.split(/\s+/).length <= 3) return null;
+  if (session.state === "awaiting_confirmation") {
+    const edit = parseEditCommand(text, session.batchSize ?? 1);
+    if (edit && !edit.needsSeq && edit.explicit) {
+      const currency = await shopCurrencyForUser(userId);
+      const found = extractPrice(edit.text, currency) != null || extractStock(edit.text) != null
+        || extractSalePrice(edit.text, new Date(), currency) != null;
+      if (plainQuickEdit(edit.text, found)) return null;
+    }
+  }
+  const lead = text.match(/^\s*(?:product\s*)?#?(\d{1,2})\s*[:\-–.)]\s*\S/i);
+  return { text, ...(lead ? { hintSeq: Number(lead[1]) } : {}) };
+}
+
+/** "product 2 of 3", while a batch's photos come in. */
+function batchPosition(session: WhatsAppSession): string | undefined {
+  if (session.state !== "awaiting_photos") return undefined;
+  const size = session.batchSize ?? 1;
+  return `product ${session.batchSeq ?? 1}${size > 1 ? ` of ${size}` : ""}`;
+}
+
+/** The bot's question still waiting for the seller, in a few words for the AI. */
+function openQuestion(session: WhatsAppSession): string | undefined {
+  if (session.awaitingPriceFor) return "the selling price of a drafted product";
+  if (session.awaitingValueFor) {
+    return session.awaitingValueFor.field === VARIATION_FIELD
+      ? "a drafted product's variation (its sizes or the like)"
+      : `a drafted product's ${session.awaitingValueFor.field.replace(/_/g, " ")}`;
+  }
+  if (session.awaitingCategoryFor) return "the right category for a product Jumia rejected";
+  if (session.awaitingQcAnswer) return `what Jumia's quality check needs for a rejected product (${session.awaitingQcAnswer.kind})`;
+  if (session.assistantPending) return "which product they meant";
+  return undefined;
+}
+
 /**
  * Entry point for every message from an already-linked number. Dispatches
  * on the seller's session state. `messageId`, when given (Meta's wamid),
@@ -555,7 +637,7 @@ export async function handleLinkedMessage(
   userId: string,
   phoneNumber: string,
   messageId: string | undefined,
-  content: { text?: string; imageMediaId?: string; unsupported?: string; platformError?: string },
+  content: Incoming & { unsupported?: string; platformError?: string },
 ): Promise<void> {
   let session = await getOrCreateSession(userId, phoneNumber);
 
@@ -667,6 +749,28 @@ export async function handleLinkedMessage(
   if (draftCategoryTap) {
     await handleCategoryCorrection(userId, phoneNumber, draftCategoryTap[1], parseInt(draftCategoryTap[2], 10));
     return;
+  }
+
+  // ── The AI reads every typed message first ────────────────────────────
+  // Owner, 2026-10-07: "any reply or text to the bot is taken afresh and the
+  // previous context is taken into consideration too, so if it is about a
+  // draft or a message before it is recognised from the intent of the
+  // message and if it is something new that needs doing too". Where the
+  // seller is and the bot's open question go to it as context, never as a
+  // limit: a question asked mid-batch is answered, a change to a live
+  // product goes there, and what carries on the current step (an answer, a
+  // product's notes) comes back as "step" for the usual handling below,
+  // which also runs whenever the AI can't be reached. Taps, plain numbers,
+  // a command's own words and "done" skip it (aiReadable): they mean one
+  // thing already. Never while connecting Jumia: those messages are codes.
+  const readable = await aiReadable(userId, session, content);
+  if (readable && (await assistantFor(userId, phoneNumber))) {
+    const stage = aiStage(session)!;
+    const outcome = await runAssistant(userId, phoneNumber, session, readable.text, stage, stage === "review" ? readable.hintSeq : undefined, {
+      position: batchPosition(session), waitingFor: openQuestion(session),
+    });
+    if (outcome === "handled") return;
+    content = { ...content, aiRead: outcome };
   }
 
   const globalCmd = content.text ? parseGlobalCommand(content.text) : null;
@@ -1251,7 +1355,7 @@ async function handleAwaitingCount(
   userId: string,
   phoneNumber: string,
   session: WhatsAppSession,
-  content: { text?: string; imageMediaId?: string },
+  content: Incoming,
 ): Promise<void> {
   // Defense in depth: the LINK-code branch in app/api/whatsapp/webhook/
   // route.ts already checks this once, right after linking. Re-checking
@@ -1293,11 +1397,13 @@ async function handleAwaitingCount(
   // AI can't be reached, the usual reading below runs.
   let understood: number | null = null;
   let limited = false;
-  if (typed && plain == null && (await assistantFor(userId, phoneNumber))) {
-    const outcome = await runAssistant(userId, phoneNumber, session, typed, session.lastSubmittedBatchId ? "sent" : "idle");
+  if (typed && plain == null) {
+    // Read already when it came in (handleLinkedMessage); asked here only when it wasn't.
+    const outcome = content.aiRead
+      ?? ((await assistantFor(userId, phoneNumber)) ? await runAssistant(userId, phoneNumber, session, typed, session.lastSubmittedBatchId ? "sent" : "idle") : null);
     if (outcome === "handled") return;
     limited = outcome === "limited";
-    if (typeof outcome === "object") understood = outcome.list;
+    if (outcome && typeof outcome === "object") understood = outcome.list;
     else if (outcome === "default" && !session.lastSubmittedBatchId) {
       await replyButtons(phoneNumber, "Sorry, I didn't catch that. Tell me what you'd like to do for your Jumia shop, or tap how many products you're listing.", COUNT_QUICK_PICKS);
       return;
@@ -1329,7 +1435,7 @@ async function handleAwaitingCount(
     : content.text ? readProductCount(content.text, max) : { ok: false, reason: "no_number" };
 
   if (!parsed.ok) {
-    // Past the day's chat replies, a question isn't a count gone wrong
+    // With the assistant resting (the day's ceiling for everyone), a question isn't a count gone wrong
     // (owner's test, 2026-10-07: "explain" got "I need a number").
     if (limited && parsed.reason === "no_number") {
       await replyButtons(phoneNumber, limitedText(isWebAddress(phoneNumber)), COUNT_QUICK_PICKS);
@@ -2139,22 +2245,10 @@ async function handleAwaitingPhotos(
     return;
   }
 
-  // ── A question before the first photo ───────────────────────────────────
-  // Owner's live test, 2026-10-07: "Has JUMIA payed me ?" and "I won't list
-  // again", sent right after starting a batch, were taken as product 1's
-  // notes in silence. On the assistant's pilot, a message that reads as a
-  // question to the bot, before any photo of the batch, goes to it; it
-  // answers (or stops the batch), and anything it reads as the product's
-  // details stays a note, as always. From the first photo on, nothing
-  // changes.
-  const early = content.text?.trim();
-  if (early && !content.imageMediaId && seq === 1 && !listingId && looksLikeQuestion(early)
-    && !isProductNumber(early, batchSize) && !endsWithDoneSignal(early)
-    && (await assistantFor(userId, phoneNumber))
-    && !(await findBatchSlotListing(userId, session.batchId, 1))
-    && (await runAssistant(userId, phoneNumber, session, early, "starting")) === "handled") {
-    return;
-  }
+  // A question before (or between) the photos is the AI's, read before this
+  // (handleLinkedMessage): "Has JUMIA payed me ?" right after starting a
+  // batch was once taken as product 1's notes in silence. What reaches here
+  // is the product's own: photos, notes, "done", a product number.
 
   // ── Quiet mode: no per-product confirmations, closed by a number ────────
   // Not picked for this batch, the seller's last pick stands. Only for an
@@ -3405,7 +3499,7 @@ async function handleAwaitingBatchConfirmation(
   userId: string,
   phoneNumber: string,
   session: WhatsAppSession,
-  content: { text?: string; imageMediaId?: string },
+  content: Incoming,
 ): Promise<void> {
   const batchId = session.batchId;
   const batchSize = session.batchSize ?? 1;
@@ -3561,24 +3655,29 @@ async function handleAwaitingBatchConfirmation(
 
   const editCmd = parseEditCommand(text, batchSize);
 
-  // The assistant (lib/whatsapp/assistant.ts), on the pilot's accounts:
-  // anything past the commands above is understood by AI and carried out by
-  // our code. A plain price, stock or sale edit ("2: price 150") still goes
-  // straight to handleEdit, as it always has. If the AI can't be reached,
-  // the usual handling below runs.
-  const pilot = await assistantFor(userId, phoneNumber);
-  if (pilot) {
-    if (editCmd && !editCmd.needsSeq) {
-      const currency = await shopCurrencyForUser(userId);
-      const found = extractPrice(editCmd.text, currency) != null || extractStock(editCmd.text) != null
-        || extractSalePrice(editCmd.text, new Date(), currency) != null;
-      if (plainQuickEdit(editCmd.text, found)) {
-        await handleEdit(userId, phoneNumber, batchId, editCmd.seq, editCmd.text);
-        return;
+  // The assistant (lib/whatsapp/assistant.ts): anything past the commands
+  // above is understood by AI and carried out by our code. It has usually
+  // read the message already, as it came in (handleLinkedMessage, content.
+  // aiRead), and handed it on as "step" when it's for the steps below: then
+  // a plain price, stock or sale edit ("2: price 150") goes to handleEdit,
+  // as it always has. If the AI can't be reached, the usual handling runs.
+  const read = content.aiRead;
+  const assistantOn = read !== undefined || (await assistantFor(userId, phoneNumber));
+  if (assistantOn) {
+    let outcome: AssistantOutcome | undefined = read;
+    if (outcome === undefined) {
+      if (editCmd && !editCmd.needsSeq) {
+        const currency = await shopCurrencyForUser(userId);
+        const found = extractPrice(editCmd.text, currency) != null || extractStock(editCmd.text) != null
+          || extractSalePrice(editCmd.text, new Date(), currency) != null;
+        if (plainQuickEdit(editCmd.text, found)) {
+          await handleEdit(userId, phoneNumber, batchId, editCmd.seq, editCmd.text);
+          return;
+        }
       }
+      const hint = editCmd && !editCmd.needsSeq && editCmd.explicit ? editCmd.seq : undefined;
+      outcome = await runAssistant(userId, phoneNumber, session, text, "review", hint);
     }
-    const hint = editCmd && !editCmd.needsSeq && editCmd.explicit ? editCmd.seq : undefined;
-    const outcome = await runAssistant(userId, phoneNumber, session, text, "review", hint);
     if (outcome === "handled") return;
     if (outcome === "default") {
       await replyCta(
@@ -3617,8 +3716,8 @@ async function handleAwaitingBatchConfirmation(
   // primary path) so well-formed commands above stay fast, free, and
   // fully deterministic. looksActionable is a cheap pre-filter so an
   // off-topic reply ("thanks", "ok") never costs a Gemini call for
-  // nothing. Not for the assistant's pilot, which has already asked.
-  if (!pilot && looksActionable(text)) {
+  // nothing. Only when the assistant is switched off: otherwise it has already read it.
+  if (!assistantOn && looksActionable(text)) {
     const listings = await getBatchListings(batchId);
     const intent = await classifyBatchIntent(text, listings.map((l) => ({ seq: l.whatsapp_seq ?? 0, title: l.title })));
 

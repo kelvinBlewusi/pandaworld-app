@@ -3660,7 +3660,8 @@ describe("the assistant, on the pilot's accounts", () => {
     db.tables.variants = titles.map((_, i) => ({
       id: `variant-${i + 1}`, listing_id: `listing-${i + 1}`, variation: "...", seller_sku: `PA-TEST0${i + 1}-1`, quantity: 3, global_price: 4500,
     }));
-    db.tables.app_settings = pilot ? [{ key: "assistant_users", value: [USER] }] : [];
+    // Every seller has it since 2026-10-07; "not the pilot" is now the kill switch.
+    db.tables.app_settings = pilot ? [] : [{ key: "assistant_enabled", value: false }];
     db.tables.whatsapp_assistant_log = [];
     seedSession({ state: "awaiting_confirmation", batch_size: titles.length, batch_seq: null });
     sent.length = 0;
@@ -3831,7 +3832,8 @@ describe("the assistant, on the pilot's accounts", () => {
     function idle(patch: Record<string, unknown> = {}, pilot = true) {
       seedSession({ state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null, listing_id: null, ...patch });
       db.tables.jumia_connections = [{ user_id: USER, status: "active", access_token: "real-token" }];
-      db.tables.app_settings = pilot ? [{ key: "assistant_users", value: [USER] }] : [];
+      // Every seller has it since 2026-10-07; "not the pilot" is now the kill switch.
+    db.tables.app_settings = pilot ? [] : [{ key: "assistant_enabled", value: false }];
       db.tables.whatsapp_assistant_log = [];
       sent.length = 0;
     }
@@ -3926,7 +3928,7 @@ describe("the assistant, on the pilot's accounts", () => {
   describe("a question right after starting a batch (owner's live test, 2026-10-07)", () => {
     function starting(patch: Record<string, unknown> = {}) {
       seedSession({ state: "awaiting_photos", batch_id: "batch-9", batch_size: 2, batch_seq: 1, listing_id: null, batch_quiet: false, ...patch });
-      db.tables.app_settings = [{ key: "assistant_users", value: [USER] }];
+      db.tables.app_settings = [];
       db.tables.whatsapp_assistant_log = [];
       db.tables.listings = [];
       sent.length = 0;
@@ -3959,11 +3961,19 @@ describe("the assistant, on the pilot's accounts", () => {
       expect(sent.at(-1)!.body).toBe("Got it — noted for product 1. Send a photo to get started.");
     });
 
-    it("notes that aren't a question never reach the AI", async () => {
+    // Since 2026-10-07 the AI reads every typed message first: a product's
+    // notes come back as "step" and stay notes, and stay notes when it
+    // can't be reached.
+    it("notes are read by the AI and handed back as notes, or kept as notes when it's down", async () => {
       starting();
+      aiReplies.push('{"type":"step"}');
       await handleLinkedMessage(USER, PHONE, "m1", { text: "Price 200, sizes M and L" });
-      expect(aiPrompts).toHaveLength(0);
+      expect(aiPrompts).toHaveLength(1);
+      expect(aiPrompts[0]).toContain("They're on product 1 of 2.");
       expect(session().pending_notes).toContain("Price 200");
+
+      await handleLinkedMessage(USER, PHONE, "m2", { text: "colour black" });
+      expect(session().pending_notes).toContain("colour black");
     });
   });
 });
@@ -3988,5 +3998,107 @@ describe("the Listing Assistant's web chat (owner, 2026-10-07)", () => {
     await handleLinkedMessage(USER, PHONE, "wa-m1", { imageMediaId: "a", text: "price 150" });
     const made = db.tables.listings.filter((l) => l.whatsapp_batch_id === "batch-wa");
     expect(made[0].chat_channel ?? null).toBeNull();
+  });
+});
+
+// Owner, 2026-10-07: "any reply or text to the bot is taken afresh and the
+// previous context is taken into consideration too ... if it is something
+// new that needs doing too it is gotten from the intent of the request".
+describe("the AI reads every typed message first", () => {
+  beforeEach(() => {
+    db.tables.whatsapp_assistant_log = [];
+    db.tables.seller_memory = [];
+  });
+
+  it("\"Hello?\" while a product's photos come in is answered, not saved as its notes", async () => {
+    seedSession({ state: "awaiting_photos", batch_size: 1, batch_seq: 1, listing_id: "listing-1" });
+    db.tables.listings = [{ id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, images: ["https://cdn.test/a.jpg"], user_prompt: null, status: "draft" }];
+    aiReplies.push('{"type":"reply","text":"Hi! I\'m here.","link":null}');
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "Hello?" });
+    expect(aiPrompts[0]).toContain("Where the seller is (context, not a limit");
+    expect(aiPrompts[0]).toContain("They're on product 1.");
+    expect(listings()[0].user_prompt).toBeNull();
+    expect(sent.at(-1)!.body).toBe("Hi! I'm here.\n\n_Still on product 1: send its photos and details, then *done*._");
+  });
+
+  it("the product's details mid-batch come back as \"step\" and are saved as its notes", async () => {
+    seedSession({ state: "awaiting_photos", batch_size: 1, batch_seq: 1, listing_id: "listing-1" });
+    db.tables.listings = [{ id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, images: ["https://cdn.test/a.jpg"], user_prompt: null, status: "draft" }];
+    aiReplies.push('{"type":"step"}');
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "Color: cream" });
+    expect(listings()[0].user_prompt).toContain("Color: cream");
+  });
+
+  it("while drafting, something else is answered instead of \"hang tight\"", async () => {
+    seedSession({ state: "analyzing", batch_size: 1, batch_seq: null });
+    aiReplies.push('{"type":"reply","text":"Got it: send the new product after this one is drafted, as a new batch.","link":null}');
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "No this is a different product" });
+    expect(aiPrompts[0]).toContain("being drafted by AI right now");
+    expect(sent.map((m) => m.body)).toEqual(["Got it: send the new product after this one is drafted, as a new batch."]);
+  });
+
+  it("a question while the bot waits for a price is answered, and the price question stays open", async () => {
+    db.tables.listings = [{ id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: "Kettle", selling_price: null, status: "draft" }];
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null, awaiting_price_for: "listing-1" });
+    aiReplies.push('{"type":"credits"}');
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "how much credit do I have left" });
+    expect(aiPrompts[0]).toContain("The bot's last question is still open: it asked for the selling price of a drafted product.");
+    expect(session().awaiting_price_for).toBe("listing-1");
+    // The price, typed next, still answers it, with no AI call.
+    aiPrompts.length = 0;
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "150" });
+    expect(aiPrompts).toHaveLength(0);
+    expect(listings()[0].selling_price).toBe(150);
+  });
+
+  it("after a batch went to Jumia, a change to it isn't answered with \"already with Jumia\"", async () => {
+    seedSession({ state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null, last_submitted_batch_id: "batch-1" });
+    db.tables.jumia_connections = [{ user_id: USER, status: "active", access_token: "tok", refresh_token: "ref" }];
+    aiReplies.push('{"type":"reply","text":"Once Jumia approves the helmet, tell me and I\'ll change its price.","link":null}');
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "Change the price of the helmet i had already submitted to 500" });
+    db.tables.jumia_connections = [];
+    expect(aiPrompts[0]).toContain("has just submitted the products below to Jumia");
+    expect(sent.some((m) => m.body.includes("already with Jumia"))).toBe(false);
+  });
+
+  it("taps, plain numbers and a command's own words skip it", async () => {
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    db.tables.listings = [{ id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: "Kettle", selling_price: 150, status: "draft" }];
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "submit all", tapped: true });
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "status" });
+    expect(aiPrompts).toHaveLength(0);
+  });
+
+  it("never while connecting Jumia: those messages are codes", async () => {
+    seedSession({ state: "awaiting_jumia_credentials", batch_id: null, batch_size: null, batch_seq: null, pending_app_id: null });
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "here is my token abc" });
+    expect(aiPrompts).toHaveLength(0);
+  });
+
+  it("the prompt carries what it remembers of the seller, and the conversation with codes blanked", async () => {
+    db.tables.seller_memory = [{ user_id: USER, summary: "- Sells crochet hats and bodysuits, prices around GHS 100-130", since_refresh: 1 }];
+    db.tables.whatsapp_message_log = [
+      { phone_number: PHONE, direction: "inbound", message_type: "text", body_text: "c9758cb3-8a9b-49b2-9ae5-6973aa3015cd", created_at: new Date(Date.now() - 60_000).toISOString() },
+    ];
+    seedSession({ state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null });
+    db.tables.jumia_connections = [{ user_id: USER, status: "active", access_token: "tok", refresh_token: "ref" }];
+    aiReplies.push('{"type":"reply","text":"Hi!","link":null}');
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "hi there" });
+    db.tables.jumia_connections = [];
+    db.tables.whatsapp_message_log = [];
+    expect(aiPrompts[0]).toContain("What you remember about this seller from earlier");
+    expect(aiPrompts[0]).toContain("Sells crochet hats and bodysuits");
+    expect(aiPrompts[0]).toContain("Seller: [a code]");
+    expect(aiPrompts[0]).not.toContain("c9758cb3");
+  });
+
+  it("switched off, the usual flow answers with no AI", async () => {
+    db.tables.app_settings = [{ key: "assistant_enabled", value: false }];
+    seedSession({ state: "awaiting_photos", batch_size: 1, batch_seq: 1, listing_id: "listing-1" });
+    db.tables.listings = [{ id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, images: ["https://cdn.test/a.jpg"], user_prompt: null, status: "draft" }];
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "Hello?" });
+    db.tables.app_settings = [];
+    expect(aiPrompts).toHaveLength(0);
+    expect(listings()[0].user_prompt).toContain("Hello?");
   });
 });

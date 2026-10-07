@@ -81,6 +81,8 @@ export interface MessageContent {
    * the codes are undocumented and Meta adds to them freely.
    */
   platformError?: string;
+  /** A button or list tap: its id is `text`, and it means one thing (the AI doesn't read it). */
+  tapped?: boolean;
 }
 
 function describeError(msg: IncomingMessage): string {
@@ -102,13 +104,13 @@ export function contentOf(msg: IncomingMessage): MessageContent {
     // did, once ten of them stopped fitting in button messages — without
     // touching a single parser.
     const tapped = msg.interactive?.button_reply?.id ?? msg.interactive?.list_reply?.id;
-    if (tapped) return { text: tapped };
+    if (tapped) return { text: tapped, tapped: true };
   }
   // A quick-reply button on a TEMPLATE (an order alert sent outside the
   // 24-hour window) arrives as type "button", carrying the payload set when
   // it was sent (lib/whatsapp/client.ts sendTemplate): the same command
   // phrase an interactive button would have as its id.
-  if (msg.type === "button" && msg.button?.payload) return { text: msg.button.payload };
+  if (msg.type === "button" && msg.button?.payload) return { text: msg.button.payload, tapped: true };
   if (msg.text?.body) return { text: msg.text.body };
   if (msg.type === METAS_OWN_UNSUPPORTED_TYPE) {
     return { unsupported: msg.type, platformError: describeError(msg) };
