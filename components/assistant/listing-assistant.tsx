@@ -404,7 +404,7 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
           type="button"
           onClick={() => toBottom()}
           aria-label="Go to the newest message"
-          className="absolute bottom-3 right-3 flex h-10 w-10 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-md transition-colors hover:bg-zinc-50 sm:right-5"
+          className="absolute bottom-3 left-1/2 flex h-10 w-10 -translate-x-1/2 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-600 shadow-md transition-colors hover:bg-zinc-50"
         >
           <ChevronDown className="h-5 w-5" />
           {unseen && <span className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-orange-500 ring-2 ring-white" />}
