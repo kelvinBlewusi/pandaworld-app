@@ -323,6 +323,12 @@ describe("answers", () => {
     ].join("\n"));
     await answerProducts(USER, PHONE, "rejected");
     expect(last().body).toContain("• Nasco Blender 1.5L: Poor image quality");
+    expect(last().body).toContain("Fix them in Jumia Vendor Center, or list them again here.");
+    // Jumia's API often gives no reason (owner's web chat, 2026-10-08): said, never guessed.
+    for (const r of db.tables.jumia_products as { qc_reason: string | null }[]) r.qc_reason = null;
+    await answerProducts(USER, PHONE, "rejected");
+    expect(last().body).toContain("• Nasco Blender 1.5L\n");
+    expect(last().body).toContain("Jumia didn't send the reasons through its API: check each one in Vendor Center to see why.");
     await answerProducts(USER, PHONE, "inactive");
     expect(last().body).toContain("• Men's Cotton T-Shirt (L)");
   });

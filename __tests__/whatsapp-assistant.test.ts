@@ -64,7 +64,7 @@ jest.mock("@/lib/jumia/categories", () => ({
 
 import {
   answerLiveValue, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
-  draftNumberIn, namesAProduct, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
+  draftNumberIn, isProductName, namesAProduct, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { assistantGate } from "@/lib/whatsapp/assistant-limits";
 import { parseVariations } from "@/lib/whatsapp/variation-question";
@@ -881,7 +881,9 @@ describe("research: several reads of the shop, answered together", () => {
     expect(parseAction('{"type":"list","count":10}', msg, [], links)).toEqual(newest(10));
     expect(parseAction('{"type":"restart"}', msg, [], links)).toEqual(newest(10));
     expect(parseAction('{"type":"reply","text":"I can\'t list your products here.","link":null}', msg, [], links)).toEqual(newest(10));
-    expect(parseAction('{"type":"reply","text":"x","link":null}', "show me my latest products", [], links)).toEqual({ type: "reply", text: "x", link: null });
+    // And as the hello menu.
+    expect(parseAction('{"type":"reply","text":"Hi there! Here is what I can do","link":null}', "show me my latest products", [], links)).toEqual(newest(10));
+    expect(parseAction('{"type":"reply","text":"x","link":null}', "thanks", [], links)).toEqual({ type: "reply", text: "x", link: null });
     expect(parseAction("nonsense", "what are the 5 items I added recently", [], links)).toEqual(newest(5));
   });
 
@@ -911,6 +913,23 @@ describe("research: several reads of the shop, answered together", () => {
       ],
     });
     expect(parseAction('{"type":"research","needs":[{"source":"secrets"}]}', "anything", [], links)).toEqual({ type: "unclear" });
+  });
+
+  it("a product's name on its own is that product, from the bot's list or not", async () => {
+    const names = ["Malta Guinness Soft Drink - 330ml Bottles, Pack of 6 (6 Bottles)", "Water Wave Lace Front Wig - 13x4, 20 Inch"];
+    expect(isProductName("Malta Guinness Soft Drink - 330ml Bottles, Pack of 6", names)).toBe(true);
+    expect(isProductName("Water Wave Lace Front Wig", names)).toBe(true);
+    expect(isProductName("Malta Guinness Soft Drink - 330ml Bottles, Pack of 6…", names)).toBe(true);
+    expect(isProductName("is the Water Wave Lace Front Wig live?", names)).toBe(false);
+    expect(isProductName("Lace Wig", names)).toBe(false);
+    expect(isProductName("Water Wave Lace Front Wig Bundle", names)).toBe(false);
+    expect(isProductName("hi there friend", names)).toBe(false);
+
+    db.tables.jumia_products = [{ user_id: "seller", product_sid: "x", seller_sku: "MALTA-6", name: names[0] }];
+    aiReplies.push('{"type":"reply","text":"I\'m sorry, I can only look up products related to your shop.","link":null}');
+    shopCalls.length = 0;
+    await runAssistant("seller", "233", { phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null } as never, "Malta Guinness Soft Drink - 330ml Bottles, Pack of 6", "idle");
+    expect(shopCalls).toEqual([["answerProductInfo", "Malta Guinness Soft Drink - 330ml Bottles, Pack of 6"]]);
   });
 
   it("is in the prompt, with the owner's question as its example", async () => {

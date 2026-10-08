@@ -2155,6 +2155,17 @@ get info and data and organize them to fit the sellers request."
   "I can't" reply into a newest-products read (10 when no number) unless
   the message says they want to list now ("I want to list my last 3").
   The owner's web chat got "I can't" and then "Let's list! How many…".
+  Since any reply (the hello menu came back too) is replaced the same way.
+- **A product's name on its own is that product**: after interpret, a reply
+  or unclear for a message that is a product name in their shop (3+ words,
+  every one in a jumia_products name, no "?"; `isProductName`) becomes
+  product_info. "Malta Guinness Soft Drink - 330ml Bottles, Pack of 6",
+  picked from the bot's rejected list, got "I can only look up products
+  related to your shop". Not while a batch's photos come in (it'd be notes).
+- **Rejection reasons**: Jumia's catalog API gave no `qcReason` for any of
+  the owner's rejected products. The rejected list now says so ("check each
+  one in Vendor Center") instead of a plain "Fix them…", and the prompt
+  knows a reason is never guessed.
 
 ### The chat knows the website (owner, 2026-10-07)
 
