@@ -163,8 +163,9 @@ export async function runCase(c: EvalCase, model: string, opts: { pipeline?: Pip
     try {
       if (opts.pipeline === "front_door") {
         const { area, action, raw } = await understandFrontDoor(c, { router: opts.router || model, reader: model });
+        // A question back is a reply with buttons: right where any reply is.
         const asked = action.type === "clarify";
-        const pass = !asked && passes(action, c);
+        const pass = asked ? c.ok.some((shape) => shape.type === "reply" && Object.keys(shape).length === 1) : passes(action, c);
         return { id: c.id, area: c.area, pass, bare: pass, asked, routed: area, got: summary(action), raw: raw.slice(0, 600), ms: Date.now() - t0 };
       }
       const { action, bare, raw } = await understand(c, model);

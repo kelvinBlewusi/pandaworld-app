@@ -148,6 +148,11 @@ describe("the front door prototype", () => {
     expect(await runCase(byId("live-change-drone-psc"), "m", { pipeline: "front_door" })).toMatchObject({ pass: false, asked: false, routed: "listing" });
   });
 
+  it("a question back is right where any reply is", async () => {
+    answer = sortThenRead("live_products", '{"type":"clarify","question":"Which products?","options":["The freezer","Others"]}');
+    expect(await runCase(byId("live-stock-those"), "m", { pipeline: "front_door" })).toMatchObject({ pass: true, asked: true });
+  });
+
   it("a question back is counted apart, not as right", async () => {
     answer = sortThenRead("live_products", '{"type":"clarify","question":"Change its stock or its price?","options":["Stock to 10","Price to 10"]}');
     const r = await runCase(byId("live-change-drone-psc"), "m", { pipeline: "front_door" });
@@ -179,7 +184,9 @@ describe("the front door prototype", () => {
     const id = await queueRun({ model: "gemini-2.5-flash", pipeline: "front_door", router: "gemini-2.5-flash-lite" });
     await workOnRuns(10 * 60_000);
     const row = (db.tables.assistant_eval_runs as Record<string, unknown>[]).find((x) => x.id === id) as { pipeline: string; router_model: string; asked: number; passed: number; results: never[] };
-    expect(row).toMatchObject({ pipeline: "front_door", router_model: "gemini-2.5-flash-lite", asked: ASSISTANT_CASES.length, passed: 0 });
+    // A question back is right only where any reply would be.
+    const replyOk = ASSISTANT_CASES.filter((c) => c.ok.some((s) => s.type === "reply" && Object.keys(s).length === 1)).length;
+    expect(row).toMatchObject({ pipeline: "front_door", router_model: "gemini-2.5-flash-lite", asked: ASSISTANT_CASES.length, passed: replyOk });
     expect(routing(row.results).routed).toBe(ASSISTANT_CASES.length);
   });
 });
