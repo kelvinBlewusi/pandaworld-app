@@ -16,7 +16,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { createServerClient } from "@/lib/supabase/server";
 
-export type AiFeature = "extension_fill" | "listing_draft" | "category_refill" | "assistant" | "other";
+/** assistant_eval: the assistant's test set (lib/evals/assistant-eval.ts), never a seller's. */
+export type AiFeature = "extension_fill" | "listing_draft" | "category_refill" | "assistant" | "assistant_eval" | "other";
 
 interface UsageContext {
   feature:    AiFeature;
