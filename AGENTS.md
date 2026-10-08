@@ -2205,6 +2205,9 @@ get info and data and organize them to fit the sellers request."
   - The selected path on its own line (2 lines max) and a full-width
     "Select category" button clear of the phone's home bar.
   - Search no longer auto-focuses on phones (the keyboard covered the list).
+- **"The last 20" came back as 10**: the newest-products read asks Jumia
+  for 4× the products wanted (up to 100; its page may count variations)
+  and shows only as many as asked.
 - **Polish switch**: just "Polish photos" (the credit cost and the
   explanation line removed, owner's ask). The cost still comes from the
   page (POLISH_COST), which only decides whether the switch shows.

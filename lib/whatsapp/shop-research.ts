@@ -254,7 +254,9 @@ async function readProducts(ctx: Ctx, need: Extract<ResearchNeed, { source: "pro
     && (["all", "active", "inactive", "rejected", "pending"] as ProductFilter[]).includes(need.filter);
   if (live) {
     const r = await fetchCatalogPage(ctx.token, ctx.country, {
-      latestFirst: need.sort === "newest", size: need.limit,
+      // "The last 20" came back as 10 (owner's web chat, 2026-10-08): Jumia's
+      // page may count variations. Asked for more, cut to the products asked for.
+      latestFirst: need.sort === "newest", size: Math.min(100, need.limit * 4),
       ...(need.filter === "active" ? { status: "ACTIVE" as const } : need.filter === "inactive" ? { status: "INACTIVE" as const } : {}),
       ...(need.filter === "rejected" ? { qcStatus: "REJECTED" } : need.filter === "pending" ? { qcStatus: "PENDING" } : {}),
       ...(since ? { createdFrom: since } : {}),
