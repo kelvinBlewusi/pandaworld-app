@@ -11,6 +11,11 @@
  * deployed ("pass"), and with the AI's choice checked for safety only,
  * without parseAction's word rules ("bare"), to see what each rule adds.
  *
+ * A run can instead put the cases through the step-2 prototype, "one front
+ * door" (lib/assistant-v2/front-door.ts: route to an area, then read within
+ * it, and ask back rather than guess), which nothing in the chat uses. Its
+ * questions back are counted apart ("asked"): not wrong, but a tap more.
+ *
  * Runs are rows in assistant_eval_runs, worked through by
  * app/api/worker/assistant-eval (pg_cron each minute while one is queued,
  * and nudged when one is queued from /admin/assistant-tests). Nothing a
@@ -27,6 +32,7 @@ import {
   type AssistantAction, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { ASSISTANT_CASES, type EvalCase, type Shape } from "@/lib/evals/assistant-cases";
+import { frontDoor } from "@/lib/assistant-v2/front-door";
 import type { ListingRow } from "@/lib/supabase/types";
 
 /** What the AI is told about the seller: the shape sellerFacts gives, for a Standard seller in Ghana. */
@@ -49,12 +55,20 @@ const PARALLEL = 10;
 /** A run is held by one worker for this long at a time. */
 const LOCK_MS = 58_000;
 
+/** "current": what the chat does today. "front_door": the step-2 prototype. */
+export type Pipeline = "current" | "front_door";
+export const PIPELINES: Pipeline[] = ["current", "front_door"];
+
 export interface CaseResult {
   id: string;
   area: string;
   pass: boolean;
   /** Passed with the AI's choice checked for safety only (no word rules). */
   bare: boolean;
+  /** Front door: it asked the seller a question back instead of acting. */
+  asked?: boolean;
+  /** Front door: the area its first call sent the message to. */
+  routed?: string;
   got: string;
   raw: string;
   error?: string;
@@ -131,14 +145,28 @@ export async function understand(c: EvalCase, model: string): Promise<{ action: 
   return { action, bare: parseActionUnguarded(text, c.msg, products, links, "GHS", opts), raw: text };
 }
 
-const summary = (a: AssistantAction) => JSON.stringify(a).slice(0, 400);
+/** What the front door prototype makes of the case's message (no word rules, no product-name override). */
+export async function understandFrontDoor(c: EvalCase, models: { router: string; reader: string }) {
+  return frontDoor({
+    stage: c.stage, message: c.msg, conversation: c.ctx ?? [], drafts: facts(c), listed: c.listed ?? null,
+    waitingFor: c.waitingFor, seller: SELLER, links: assistantLinks(), currency: "GHS", web: c.web ?? true, shopNames: c.catalog,
+  }, models);
+}
 
-export async function runCase(c: EvalCase, model: string): Promise<CaseResult> {
+const summary = (a: unknown) => JSON.stringify(a).slice(0, 400);
+
+export async function runCase(c: EvalCase, model: string, opts: { pipeline?: Pipeline; router?: string | null } = {}): Promise<CaseResult> {
   const t0 = Date.now();
   let lastError = "";
   // One retry: a timeout isn't the assistant misunderstanding.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
+      if (opts.pipeline === "front_door") {
+        const { area, action, raw } = await understandFrontDoor(c, { router: opts.router || model, reader: model });
+        const asked = action.type === "clarify";
+        const pass = !asked && passes(action, c);
+        return { id: c.id, area: c.area, pass, bare: pass, asked, routed: area, got: summary(action), raw: raw.slice(0, 600), ms: Date.now() - t0 };
+      }
       const { action, bare, raw } = await understand(c, model);
       return { id: c.id, area: c.area, pass: passes(action, c), bare: passes(bare, c), got: summary(action), raw: raw.slice(0, 400), ms: Date.now() - t0 };
     } catch (e) {
@@ -153,14 +181,24 @@ export async function runCase(c: EvalCase, model: string): Promise<CaseResult> {
 export interface EvalRun {
   id: string; created_at: string; status: string; model: string; note: string | null; total: number; done: number;
   passed: number; passed_bare: number; errors: number; results: CaseResult[]; finished_at: string | null;
+  /** Older rows have none: the current pipeline. */
+  pipeline?: Pipeline | null; router_model?: string | null; asked?: number | null;
 }
 
-/** Queue a run of the whole set (the model in use unless one is named). Returns its id. */
-export async function queueRun(opts: { model?: string; note?: string } = {}): Promise<string> {
+/**
+ * Queue a run of the whole set (the model in use unless one is named),
+ * through the chat as it is or the front door prototype (whose first call
+ * uses `router`, the same model unless named). Returns its id.
+ */
+export async function queueRun(opts: { model?: string; note?: string; pipeline?: Pipeline; router?: string } = {}): Promise<string> {
   const model = opts.model ?? (await assistantModel());
+  const pipeline = opts.pipeline ?? "current";
   const { data, error } = await createServerClient()
     .from("assistant_eval_runs")
-    .insert({ model, note: opts.note ?? null, total: ASSISTANT_CASES.length, status: "queued" })
+    .insert({
+      model, note: opts.note ?? null, total: ASSISTANT_CASES.length, status: "queued", pipeline,
+      router_model: pipeline === "front_door" ? opts.router ?? model : null,
+    })
     .select("id")
     .single();
   if (error || !data) throw new Error(`couldn't queue a run: ${error?.message ?? "no row"}`);
@@ -183,6 +221,7 @@ const tally = (results: CaseResult[]) => ({
   passed:      results.filter((r) => r.pass).length,
   passed_bare: results.filter((r) => r.bare).length,
   errors:      results.filter((r) => r.error).length,
+  asked:       results.filter((r) => r.asked).length,
 });
 
 /**
@@ -212,7 +251,7 @@ export async function workOnRuns(budgetMs = 45_000): Promise<{ runId: string | n
   const left = ASSISTANT_CASES.filter((c) => !done.has(c.id));
   while (left.length > 0 && Date.now() < deadline - 15_000) {
     const group = left.splice(0, PARALLEL);
-    results.push(...(await Promise.all(group.map((c) => runCase(c, run.model)))));
+    results.push(...(await Promise.all(group.map((c) => runCase(c, run.model, { pipeline: run.pipeline ?? "current", router: run.router_model })))));
     await db.from("assistant_eval_runs").update({
       ...tally(results), results, locked_until: new Date(Date.now() + LOCK_MS).toISOString(),
     }).eq("id", run.id);
@@ -225,15 +264,24 @@ export async function workOnRuns(budgetMs = 45_000): Promise<{ runId: string | n
   return { runId: run.id, done: results.length, total: ASSISTANT_CASES.length };
 }
 
-/** A run's results by area: cases, passed as deployed, passed on the AI's choice alone. Pure. */
-export function byArea(results: CaseResult[]): { area: string; cases: number; passed: number; bare: number }[] {
-  const rows = new Map<string, { area: string; cases: number; passed: number; bare: number }>();
+/** A run's results by area: cases, passed as deployed, passed on the AI's choice alone, asked back. Pure. */
+export function byArea(results: CaseResult[]): { area: string; cases: number; passed: number; bare: number; asked: number }[] {
+  const rows = new Map<string, { area: string; cases: number; passed: number; bare: number; asked: number }>();
   for (const r of results) {
-    const row = rows.get(r.area) ?? { area: r.area, cases: 0, passed: 0, bare: 0 };
+    const row = rows.get(r.area) ?? { area: r.area, cases: 0, passed: 0, bare: 0, asked: 0 };
     row.cases++;
     if (r.pass) row.passed++;
     if (r.bare) row.bare++;
+    if (r.asked) row.asked++;
     rows.set(r.area, row);
   }
   return Array.from(rows.values()).sort((a, b) => a.passed / a.cases - b.passed / b.cases);
+}
+
+const AREA_OF: Record<string, string> = { live_changes: "live_products" };
+
+/** Front door runs: of the cases routed, how many went to the case's own area. Pure. */
+export function routing(results: CaseResult[]): { routed: number; right: number } {
+  const routed = results.filter((r) => r.routed);
+  return { routed: routed.length, right: routed.filter((r) => r.routed === (AREA_OF[r.area] ?? r.area)).length };
 }

@@ -173,7 +173,7 @@ const GOOGLE_SEARCH_TOOL = { google_search: {} };
 export async function callGeminiBackend(
   modelName: string,
   parts: GeminiPart[],
-  opts: { preferBackend?: "vertex" | "ai-studio"; groundWithSearch?: boolean } = {},
+  opts: { preferBackend?: "vertex" | "ai-studio"; groundWithSearch?: boolean; json?: boolean } = {},
 ): Promise<GeminiCallResult> {
   // Per-call backend preference. Vertex and AI Studio expose DIFFERENT model
   // catalogues despite sharing model names and pricing: confirmed live (Aug
@@ -195,12 +195,15 @@ export async function callGeminiBackend(
     //   - no per-model object; the model name is an argument
     //   - tools move inside `config`
     //   - the result IS the response (no `.response` wrapper)
+    // `json`: the reply is one JSON value (responseMimeType), for callers that parse it.
+    const config = {
+      ...(opts.groundWithSearch ? { tools: [GOOGLE_SEARCH_TOOL] as unknown as import("@google/genai").Tool[] } : {}),
+      ...(opts.json ? { responseMimeType: "application/json" } : {}),
+    };
     const result = await vertex.models.generateContent({
       model:    modelName,
       contents: [{ role: "user", parts: parts as VertexPart[] }],
-      ...(opts.groundWithSearch
-        ? { config: { tools: [GOOGLE_SEARCH_TOOL] as unknown as import("@google/genai").Tool[] } }
-        : {}),
+      ...(Object.keys(config).length > 0 ? { config } : {}),
     });
     const candidate = result.candidates?.[0];
     const responseParts = candidate?.content?.parts ?? [];
@@ -215,10 +218,11 @@ export async function callGeminiBackend(
   const ai = getAIStudioClient();
   const model: AIStudioModel = ai.getGenerativeModel({ model: modelName });
   const result = await model.generateContent(
-    opts.groundWithSearch
+    opts.groundWithSearch || opts.json
       ? {
           contents: [{ role: "user", parts: parts as import("@google/generative-ai").Part[] }],
-          tools: [GOOGLE_SEARCH_TOOL] as unknown as import("@google/generative-ai").Tool[],
+          ...(opts.groundWithSearch ? { tools: [GOOGLE_SEARCH_TOOL] as unknown as import("@google/generative-ai").Tool[] } : {}),
+          ...(opts.json ? { generationConfig: { responseMimeType: "application/json" } } : {}),
         }
       : parts,
   );
