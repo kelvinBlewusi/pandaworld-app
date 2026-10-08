@@ -73,7 +73,7 @@ import {
   answerBrand, answerCategoryNeeds, answerLinkedShops, answerPayoutDetail, answerReport, answerWarehouseStock, proposeWarehouseOrder,
   proposeWarehouseShipped, type ReportKind,
 } from "@/lib/whatsapp/shop-insights";
-import type { LiveChange } from "@/lib/jumia/shop";
+import { shopProducts, type LiveChange, type ShopProduct } from "@/lib/jumia/shop";
 import { MAX_NEEDS, answerResearch, parseNeeds, type ResearchNeed } from "@/lib/whatsapp/shop-research";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { assistantGate, assistantSwitchedOn } from "@/lib/whatsapp/assistant-limits";
@@ -85,7 +85,7 @@ import { resetSession, updateSession, type AssistantPending, type LiveValueAsk, 
 import { parseVariations, saveVariations, sizeNamedIn, variationOptions, VARIATION_FIELD } from "@/lib/whatsapp/variation-question";
 import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPrice, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import type { ListingRow } from "@/lib/supabase/types";
-import { FRONT_DOOR_ROUTER, frontDoor, namesInMessage, type Clarify } from "@/lib/assistant-v2/front-door";
+import { FRONT_DOOR_LIMITS, FRONT_DOOR_ROUTER, frontDoor, namesInMessage, type Clarify } from "@/lib/assistant-v2/front-door";
 
 /** Small and quick, like the review step's older fallback (lib/whatsapp/intent.ts). */
 export const ASSISTANT_MODEL = "gemini-2.5-flash-lite";
@@ -868,7 +868,9 @@ export function saleWindow(message: string, now: Date): { start: string; end: st
 const END_SALE_WORDS = /\b(end|ends|stop|remove|cancel|no longer|take off|turn off)\b[^.?!]*\b(sale|discount|promo)|\b(sale|discount|promo)\b[^.?!]*\b(end|ended|off|over|stop)\b/i;
 const OFF_WORDS = /\b(off|deactivate|disable|hide|unpublish|inactive|pause|stop selling|unlist)\b/i;
 /** Typos included: "also tun on the drone" was refused (live, 2026-10-07). Not "on sale". */
-const ON_WORDS = /\b(turn|tun|trun|tur|switch|put|set|get|bring)\b[^.?!]*\bon\b(?!\s+(sale|discount|promo))|\b(back on|on again)\b|\b(activate|enable|unhide|publish|republish|reactivate|resume|unpause)\b|\b(active|live|visible) again\b|\bmake (it |them )?(active|live|visible)\b|\bgo live\b/i;
+// "On them", "on all the products that are off": "on" as the verb, as sellers
+// write it (owner's web chat, 2026-10-08).
+const ON_WORDS = /^\s*on\s+(?:all|them|those|these|the|it|every|everything|my)\b|\b(turn|tun|trun|tur|switch|put|set|get|bring)\b[^.?!]*\bon\b(?!\s+(sale|discount|promo))|\b(back on|on again)\b|\b(activate|enable|unhide|publish|republish|reactivate|resume|unpause)\b|\b(active|live|visible) again\b|\bmake (it |them )?(active|live|visible)\b|\bgo live\b/i;
 
 /**
  * A question about a product's state ("is the drone live?", "is the dron
@@ -1018,9 +1020,13 @@ const SCOPE_GROUP: Partial<Record<BulkScope, string>> = {
  */
 export function bulkAction(
   parsed: Record<string, unknown>, message: string, now: Date, currency: string,
-  opts: { listed?: boolean; restock?: boolean; many?: boolean } = {},
+  opts: { listed?: boolean; restock?: boolean; many?: boolean; previous?: string } = {},
 ): AssistantAction {
   const ask = (text: string): AssistantAction => ({ type: "reply", text, link: null });
+  // "On them and keep their stock" after "on all the products that are off"
+  // (owner's web chat, 2026-10-08): the rule and its group are in the message
+  // before, which this one points back to. Values still come from this one.
+  const rule = opts.previous && LISTED_WORDS.test(message) ? `${message}\n${opts.previous}` : message;
   let scope: BulkScope;
   if (parsed.scope === "listed") {
     // "Those", "the last 10", "all" after a list: the products the bot just
@@ -1030,7 +1036,7 @@ export function bulkAction(
     if (!LISTED_WORDS.test(message) && !RULE_WORDS.test(message) && !opts.many) return { type: "unclear" };
     scope = "listed";
   } else {
-    if (!RULE_WORDS.test(message) && !opts.many) return { type: "unclear" };
+    if (!RULE_WORDS.test(rule) && !opts.many) return { type: "unclear" };
     scope = BULK_SCOPES.has(parsed.scope as BulkScope) ? (parsed.scope as BulkScope) : "all";
   }
   const words = typeof parsed.words === "string" && parsed.words.trim() ? parsed.words.trim().slice(0, 80) : null;
@@ -1045,8 +1051,8 @@ export function bulkAction(
     // stock became every product). Only "all products", "everything" make it
     // the whole shop; otherwise ask which they mean. "Restock all" is what's
     // out of stock.
-    if (backed && !backed.test(message) && !(scope === "out_of_stock" && opts.restock)) {
-      if (!WHOLE_SHOP_RE.test(message)) {
+    if (backed && !backed.test(rule) && !(scope === "out_of_stock" && opts.restock)) {
+      if (!WHOLE_SHOP_RE.test(rule)) {
         return ask(`Every product in your shop, or only ${SCOPE_GROUP[scope] ?? "some of them"}? Say it with the change, e.g. "set the stock of everything out of stock to 10" or "set all products' stock to 10".`);
       }
       scope = "all";
@@ -1093,6 +1099,7 @@ export function bulkAction(
   return { type: "bulk", scope, words: scope === "matching" ? words : null, change };
 }
 
+const CHANGE_WORDS = /\b(change|update|edit|modify|new|another)\b/i;
 const REWRITE_WORDS = /\b(rewrite|re-write|improve|better|write|redo|re-do|optimi[sz]e|polish|fix|make (it|the \w+) (better|nicer|attractive|catchy|professional))\b/i;
 
 /** A live product's content change, checked: its text copied from the message, or a rewrite they asked for. */
@@ -1110,7 +1117,12 @@ export function contentAction(parsed: Record<string, unknown>, message: string, 
   const rewrite = (Array.isArray(parsed.rewrite) ? parsed.rewrite : [])
     .filter((f): f is "name" | "description" | "highlights" => f === "name" || f === "description" || f === "highlights")
     .filter((f) => !request[f]);
-  if (rewrite.length > 0 && REWRITE_WORDS.test(message)) { request.rewrite = Array.from(new Set(rewrite)); request.instructions = message.slice(0, 400); }
+  // "Change the description of the boot" with no new text in it asks for one
+  // to be written, like "rewrite" (owner's web chat, 2026-10-08).
+  const named = rewrite.some((f) => new RegExp(f === "name" ? "\\b(name|title)\\b" : `\\b${f}\\b`, "i").test(message));
+  if (rewrite.length > 0 && (REWRITE_WORDS.test(message) || (named && CHANGE_WORDS.test(message)))) {
+    request.rewrite = Array.from(new Set(rewrite)); request.instructions = message.slice(0, 400);
+  }
   if (Object.keys(request).length === 0) {
     return ask("What should I change on it? Write the new name, or say \"rewrite its description\", e.g. \"change the blender's name to Silver Crest 3 in 1 Blender 1.5L\".");
   }
@@ -1351,7 +1363,7 @@ function parseActionRaw(
       return { type: "report", kind: parsed.kind as ReportKind, period: asPeriod(parsed.period, "month") };
     }
     case "bulk":
-      return bulkAction(parsed, message, now, currency, { listed: opts.listed });
+      return bulkAction(parsed, message, now, currency, { listed: opts.listed, previous: lastSellerLine(context) });
     case "content_change":
       return contentAction(parsed, message, context);
     case "brand_check": {
@@ -1595,13 +1607,24 @@ export async function interpret(
   return { action, links, raw: text };
 }
 
-/** Their Jumia products whose names share words with the message (the shop's local copy). */
-async function shopNamesIn(userId: string, message: string): Promise<string[]> {
+/** One line for a product the bot listed: where it is, as the front door reads it. */
+function listedLine(p: ShopProduct): string {
+  const qc = p.qcStatus === "REJECTED" ? "rejected by quality check" : p.qcStatus === "APPROVED" ? "approved" : p.qcStatus ? "waiting for quality check" : "quality check unknown";
+  const variation = p.variation && p.variation !== "..." ? ` (${p.variation})` : "";
+  return `"${p.name}${variation}" · ${p.status === "ACTIVE" ? "on" : p.status === "INACTIVE" ? "off" : (p.status ?? "?").toLowerCase()} · ${qc} · stock ${p.stock ?? "?"}`;
+}
+
+/** From the shop's local copy: the products the message names, and the ones the bot just listed, as lines. */
+async function shopFacts(userId: string, message: string, listedSids: string[]): Promise<{ names: string[]; listed: string[] }> {
   try {
-    const { data } = await createServerClient().from("jumia_products").select("name").eq("user_id", userId).limit(5000);
-    return namesInMessage(message, ((data ?? []) as { name: string | null }[]).map((r) => r.name ?? "").filter(Boolean));
+    const products = (await shopProducts(userId)).filter((p) => p.status !== "DELETED");
+    const bySid = new Map(products.map((p) => [p.sid, p]));
+    return {
+      names:  namesInMessage(message, products.map((p) => p.name).filter(Boolean)),
+      listed: listedSids.map((sid) => bySid.get(sid)).filter((p): p is ShopProduct => !!p).slice(0, 30).map(listedLine),
+    };
   } catch {
-    return [];
+    return { names: [], listed: [] };
   }
 }
 
@@ -1615,17 +1638,21 @@ export async function interpretThroughFrontDoor(
   stage: Stage,
   products: ProductFacts[],
   message: string,
-  opts: { batchId?: string | null; conversation?: string[]; web?: boolean; position?: string; waitingFor?: string; listed?: { count: number; what: string } | null } = {},
+  opts: {
+    batchId?: string | null; conversation?: string[]; web?: boolean; position?: string; waitingFor?: string;
+    listed?: { count: number; what: string } | null; listedSids?: string[];
+  } = {},
 ): Promise<{ action: AssistantAction | Clarify; links: Record<string, AssistantLink>; raw: string }> {
-  const [currency, seller, reader, listingCost, memory, shopNames] = await Promise.all([
+  const [currency, seller, reader, listingCost, memory, shop] = await Promise.all([
     shopCurrencyForUser(userId), sellerFacts(userId), assistantModel(), listingCreditCost(userId).catch(() => LIVE_LISTING_CREDIT_COST),
-    sellerMemory(userId), shopNamesIn(userId, message),
+    sellerMemory(userId), shopFacts(userId, message, opts.listed ? opts.listedSids ?? [] : []),
   ]);
   const links = assistantLinks({ batchId: opts.batchId, countrySlug: seller.countrySlug });
   const { action, raw } = await frontDoor({
-    stage, message, conversation: opts.conversation ?? [], drafts: products, listed: opts.listed ?? null, waitingFor: opts.waitingFor,
-    seller: seller.lines, links, currency, web: opts.web ?? false, shopNames, listingCost, position: opts.position, memory,
-  }, { router: FRONT_DOOR_ROUTER, reader }, { feature: "assistant", userId });
+    stage, message, conversation: opts.conversation ?? [], drafts: products, waitingFor: opts.waitingFor,
+    listed: opts.listed ? { ...opts.listed, items: shop.listed } : null,
+    seller: seller.lines, links, currency, web: opts.web ?? false, shopNames: shop.names, listingCost, position: opts.position, memory,
+  }, { router: FRONT_DOOR_ROUTER, reader }, { feature: "assistant", userId }, FRONT_DOOR_LIMITS);
   return { action, links, raw: `[front door] ${raw}` };
 }
 
@@ -1652,6 +1679,12 @@ async function sendClarify(phone: string, clarify: Clarify): Promise<void> {
 }
 
 // ─── Carrying it out ──────────────────────────────────────────────────────
+
+/** The seller's message before this one, from the conversation ("Seller: …" lines). */
+export function lastSellerLine(context: string): string | undefined {
+  const lines = context.split("\n").filter((l) => l.startsWith("Seller:"));
+  return lines.length ? lines[lines.length - 1].slice(7).trim() || undefined : undefined;
+}
 
 /** "quantity 20", "variation L", for the reply and the "which?" question. */
 function describeChanges(c: Changes): string {
@@ -1941,7 +1974,7 @@ export async function runAssistant(
       listed: listedFresh(session),
     };
     if (viaFrontDoor) {
-      const read = await interpretThroughFrontDoor(userId, stage, products, text, facts);
+      const read = await interpretThroughFrontDoor(userId, stage, products, text, { ...facts, listedSids: session.lastListed?.sids });
       if (read.action.type === "clarify") {
         await sendClarify(phone, read.action);
         await logTurn(userId, stage, text, read.action as unknown as AssistantAction, `asked: ${read.action.question}`.slice(0, 300), read.raw);

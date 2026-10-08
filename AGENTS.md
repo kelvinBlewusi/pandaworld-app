@@ -2324,6 +2324,40 @@ measuring, is this.
   intake.ts `aiReadable` lets it through as if typed (taps otherwise skip
   the AI), and if the AI hands it back it goes on as plain text.
   `recentConversation` shows it as the words.
+- **The owner's first session (web, 8 Oct 17:00–17:52) and what changed**:
+  - Replies made claims up in areas without the facts ("our team will
+    update your rejected products", "I can't write descriptions"). Now every
+    area's reading call gets the seller's facts and `capabilities()`, with
+    "there is no team doing things by hand".
+  - "The approved ones" picked 2 of 6, because the conversation keeps only
+    300 characters of each message. Now the products just listed go in as
+    lines with on/off, quality check and stock (`listedLine`, `shopFacts`,
+    from session.lastListed). They also count as named for the safety
+    checks.
+  - The bot's ask without "?" ("please provide the new description text
+    for …") is now an open question (`ASKING_RE`), and the router keeps an
+    answer in its question's area. A live product under discussion stays
+    live_products while drafts wait.
+  - "On them and keep their current stock" after "on all the products that
+    are off" now passes. `bulkAction` reads the rule and group from the
+    previous seller message when this one points back (`lastSellerLine`).
+    ON_WORDS takes a leading "on" ("on all…", "on them").
+  - "Change the description of X" with no new text means rewrite
+    (`CHANGE_WORDS` plus the field named).
+  - One message got no reply (the 60 s route limit while Gemini was slow).
+    `FRONT_DOOR_LIMITS` now gives sorting 10 s and reading 25 s; after that,
+    Flash-Lite reads it in 12 s. `raw` starts with the timings
+    (`[front door] 0.9s+6.2s …`).
+  - Shop numbers now agree. Bulk `out_of_stock`/`low_stock` count only
+    products that are on, like the stock list (it showed 5; the rule changed
+    12). `healthEvidence` drops DELETED (436 vs 297). The overview and stock
+    list say when changes sent in the last 30 min are still being applied.
+  - 9 new cases in the test set (`src: "log 10-08 17:xx"`).
+- **The chat page** (owner: "cover the entire page with the side panel
+  still in place"): on /extension/assistant the shell has no title bar or
+  padding (`onAssistant`). The chat fills the page beside the sidebar, with
+  messages and the composer in a centred `max-w-3xl` column. Phones are
+  unchanged (full screen).
 - **Before "all"**: read the owner's front-door turns in
   whatsapp_assistant_log (`raw like '[front door]%'`). Make each misread a
   test case and run the set with the front door. Then remove the word rules

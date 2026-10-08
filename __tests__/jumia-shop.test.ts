@@ -321,6 +321,11 @@ describe("answers", () => {
       "", "Ask me about any of them: stock, price, a sale, or turning one on or off.",
       "How sales are going: *sales week*. A full health check of your shop: *report* (2 credits).",
     ].join("\n"));
+    // A change sent a moment ago that Jumia hasn't applied yet: said, so the numbers don't look wrong.
+    db.tables.jumia_product_changes = [{ id: "c1", user_id: USER, status: "sent", updated_at: new Date().toISOString() }];
+    await answerProducts(USER, PHONE, "all");
+    expect(last().body).toContain("⏳ 1 change you made is still being applied by Jumia");
+    db.tables.jumia_product_changes = [];
     await answerProducts(USER, PHONE, "rejected");
     expect(last().body).toContain("• Nasco Blender 1.5L: Poor image quality");
     expect(last().body).toContain("Fix them in Jumia Vendor Center, or list them again here.");

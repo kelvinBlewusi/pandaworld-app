@@ -315,6 +315,8 @@ describe("the shop health report", () => {
       p({ sellerSku: "B", name: "Blender", stock: 0 }),
       p({ sellerSku: "C", name: "Iron", status: "INACTIVE" }),
       p({ sellerSku: "D", name: "Fan", qcStatus: "rejected" }),
+      // Deleted products aren't in the shop (owner, 2026-10-08: the report counted 436 against 297).
+      p({ sellerSku: "E", name: "Old fan", status: "DELETED", qcStatus: "rejected" }),
     ];
     const orders = [{ createdAt: new Date(now - 5 * day).toISOString() }, { createdAt: new Date(now - 40 * day).toISOString() }];
     const item = (sku: string, status: string, price: number) => ({ id: sku + status, status, paidPriceLocal: price, product: { sellerSku: sku, name: sku === "A" ? "Kettle" : "Blender" }, country: { currencyCode: "GHS" } });

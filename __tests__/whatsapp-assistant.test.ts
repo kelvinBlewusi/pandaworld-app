@@ -794,6 +794,19 @@ describe("more of the Jumia API (owner, 2026-10-07: \"do all\")", () => {
       .toEqual({ type: "bulk", scope: "all", words: null, change: { kind: "sale", sale: null } });
   });
 
+  it("reads a follow-up that points back to the rule before it (owner's web chat, 2026-10-08)", () => {
+    const ctx = "Seller: on all the products that are off\nBot: What should their stock be?";
+    expect(parseAction('{"type":"bulk","scope":"inactive","words":null,"active":true}', "on them and keet their current stock", [], {}, "GHS", { context: ctx }))
+      .toEqual({ type: "bulk", scope: "inactive", words: null, change: { kind: "status", active: true } });
+    // Without the rule before it, "them" alone isn't many products.
+    expect(parseAction('{"type":"bulk","scope":"inactive","words":null,"active":true}', "on them", [], {}, "GHS", { context: "" })).toEqual({ type: "unclear" });
+  });
+
+  it("\"change the description of X\" with no new text asks for one to be written", () => {
+    expect(parseAction('{"type":"content_change","product":"wellington boot","description":null,"rewrite":["description"]}', "change the description of the wellington boot", [], {}, "GHS"))
+      .toMatchObject({ type: "content_change", product: "wellington boot", request: { rewrite: ["description"] } });
+  });
+
   it("a rule the message doesn't back isn't carried out", () => {
     // No "all" or percentage: not a rule.
     expect(parse('{"type":"bulk","scope":"all","price_pct":5}', "raise the kettle price")).toEqual({ type: "unclear" });

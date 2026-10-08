@@ -25,6 +25,7 @@ import { BuyCreditsModal } from "./buy-credits-modal";
 import type { CreditTransaction } from "@/lib/billing/extension-credits";
 import type { UserNotice } from "@/lib/notices";
 import { RichText } from "./rich-text";
+import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -223,8 +224,11 @@ export function ExtensionShell({
 
         {/* Utility bar — page title + greeting on the left (changes per
             page), Plan (a link to /pricing) / Credits / notifications /
-            Install on the right, same order across every page in this shell. */}
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-4 border-b bg-white px-4 py-4 sm:px-6">
+            Install on the right, same order across every page in this shell.
+            Not on the Listing Assistant: the chat fills the whole page beside
+            the sidebar there (owner, 2026-10-08: "cover the entire page with
+            the side panel still in place"). */}
+        <div className={cn("flex shrink-0 flex-wrap items-center justify-between gap-4 border-b bg-white px-4 py-4 sm:px-6", onAssistant && "hidden")}>
           <div>
             <h1 className="text-xl font-bold text-zinc-900 sm:text-2xl">{pageTitle}</h1>
             <p className="text-sm text-zinc-500">Welcome, {user?.firstName ?? user?.username ?? "there"}</p>
@@ -345,9 +349,13 @@ export function ExtensionShell({
           </div>
         </div>
 
-        <main className="flex-1 overflow-y-auto">
-          <div className="min-h-full p-4 sm:p-6 lg:p-8">{children}</div>
-        </main>
+        {onAssistant ? (
+          <main className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</main>
+        ) : (
+          <main className="flex-1 overflow-y-auto">
+            <div className="min-h-full p-4 sm:p-6 lg:p-8">{children}</div>
+          </main>
+        )}
       </div>
       {canBuyCredits && <BuyCreditsModal open={buyOpen} onClose={() => setBuyOpen(false)} listingCost={listingCost} />}
     </div>

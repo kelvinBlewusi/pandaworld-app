@@ -133,6 +133,9 @@ describe("rules for many products", () => {
   it("picks by scope and leaves out what wouldn't change", () => {
     const all = products();
     expect(bulkTargets(all, "out_of_stock", null, { kind: "status", active: false }, null).targets.map((p) => p.sellerSku)).toEqual(["LAT-50"]);
+    // Out of stock means what the stock list shows: on, with none left (owner, 2026-10-08: the list said 5, the rule changed 12).
+    const offAndEmpty = [...all, { ...all[0], sid: "off-empty", sellerSku: "OFF-0", status: "INACTIVE", stock: 0 }];
+    expect(bulkTargets(offAndEmpty, "out_of_stock", null, { kind: "stock", stock: 10 }, null).targets.map((p) => p.sellerSku)).not.toContain("OFF-0");
     const off = bulkTargets(all, "all", null, { kind: "status", active: false }, null);
     expect(off.targets.map((p) => p.sellerSku)).toEqual(["LAT-50", "LAT-100", "NAS-K"]);
     expect(off.skipped).toEqual([{ reason: "already off", count: 1 }]);

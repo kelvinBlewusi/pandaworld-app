@@ -43,7 +43,8 @@ export interface FrontDoorInput {
   message:      string;
   conversation: string[];
   drafts:       ProductFacts[];
-  listed:       { count: number; what: string } | null;
+  /** The products the bot last listed for them; `items`, one line each with where it is (on/off, quality check, stock). */
+  listed:       { count: number; what: string; items?: string[] } | null;
   waitingFor?:  string;
   seller:       string[];
   links:        Record<string, AssistantLink>;
@@ -75,6 +76,8 @@ const STAGES: Record<Stage, string> = {
   sent:       "They have just submitted their batch to Jumia.",
 };
 
+const ASKING_RE = /\b(please (?:provide|send|give|share|tell|write|type)|send me|tell me|let me know|reply with|what should)\b/i;
+
 /** The bot's question still open, and what kind of answer fits it; null when none. Pure. */
 export function openQuestion(input: Pick<FrontDoorInput, "stage" | "conversation" | "waitingFor">): { about: string; fits: string } | null {
   if (input.waitingFor) return { about: input.waitingFor, fits: "a value or a short answer to it" };
@@ -83,7 +86,9 @@ export function openQuestion(input: Pick<FrontDoorInput, "stage" | "conversation
   }
   const lastBot = [...input.conversation].reverse().find((l) => l.startsWith("Bot:"))?.slice(4).trim() ?? "";
   if (/how many products/i.test(lastBot)) return { about: "how many products they are listing now", fits: "a number of products to list, or wanting to list" };
-  if (/\?\s*$/.test(lastBot)) return { about: lastBot.slice(0, 200), fits: "a short answer to that question" };
+  // A question, or the bot asking them for something ("please provide the
+  // new description text for …", owner's web chat, 2026-10-08).
+  if (/\?\s*$/.test(lastBot) || ASKING_RE.test(lastBot)) return { about: lastBot.slice(0, 300), fits: "an answer to it, or what it asked for (a value, a text, a choice)" };
   return null;
 }
 
@@ -110,7 +115,7 @@ export function contextText(input: FrontDoorInput): string {
     `Where they are: ${STAGES[input.stage]}${input.position ? ` (${input.position})` : ""}`,
     `The bot's open question: ${q ? `${q.about}. What answers it: ${q.fits}. Anything else is a new request and closes the question.` : "none"}`,
     `Drafts in their batch: ${input.drafts.length ? `\n${input.drafts.map((p) => draftLine(p, input.currency)).join("\n")}` : "none"}`,
-    `Products you last listed for them: ${input.listed ? `${input.listed.count} (${input.listed.what}). "Those", "them", "all of them" and "the last N" mean these.` : "none"}`,
+    `Products you last listed for them: ${input.listed ? `${input.listed.count} (${input.listed.what}). "Those", "them", "all of them" and "the last N" mean these; "the approved ones", "the rejected ones", "the first one" pick among them.${input.listed.items?.length ? `\n${input.listed.items.slice(0, 30).map((l, i) => `${i + 1}. ${l}`).join("\n")}` : ""}` : "none"}`,
     ...(named.length ? [`Products in their Jumia shop the message names: ${named.map((n) => `"${n}"`).join(", ")}`] : []),
     `Recent conversation (oldest first):${input.conversation.length ? `\n${input.conversation.slice(-6).join("\n")}` : " none"}`,
     `Their new message: "${input.message.replace(/"/g, "'").slice(0, 600)}"`,
@@ -137,6 +142,8 @@ function routerPrompt(input: FrontDoorInput): string {
     "",
     "Rules:",
     "- Read the message for what they want now. The open question is context: a message that doesn't fit what answers it is a new request.",
+    "- A message that answers the open question belongs to the area the question was about (a description the bot asked for a live product is live_products).",
+    "- drafts only when the message is about one of the drafts listed above. A product already in their shop that the conversation is about stays live_products, even while drafts wait.",
     "- A change to a product (\"change the drone to 10\", \"restock the kettle\", \"set X to 50 pcs\") is live_products, or drafts when it names one of the drafts. Never listing.",
     "- A product's name on its own after you listed products is shop_info: they want that product's details.",
     "- An order number (e.g. #394666919) is orders. How much they made or sold is orders, not money.",
@@ -175,7 +182,8 @@ const ACTIONS: Record<Area, string[]> = {
     '{"type":"bulk","scope":"all" or "out_of_stock" or "low_stock" or "inactive" or "active" or "matching" or "listed","words":"<their words, for matching>" or null,',
     '  plus one of "price_pct", "sale_pct", "stock", "price", "sale_price", "sale":"end", "active"} - one change to many products by a rule;',
     '  "listed" is the products you last listed for them ("those", "the last 10", "all" right after your list).',
-    '{"type":"content_change","product":"<their words>","name":"<copied>" or null,"description":"<copied>" or null,"highlights":null,"brand":null,"rewrite":["name","description","highlights"] or []} - a live product\'s text.',
+    '{"type":"content_change","product":"<the product>","name":"<copied>" or null,"description":"<copied>" or null,"highlights":null,"brand":null,"rewrite":["name","description","highlights"] or []} - a live product\'s',
+    '  name, description or highlights: their own text copied whole, or "rewrite" for what they ask YOU to write (PandaWorld writes it with AI and shows it before one tap).',
     '{"type":"product_info","product":"<their words>"} - when it is really a question about a product (is it on, approved, in stock).',
     '{"type":"warehouse_order","items":[{"product":"<their words>","quantity":<number>}]} - send stock to Jumia\'s warehouse.',
     '{"type":"warehouse_shipped","po":"<from the message>","tracking":"<from the message>","carrier":null} - a warehouse delivery has shipped.',
@@ -244,6 +252,8 @@ const EXAMPLES: Record<Area, string[]> = {
     '"turn off everything that\'s out of stock" → {"type":"bulk","scope":"out_of_stock","words":null,"active":false}',
     '(after you listed their newest products) "change the stock of the last 10 to 20" → {"type":"bulk","scope":"listed","words":null,"stock":20}',
     '"rewrite the description of the wellington boot" → {"type":"content_change","product":"wellington boot","name":null,"description":null,"highlights":null,"brand":null,"rewrite":["description"]}',
+    '(the bot asked for the new description of the kettle) "<their text>" → {"type":"content_change","product":"kettle","name":null,"description":"<their text, copied whole>","highlights":null,"brand":null,"rewrite":[]}',
+    '"switch on everything that is off" → {"type":"bulk","scope":"inactive","words":null,"active":true}',
   ],
   shop_info: [
     '"is the dron active" → {"type":"product_info","product":"drone"}',
@@ -285,10 +295,13 @@ function readerPrompt(area: Area, input: FrontDoorInput): string {
     `This message is about: ${area.replace(/_/g, " ")}. Choose ONE action as JSON; PandaWorld's code checks it and carries it out.`,
     "",
     contextText(input),
+    // In every area: a reply about what PandaWorld does comes from this, never
+    // from a guess ("our team will fix your rejected products", "I can't
+    // write descriptions": owner's web chat, 2026-10-08).
+    "", "About this seller:", ...input.seller,
+    ...(input.memory ? ["", "What you remember about them from earlier (to understand them; never quote it):", input.memory] : []),
+    "", "What PandaWorld can do (all true; nothing else is: there is no team doing things by hand):", capabilities(input.listingCost ?? 2),
     ...(replyArea ? [
-      "", "About this seller:", ...input.seller,
-      ...(input.memory ? ["", "What you remember about them from earlier (to understand them; never quote it):", input.memory] : []),
-      "", "What PandaWorld can do (all true; never claim anything else):", capabilities(input.listingCost ?? 2),
       "", siteGuide(),
       "", "Links you can send (put the key in \"link\"):", ...Object.entries(input.links).map(([k, l]) => `- ${k}: ${l.what}`),
     ] : []),
@@ -303,6 +316,8 @@ function readerPrompt(area: Area, input: FrontDoorInput): string {
     "",
     "Rules:",
     "- Every number and word you put in an action must be in their message (or, for which product, the recent conversation). Never guess or invent a value.",
+    "- Name products as their shop calls them when you can tell which: from the products you last listed (\"the approved ones\" are those whose quality check passed, on or off; \"my latest uploaded product\" is the first of a list of their newest) or the products the message names.",
+    "- A question about what you can do (\"can you…?\"): answer from What PandaWorld can do, and if it can, offer to do it. Never say a team or a person will do something.",
     "- Ask (clarify) only when you can't tell which action or which product, or a change has no value to set. Never ask for a detail that has a default: a period (use the action's usual one), a report's kind, the price for fees (null), how many to list (10). Use the default and answer.",
     ...(replyArea ? [
       "- A hello or \"what can you do\": a short list (\"• \" lines, never numbered) of what you can do for them, with the words that do it, then ask what they'd like.",
@@ -325,31 +340,65 @@ const json = (text: string): Record<string, unknown> | null => {
 /** Whose AI use it is: the chat's ("assistant", for the seller) or the test set's. */
 export interface FrontDoorUsage { feature: "assistant" | "assistant_eval"; userId?: string }
 
-async function ask(model: string, prompt: string, usage: FrontDoorUsage): Promise<string> {
-  const { text } = await withAiUsageContext(usage, () =>
+/**
+ * How long each call may take. A message the website's route (60 s) cut off
+ * got no reply at all (owner's web chat, 2026-10-08 17:49, Gemini slow):
+ * sorting 10 s, reading 25 s, then Flash-Lite reads it in 12 s, all well
+ * inside the 60 s.
+ */
+export const FRONT_DOOR_LIMITS = { routerMs: 10_000, readerMs: 25_000, fallbackMs: 12_000 };
+
+async function ask(model: string, prompt: string, usage: FrontDoorUsage, limitMs?: number): Promise<string> {
+  const call = withAiUsageContext(usage, () =>
     callGeminiBackend(model, [{ text: prompt }], { json: true, ...(model.startsWith("gemini-3") ? { preferBackend: "ai-studio" as const } : {}) }));
-  return text;
+  if (!limitMs) return (await call).text;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${model} took over ${limitMs / 1000} s`)), limitMs); });
+  try {
+    return (await Promise.race([call, late])).text;
+  } finally {
+    clearTimeout(timer);
+  }
 }
+
+const secs = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
 
 /** What the front door makes of a message: the area, the action (or a question back), and the AI's raw replies. */
 export async function frontDoor(
   input: FrontDoorInput, models: FrontDoorModels, usage: FrontDoorUsage = { feature: "assistant_eval" },
+  limits: Partial<typeof FRONT_DOOR_LIMITS> = {},
 ): Promise<{ area: Area; action: FrontDoorAction; raw: string }> {
-  const routed = await ask(models.router, routerPrompt(input), usage);
+  const t0 = Date.now();
+  const routed = await ask(models.router, routerPrompt(input), usage, limits.routerMs);
+  const t1 = Date.now();
   const picked = json(routed)?.area;
   const area: Area = AREAS.has(picked as Area) ? (picked as Area) : "chat";
   // Drafts only exist in a batch: without any, a change goes to the live products.
   const reading: Area = area === "drafts" && input.drafts.length === 0 ? "live_products" : area;
-  const text = await ask(models.reader, readerPrompt(reading, input), usage);
-  const raw = `${routed.trim()} → ${text.trim()}`;
+  const prompt = readerPrompt(reading, input);
+  let text: string;
+  let note = "";
+  try {
+    text = await ask(models.reader, prompt, usage, limits.readerMs);
+  } catch (e) {
+    // Slow or down: the quick model reads it instead of leaving them waiting.
+    if (!limits.readerMs || models.reader === FRONT_DOOR_ROUTER) throw e;
+    text = await ask(FRONT_DOOR_ROUTER, prompt, usage, limits.fallbackMs);
+    note = ` (read by ${FRONT_DOOR_ROUTER}: ${(e as Error).message})`;
+  }
+  const raw = `${secs(t1 - t0)}+${secs(Date.now() - t1)}${note} ${routed.trim()} → ${text.trim()}`;
   const parsed = json(text);
   if (parsed?.type === "clarify") {
     const options = (Array.isArray(parsed.options) ? parsed.options : []).filter((o): o is string => typeof o === "string").map((o) => o.slice(0, 40)).slice(0, 3);
     const question = typeof parsed.question === "string" ? parsed.question.slice(0, 300) : "";
     return { area: reading, action: { type: "clarify", question, options }, raw };
   }
+  // The products just listed count as named in the conversation: it keeps
+  // only 300 characters of each message, so a long list's later names were
+  // missing from it.
+  const context = [...input.conversation, ...(input.listed?.items ?? []).map((l) => `Bot: ${l}`)].join("\n");
   const action = parseActionUnguarded(text, input.message, input.drafts, input.links, input.currency, {
-    context: input.conversation.join("\n"), stage: input.stage, listed: !!input.listed,
+    context, stage: input.stage, listed: !!input.listed,
   });
   return { area: reading, action, raw };
 }
