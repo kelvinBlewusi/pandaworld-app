@@ -77,6 +77,9 @@ export function healthEvidence(
   listings: { status: string }[],
   now = Date.now(),
 ): HealthEvidence {
+  // Deleted products aren't in the shop: counting them made "436 on Jumia,
+  // 349 off, 70 rejected" against the overview's 297 (owner, 2026-10-08).
+  products = products.filter((p) => (p.status ?? "").toUpperCase() !== "DELETED");
   const active = products.filter(isActive);
   const sales = salesByProduct(items);
   const rows = Array.from(sales.values());

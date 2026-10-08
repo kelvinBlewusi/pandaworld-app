@@ -363,8 +363,10 @@ export function bulkTargets(
   const live = products.filter((p) => p.status !== "DELETED");
   let picked: ShopProduct[];
   switch (scope) {
-    case "out_of_stock": picked = live.filter((p) => p.stock === 0); break;
-    case "low_stock":    picked = live.filter((p) => p.stock != null && p.stock > 0 && p.stock <= LOW_STOCK); break;
+    // As the stock list and the overview count them: products that are on
+    // (owner, 2026-10-08: the list showed 5 out of stock, the rule changed 12).
+    case "out_of_stock": picked = live.filter((p) => p.status === "ACTIVE" && p.stock === 0); break;
+    case "low_stock":    picked = live.filter((p) => p.status === "ACTIVE" && p.stock != null && p.stock > 0 && p.stock <= LOW_STOCK); break;
     case "inactive":     picked = live.filter((p) => p.status === "INACTIVE"); break;
     case "active":       picked = live.filter((p) => p.status === "ACTIVE"); break;
     case "matching":     picked = words ? findProducts(live, words, 5000) : []; break;
@@ -786,9 +788,30 @@ export async function answerStock(userId: string, phone: string, query: string |
   await rememberListed(phone, pick, filter === "out" ? "out of stock" : filter === "low" ? "low on stock" : "out of stock or low");
   const head = filter === "out" ? `🚫 Out of stock on Jumia (${pick.length})` : filter === "low" ? `⚠️ Low on stock (${pick.length})` : `⚠️ Out of stock or low (${pick.length})`;
   const lines = pick.slice(0, 15).map((p) => `• ${shorten(label(p), 60)}: ${stockText(p)}`);
-  await sendLong(phone, [head, ...lines, ...(pick.length > 15 ? [`+${pick.length - 15} more. Ask me about one by name.`] : []), "", "Tell me the new stock to update one, e.g. \"set the fridge's stock to 10\"."].join("\n"));
+  await sendLong(phone, [
+    head, ...lines, ...(pick.length > 15 ? [`+${pick.length - 15} more. Ask me about one by name.`] : []), "",
+    ...inFlightLine(await changesInFlight(userId)),
+    "Tell me the new stock to update one, e.g. \"set the fridge's stock to 10\".",
+  ].join("\n"));
   return `${pick.length} listed`;
 }
+
+/**
+ * Changes sent to Jumia in the last half hour that it hasn't applied yet:
+ * right after "turn all 191 off products on", the overview still said 191
+ * off (owner, 2026-10-08; Jumia applied them 9 minutes later). Never throws.
+ */
+async function changesInFlight(userId: string): Promise<number> {
+  try {
+    const { count } = await createServerClient().from("jumia_product_changes").select("id", { count: "exact", head: true })
+      .eq("user_id", userId).eq("status", "sent").gt("updated_at", new Date(Date.now() - 30 * 60_000).toISOString());
+    return count ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+const inFlightLine = (n: number) => (n > 0 ? [`⏳ ${n} change${n === 1 ? "" : "s"} you made ${n === 1 ? "is" : "are"} still being applied by Jumia (usually a few minutes): these numbers catch up once ${n === 1 ? "it's" : "they're"} done.`] : []);
 
 /** Their products: an overview, or the inactive or rejected ones. */
 export async function answerProducts(userId: string, phone: string, filter: "all" | "inactive" | "rejected"): Promise<string> {
@@ -829,6 +852,7 @@ export async function answerProducts(userId: string, phone: string, filter: "all
     `• Waiting for Jumia's check: ${pending.length}`,
     `• Rejected: ${rejected.length}`,
     "",
+    ...inFlightLine(await changesInFlight(userId)),
     "Ask me about any of them: stock, price, a sale, or turning one on or off.",
     // Where "give me insight" goes next (owner's test, 2026-10-07).
     `How sales are going: *sales week*. A full health check of your shop: *report* (${REPORT_CREDIT_COST} credits).`,

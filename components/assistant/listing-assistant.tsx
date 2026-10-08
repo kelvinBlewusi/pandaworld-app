@@ -443,19 +443,20 @@ export function ListingAssistant({ firstName, productForm }: {
 
   return (
     // On a phone the chat is the whole screen (owner): it covers the app's top
-    // bar and title card, keeping one slim row with a way back. From sm up
-    // it's a card in the page.
+    // bar, keeping one slim row with a way back. From sm up it fills the page
+    // beside the sidebar, with no title bar or card around it (owner,
+    // 2026-10-08: "cover the entire page with the side panel still in place").
     <div
       className={cn(
         "fixed inset-0 z-30 flex flex-col overflow-hidden bg-white",
-        "sm:relative sm:inset-auto sm:z-auto sm:h-[calc(100dvh-13rem)] sm:min-h-[520px] sm:rounded-2xl sm:border sm:shadow-sm lg:h-[calc(100dvh-12rem)]",
-        dragging ? "sm:border-orange-400 sm:ring-2 sm:ring-orange-200" : "sm:border-zinc-200",
+        "sm:relative sm:inset-auto sm:z-auto sm:min-h-0 sm:flex-1",
+        dragging && "ring-2 ring-inset ring-orange-300",
       )}
       onDragOver={(e) => { e.preventDefault(); if (!locked) setDragging(true); }}
       onDragLeave={() => setDragging(false)}
       onDrop={(e) => { e.preventDefault(); setDragging(false); if (!locked) addFiles(e.dataTransfer.files); }}
     >
-      <div className="flex items-center gap-1 border-b border-zinc-100 px-2 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))] sm:gap-3 sm:px-5 sm:py-3">
+      <div className="flex items-center gap-1 border-b border-zinc-100 px-2 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))] sm:gap-3 sm:px-6 sm:py-2.5">
         <Link
           href="/extension/dashboard"
           aria-label="Back to the dashboard"
@@ -485,7 +486,9 @@ export function ListingAssistant({ firstName, productForm }: {
       </div>
 
       <div className="relative min-h-0 flex-1">
-      <div ref={scroller} onScroll={onScroll} className="h-full space-y-3 overflow-y-auto bg-zinc-50/60 px-3 py-4 sm:px-5">
+      <div ref={scroller} onScroll={onScroll} className="h-full overflow-y-auto bg-zinc-50/60 px-3 py-4 sm:px-6 sm:py-6">
+      {/* One reading column, centred, however wide the page. */}
+      <div className="mx-auto w-full max-w-3xl space-y-3">
         {!loaded && (
           <div className="flex h-full items-center justify-center text-sm text-zinc-400">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading your conversation…
@@ -526,6 +529,7 @@ export function ListingAssistant({ firstName, productForm }: {
           </div>
         )}
       </div>
+      </div>
       {!atBottom && (
         <button
           type="button"
@@ -559,8 +563,8 @@ export function ListingAssistant({ firstName, productForm }: {
       )}
 
       {locked ? (
-        <div className="border-t border-zinc-100 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4">
-          <div className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="border-t border-zinc-100 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-4">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="flex items-start gap-2 text-sm text-amber-900">
               <Lock className="mt-0.5 h-4 w-4 shrink-0" />
               <span>You&apos;re out of credits, so the chat is locked. It unlocks as soon as you top up, or when a refund from Jumia&apos;s quality check comes in.</span>
@@ -569,7 +573,8 @@ export function ListingAssistant({ firstName, productForm }: {
           </div>
         </div>
       ) : (
-      <div className="relative border-t border-zinc-100 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4">
+      <div className="border-t border-zinc-100 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-4">
+      <div className="relative mx-auto w-full max-w-3xl">
         {(commandsOpen || (text.startsWith("/") && !/\s/.test(text))) && (
           <CommandMenu
             commands={matchingCommands(commandsOpen && !text.startsWith("/") ? "" : text)}
@@ -658,6 +663,7 @@ export function ListingAssistant({ firstName, productForm }: {
           </button>
         </div>
       </div>
+      </div>
       )}
 
       {confirmClear && (
@@ -698,7 +704,7 @@ function formButton(m: Message): number | null {
 /** The command menu, above the message box. */
 function CommandMenu({ commands, onChoose, onClose }: { commands: PaletteCommand[]; onChoose: (c: PaletteCommand) => void; onClose: () => void }) {
   return (
-    <div className="absolute inset-x-3 bottom-full z-10 mb-2 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-lg sm:inset-x-4" role="menu">
+    <div className="absolute inset-x-0 bottom-full z-10 mb-2 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-lg" role="menu">
       <div className="flex items-center justify-between border-b border-zinc-100 px-3 py-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Commands</span>
         <button type="button" onClick={onClose} aria-label="Close commands" className="text-zinc-400 hover:text-zinc-600">

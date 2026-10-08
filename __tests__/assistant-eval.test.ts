@@ -21,7 +21,7 @@ jest.mock("@/lib/ai/gemini-client", () => ({
 
 import { ASSISTANT_CASES, type EvalCase } from "@/lib/evals/assistant-cases";
 import { byArea, matchesShape, passes, queueRun, routing, runCase, workOnRuns } from "@/lib/evals/assistant-eval";
-import { contextText, namesInMessage, openQuestion } from "@/lib/assistant-v2/front-door";
+import { contextText, frontDoor, namesInMessage, openQuestion } from "@/lib/assistant-v2/front-door";
 
 const ACTIONS = new Set([
   "edit", "submit", "list", "restart", "review", "orders", "credits", "help", "reply", "live_change", "product_info", "fees", "stock", "shop",
@@ -194,6 +194,42 @@ describe("the front door prototype", () => {
     });
     expect(text).toContain("Products you last listed for them: 10 (your 10 newest products)");
     expect(text).toContain('Products in their Jumia shop the message names: "Pedestal Fan');
+  });
+
+  it("every area knows what PandaWorld can do, so a reply never invents it (owner's web chat, 2026-10-08)", async () => {
+    answer = sortThenRead("drafts", '{"type":"reply","text":"ok","link":null}');
+    await runCase(byId("draft-v-wig-price"), "m", { pipeline: "front_door" });
+    expect(prompts[1]).toContain("This message is about: drafts.");
+    expect(prompts[1]).toContain("What PandaWorld can do (all true; nothing else is: there is no team doing things by hand):");
+    expect(prompts[1]).toContain("rewritten by AI");
+  });
+
+  it("sees the products just listed with where each is, and the bot asking for something", () => {
+    const c = byId("live-approved-ones");
+    const text = contextText({
+      stage: "idle", message: c.msg, conversation: c.ctx ?? [], drafts: [], listed: c.listed ?? null, seller: [], links: {}, currency: "GHS", web: true,
+    });
+    expect(text).toContain('4. "Quilted Car Cover - Waterproof, Dustproof, All-Weather Protection (Default)" · off · approved · stock 1');
+    expect(openQuestion({ stage: "review", conversation: ["Bot: Okay, please provide the new description text for 'Crocheted Beanie Hat'."] })?.about).toContain("please provide the new description");
+  });
+
+  it("when the reading call is slow, Flash-Lite reads it instead of leaving them waiting", async () => {
+    jest.useFakeTimers();
+    try {
+      answer = (p) => (p.includes('Reply with JSON only: {"area"') ? '{"area":"orders"}'
+        : prompts.length === 2 ? new Promise<string>(() => {}) : '{"type":"orders"}');
+      const c = byId("chat-hi");
+      const read = frontDoor({
+        stage: c.stage, message: "orders", conversation: [], drafts: [], listed: null, seller: [], links: {}, currency: "GHS", web: true,
+      }, { router: "gemini-2.5-flash-lite", reader: "gemini-2.5-flash" }, { feature: "assistant_eval" }, { routerMs: 10_000, readerMs: 25_000, fallbackMs: 12_000 });
+      await jest.advanceTimersByTimeAsync(26_000);
+      const r = await read;
+      expect(r.action).toEqual({ type: "orders" });
+      expect(r.raw).toContain("(read by gemini-2.5-flash-lite: gemini-2.5-flash took over 25 s)");
+      expect(prompts).toHaveLength(3);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it("a run is queued with its way and sorting model, and counts the questions back", async () => {

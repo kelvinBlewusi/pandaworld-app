@@ -37,8 +37,8 @@ export interface EvalCase {
   ctx?: string[];
   /** The batch's drafts (review stage): seq is the position + 1. */
   drafts?: DraftFact[];
-  /** Products the bot had just listed for them (session.lastListed). */
-  listed?: { count: number; what: string };
+  /** Products the bot had just listed for them (session.lastListed); `items`, one line each as the front door is told them. */
+  listed?: { count: number; what: string; items?: string[] };
   /** Product names in their Jumia shop, when the message is about one. */
   catalog?: string[];
   web?: boolean;
@@ -73,6 +73,25 @@ const CATALOG = [
   "Gold Medals with Ribbons - Bulk Pack for Sports, School, & Award Ceremonies",
   "Nasco Electric Kettle 1.7L",
 ];
+
+// The owner's 10 newest products as the bot listed them (web chat, 2026-10-08 17:00).
+const NEWEST_10 = [
+  '"Crocheted Beanie Hat - Pearl Embellished, Crochet Knit (Summerhat-cream)" · on · approved · stock 1',
+  '"Vintage Radio Eau de Parfum - 100ml, Natural Spray (100ml)" · off · rejected by quality check · stock 1',
+  '"Ventilated Safety Helmet - Blue, Adjustable Strap" · on · approved · stock 1',
+  '"Quilted Car Cover - Waterproof, Dustproof, All-Weather Protection (Default)" · off · approved · stock 1',
+  '"Kinky Curly Wig - 24 Inch Length, Full Lace" · on · approved · stock 1',
+  '"Asymmetrical Irregular Statement Earrings - Shell Inlay, Gold Tone" · off · approved · stock 1',
+  '"Kinky Curly Wig - 24 Inch Length, Full Lace" · off · rejected by quality check · stock 1',
+  '"Enhancement Dietary Supplement - Collagen Boosters, Lifts Buttocks" · off · rejected by quality check · stock 0',
+  '"20000mAh Power Bank - Dual LED Flashlight, 4 Built-In Cables" · off · rejected by quality check · stock 0',
+  '"Wireless Eyewear Audio Glasses - Bluetooth 5.0, Built-in Speaker" · off · approved · stock 1',
+];
+const NEWEST_LISTED = { count: 10, what: "their 10 newest products", items: NEWEST_10 };
+const NEWEST_ASKED = "Seller: what is the last 10 products i have uploaded";
+const NEWEST_SHOWN = "Bot: *Last 10 products uploaded* / • Crocheted Beanie Hat - Pearl Embellished, Crochet Knit (Summerhat-cream) - on, approved - added 7 Oct / • Vintage Radio Eau de Parfum - 100ml, Natural Spray (100ml) - rejected - added 7 Oct / • Ventilated Safety Helmet - Blue, Adjustable Strap - on, approved - added 7 Oct / • Quilted Car Cover - Waterproof, Dustproof, All-Weather Protection (Default) - off, approved - added 7 Oct / • Kinky Curly Wig - 24 Inch Length, Full Lace - on, approved - added 7 Oct / • Asymmetrical Irregular Statement Earrings - Shell Inlay, Gold Tone - off, approved - added 7 Oct / • Kinky Curly Wig - 24 Inch Length, Full Lace - rejected - added 7 Oct / • Enhancement Dietary Supplement - Collagen Boosters, Lifts Buttocks - rejected - added 4 Oct / • 20000mAh Power Bank - Dual LED Flashlight, 4 Built-In Cables - rejected - added 2 Oct / • Wireless Eyewear Audio Glasses - Bluetooth 5.0, Built-in Speaker - off, approved - added 2 Oct";
+const BEANIE_DRAFT: DraftFact = { title: "Crocheted Pearl Beanie - Fashion Headwear, One Size", price: 130 };
+const PERFUME_TEXT = "Introducing the captivating Vintage Radio Eau de Parfum, a fragrance designed to evoke a sense of nostalgia and timeless elegance. This exquisite scent is presented in a unique bottle that artfully mimics the charm of a classic vintage radio, making it a statement piece for any vanity. The fragrance itself is a harmonious blend, crafted as a natural spray for effortless application. With a generous volume of 100ml, this Eau de Parfum offers a long-lasting olfactory experience, perfect for both everyday wear and special occasions.\n\nProduct Details:\n\nFragrance Type: Eau de Parfum\nVolume: 100ml / 3.4 fl.oz\nApplication: Natural Spray Vaporisateur";
 
 const reply: Shape = { type: "reply" };
 const help: Shape = { type: "help" };
@@ -313,4 +332,15 @@ export const ASSISTANT_CASES: EvalCase[] = [
   { id: "draft-v-wig-price", src: "variant", area: "drafts", stage: "review", drafts: [{ title: "Kinky Curly Wig - 24 Inch Length, Full Lace" }, PERFUME], msg: "make the wig 120", ok: [{ type: "edit", "edits.0.seqs": [1], "edits.0.changes.price": 120 }] },
   { id: "draft-v-qty-product-2", src: "variant", area: "drafts", stage: "review", drafts: [BODYSUIT, PERFUME], msg: "change qty of product 2 to 7", ok: [{ type: "edit", "edits.0.seqs": [2], "edits.0.changes.quantity": 7 }] },
   { id: "draft-v-restock-not-draft", src: "variant", area: "drafts", stage: "review", drafts: [TSHIRT_SET], msg: "restock the kettle to 30", ok: [stock("kettle", 30)], note: "A product that isn't one of the drafts is in the shop." },
+
+  // ─── The owner's first session through the front door (web, 2026-10-08 17:00–17:52) ───
+  { id: "live-approved-ones", src: "log 10-08 17:02", area: "live_changes", stage: "idle", listed: NEWEST_LISTED, ctx: [NEWEST_ASKED, NEWEST_SHOWN], msg: "change the stock of the approved ones to 10", ok: [{ type: "live_change", "change.stock": 10, others: "~Quilted" }, reply], note: "Changed only the 2 approved ones that were on; 'approved' is the quality check, on or off (the owner's next message)." },
+  { id: "live-approved-on-or-off", src: "log 10-08 17:05", area: "live_changes", stage: "idle", listed: NEWEST_LISTED, ctx: [NEWEST_ASKED, NEWEST_SHOWN, "Seller: change the stock of the approved ones to 10", "Bot: Change these 2 products on Jumia? / • Crocheted Beanie Hat - Pearl Embellished, Crochet…: stock 1 → 10 / • Ventilated Safety Helmet - Blue, Adjustable Strap: stock 1 → 10 /  / One tap changes them all."], msg: "change the stock of the approved ones to 10 whether on or off", ok: [{ type: "live_change", "change.stock": 10, others: "~Wireless" }], note: "Offered the same 2 again." },
+  { id: "live-on-all-off", src: "log 10-08 17:06", area: "live_changes", stage: "idle", ctx: ["Seller: change the stock of the approved ones to 10 whether on or off", "Bot: ✅ Sent to Jumia for 2 products (Crocheted Beanie Hat - Pearl Embellishe…, Ventilated Safety Helmet - Blue, Adjust…): stock to 10."], msg: "on all the products that are off", ok: [{ type: "bulk", scope: "inactive", "change.kind": "status", "change.active": true }], note: "Read as setting their stock to 10." },
+  { id: "live-on-them-keep-stock", src: "log 10-08 17:07", area: "live_changes", stage: "idle", ctx: ["Seller: on all the products that are off", "Bot: What should their stock be? Send it with the rule, e.g. \"set all the kettles' stock to 10\"."], msg: "on them and keet their current stock", ok: [{ type: "bulk", scope: "inactive", "change.kind": "status", "change.active": true }], note: "The rule was in the message before: got \"Sorry, I didn't catch that\"." },
+  { id: "help-rejected-edit-can-you", src: "log 10-08 17:15", area: "account_help", stage: "idle", ctx: ["Seller: can you tell what the rejection reasons are?", "Bot: ❌ Rejected by Jumia's quality check (11) / • Nourishing Cocoa Body Lotion… / Jumia didn't send the reasons through its API: check each one in Vendor Center to see why."], msg: "can you make changes to rejected products", ok: [reply, help], note: "Said a team would fix them: there is no such team. The reply must come from what PandaWorld can do." },
+  { id: "live-describe-latest", src: "log 10-08 17:44", area: "live_changes", stage: "idle", listed: NEWEST_LISTED, ctx: [NEWEST_ASKED, NEWEST_SHOWN], msg: "Change the description of my latest uploaded product on vendor center", ok: [{ type: "content_change", product: "~beanie hat", "request.rewrite": ["description"] }], note: "Asked \"What should I change on it?\": the latest uploaded product was the first of the list, and changing a description with no new text is writing one." },
+  { id: "live-write-its-description", src: "log 10-08 17:45", area: "live_changes", stage: "review", drafts: [BEANIE_DRAFT], listed: NEWEST_LISTED, ctx: [NEWEST_SHOWN, "Seller: Change the description of my latest uploaded product on vendor center", "Bot: What should I change on it? Write the new name, or say \"rewrite its description\", e.g. \"change the blender's name to Silver Crest 3 in 1 Blender 1.5L\"."], msg: "write it's description", ok: [{ type: "content_change", product: "~beanie hat", "request.rewrite": ["description"] }], note: "Said \"I can't write descriptions myself\": it can." },
+  { id: "live-description-pasted", src: "log 10-08 17:51", area: "live_changes", stage: "review", drafts: [BEANIE_DRAFT], catalog: ["Crocheted Beanie Hat - Pearl Embellished, Crochet Knit (Summerhat-cream)"], ctx: ["Seller: i see / rewrite the description of this product / Crocheted Beanie Hat / i will give you what to write", "Bot: Okay, please provide the new description text for 'Crocheted Beanie Hat - Pearl Embellished, Crochet Knit'."], msg: PERFUME_TEXT, ok: [{ type: "content_change", product: "~beanie hat", "request.description": "~Introducing the captivating" }, reply], note: "Read as an edit to the draft and dropped. A question back is fair too: the text is about a perfume." },
+  { id: "list-start-new-review", src: "log 10-08 17:29", area: "listing", stage: "review", drafts: [BEANIE_DRAFT], msg: "Start a new listing", ok: [restart] },
 ];

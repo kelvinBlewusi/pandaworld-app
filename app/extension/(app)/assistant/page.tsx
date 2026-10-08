@@ -32,7 +32,8 @@ export default async function ListingAssistantPage() {
 
   if (!(await listingAssistantFor(userId))) {
     return (
-      <div className="mx-auto max-w-lg rounded-2xl border border-zinc-200 bg-white p-8 text-center shadow-sm">
+      // The page has no padding of its own here (the chat fills it).
+      <div className="mx-4 mt-8 rounded-2xl border border-zinc-200 bg-white p-8 text-center shadow-sm sm:mx-auto sm:max-w-lg">
         <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-orange-50">
           <Image src="/brand/panda-p-logo-trimmed.png" alt="PandaWorld" width={634} height={562} className="h-8 w-auto" />
         </span>
