@@ -2264,9 +2264,13 @@ measuring, is this.
   rules. **Nothing in the chat imports it.** Runs with
   `pipeline = 'front_door'` (migration 2026-10-08_assistant-eval-pipeline.sql;
   `router_model` is the sorting call's model) go through it, and
-  `asked` counts its questions back, which are neither right nor wrong. In
-  /admin/assistant-tests, choose the way and the sorting model; click a
-  run's time to see that run.
+  `asked` counts its questions back. A question back is right only where
+  the case accepts any reply (it is a reply with buttons), and wrong
+  otherwise. In /admin/assistant-tests, choose the way and the sorting
+  model; click a run's time to see that run. Round 1 asked back for things
+  that have a default (a period, a report kind, the price in a fees
+  question), so round 2 asks only when the action, the product or a
+  change's value can't be told.
 
 ### The chat knows the website (owner, 2026-10-07)
 

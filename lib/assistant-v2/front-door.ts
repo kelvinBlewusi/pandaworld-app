@@ -116,10 +116,10 @@ function routerPrompt(input: FrontDoorInput): string {
     "- drafts: changing, submitting, polishing or deleting the drafts listed below (only when there are drafts)",
     "- live_products: changing products already in their Jumia shop: stock, price, sale, on/off, name or description, many at once",
     "- shop_info: questions about their Jumia products: is one live/approved, stock, lists (newest, rejected, off, out of stock), counts, reports, a product's details",
-    "- orders: their orders and sales: today, this week, cancelled, returned, delivered, one order by its number, orders to pack",
-    "- money: credits, payouts and statements, what Jumia takes when a product sells",
-    "- account_help: their PandaWorld account, pack, WhatsApp or Jumia connection, what PandaWorld does, links, how-to",
-    "- chat: greetings, thanks, small talk, anything outside Jumia and PandaWorld",
+    "- orders: their orders and sales: what sold and how much the shop made in a period, cancelled, returned, delivered, one order by its number, orders to pack",
+    "- money: their PandaWorld credits; Jumia's payouts and statements (what Jumia paid them or still owes); what Jumia takes when a product sells",
+    "- account_help: their PandaWorld account and pack, the packs on offer, WhatsApp or Jumia connection, their shop's name, what PandaWorld does, links, how-to",
+    "- chat: greetings, thanks, short reactions (\"ok\", \"really?\"), questions about this chat itself, small talk, anything outside Jumia and PandaWorld",
     "",
     contextText(input),
     "",
@@ -127,6 +127,7 @@ function routerPrompt(input: FrontDoorInput): string {
     "- Read the message for what they want now. The open question is context: a message that doesn't fit what answers it is a new request.",
     "- A change to a product (\"change the drone to 10\", \"restock the kettle\", \"set X to 50 pcs\") is live_products, or drafts when it names one of the drafts. Never listing.",
     "- A product's name on its own after you listed products is shop_info: they want that product's details.",
+    "- An order number (e.g. #394666919) is orders. How much they made or sold is orders, not money.",
     "- Typos and other languages are normal.",
     "",
     'Reply with JSON only: {"area":"<one area>"}',
@@ -135,7 +136,7 @@ function routerPrompt(input: FrontDoorInput): string {
 
 // ─── 3. Read, within the area ────────────────────────────────────────────────
 
-const CLARIFY = '{"type":"clarify","question":"<one short question>","options":["<2 or 3 short answers they can tap>"]} - when what they want is clear but a needed detail is missing, or the message could mean two things (e.g. "change the drone to 10": its stock or its price?). Never guess a value.';
+const CLARIFY = '{"type":"clarify","question":"<one short question>","options":["<2 or 3 short answers they can tap>"]} - only when you can\'t tell which action or which product they mean, or a change is missing the value to set (e.g. "change the drone to 10": its stock or its price?).';
 const REPLY = '{"type":"reply","text":"<your message>","link":"<a link key, or null>"} - a question you answer in a line or two; a hello; anything this area\'s actions don\'t cover.';
 
 const ACTIONS: Record<Area, string[]> = {
@@ -289,7 +290,7 @@ function readerPrompt(area: Area, input: FrontDoorInput): string {
     "",
     "Rules:",
     "- Every number and word you put in an action must be in their message (or, for which product, the recent conversation). Never guess or invent a value.",
-    "- When you can't tell between two actions or two values, use clarify with the options.",
+    "- Ask (clarify) only when you can't tell which action or which product, or a change has no value to set. Never ask for a detail that has a default: a period (use the action's usual one), a report's kind, the price for fees (null), how many to list (10). Use the default and answer.",
     ...(replyArea ? [
       "- A hello or \"what can you do\": a short list (\"• \" lines, never numbered) of what you can do for them, with the words that do it, then ask what they'd like.",
       "- About themselves (pack, credits, shop, connections): only from About this seller. Outside Jumia and PandaWorld: say you can't help with that and suggest something you can do.",
