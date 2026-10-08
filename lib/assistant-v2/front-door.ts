@@ -68,8 +68,13 @@ export interface FrontDoorInput {
 
 export interface FrontDoorModels { router: string; reader: string }
 
-/** The sorting call's model: Flash-Lite sorted as well as Flash, in half the time (8 Oct test runs). */
+/** The sorting call's model by default: Flash-Lite sorted as well as Flash, in half the time (8 Oct test runs). app_settings `assistant_router_model` overrides it. */
 export const FRONT_DOOR_ROUTER = "gemini-2.5-flash-lite";
+/**
+ * The backup when a call fails or is slow: on Vertex, so it still answers
+ * when the chosen models (Gemini 3 runs through AI Studio) don't.
+ */
+export const FRONT_DOOR_FALLBACK = "gemini-2.5-flash-lite";
 
 // ─── 1. Context as one record ────────────────────────────────────────────────
 
@@ -402,9 +407,11 @@ export async function frontDoor(
     } catch (e) {
       // The sorting model refused at once (Vertex answered 404 for it, owner's
       // WhatsApp 2026-10-08 21:16, and the message got the review step's
-      // help): the reading model sorts it. Not after a timeout: no time left.
-      if (/took over/.test((e as Error).message) || models.router === models.reader) throw e;
-      routed = await ask(models.reader, routerPrompt(input), usage, limits.routerMs);
+      // help): the backup sorts it, or the reading model when the backup is
+      // the one that failed. Not after a timeout: no time left.
+      const backup = models.router === FRONT_DOOR_FALLBACK ? models.reader : FRONT_DOOR_FALLBACK;
+      if (/took over/.test((e as Error).message) || backup === models.router) throw e;
+      routed = await ask(backup, routerPrompt(input), usage, limits.routerMs);
     }
   }
   const t1 = Date.now();
@@ -425,9 +432,9 @@ export async function frontDoor(
     text = await ask(models.reader, prompt, usage, limits.readerMs);
   } catch (e) {
     // Slow or down: the quick model reads it instead of leaving them waiting.
-    if (!limits.readerMs || models.reader === FRONT_DOOR_ROUTER) throw e;
-    text = await ask(FRONT_DOOR_ROUTER, prompt, usage, limits.fallbackMs);
-    note = ` (read by ${FRONT_DOOR_ROUTER}: ${(e as Error).message})`;
+    if (!limits.readerMs || models.reader === FRONT_DOOR_FALLBACK) throw e;
+    text = await ask(FRONT_DOOR_FALLBACK, prompt, usage, limits.fallbackMs);
+    note = ` (read by ${FRONT_DOOR_FALLBACK}: ${(e as Error).message})`;
   }
   const raw = `${secs(t1 - t0)}+${secs(Date.now() - t1)}${note} ${routed.trim()} → ${text.trim()}`;
   // Two answers as a list ("orders for yesterday and today"): the first.

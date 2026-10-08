@@ -2425,6 +2425,19 @@ measuring, is this.
   changes things, and the router sends "what you listed for me from this
   chat" to shop_info. Runs 0c00acd1 and 94649e1e. app_settings
   `assistant_front_door` = `"all"`; delete the row to go back.
+- **Both calls on Gemini 3.1 Flash-Lite (owner, 9 Oct: "let's switch to
+  Gemini 3.1 Flash-Lite")**. The same hour, 224 cases: today's setup
+  (sort 2.5 Flash-Lite, read 2.5 Flash) 213, median 2.3 s, slowest tenth
+  7.7 s, $1.85 per 1,000 messages. Both on 3.1 Flash-Lite: 211, 1.6 s,
+  1.9 s, $1.14; its misses all safe (asks, notes, a read-only wrong
+  filter). Reading on 3.1 with sorting on 2.5 Flash-Lite: 207, and one reply
+  claimed a change it hadn't made. Runs 74c7ca36, 009e1db9, b3779169.
+  - Settings: app_settings `assistant_model` and `assistant_router_model`
+    (`routerModel()`) = `gemini-3.1-flash-lite`. Gemini 3 goes through AI
+    Studio (it 404s on this project's Vertex), so the backup
+    (`FRONT_DOOR_FALLBACK`, 2.5 Flash-Lite) stays on Vertex: it sorts when
+    the sorting call errors and reads when the reading call errors or is
+    slow. To go back, set both to `gemini-2.5-flash` / delete the router row.
 - **Next (step 2 cleanup)**: remove the word rules in `parseAction` and the
   old prompt (`buildPrompt`, `interpret`) once a few days of every seller's
   turns look right; keep `interpret` only as the fallback when the front

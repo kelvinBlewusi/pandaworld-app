@@ -1564,6 +1564,21 @@ export async function productFacts(listings: ListingRow[]): Promise<ProductFacts
 /** Models app_settings `assistant_model` may switch to; anything else is ignored. */
 const MODELS = new Set(["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3.1-flash-lite"]);
 
+/**
+ * The front door's sorting model: app_settings `assistant_router_model`, else
+ * FRONT_DOOR_ROUTER. Both on Gemini 3.1 Flash-Lite since 9 Oct (owner: "let's
+ * switch to Gemini 3.1 Flash-Lite"; 211 of 224 against 213, a third faster,
+ * 40% cheaper).
+ */
+export async function routerModel(): Promise<string> {
+  try {
+    const { data } = await createServerClient().from("app_settings").select("value").eq("key", "assistant_router_model").maybeSingle();
+    return typeof data?.value === "string" && MODELS.has(data.value) ? data.value : FRONT_DOOR_ROUTER;
+  } catch {
+    return FRONT_DOOR_ROUTER;
+  }
+}
+
 /** The model the assistant uses: app_settings `assistant_model`, else ASSISTANT_MODEL. */
 export async function assistantModel(): Promise<string> {
   try {
@@ -1678,7 +1693,7 @@ export async function interpretThroughFrontDoor(
     listed: opts.listed ? { ...opts.listed, items: shop.listed } : null,
     seller: seller.lines, links, currency, web: opts.web ?? false, shopNames: shop.names, listingCost, position: opts.position, memory,
     ...(opts.answered ? { answered: opts.answered } : {}),
-  }, { router: FRONT_DOOR_ROUTER, reader }, { feature: "assistant", userId }, FRONT_DOOR_LIMITS);
+  }, { router: await routerModel(), reader }, { feature: "assistant", userId }, FRONT_DOOR_LIMITS);
   return { area, action, links, raw: `[front door] ${raw}` };
 }
 
