@@ -38,7 +38,7 @@ jest.mock("@/lib/whatsapp/client", () => ({
 }));
 
 import { changedPrice, contentItems, pctPrice, productsFromCatalog, type ShopProduct } from "@/lib/jumia/shop";
-import { bulkTargets, handleShopTap, htmlToText, proposeBulkChange, proposeContentChange } from "@/lib/whatsapp/shop";
+import { answerProductText, answerProducts, bulkTargets, handleShopTap, htmlToText, proposeBulkChange, proposeContentChange } from "@/lib/whatsapp/shop";
 import {
   answerBrand, answerLinkedShops, answerPayoutDetail, answerReport, answerWarehouseStock, daysLeft, handleWarehouseTap, proposeWarehouseOrder,
   proposeWarehouseShipped, salesByProduct, statementLines,
@@ -168,6 +168,24 @@ describe("rules for many products", () => {
     expect(last().body).toContain("✅ Sent to Jumia for 2 products");
   });
 
+  it("more than one tap's worth comes in parts, one tap each (owner's web chat, 2026-10-08: \"you may do it in batches\")", async () => {
+    const id = (i: number) => `dddddddd-0000-4000-8000-${String(i).padStart(12, "0")}`;
+    catalog = Array.from({ length: 250 }, (_, i) => set(`x${i}`, `Kettle number ${i + 1}`, [{ id: id(i), sku: `K-${i + 1}`, price: 100 }]));
+    stock = Object.fromEntries(catalog.map((_, i) => [id(i), 5]));
+    expect(await proposeBulkChange(USER, PHONE, "all", null, { kind: "stock", stock: 0 })).toBe("offered bulk stock for 250 in 2 parts (all)");
+    const offers = sent.filter((m) => m.kind === "buttons");
+    expect(sent.find((m) => m.kind === "text")!.body).toContain("That's 250 products, more than 200 for one tap, so it comes in 2 parts.");
+    expect(offers.map((o) => o.body.split("\n")[0])).toEqual(["*Part 1 of 2*", "*Part 2 of 2*"]);
+    expect(offers[0].body).toContain("Change these 200 products on Jumia?");
+    expect(offers[1].body).toContain("Change these 50 products on Jumia?");
+    expect(writes()).toHaveLength(0);
+    // Each part is its own tap.
+    await handleShopTap(USER, PHONE, offers[1].ids![0]);
+    const feeds = writes().filter((c) => c.path === "/feeds/products/stock");
+    expect(feeds).toHaveLength(1);
+    expect((feeds[0].body as { products: unknown[] }).products).toHaveLength(50);
+  });
+
   it("nothing to change is said, not offered", async () => {
     stock[PERFUME_50] = 5;
     expect(await proposeBulkChange(USER, PHONE, "out_of_stock", null, { kind: "status", active: false })).toBe("bulk none: out_of_stock");
@@ -213,6 +231,13 @@ describe("a live product's content", () => {
     expect(last().body).toContain("isn't a brand on Jumia");
     expect(await proposeContentChange(USER, PHONE, "kettle", { brand: "nasco" })).toBe("offered content (brand) for NAS-K");
     expect(last().body).toContain("brand → Nasco");
+  });
+
+  it("its text is shown as Jumia has it, to read or edit (owner's web chat, 2026-10-08: the AI wrote one itself)", async () => {
+    expect(await answerProductText(USER, PHONE, "kettle")).toBe("text of NAS-K");
+    expect(last().body).toContain("*Nasco Electric Kettle 1.7L* (SKU NAS-K)\n\n*Description:*\nNasco Electric Kettle 1.7L, the original description.");
+    expect(last().body).toContain("*Highlights:*\n• Old point");
+    expect(writes()).toHaveLength(0);
   });
 
   it("descriptions are shown as plain lines", () => {

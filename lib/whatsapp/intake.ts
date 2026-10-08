@@ -89,11 +89,12 @@ import { rememberRestrictedWords } from "@/lib/jumia/learned-restricted-words";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
 import { handleShopTap } from "@/lib/whatsapp/shop";
 import { handleWarehouseTap } from "@/lib/whatsapp/shop-insights";
+import { answerMore } from "@/lib/whatsapp/shop-research";
 import { findBrandExact, getBrandCount, searchBrandsFromDB } from "@/lib/jumia/brands";
 import { chatChannelOf, isWebAddress } from "@/lib/whatsapp/channel";
 import { limitedText } from "@/lib/whatsapp/assistant-limits";
 import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPrice, dropVariantSalesFrom, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
-import { answerLiveValue, answerPendingQuestion, assistantFor, plainQuickEdit, runAssistant, type AssistantOutcome, type Stage } from "@/lib/whatsapp/assistant";
+import { answerLiveValue, answerPendingQuestion, assistantFor, frontDoorFor, plainQuickEdit, runAssistant, type AssistantOutcome, type Stage } from "@/lib/whatsapp/assistant";
 import { batchCreditRefusal, creditGate } from "@/lib/whatsapp/credit-gate";
 import { runChatCommand } from "@/lib/whatsapp/chat-commands";
 import { nudgePolishWorker, queuePolish } from "@/lib/whatsapp/chat-polish";
@@ -585,17 +586,23 @@ async function aiReadable(
   phoneNumber: string,
   session: WhatsAppSession,
   content: Incoming & { unsupported?: string },
-): Promise<{ text: string; hintSeq?: number; answered?: boolean } | null> {
+): Promise<{ text: string; hintSeq?: number; answered?: { area?: string } } | null> {
   const text = content.text?.trim();
-  // An answer tapped under the front door's question ("answer:Stock to 10",
-  // lib/whatsapp/assistant.ts sendClarify) is read as if they'd typed it.
-  const answer = content.tapped && text ? text.match(/^answer:([\s\S]+)$/)?.[1]?.trim() : undefined;
-  if (answer) return aiStage(session) ? { text: answer.slice(0, 200), answered: true } : null;
+  // An answer tapped under the front door's question ("answer:@live_products:Stock
+  // to 10", lib/whatsapp/assistant.ts sendClarify) is read as if they'd typed
+  // it, in that question's area.
+  const tap = content.tapped && text ? text.match(/^answer:(?:@([a-z_]+):)?([\s\S]+)$/) : null;
+  const answer = tap?.[2]?.trim();
+  if (answer) return aiStage(session) ? { text: answer.slice(0, 200), answered: tap?.[1] ? { area: tap[1] } : {} } : null;
   if (!text || content.imageMediaId || content.unsupported || content.tapped || !aiStage(session)) return null;
   // A number picking from the bot's own numbered lines (owner's test,
   // 2026-10-07: "4" after a list whose 4th line was shop insight became
   // "4 products") is the AI's to read, with that list in its conversation.
   if (PLAIN_NUMBER_RE.test(text) && session.state === "awaiting_count" && (await pickedFromList(phoneNumber, text))) return { text };
+  // A number answering the assistant's own question is the AI's to read with
+  // it: "0" after "What should their stock be?" was read as draft 1's price
+  // (owner's web chat, 2026-10-08 19:25: "Updated product 1's price to GH₵0").
+  if (PLAIN_NUMBER_RE.test(text) && (await answersAssistantQuestion(userId, phoneNumber, session))) return { text };
   if (/^[a-z_]+:\S+$/i.test(text) || PLAIN_NUMBER_RE.test(text) || EXACT_SUBMIT_RE.test(text)) return null;
   const cmd = parseGlobalCommand(text);
   // Sentences the commands only guess at go to the AI; the regexes stay as the fallback.
@@ -626,6 +633,20 @@ async function pickedFromList(phoneNumber: string, text: string): Promise<boolea
   const bot = await lastBotMessage(phoneNumber);
   if (!bot || bot.type !== "text") return false;
   return bot.body.endsWith("?") && new RegExp(`(^|\\n)\\s*${n}[.)]\\s+\\S`).test(bot.body);
+}
+
+/**
+ * Whether the bot's last message is the assistant's own question, so a bare
+ * number answers it: through the front door only, between batches or in
+ * review, with no step of the listing flow waiting for a value, and not the
+ * flow's own "how many products" or "Start a new batch?" (a count there).
+ */
+async function answersAssistantQuestion(userId: string, phoneNumber: string, session: WhatsAppSession): Promise<boolean> {
+  if (session.state !== "awaiting_confirmation" && session.state !== "awaiting_count") return false;
+  if (session.awaitingPriceFor || session.awaitingValueFor || session.awaitingCategoryFor || session.awaitingQcAnswer || session.assistantPending) return false;
+  const bot = await lastBotMessage(phoneNumber);
+  if (!bot || !bot.body.includes("?") || /how many products/i.test(bot.body) || bot.body.startsWith(NEW_BATCH_OFFER)) return false;
+  return frontDoorFor(userId);
 }
 
 /** "product 2 of 3", while a batch's photos come in. */
@@ -728,6 +749,10 @@ export async function handleLinkedMessage(
   if (!content.imageMediaId && (await handleShopTap(userId, phoneNumber, content.text))) return;
   // The same for a delivery order into Jumia's warehouse (lib/whatsapp/shop-insights.ts).
   if (!content.imageMediaId && (await handleWarehouseTap(userId, phoneNumber, content.text))) return;
+  // "More" after a list that had more: its next products (lib/whatsapp/shop-research.ts).
+  // Not while a batch's photos come in, where "next" is the next product.
+  if (!content.imageMediaId && (session.state === "awaiting_count" || session.state === "awaiting_confirmation")
+    && (await answerMore(userId, phoneNumber, session.lastListed, content.text))) return;
 
   // The answer to the assistant's "What should its stock be?" about a live
   // product: a bare "10" is the stock, not a batch of 10 (owner's second
@@ -811,7 +836,7 @@ export async function handleLinkedMessage(
   if (readable && (await assistantFor(userId, phoneNumber))) {
     const stage = aiStage(session)!;
     const outcome = await runAssistant(userId, phoneNumber, session, readable.text, stage, stage === "review" ? readable.hintSeq : undefined, {
-      position: batchPosition(session), waitingFor: openQuestion(session),
+      position: batchPosition(session), waitingFor: openQuestion(session), ...(readable.answered ? { answered: readable.answered } : {}),
     });
     if (outcome === "handled") return;
     // A tapped answer goes on as its words, like typed text.
@@ -4421,6 +4446,12 @@ async function handleEdit(
   // A price Jumia would refuse is never saved: the push would only stop
   // over it later, further from the message that set it.
   if (price != null) {
+    // Nothing sells for 0: a "0" here was an answer to another question
+    // (owner's web chat, 2026-10-08), never a price.
+    if (!(price > 0)) {
+      await replyText(phoneNumber, `⚠️ A price has to be more than 0, so I haven't changed product ${seq}. Send its price again, e.g. "${seq}: price 150".`);
+      return;
+    }
     const minimum = await priceMinimumForUser(userId);
     if (isBelowMinimum(price, minimum)) {
       await replyText(

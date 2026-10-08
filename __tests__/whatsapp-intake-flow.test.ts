@@ -4025,13 +4025,18 @@ describe("the assistant, on the pilot's accounts", () => {
       aiReplies.push('{"area":"drafts"}', '{"type":"clarify","question":"Change the fridge\'s quantity or its price to 20?","options":["Quantity to 20","Price to 20","20"]}');
       await handleLinkedMessage(USER, PHONE, "m1", { text: "fridge 20" });
       // A bare number would read as a count once tapped, so it isn't offered.
-      expect(sent.at(-1)).toMatchObject({ kind: "buttons", body: "Change the fridge's quantity or its price to 20?", rows: ["answer:Quantity to 20", "answer:Price to 20"] });
+      // Each answer carries its question's area.
+      expect(sent.at(-1)).toMatchObject({ kind: "buttons", body: "Change the fridge's quantity or its price to 20?", rows: ["answer:@drafts:Quantity to 20", "answer:@drafts:Price to 20"] });
       expect(db.tables.whatsapp_assistant_log.at(-1)).toMatchObject({ outcome: expect.stringContaining("asked:") });
       expect(db.tables.listings[0].quantity).toBe(3);
 
-      aiReplies.push('{"area":"drafts"}', '{"type":"edit","edits":[{"products":[1],"said":"fridge","changes":{"quantity":20},"ask":false}]}');
-      await handleLinkedMessage(USER, PHONE, "m2", { text: "answer:Quantity to 20", tapped: true });
+      // Tapped, it's read in that area without sorting it again (owner's
+      // WhatsApp, 2026-10-08: "Yes" to "Is the new name …?" was sorted as listing).
+      aiReplies.push('{"type":"edit","edits":[{"products":[1],"said":"fridge","changes":{"quantity":20},"ask":false}]}');
+      await handleLinkedMessage(USER, PHONE, "m2", { text: "answer:@drafts:Quantity to 20", tapped: true });
+      expect(aiPrompts).toHaveLength(3);
       expect(aiPrompts[2]).toContain('Their new message: "Quantity to 20"');
+      expect(aiPrompts[2]).toContain("This message is about: drafts");
       expect(db.tables.listings[0].quantity).toBe(20);
     });
 
@@ -4210,6 +4215,35 @@ describe("the AI reads every typed message first", () => {
     expect(listings()[0].selling_price).toBe(130);
     expect(session().state).toBe("awaiting_photos");
     expect(session().batch_size).toBe(3);
+  });
+
+  // Owner's web chat, 2026-10-08 19:25: "0" after "What should their stock
+  // be?" became "Updated product 1's price to GH₵0".
+  it("a number answering the assistant's question is read with it through the front door, never as a draft's price", async () => {
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    db.tables.app_settings = [{ key: "assistant_front_door", value: [USER] }];
+    db.tables.listings = [{ id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: "Crocheted Pearl Beanie", selling_price: 130, status: "draft" }];
+    db.tables.whatsapp_message_log = [
+      { phone_number: PHONE, direction: "outbound", message_type: "button", created_at: new Date(Date.now() - 30_000).toISOString(),
+        body_text: "What should their stock be? Send it with the rule, e.g. \"set all the kettles' stock to 10\"." },
+    ];
+    aiReplies.push('{"area":"live_products"}', '{"type":"reply","text":"Every product, or only some?","link":null}');
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "0" });
+    db.tables.whatsapp_message_log = [];
+    db.tables.app_settings = [];
+    expect(aiPrompts).toHaveLength(2);
+    expect(aiPrompts[1]).toContain('Their new message: "0"');
+    expect(listings()[0].selling_price).toBe(130);
+  });
+
+  it("a price of 0 is never saved on a draft", async () => {
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    db.tables.app_settings = [{ key: "assistant_enabled", value: false }];
+    db.tables.listings = [{ id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: "Crocheted Pearl Beanie", selling_price: 130, status: "draft" }];
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "1: price 0" });
+    db.tables.app_settings = [];
+    expect(listings()[0].selling_price).toBe(130);
+    expect(sent.at(-1)!.body).toContain("A price has to be more than 0");
   });
 
   it("\"start another 3\" (the offer's button when a count was given) starts a batch of 3", async () => {

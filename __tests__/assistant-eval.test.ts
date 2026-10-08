@@ -24,7 +24,7 @@ import { byArea, matchesShape, passes, queueRun, routing, runCase, workOnRuns } 
 import { contextText, frontDoor, namesInMessage, openQuestion } from "@/lib/assistant-v2/front-door";
 
 const ACTIONS = new Set([
-  "edit", "submit", "list", "restart", "review", "orders", "credits", "help", "reply", "live_change", "product_info", "fees", "stock", "shop",
+  "edit", "submit", "list", "restart", "review", "orders", "credits", "help", "reply", "live_change", "product_info", "product_text", "fees", "stock", "shop",
   "order_status", "sales", "listings", "payouts", "payout_detail", "report", "bulk", "content_change", "brand_check", "category_info", "shops",
   "warehouse_stock", "warehouse_order", "warehouse_shipped", "polish", "health_report", "research", "note", "unclear",
 ]);
@@ -241,6 +241,32 @@ describe("the front door prototype", () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it("when the sorting model refuses, the reading model sorts (owner's WhatsApp, 2026-10-08: Vertex 404)", async () => {
+    answer = (p) => {
+      if (p.includes('Reply with JSON only: {"area"') && prompts.length === 1) throw new Error("Publisher model gemini-2.5-flash-lite was not found");
+      return p.includes('Reply with JSON only: {"area"') ? '{"area":"orders"}' : '{"type":"orders"}';
+    };
+    const r = await frontDoor({
+      stage: "idle", message: "orders", conversation: [], drafts: [], listed: null, seller: [], links: {}, currency: "GHS", web: true,
+    }, { router: "gemini-2.5-flash-lite", reader: "gemini-2.5-flash" }, { feature: "assistant_eval" }, { routerMs: 10_000, readerMs: 25_000, fallbackMs: 12_000 });
+    expect(r.action).toEqual({ type: "orders" });
+    expect(prompts).toHaveLength(3);
+  });
+
+  it("a tapped answer is read in its question's area, the question's words as said (owner's WhatsApp, 2026-10-08)", async () => {
+    const name = "Backless Bodysuit - Adjustable Straps, Design";
+    answer = () => `{"type":"content_change","product":"Backless Thong Bodysuit","name":"${name}","rewrite":[]}`;
+    const r = await frontDoor({
+      stage: "review", message: "Yes", drafts: [], listed: null, seller: [], links: {}, currency: "GHS", web: false,
+      conversation: ["Seller: The last submitted product", `Bot: Is the new name '${name}' for the Backless Thong Bodysuit?`],
+      answered: { area: "live_products" },
+    }, { router: "gemini-2.5-flash-lite", reader: "gemini-2.5-flash" });
+    // Not sorted again: one call, in live products.
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("This message is about: live products.");
+    expect(r.action).toEqual({ type: "content_change", product: "Backless Thong Bodysuit", request: { name } });
   });
 
   it("a run is queued with its way and sorting model, and counts the questions back", async () => {

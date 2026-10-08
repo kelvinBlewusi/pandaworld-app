@@ -382,7 +382,7 @@ describe("the front door (step 2, owner 2026-10-08)", () => {
     db.tables.app_settings = [{ key: "assistant_front_door", value: "all" }];
     aiReplies.push('{"area":"live_products"}', '{"type":"clarify","question":"Which products should stay on?","options":["I\'ll name the ones to keep on","None, turn everything off"]}');
     expect(await runAssistant("seller", "233", session(), "off all other products apart from the ones i asked you turn on", "idle")).toBe("handled");
-    expect(sent[0]).toMatchObject({ kind: "list", body: "Which products should stay on?", rows: ["answer:I'll name the ones to keep on", "answer:None, turn everything off"] });
+    expect(sent[0]).toMatchObject({ kind: "list", body: "Which products should stay on?", rows: ["answer:@live_products:I'll name the ones to keep on", "answer:@live_products:None, turn everything off"] });
   });
 });
 
@@ -827,8 +827,19 @@ describe("more of the Jumia API (owner, 2026-10-07: \"do all\")", () => {
       .toEqual({ type: "content_change", product: "blender", request: { name: "Silver Crest 3 in 1 Blender 1.5L" } });
     expect(parse('{"type":"content_change","product":"wellington boot","rewrite":["description"]}', "rewrite the description of the wellington boot"))
       .toEqual({ type: "content_change", product: "wellington boot", request: { rewrite: ["description"], instructions: "rewrite the description of the wellington boot" } });
-    // A name it made up is left out, and with nothing left it asks.
+    // A name it made up is never sent: asked to change the name, PandaWorld
+    // writes one from what Jumia has, with their words as the instructions.
     expect(parse('{"type":"content_change","product":"blender","name":"Best Blender Ever","rewrite":[]}', "change the blender's name"))
+      .toEqual({ type: "content_change", product: "blender", request: { rewrite: ["name"], instructions: "change the blender's name" } });
+    // Owner's WhatsApp, 2026-10-08: removing a word, the name not even said.
+    const bodysuit = "Backless Thong Bodysuit - Adjustable Straps, Thong Design";
+    expect(parseAction(`{"type":"content_change","product":"${bodysuit}","name":"Backless Bodysuit - Adjustable Straps","rewrite":[]}`,
+      "Just redraft the name yourself for the last submitted product \nIt has the name thong in it just remove that word", [], {}, "GHS", { now: NOW, context: `Bot: The '${bodysuit}' was listed from our chat` }))
+      .toMatchObject({ type: "content_change", product: bodysuit, request: { rewrite: ["name"] } });
+    expect(parseAction(`{"type":"content_change","product":"${bodysuit}","rewrite":["name"]}`, "Okay it is not a Thong so change that", [], {}, "GHS", { now: NOW, context: `Bot: The '${bodysuit}' was listed from our chat` }))
+      .toMatchObject({ type: "content_change", request: { rewrite: ["name"], instructions: "Okay it is not a Thong so change that" } });
+    // Without asking for a change, a made-up name still gets the question.
+    expect(parse('{"type":"content_change","product":"blender","name":"Best Blender Ever","rewrite":[]}', "the blender"))
       .toMatchObject({ type: "reply", text: expect.stringContaining("What should I change on it?") });
   });
 

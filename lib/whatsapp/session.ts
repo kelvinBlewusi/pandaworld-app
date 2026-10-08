@@ -1,4 +1,5 @@
 import { createServerClient } from "@/lib/supabase/server";
+import type { ResearchNeed } from "@/lib/whatsapp/shop-research";
 
 /**
  * Per-phone-number conversation state for the WhatsApp chatbot. See
@@ -40,6 +41,8 @@ export interface ListedProducts {
   sids: string[];
   what: string;
   at:   string;
+  /** The list had more: the read for its next products and the question it answered ("more"; lib/whatsapp/shop-research.ts). */
+  next?: { need: Extract<ResearchNeed, { source: "products" }>; request: string };
 }
 
 export interface LiveValueAsk {

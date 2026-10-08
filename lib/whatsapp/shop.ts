@@ -52,7 +52,7 @@ import {
   type ContentFields, type LiveChange, type ProductSet, type ShopProduct,
 } from "@/lib/jumia/shop";
 import { findBrandExact, searchBrandsFromDB } from "@/lib/jumia/brands";
-import { updateSession } from "@/lib/whatsapp/session";
+import { updateSession, type ListedProducts } from "@/lib/whatsapp/session";
 import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
 import { findRestrictedWords, stripRestrictedWords } from "@/lib/ai/restricted-words";
 import { callGeminiBackend } from "@/lib/ai/gemini-client";
@@ -341,6 +341,8 @@ async function proposeGroup(
 
 /** The most products one tap changes by a rule ("10% off all perfumes"). */
 export const BULK_MAX = 200;
+/** A bigger rule comes in parts of BULK_MAX, one tap each, up to this many. */
+export const BULK_PARTS_MAX = 5;
 
 /** Which products a rule is about. "listed": the ones the bot just listed for them (rememberListed). */
 export type BulkScope = "all" | "out_of_stock" | "low_stock" | "inactive" | "active" | "matching" | "listed";
@@ -349,10 +351,13 @@ export type BulkScope = "all" | "out_of_stock" | "low_stock" | "inactive" | "act
  * Remember the products just listed for the seller, so "those", "them" and
  * "the last 10" mean them (owner's web chat, 2026-10-08). Never throws.
  */
-export async function rememberListed(phone: string, products: Pick<ShopProduct, "sid">[], what: string): Promise<void> {
+export async function rememberListed(phone: string, products: Pick<ShopProduct, "sid">[], what: string, next?: ListedProducts["next"]): Promise<void> {
   if (products.length === 0) return;
   await updateSession(phone, {
-    lastListed: { sids: Array.from(new Set(products.map((p) => p.sid))).slice(0, 500), what: what.slice(0, 120), at: new Date().toISOString() },
+    lastListed: {
+      sids: Array.from(new Set(products.map((p) => p.sid))).slice(0, 500), what: what.slice(0, 120), at: new Date().toISOString(),
+      ...(next ? { next } : {}),
+    },
   }).catch(() => undefined);
 }
 
@@ -414,32 +419,43 @@ export async function proposeBulkChange(
     await sendTextIfConfigured(phone, `Nothing to change: I found no ${scope === "matching" ? `products matching ${what}` : what.replace(/^your /, "")}${left ? ` to change (${left})` : ""}.`);
     return `bulk none: ${scope}`;
   }
-  if (targets.length > BULK_MAX) {
-    await sendTextIfConfigured(phone, `That's ${targets.length} products: I change up to ${BULK_MAX} with one tap. Narrow it down, e.g. "10% off all perfumes", or use Vendor Center's bulk tools.`);
+  if (targets.length > BULK_MAX * BULK_PARTS_MAX) {
+    await sendTextIfConfigured(phone, `That's ${targets.length} products: I change up to ${BULK_MAX * BULK_PARTS_MAX} at a time. Narrow it down, e.g. "10% off all perfumes", or use Vendor Center's bulk tools.`);
     return `bulk too big: ${targets.length}`;
   }
+  // More than one tap's worth goes in parts, one tap each (owner's web chat,
+  // 2026-10-08: "reduce all the stock of the entire shop to 0, you may do it
+  // in batches" got "Narrow it down").
+  const parts: ShopProduct[][] = [];
+  for (let i = 0; i < targets.length; i += BULK_MAX) parts.push(targets.slice(i, i + BULK_MAX));
+  if (parts.length > 1) {
+    await sendTextIfConfigured(phone, `That's ${targets.length} products, more than ${BULK_MAX} for one tap, so it comes in ${parts.length} parts. Tap Yes on each part you want changed${ctx.charged ? `; each part is ${LIVE_CHANGE_CREDIT_COST} credits` : ""}.`);
+  }
   const db = createServerClient();
-  const groupId = crypto.randomUUID();
-  for (let i = 0; i < targets.length; i += 100) {
-    const { error } = await db.from("jumia_product_changes").insert(targets.slice(i, i + 100).map((p) => ({
-      id: crypto.randomUUID(), user_id: userId, group_id: groupId, product_sid: p.sid, seller_sku: p.sellerSku, name: label(p),
-      change, candidates: null, status: "pending",
-    })));
-    if (error) {
-      await sendTextIfConfigured(phone, "I couldn't get that ready just now. Send it again in a moment.");
-      return `failed: ${error.message}`;
+  for (let n = 0; n < parts.length; n++) {
+    const part = parts[n];
+    const groupId = crypto.randomUUID();
+    for (let i = 0; i < part.length; i += 100) {
+      const { error } = await db.from("jumia_product_changes").insert(part.slice(i, i + 100).map((p) => ({
+        id: crypto.randomUUID(), user_id: userId, group_id: groupId, product_sid: p.sid, seller_sku: p.sellerSku, name: label(p),
+        change, candidates: null, status: "pending",
+      })));
+      if (error) {
+        await sendTextIfConfigured(phone, "I couldn't get that ready just now. Send it again in a moment.");
+        return `failed: ${error.message}`;
+      }
     }
+    let body = (parts.length > 1 ? `*Part ${n + 1} of ${parts.length}*\n` : "") + confirmText(part, change, ctx);
+    if (left && n === 0) {
+      const note = `\n\nLeft out: ${left}.`;
+      if (body.length + note.length <= INTERACTIVE_BODY_MAX) body += note;
+    }
+    await sendButtonsIfConfigured(phone, body, [
+      { id: `lgrp:${groupId}`, title: part.length === 1 ? "Yes, change it ✅" : `Yes, change ${part.length} ✅` },
+      { id: `lgrpno:${groupId}`, title: "No" },
+    ]);
   }
-  let body = confirmText(targets, change, ctx);
-  if (left) {
-    const note = `\n\nLeft out: ${left}.`;
-    if (body.length + note.length <= INTERACTIVE_BODY_MAX) body += note;
-  }
-  await sendButtonsIfConfigured(phone, body, [
-    { id: `lgrp:${groupId}`, title: targets.length === 1 ? "Yes, change it ✅" : `Yes, change ${targets.length} ✅` },
-    { id: `lgrpno:${groupId}`, title: "No" },
-  ]);
-  return `offered bulk ${change.kind} for ${targets.length} (${scope}${words ? `: ${words}` : ""})`;
+  return `offered bulk ${change.kind} for ${targets.length}${parts.length > 1 ? ` in ${parts.length} parts` : ""} (${scope}${words ? `: ${words}` : ""})`;
 }
 
 // ─── A live product's content ───────────────────────────────────────────────
@@ -479,10 +495,13 @@ export async function rewriteContent(
     `Description now: ${htmlToText(set.description).slice(0, 3000)}`,
     `Highlights now: ${htmlToText(highlights).slice(0, 800)}`,
     `Details: ${[...set.attributes.filter((a) => a.name !== "short_description" && a.value.length < 120), ...set.variations.flatMap((v) => v.attributes)].slice(0, 30).map((a) => `${a.name}=${a.value}`).join("; ")}`,
-    ...(instructions ? [`The seller's instructions: ${instructions.slice(0, 400)}`] : []),
+    ...(instructions ? [
+      `The seller's instructions: ${instructions.slice(0, 400)}`,
+      "When the instructions ask for a small edit (remove, replace or add a word), make only that edit and keep the rest exactly as it is.",
+    ] : []),
     "",
     "Return ONLY JSON with these keys and nothing else:",
-    ...(fields.includes("name") ? ['"name": the product name, 20 to 60 characters: brand, what it is, its key spec (size, capacity, colour). No promotional words.'] : []),
+    ...(fields.includes("name") ? ['"name": the product name, 20 to 60 characters (or as long as it is now, for a small edit): brand, what it is, its key spec (size, capacity, colour). No promotional words.'] : []),
     ...(fields.includes("description") ? ['"description": 120 to 250 words as simple HTML: <p> paragraphs, then a <ul> of key features. Plain, factual, no prices, no contact details, no links.'] : []),
     ...(fields.includes("highlights") ? ['"highlights": 4 to 6 short bullet points as one HTML <ul><li>…</li></ul>.'] : []),
   ].join("\n");
@@ -851,6 +870,9 @@ export async function answerProducts(userId: string, phone: string, filter: "all
     `• Out of stock: ${out.length}`,
     `• Waiting for Jumia's check: ${pending.length}`,
     `• Rejected: ${rejected.length}`,
+    // Deleted ones are known too, just not counted ("what is the number of
+    // deleted products" got "PandaWorld can't track them": owner, 2026-10-08).
+    ...(products.length > live.length ? [`(Deleted on Jumia, not counted above: ${products.length - live.length})`] : []),
     "",
     ...inFlightLine(await changesInFlight(userId)),
     "Ask me about any of them: stock, price, a sale, or turning one on or off.",
@@ -902,6 +924,48 @@ export async function answerProductInfo(userId: string, phone: string, query: st
     ...(found.length > 3 ? [`+${found.length - 3} more match "${shorten(query, 40)}". Name one more exactly, or its SKU.`] : []),
   ].join("\n\n"));
   return `info on ${shown.map((p) => p.sellerSku).join(", ")}`;
+}
+
+/**
+ * A product's name, description and highlights as Jumia has them now, to
+ * read or to edit (owner's web chat, 2026-10-08: "print the description here
+ * for me so I can edit it" got one the AI wrote itself). Free, like the
+ * rest of reading their shop.
+ */
+export async function answerProductText(userId: string, phone: string, query: string): Promise<string> {
+  const ctx = await shopContext(userId, phone, "shop_whatsapp", "your live products");
+  if (!ctx) return "blocked";
+  const products = await catalog(ctx);
+  if (!products) return "no catalog";
+  const found = findProducts(products, query);
+  if (found.length === 0) {
+    await sendTextIfConfigured(phone, `I couldn't find "${shorten(query, 60)}" among your ${products.length} Jumia products. Try its name as it shows on Jumia, or its SKU.`);
+    return "not found";
+  }
+  // Its sizes or colours share one text: the set's.
+  const sets = Array.from(new Map(found.map((p) => [p.setSid ?? p.sid, p])).values());
+  if (sets.length > 1) {
+    await sendLong(phone, [
+      `"${shorten(query, 40)}" could be ${sets.length} products. Which one?`,
+      ...sets.slice(0, 6).map((p) => `• ${shorten(p.name, 60)} (SKU ${p.sellerSku})`),
+      "", "Ask again with its name as it shows on Jumia, or its SKU.",
+    ].join("\n"));
+    return `text unclear: ${sets.length}`;
+  }
+  const product = sets[0];
+  const set = await fetchProductSet(ctx.token, product.sellerSku);
+  if (!set.ok || !set.data) {
+    await sendTextIfConfigured(phone, `I couldn't read ${shorten(product.name, 60)} from Jumia just now${set.ok ? "" : `: ${set.message}`}. Try again in a minute.`);
+    return "set unreadable";
+  }
+  const highlights = htmlToText(set.data.attributes.find((a) => a.name === "short_description")?.value ?? "");
+  await sendLong(phone, [
+    `*${set.data.name || product.name}* (SKU ${product.sellerSku})`,
+    "", "*Description:*", htmlToText(set.data.description) || "(none on Jumia)",
+    ...(highlights ? ["", "*Highlights:*", highlights] : []),
+    "", "_Read from Jumia just now._ To change it, send the new text (\"change its description to …\"), or say \"rewrite its description\" and I'll write one for you to check.",
+  ].join("\n"));
+  return `text of ${product.sellerSku}`;
 }
 
 /**
