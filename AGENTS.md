@@ -2416,10 +2416,19 @@ measuring, is this.
     when the sorting model errors (not on a timeout). If the whole front
     door fails within 20 s, the usual `interpret` reads it.
   - 12 new cases (`src: "log 10-08 19:xx"` to `21:xx`).
-- **Before "all"**: read the owner's front-door turns in
-  whatsapp_assistant_log (`raw like '[front door]%'`). Make each misread a
-  test case and run the set with the front door. Then remove the word rules
-  in `parseAction` as the current path retires.
+- **Rolled out to every seller (8 Oct, 23:5x UTC)**: the same hour, on the
+  224-case set, the front door got 211 right (2 more got no answer in 40 s,
+  which live goes to the Flash-Lite fallback), the current path 208. The
+  current path's misses included a made-up number ("6 products deleted").
+  The front door's included a reply claiming a change it hadn't made ("I'll
+  update the quantity to 7"): the reading prompt now says only an action
+  changes things, and the router sends "what you listed for me from this
+  chat" to shop_info. Runs 0c00acd1 and 94649e1e. app_settings
+  `assistant_front_door` = `"all"`; delete the row to go back.
+- **Next (step 2 cleanup)**: remove the word rules in `parseAction` and the
+  old prompt (`buildPrompt`, `interpret`) once a few days of every seller's
+  turns look right; keep `interpret` only as the fallback when the front
+  door fails fast, or retire it too.
 
 ### The chat knows the website (owner, 2026-10-07)
 
