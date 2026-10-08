@@ -4,6 +4,9 @@ import Link from "next/link";
 import Image from "next/image";
 import { ListingAssistant } from "@/components/assistant/listing-assistant";
 import { listingAssistantFor } from "@/lib/whatsapp/listing-assistant";
+import { isAdmin } from "@/lib/auth/is-admin";
+import { shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
+import { ADMIN_MAX_BATCH_SIZE } from "@/lib/whatsapp/batch";
 
 // ─── /extension/assistant — the Listing Assistant ───────────────────────────
 //
@@ -46,5 +49,9 @@ export default async function ListingAssistantPage() {
   }
 
   const user = await currentUser().catch(() => null);
-  return <ListingAssistant firstName={user?.firstName ?? null} />;
+  // The product form, admins only while the owner tries it (2026-10-08).
+  const productForm = isAdmin(userId)
+    ? { currency: await shopCurrencyForUser(userId).catch(() => "GHS"), maxProducts: ADMIN_MAX_BATCH_SIZE }
+    : null;
+  return <ListingAssistant firstName={user?.firstName ?? null} productForm={productForm} />;
 }

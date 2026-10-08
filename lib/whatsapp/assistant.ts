@@ -614,6 +614,10 @@ export function verifyChanges(
     const isCurrent = (v: string) => lower(known.variations).includes(v.toLowerCase());
     const backed: string[] = [];
     let given = 0;
+    // At least one must come from this message: the product's current
+    // variations alone are no change ("my message count so far" came back
+    // as its sizes again, and was applied, 2026-10-08).
+    let fromMessage = false;
     // The options each phrase of the seller's was read as.
     const read = new Map<string, { said: string; options: string[] }>();
     for (const item of r.variations) {
@@ -626,7 +630,9 @@ export function verifyChanges(
         // category's options isn't enough: the AI once sent all 54 of a
         // category's sizes for "Sizes: Large, Medium, Small" (owner's web
         // chat, 2026-10-07).
-        if (wordInMessage(w, message) || isCurrent(w) || (isOption(w) && sizeNamedIn(w, message))) backed.push(w);
+        const said = wordInMessage(w, message) || (isOption(w) != null && sizeNamedIn(w, message));
+        if (said || isCurrent(w)) backed.push(w);
+        fromMessage ||= said;
         continue;
       }
       if (!item || typeof item !== "object") continue;
@@ -638,7 +644,10 @@ export function verifyChanges(
       const option = typeof pair.option === "string" ? pair.option.trim().slice(0, 60) : "";
       if (!said && !option) continue;
       given++;
-      if (said === "" || !(saidInMessage(said, message) || isCurrent(said))) continue;
+      // Whole words: "S" isn't in "message".
+      const inMessage = wordInMessage(said, message) || (said.length >= 4 && saidInMessage(said, message));
+      if (said === "" || !(inMessage || isCurrent(said))) continue;
+      fromMessage ||= inMessage;
       if (known.options.length === 0) { backed.push(said); continue; }
       const match = isOption(option) ?? (isCurrent(option) ? option : null);
       if (!match) continue;
@@ -654,8 +663,8 @@ export function verifyChanges(
       const limit = /\bto\b|[-–]|\bthrough\b|\btill\b|\buntil\b|\ball\b/i.test(said) ? 8 : Math.max(1, parts);
       if (options.length <= limit || isCurrent(said)) backed.push(...options);
     }
-    if (backed.length > 0) changes.variations = Array.from(new Set(backed));
-    else if (given > 0) dropped.push("variations");
+    if (backed.length > 0 && fromMessage) changes.variations = Array.from(new Set(backed));
+    else if (given > 0 && !(backed.length > 0)) dropped.push("variations");
   }
   for (const key of ["title", "brand", "color"] as const) {
     const v = r[key];
@@ -679,6 +688,19 @@ function colourLine(message: string): string | null {
   const m = message.match(/\bcolou?rs?\s*[:=-]\s*([^\n]+)/i);
   const v = m?.[1]?.trim().replace(/[.!]+$/, "").replace(/\s+/g, " ").slice(0, 60);
   return v ? v : null;
+}
+
+/** The draft a phrase names by number ("product 3", "#2", "item 1"), when it's one of these. */
+export function draftNumberIn(said: string, products: { seq: number }[]): number | null {
+  const m = said.match(/\b(?:product|item|draft|no\.?|number)\s*#?\s*(\d{1,2})\b/i) ?? said.match(/^\s*#?(\d{1,2})\s*$/);
+  const n = m ? Number(m[1]) : NaN;
+  return products.some((p) => p.seq === n) ? n : null;
+}
+
+/** Whether the message is about a product's details at all: a number, or a field's name. */
+function namesAField(message: string): boolean {
+  return /\d/.test(message)
+    || /\b(?:price|cost|cheaper|dearer|expensive|discount|sale|reduce|increase|lower|raise|colou?rs?|sizes?|variations?|variants?|name|rename|title|brand|quantity|qty|stock|pieces?)\b/i.test(message);
 }
 
 /**
@@ -1159,7 +1181,11 @@ function parseActionRaw(
     }
     case "list": {
       const count = Number(parsed.count);
-      return Number.isInteger(count) && count >= 1 && countBacked(count, message) ? { type: "list", count } : { type: "unclear" };
+      // A count the message doesn't give is the AI's guess: still a wish to
+      // list, so it's offered like "restart" (owner's web chat, 2026-10-08:
+      // "let's list new products" came back as a count of 1 and got the
+      // review step's help instead).
+      return Number.isInteger(count) && count >= 1 && countBacked(count, message) ? { type: "list", count } : { type: "restart" };
     }
     case "submit": {
       if (parsed.products === "all") return { type: "submit", seqs: "all" };
@@ -1186,7 +1212,12 @@ function parseActionRaw(
         let seqs = seqsOf(e.products);
         // The draft must be the product they named: "set the gold medal to
         // 25" once changed a draft of gold-tone earrings (live, 2026-10-07).
-        const said = typeof e.said === "string" && !saidIsValues(e.said, e.changes) ? e.said.trim() : "";
+        let said = typeof e.said === "string" && !saidIsValues(e.said, e.changes) ? e.said.trim() : "";
+        // "the 150 is product 3 price": a draft named by its number is that
+        // draft, never a live product (owner's web chat, 2026-10-08, where
+        // it went to the live products on Jumia).
+        const byNumber = draftNumberIn(said, products);
+        if (byNumber != null) { seqs = [byNumber]; said = ""; }
         if (said && seqs.length > 0) {
           const fits = seqs.filter((seq) => fitsDraft(said, products.find((p) => p.seq === seq)?.listing.title ?? null));
           if (fits.length === 0) { misnamed.push({ said, changes: e.changes }); continue; }
@@ -1217,7 +1248,11 @@ function parseActionRaw(
         }
         return ask(`"${m.said.slice(0, 60)}" isn't one of the drafts here. Say which draft by its number, or, for a product already on Jumia, e.g. "set the ${m.said.slice(0, 40)}'s price to 150".`);
       }
-      return edits.length > 0 || dropped.size > 0 ? { type: "edit", edits, dropped: Array.from(dropped) } : { type: "unclear" };
+      if (edits.length > 0) return { type: "edit", edits, dropped: Array.from(dropped) };
+      // Nothing it gave is in the message, and the message names no field
+      // or number: not an edit at all ("my message count so far" came back
+      // as the last edit again, 2026-10-08).
+      return dropped.size > 0 && namesAField(message) ? { type: "edit", edits, dropped: Array.from(dropped) } : { type: "unclear" };
     }
     default:
       return { type: "unclear" };
@@ -1706,7 +1741,14 @@ async function carryOut(
         return "stopped batch";
       }
       if (stage === "review") {
-        await sendButtonsIfConfigured(phone, "Start a new batch? Drafts you haven't sent stay on your review page.", [START_ANOTHER, REVIEW]);
+        // A count they gave starts that batch on the tap; a count typed
+        // after this offer does too (lib/whatsapp/intake.ts).
+        const count = action.type === "list" ? action.count : null;
+        await sendButtonsIfConfigured(
+          phone,
+          count ? `Start a new batch of ${count}? Drafts you haven't sent stay on your review page.` : "Start a new batch? Drafts you haven't sent stay on your review page.",
+          [count ? { id: `start another ${count}`, title: `Yes, list ${count}` } : START_ANOTHER, REVIEW],
+        );
       } else {
         await sendButtonsIfConfigured(phone, "Let's list! How many products are you listing today?", COUNT_QUICK_PICKS);
       }

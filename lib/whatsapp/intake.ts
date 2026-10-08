@@ -3,6 +3,7 @@ import { sendTextIfConfigured, sendCtaUrlIfConfigured, sendButtonsIfConfigured, 
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { VARIATION_FIELD, isVariationBlock, variationOptions, variationMayBlock, variationQuestion, parseVariations, saveVariations, optionsShown } from "@/lib/whatsapp/variation-question";
 import { ingestWhatsAppImage } from "@/lib/whatsapp/media";
+import { recordInboundMessage } from "@/lib/whatsapp/message-log";
 import {
   getOrCreateSession,
   updateSession,
@@ -617,22 +618,9 @@ async function aiReadable(
 async function pickedFromList(phoneNumber: string, text: string): Promise<boolean> {
   const n = text.match(/^(\d)\.?$/)?.[1];
   if (!n) return false;
-  try {
-    const { data } = await createServerClient()
-      .from("whatsapp_message_log")
-      .select("direction, message_type, body_text")
-      .eq("phone_number", phoneNumber)
-      .order("created_at", { ascending: false })
-      .limit(2);
-    const rows = (data ?? []) as { direction: string; message_type: string | null; body_text: string | null }[];
-    // The newest row can be this very message, logged as it arrived.
-    const bot = rows[0]?.direction === "outbound" ? rows[0] : rows[0]?.direction === "inbound" ? rows[1] : undefined;
-    if (!bot || bot.direction !== "outbound" || bot.message_type !== "text") return false;
-    const body = (bot.body_text ?? "").trim();
-    return body.endsWith("?") && new RegExp(`(^|\\n)\\s*${n}[.)]\\s+\\S`).test(body);
-  } catch {
-    return false;
-  }
+  const bot = await lastBotMessage(phoneNumber);
+  if (!bot || bot.type !== "text") return false;
+  return bot.body.endsWith("?") && new RegExp(`(^|\\n)\\s*${n}[.)]\\s+\\S`).test(bot.body);
 }
 
 /** "product 2 of 3", while a batch's photos come in. */
@@ -794,6 +782,18 @@ export async function handleLinkedMessage(
   // which also runs whenever the AI can't be reached. Taps, plain numbers,
   // a command's own words and "done" skip it (aiReadable): they mean one
   // thing already. Never while connecting Jumia: those messages are codes.
+  // A count typed after the assistant's "Start a new batch?" in review
+  // starts that batch; anywhere else in review a bare number is a price or
+  // a product number (owner's web chat, 2026-10-08).
+  const typedCount = !content.tapped && !content.imageMediaId ? content.text?.trim().match(/^(\d{1,2})$/)?.[1] : undefined;
+  if (typedCount && session.state === "awaiting_confirmation" && Number(typedCount) >= 1) {
+    const bot = await lastBotMessage(phoneNumber);
+    if (bot?.body.startsWith(NEW_BATCH_OFFER)) {
+      await startAnotherWithCount(userId, phoneNumber, Number(typedCount));
+      return;
+    }
+  }
+
   const readable = await aiReadable(userId, phoneNumber, session, content);
   if (readable && (await assistantFor(userId, phoneNumber))) {
     const stage = aiStage(session)!;
@@ -880,6 +880,10 @@ async function handleGlobalCommand(
         ? (await getBatchListings(session.batchId)).filter((l) => l.status === "draft" || l.status === "failed").length
         : 0;
       const kept = unsent === 0 ? "" : unsent === 1 ? " Your unsent draft stays on the review page." : ` Your ${unsent} unsent drafts stay on the review page.`;
+      if (cmd.count) {
+        await startAnotherWithCount(userId, phoneNumber, cmd.count, kept);
+        return;
+      }
       await handleGlobalRestart(userId, phoneNumber, `Let's list more!${kept}`);
       return;
     }
@@ -1002,6 +1006,41 @@ async function handleGlobalRestart(userId: string, phoneNumber: string, lead = "
   }
   await replyButtons(phoneNumber, `${lead} How many products are you listing today?`, COUNT_QUICK_PICKS);
 }
+
+/**
+ * A new batch of `count` straight away, from review ("let's list 3 new
+ * products", or "3" typed after the "Start a new batch?" offer): the
+ * restart, then the count as if typed, so it's checked the same way
+ * (Jumia connected, credits, the batch cap). Owner's web chat, 2026-10-08:
+ * "3" there was read as a GHS 3 price.
+ */
+async function startAnotherWithCount(userId: string, phoneNumber: string, count: number, kept = ""): Promise<void> {
+  await resetSession(phoneNumber);
+  if (kept) await replyText(phoneNumber, kept.trim());
+  const fresh = await getOrCreateSession(userId, phoneNumber);
+  await handleAwaitingCount(userId, phoneNumber, fresh, { text: String(count) });
+}
+
+/** The bot's last message here, when it's the newest row or just before this message. */
+async function lastBotMessage(phoneNumber: string): Promise<{ type: string | null; body: string } | null> {
+  try {
+    const { data } = await createServerClient()
+      .from("whatsapp_message_log")
+      .select("direction, message_type, body_text")
+      .eq("phone_number", phoneNumber)
+      .order("created_at", { ascending: false })
+      .limit(2);
+    const rows = (data ?? []) as { direction: string; message_type: string | null; body_text: string | null }[];
+    // The newest row can be this very message, logged as it arrived.
+    const bot = rows[0]?.direction === "outbound" ? rows[0] : rows[0]?.direction === "inbound" ? rows[1] : undefined;
+    return bot && bot.direction === "outbound" ? { type: bot.message_type, body: (bot.body_text ?? "").trim() } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The assistant's offer in review (lib/whatsapp/assistant.ts), which a typed count answers. */
+const NEW_BATCH_OFFER = "Start a new batch";
 
 /**
  * "retry" — the counterpart to restart, and the whole point of the button
@@ -2671,6 +2710,107 @@ async function startBatchAnalysis(
   }
 }
 
+/** One product from the web chat's product form (components/assistant/product-form.tsx). */
+export interface FormProduct {
+  /** The page's uploads (`web:<path>`), already checked as the seller's own. */
+  mediaIds: string[];
+  price:    number;
+  quantity: number | null;
+  sizes:    string;
+  colour:   string;
+  notes:    string;
+}
+
+/** A form product's details as the notes a seller would type with its photos. */
+export function formNotes(p: FormProduct): string {
+  return [
+    `Price: ${p.price}`,
+    p.quantity ? `Quantity: ${p.quantity}` : "",
+    p.sizes.trim() ? `Sizes: ${p.sizes.trim()}` : "",
+    p.colour.trim() ? `Colour: ${p.colour.trim()}` : "",
+    p.notes.trim(),
+  ].filter(Boolean).join("\n");
+}
+
+/**
+ * A batch from the web chat's product form (owner, 2026-10-08: "build the
+ * form for only admin let me see first"): each product's photos, price,
+ * quantity, sizes, colour and notes in its own fields, so nothing has to be
+ * guessed from the order of messages. No count question, no Done, no
+ * sending ways: the products are made here as the chat would make them
+ * (claimBatchSlot, the photos appended, the details as notes, price and
+ * quantity set), then drafted the usual way (startBatchAnalysis), with the
+ * drafting messages in the chat as always. The form's message is recorded
+ * as the seller's, an album with a line per product.
+ */
+export async function startBatchFromForm(
+  userId: string,
+  phoneNumber: string,
+  messageId: string,
+  products: FormProduct[],
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if ((await getJumiaConnectionKind(userId)) !== "connected") {
+    return { ok: false, error: "Connect your Jumia account first: the chat shows you how." };
+  }
+  const max = isAdmin(userId) ? ADMIN_MAX_BATCH_SIZE : MAX_BATCH_SIZE;
+  if (products.length < 1 || products.length > max) return { ok: false, error: `Between 1 and ${max} products at a time.` };
+  const session = await getOrCreateSession(userId, phoneNumber);
+  if (session.state === "analyzing") return { ok: false, error: "Your last batch is still being drafted. Send these once it's done." };
+  if (session.state === "awaiting_jumia_credentials" || session.state === "awaiting_jumia_oauth") {
+    return { ok: false, error: "Finish connecting Jumia in the chat first." };
+  }
+  const refusal = await batchCreditRefusal(userId, products.length);
+  if (refusal) return { ok: false, error: refusal.replace(/\*/g, "") };
+
+  // Each product's photos as links: checked as the seller's own and already stored (the page's uploads).
+  const photos: string[][] = [];
+  for (const p of products) {
+    const urls: string[] = [];
+    for (const mediaId of p.mediaIds.slice(0, MAX_LISTING_IMAGES)) {
+      const url = await ingestWhatsAppImage(mediaId, userId);
+      if (url) urls.push(url);
+    }
+    if (urls.length === 0) return { ok: false, error: `Product ${photos.length + 1}'s photos didn't come through. Add them again.` };
+    photos.push(urls);
+  }
+
+  const currency = await shopCurrencyForUser(userId);
+  const links = photos.flat();
+  const lines = products.map((p, i) =>
+    [`${i + 1}. ${currency} ${p.price}`, p.quantity ? `qty ${p.quantity}` : "", p.sizes.trim(), p.colour.trim()].filter(Boolean).join(" · "));
+  await recordInboundMessage(
+    phoneNumber, messageId, "image",
+    `🧾 ${products.length} product${products.length === 1 ? "" : "s"} from the form\n${lines.join("\n")}`,
+    links.length > 1 ? { imageMediaIds: products.flatMap((p) => p.mediaIds), link: links[0], links } : { imageMediaId: products[0].mediaIds[0], link: links[0] },
+  );
+
+  const batchId = crypto.randomUUID();
+  await resetSession(phoneNumber);
+  await updateSession(phoneNumber, {
+    state: "awaiting_photos", batchId, batchSize: products.length, batchSeq: products.length,
+    listingId: null, lastSubmittedBatchId: null, batchQuiet: true, lastImageAt: null,
+  });
+
+  const db = createServerClient();
+  for (let i = 0; i < products.length; i++) {
+    const p = products[i];
+    const slot = await claimBatchSlot(userId, batchId, i + 1, isWebAddress(phoneNumber) ? "web" : null);
+    if (!slot.ok) {
+      await resetSession(phoneNumber);
+      return { ok: false, error: `Product ${i + 1} couldn't be saved (${slot.message}). Try again.` };
+    }
+    for (const url of photos[i]) {
+      await db.rpc("append_listing_image", { p_listing_id: slot.listingId, p_url: url, p_max: MAX_LISTING_IMAGES });
+    }
+    await applyNotes(slot.listingId, formNotes(p));
+    // The fields as given, whatever the notes' reading made of them.
+    await db.from("listings").update({ selling_price: p.price, ...(p.quantity ? { quantity: p.quantity } : {}) }).eq("id", slot.listingId);
+  }
+
+  await startBatchAnalysis(phoneNumber, userId, await getOrCreateSession(userId, phoneNumber));
+  return { ok: true };
+}
+
 /**
  * Analyse ONE queued product and report it to the seller — the body that
  * used to live inside startBatchAnalysis's Promise.all, now called by
@@ -2783,12 +2923,14 @@ async function askForNextMissingPrice(
   /** `drafted`: the product's own "✅ Product drafted" lines, standing in
    *  for its name, so a single product's draft and its price question are
    *  one message (2026-10-03). */
-  opts: { after?: string; prefix?: string; drafted?: string } = {},
+  opts: { after?: string; from?: string; prefix?: string; drafted?: string } = {},
 ): Promise<boolean> {
   const listings = await getBatchListings(batchId);
   // findIndex returning -1 lands on 0 — an id that isn't in this batch
-  // restarts the walk rather than skipping the whole thing.
-  const startAt = opts.after ? listings.findIndex((l) => l.id === opts.after) + 1 : 0;
+  // restarts the walk rather than skipping the whole thing. `from` starts
+  // at that product itself.
+  const startAt = opts.after ? listings.findIndex((l) => l.id === opts.after) + 1
+    : opts.from ? Math.max(0, listings.findIndex((l) => l.id === opts.from)) : 0;
   // A product with no title never drafted at all; its own failure message
   // already covers it, and a price would not make it submittable. A price
   // below Jumia's lowest for the country is as good as none: the push stops it.
@@ -5604,6 +5746,13 @@ async function handleCategoryCorrection(
     return;
   }
   const session = await getOrCreateSession(userId, phoneNumber);
+  // Still without a price: this product's price is the open question now,
+  // so the next number answers it (owner's web chat, 2026-10-08: "150",
+  // typed after product 3's switch said "Still needs: price", went to
+  // product 1, whose price had been asked before).
+  if (/\bprice\b/i.test(missing) && session.state === "awaiting_confirmation" && session.batchId) {
+    if (await askForNextMissingPrice(phoneNumber, session.batchId, { from: listingId, prefix: head })) return;
+  }
   if (assessment?.missingFields?.length && session.state === "awaiting_confirmation" && session.batchId) {
     const asked = await askForNextMissingValue(phoneNumber, session.batchId, {
       from:   listingId,

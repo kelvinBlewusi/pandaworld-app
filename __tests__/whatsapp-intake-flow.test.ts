@@ -594,6 +594,30 @@ describe("asking for a missing price in chat", () => {
     seedSession({ state: "awaiting_confirmation", batch_size: 2, batch_seq: null, ...patch });
   }
 
+  // Owner's web chat, 2026-10-08: the bot asked product 1's price, then the
+  // seller fixed product 3's category, whose reply said "Still needs:
+  // price"; their "150" went to product 1.
+  it("after a category switch that still needs a price, that product's price is the one asked", async () => {
+    const id = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
+    seedBatch([
+      { seq: 1, title: "Thong Bodysuit" },
+      { seq: 2, title: "Vintage Radio Eau de Parfum", price: 160 },
+      { seq: 3, title: "White Maple Leaf Flower Earrings" },
+    ]);
+    for (const l of db.tables.listings) l.id = id(l.whatsapp_seq as number);
+    confirming({ batch_size: 3, awaiting_price_for: id(1) });
+    sent.length = 0;
+
+    await handleLinkedMessage(USER, PHONE, "m1", { text: `category:${id(3)}:1234`, tapped: true });
+    expect(session().awaiting_price_for).toBe(id(3));
+    expect(sent.at(-1)!.body).toContain("Product 3 — White Maple Leaf Flower Earrings");
+    expect(sent.at(-1)!.body).toContain("What price are you selling it at?");
+
+    await handleLinkedMessage(USER, PHONE, "m2", { text: "150" });
+    expect(listings().find((l) => l.id === id(3))!.selling_price).toBe(150);
+    expect(listings().find((l) => l.id === id(1))!.selling_price).toBeNull();
+  });
+
   it("asks about the first product with no price once the batch closes", async () => {
     seedBatch([
       { seq: 1, title: "Panasonic Electric Kettle 1.7L" },
@@ -4125,6 +4149,44 @@ describe("the AI reads every typed message first", () => {
     expect(session().batch_size).toBe(4);
   });
 
+  // Owner's web chat, 2026-10-08: "let's list new products", then "3", was
+  // read as a GHS 3 price for the draft in review.
+  it("a count typed after the new-batch offer in review starts that batch", async () => {
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    db.tables.listings = [{ id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: "Thong Bodysuit", selling_price: 130, status: "draft" }];
+    db.tables.jumia_connections = [{ user_id: USER, status: "active", access_token: "tok", refresh_token: "ref" }];
+    db.tables.whatsapp_message_log = [
+      { phone_number: PHONE, direction: "outbound", message_type: "button", created_at: new Date(Date.now() - 30_000).toISOString(),
+        body_text: "Start a new batch? Drafts you haven't sent stay on your review page." },
+    ];
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "3" });
+    db.tables.jumia_connections = [];
+    db.tables.whatsapp_message_log = [];
+    expect(aiPrompts).toHaveLength(0);
+    expect(listings()[0].selling_price).toBe(130);
+    expect(session().state).toBe("awaiting_photos");
+    expect(session().batch_size).toBe(3);
+  });
+
+  it("\"start another 3\" (the offer's button when a count was given) starts a batch of 3", async () => {
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    db.tables.listings = [{ id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: "Thong Bodysuit", selling_price: 130, status: "draft" }];
+    db.tables.jumia_connections = [{ user_id: USER, status: "active", access_token: "tok", refresh_token: "ref" }];
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "start another 3", tapped: true });
+    db.tables.jumia_connections = [];
+    expect(session().state).toBe("awaiting_photos");
+    expect(session().batch_size).toBe(3);
+    expect(sent.some((m) => m.body.includes("Your unsent draft stays on the review page."))).toBe(true);
+  });
+
+  it("\"let's list new products\" in review offers a new batch, not the review help", async () => {
+    seedSession({ state: "awaiting_confirmation", batch_size: 1, batch_seq: null });
+    db.tables.listings = [{ id: "listing-1", user_id: USER, whatsapp_batch_id: "batch-1", whatsapp_seq: 1, title: "Thong Bodysuit", selling_price: 130, status: "draft" }];
+    aiReplies.push('{"type":"list","count":1}');
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "let's list new products" });
+    expect(sent.at(-1)!.body).toBe("Start a new batch? Drafts you haven't sent stay on your review page.");
+  });
+
   it("switched off, the usual flow answers with no AI", async () => {
     db.tables.app_settings = [{ key: "assistant_enabled", value: false }];
     seedSession({ state: "awaiting_photos", batch_size: 1, batch_seq: 1, listing_id: "listing-1" });
@@ -4133,5 +4195,64 @@ describe("the AI reads every typed message first", () => {
     db.tables.app_settings = [];
     expect(aiPrompts).toHaveLength(0);
     expect(listings()[0].user_prompt).toContain("Hello?");
+  });
+});
+
+// Owner, 2026-10-08: "build the form for only admin let me see first". The
+// web chat's product form: each product's fields as given, one batch, no
+// count question or Done.
+describe("a batch from the web chat's product form", () => {
+  const WEB = `web:${USER}`;
+  const photo = (name: string) => `web:${USER}/assistant/${name}.jpg`;
+
+  beforeEach(() => {
+    db.tables.jumia_connections = [{ user_id: USER, status: "active", access_token: "tok", refresh_token: "ref" }];
+    db.tables.whatsapp_message_log = [];
+    seedSession({ phone_number: WEB, state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null });
+    sent.length = 0;
+    enqueued.length = 0;
+  });
+  afterEach(() => {
+    db.tables.jumia_connections = [];
+    db.tables.whatsapp_message_log = [];
+  });
+
+  it("makes each product with its own photos, price, quantity, sizes, colour and notes, then drafts them", async () => {
+    const { startBatchFromForm } = await import("@/lib/whatsapp/intake");
+    const r = await startBatchFromForm(USER, WEB, "web-form-1", [
+      { mediaIds: [photo("a1"), photo("a2")], price: 130, quantity: 5, sizes: "Large, Medium, Small", colour: "cream, black", notes: "" },
+      { mediaIds: [photo("b1")], price: 150, quantity: null, sizes: "", colour: "", notes: "Brand: Zara" },
+    ]);
+    expect(r).toEqual({ ok: true });
+
+    const made = [...listings()].sort((a, b) => (a.whatsapp_seq as number) - (b.whatsapp_seq as number));
+    expect(made.map((l) => [l.whatsapp_seq, l.selling_price, (l.images as string[]).length, l.chat_channel])).toEqual([
+      [1, 130, 2, "web"],
+      [2, 150, 1, "web"],
+    ]);
+    expect(made[0].quantity).toBe(5);
+    expect(made[0].user_prompt).toContain("Sizes: Large, Medium, Small");
+    expect(made[0].user_prompt).toContain("Colour: cream, black");
+    expect(made[1].user_prompt).toContain("Brand: Zara");
+
+    expect(enqueued).toHaveLength(2);
+    expect(session().state).toBe("analyzing");
+    expect(session().batch_size).toBe(2);
+    expect(sent.some((m) => m.body.includes("Got everything for all 2 products"))).toBe(true);
+    // The form's message is in the chat as the seller's, an album with a line per product.
+    const mine = db.tables.whatsapp_message_log.find((m) => m.direction === "inbound");
+    expect(mine?.body_text).toContain("2 products from the form");
+    expect(mine?.payload?.links).toHaveLength(3);
+  });
+
+  it("refuses while the last batch is still drafting, and before Jumia is connected", async () => {
+    const { startBatchFromForm } = await import("@/lib/whatsapp/intake");
+    const one = [{ mediaIds: [photo("a")], price: 100, quantity: null, sizes: "", colour: "", notes: "" }];
+    session().state = "analyzing";
+    expect(await startBatchFromForm(USER, WEB, "web-form-2", one)).toEqual({ ok: false, error: expect.stringContaining("still being drafted") });
+    session().state = "awaiting_count";
+    db.tables.jumia_connections = [];
+    expect(await startBatchFromForm(USER, WEB, "web-form-3", one)).toEqual({ ok: false, error: expect.stringContaining("Connect your Jumia account") });
+    expect(listings()).toHaveLength(0);
   });
 });
