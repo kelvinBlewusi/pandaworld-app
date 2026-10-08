@@ -2274,6 +2274,24 @@ measuring, is this.
   that have a default (a period, a report kind, the price in a fees
   question), so round 2 asks only when the action, the product or a
   change's value can't be told.
+- **Results, 8 Oct 14:52–15:44 UTC (Gemini slow that afternoon)**:
+  - Live chat (Flash): 189/201 = 94.0%, median 2.4 s, $3.34 per 1,000
+    messages (one call of ~9,200 prompt tokens).
+  - Front door round 1: 183/203 (90%) under the final scoring.
+  - Round 2 on Flash/Flash: 192/199 (96.5%), median 4.8 s, ~$2.10.
+  - Round 2 sorting on flash-lite and reading on Flash: 194/199 (97.5%),
+    median 2.8 s, $1.13 (~600 + ~1,000 tokens). It asked back 6 times,
+    each one fair.
+  - It fixes the live chat's leftovers: notes typed while sending a
+    product, and "kettle price GHS 120" read as listing. Its misses are
+    mostly the sorting call. Round 2 was tuned on this set, so its score is
+    optimistic, and runs vary by about 2 points.
+  - Only understanding is tested: carrying out and clarify buttons in the
+    chat aren't built.
+- **Found on the way**: `bulkAction` turns scope `out_of_stock` into `all`
+  when the message lacks out-of-stock words (`SCOPE_WORDS_RE`), unless the
+  word rule passes `restock`. That is a check that widens instead of asking.
+  The confirm tap still guards it.
 
 ### The chat knows the website (owner, 2026-10-07)
 
