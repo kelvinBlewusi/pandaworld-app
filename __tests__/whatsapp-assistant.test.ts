@@ -64,7 +64,7 @@ jest.mock("@/lib/jumia/categories", () => ({
 
 import {
   answerLiveValue, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
-  namesAProduct, recentConversation, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
+  namesAProduct, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { assistantGate } from "@/lib/whatsapp/assistant-limits";
 import { parseVariations } from "@/lib/whatsapp/variation-question";
@@ -125,6 +125,62 @@ describe("what the message backs up", () => {
     expect(verifyChanges({ variations: ["24 Inch", "Blue"] }, "Can you add Blue variant to the wig product you drafted?", { options: [], variations: ["24 Inch"] }))
       .toEqual({ changes: { variations: ["24 Inch", "Blue"] }, dropped: [] });
     expect(verifyChanges({ variations: ["Huge"] }, "make it Large", { options: [], variations: [] })).toEqual({ changes: {}, dropped: ["variations"] });
+  });
+
+  // The owner's web chat, 2026-10-07, answering "What variation(s) do you have?".
+  const BODYSUIT_MSG = "Price: 130gh \nSizes: Large, Medium, Small.\nColors: cream, black and brown";
+
+  it("takes only the sizes the seller named, never the category's whole list", () => {
+    const options = ["S", "M", "L", "XS", "XXL", "XS AB", "S-M", "L/XL", "ONE SIZE FITS ALL", "EU XS", "UK 4"];
+    // The AI sent every option back; only the three named stay.
+    expect(verifyChanges({ variations: options }, BODYSUIT_MSG, { options, variations: [] }).changes).toEqual({ variations: ["S", "M", "L"] });
+    // "it's" isn't an "S".
+    expect(verifyChanges({ variations: ["S"] }, "it's lovely", { options, variations: [] }).changes).toEqual({});
+    expect(verifyChanges({ variations: ["L"] }, "change the variation to 'L'", { options, variations: [] }).changes).toEqual({ variations: ["L"] });
+  });
+
+  // Owner, 2026-10-07: "what if it was a different word with its
+  // interpretation in the variation list acceptable for that category".
+  it("takes the AI's reading of the seller's words as one of the category's options, checked both ways", () => {
+    const options = ["XS", "S", "M", "L", "XL", "ONE SIZE FITS ALL", "EU 40", "EU 42", "UK 10", "3-4 Years", "1L", "Black and White"];
+    const known = { options, variations: [] };
+    const pairs = (...p: [string, string][]) => ({ variations: p.map(([said, option]) => ({ said, option })) });
+    expect(verifyChanges(pairs(["free size", "ONE SIZE FITS ALL"]), "it's free size", known).changes).toEqual({ variations: ["ONE SIZE FITS ALL"] });
+    expect(verifyChanges(pairs(["size 42", "EU 42"], ["size 40", "EU 40"]), "she has size 40 and size 42", known).changes).toEqual({ variations: ["EU 42", "EU 40"] });
+    expect(verifyChanges(pairs(["ages 3 to 4", "3-4 Years"]), "for ages 3 to 4", known).changes).toEqual({ variations: ["3-4 Years"] });
+    expect(verifyChanges(pairs(["one litre", "1L"]), "one litre bottle", known).changes).toEqual({ variations: ["1L"] });
+    expect(verifyChanges(pairs(["black & white", "Black and White"]), "black & white", known).changes).toEqual({ variations: ["Black and White"] });
+    // An option that isn't on the list, or words the seller didn't write, aren't taken.
+    expect(verifyChanges(pairs(["free size", "Free Size"]), "it's free size", known)).toEqual({ changes: {}, dropped: ["variations"] });
+    expect(verifyChanges(pairs(["extra small", "XS"]), "make it large", known)).toEqual({ changes: {}, dropped: ["variations"] });
+    // One phrase read as the whole list: none of it.
+    expect(verifyChanges(pairs(...options.map((o): [string, string] => ["sizes", o])), "sizes please", known)).toEqual({ changes: {}, dropped: ["variations"] });
+    // One phrase listing three is three; a range can be several.
+    expect(verifyChanges(pairs(["Large, Medium, Small", "L"], ["Large, Medium, Small", "M"], ["Large, Medium, Small", "S"]), "Sizes: Large, Medium, Small", known).changes)
+      .toEqual({ variations: ["L", "M", "S"] });
+    expect(verifyChanges(pairs(["S to XL", "S"], ["S to XL", "M"], ["S to XL", "L"], ["S to XL", "XL"]), "S to XL", known).changes)
+      .toEqual({ variations: ["S", "M", "L", "XL"] });
+  });
+
+  it("keeps the seller's own colour words when the AI renames them", () => {
+    expect(verifyChanges({ color: "Beige, Black, Brown" }, BODYSUIT_MSG, { options: [], variations: [] }))
+      .toEqual({ changes: { color: "cream, black and brown" }, dropped: [] });
+    expect(verifyChanges({ color: "Beige" }, "make it nicer", { options: [], variations: [] }).dropped).toEqual(["colour"]);
+  });
+
+  it("a sentence isn't a field to change", () => {
+    expect(verifyChanges({ other: "Don't list tbis again pls" }, "Don't list tbis again pls", { options: [], variations: [] }).changes).toEqual({});
+    expect(verifyChanges({ other: "material" }, "change the material", { options: [], variations: [] }).changes).toEqual({ other: "material" });
+  });
+
+  it("the new values given as the product's name don't make it another product", () => {
+    expect(saidIsValues("Large, Medium, Small.", { variations: ["Large", "Medium", "Small"], color: "cream, black and brown" })).toBe(true);
+    expect(saidIsValues("gold medal", { price: 25 })).toBe(false);
+    const BODYSUIT = product(1, "3-Piece Thong Bodysuit - Seamless, Tummy Control, Adjustable Straps", { options: SIZES });
+    const first = '{"type":"edit","edits":[{"products":[1],"said":"Large, Medium, Small.","changes":{"variations":["Large","Medium","Small"],"color":"cream, black and brown"},"ask":false}]}';
+    expect(parseAction(first, BODYSUIT_MSG, [BODYSUIT], assistantLinks())).toEqual({
+      type: "edit", edits: [{ seqs: [1], changes: { variations: ["Large", "Medium", "Small"], color: "cream, black and brown" }, ask: false }], dropped: [],
+    });
   });
 
   it("a size's name becomes the category's own spelling of it, both ways", () => {
@@ -740,5 +796,48 @@ describe("the chat's billed commands, understood (owner, 2026-10-07)", () => {
     expect(aiPrompts[0]).toContain("2 credits each");
     expect(aiPrompts[0]).toContain('{"type":"health_report"}');
     expect(aiPrompts[0]).toContain("Only polish, the report and confirmed changes to live products cost credits");
+  });
+});
+
+// The owner's web chat, 2026-10-07: the bot asked "What variation(s) do you
+// have?" for a drafted bodysuit, and the answer carried the price, the sizes
+// and the colours. It was refused once ("isn't one of the drafts here") and
+// then set all 54 of the category's sizes.
+describe("one message with a draft's price, sizes and colours", () => {
+  const MSG = "Price: 130gh \nSizes: Large, Medium, Small.\nColors: cream, black and brown";
+  const asked = { listingId: "l1", field: "__variation" };
+  const session = () =>
+    ({ phoneNumber: "233", userId: "seller", state: "awaiting_confirmation", batchId: "b1", lastSubmittedBatchId: null, awaitingValueFor: asked }) as unknown as WhatsAppSession;
+
+  beforeEach(() => {
+    db.tables.listings = [{
+      id: "l1", user_id: "seller", whatsapp_batch_id: "b1", whatsapp_seq: 1, status: "draft", category_code: 100,
+      title: "3-Piece Thong Bodysuit - Seamless, Tummy Control, Adjustable Straps", selling_price: 130, color: "Beige, Black, Brown",
+    }];
+    db.tables.variants = [];
+    db.tables.whatsapp_sessions = [{ phone_number: "233", user_id: "seller", state: "awaiting_confirmation", awaiting_value_for: asked }];
+  });
+
+  it("sets the sizes it names and the colours in the seller's words, and closes the size question", async () => {
+    aiReplies.push('{"type":"edit","edits":[{"products":[1],"said":"Large, Medium, Small.","changes":{"variations":["Large","Medium","Small"],"color":"cream, black and brown"},"ask":false}]}');
+    expect(await runAssistant("seller", "233", session(), MSG, "review")).toBe("handled");
+    expect((db.tables.variants as { variation: string }[]).map((v) => v.variation)).toEqual(["L", "M", "S"]);
+    expect(db.tables.listings[0].color).toBe("cream, black and brown");
+    expect(db.tables.whatsapp_sessions[0].awaiting_value_for).toBeNull();
+    expect(sent.at(-1)!.body).not.toContain("isn't one of the drafts");
+  });
+
+  it("saves the options the AI matched the seller's words to", async () => {
+    aiReplies.push('{"type":"edit","edits":[{"products":[1],"said":null,"changes":{"variations":[{"said":"Large","option":"L"},{"said":"Medium","option":"M"},{"said":"Small","option":"S"}]},"ask":false}]}');
+    await runAssistant("seller", "233", session(), MSG, "review");
+    expect((db.tables.variants as { variation: string }[]).map((v) => v.variation)).toEqual(["L", "M", "S"]);
+    expect(db.tables.whatsapp_sessions[0].awaiting_value_for).toBeNull();
+  });
+
+  it("the AI's copy of every option still sets only the three", async () => {
+    aiReplies.push('{"type":"edit","edits":[{"products":[1],"said":"3-Piece Thong Bodysuit","changes":{"variations":["S","M","L","XL","XXL"],"color":"Beige, Black, Brown"},"ask":false}]}');
+    await runAssistant("seller", "233", session(), MSG, "review");
+    expect((db.tables.variants as { variation: string }[]).map((v) => v.variation)).toEqual(["S", "M", "L"]);
+    expect(db.tables.listings[0].color).toBe("cream, black and brown");
   });
 });

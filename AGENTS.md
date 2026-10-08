@@ -1971,6 +1971,43 @@ improvement global".
   - `cleanReply` turns the model's `**bold**` into WhatsApp's `*bold*` and
     drops `#` headings.
 
+### A draft's price, sizes and colours in one message (owner, 2026-10-07/08)
+
+The owner's web chat: the bot asked "What variation(s) do you have?" for a
+drafted bodysuit (category with 54 size options) and the answer was
+"Price: 130gh / Sizes: Large, Medium, Small. / Colors: cream, black and
+brown". The AI read it twice and both failed:
+
+- First it put the sizes in the edit's `said` (the words for WHICH
+  product), so the edit was refused as "isn't one of the drafts here".
+  Now `saidIsValues` ignores a `said` made only of the change's own values,
+  and the prompt says `said` is never the new values.
+- Then it sent all 54 of the category's options as the variations, and
+  verifyChanges took any listed option as backed. Now a variation is backed
+  only when the message says it: written in it, a clothing size name for it
+  (`sizeNamedIn`: "Large" for "L"), a current variation (adding), or a
+  checked pair (next point).
+- **The AI matches the seller's words to the category's options** (owner:
+  "what if it was a different word with its interpretation in the variation
+  list ... is the AI able to match it"): where the category lists options,
+  the AI sends each variation as `{"said","option"}` ("free size" → One
+  Size, "size 42" → EU 42, "ages 3 to 4" → 3-4 Years). Kept only when
+  `said` is in the message and `option` is on the list; one phrase stands
+  for one option, one per item it lists ("Large, Medium, Small"), or up to
+  8 for a range ("S to XL"); a phrase read as more is dropped whole. The
+  prompt now shows up to 120 options (was 40). In review, a draft's sizes
+  (even answering the bot's question) are an edit, not "step".
+- The AI wrote "cream" as "Beige": a colour not in the message falls back
+  to the seller's own words on their "colour:" line.
+- Saving sizes this way closes the bot's open variation question
+  (`awaitingValueFor`). Options are saved one by one, so an option with
+  "and" in it stays whole.
+- `other` (a field chat can't change) must be a field name of up to 3
+  words: "Don't list tbis again pls" came back as one. That message, mid-
+  drafting, is now `restart` (asks before stopping), per a prompt example.
+- `wordInMessage`: an apostrophe joins letters ("it's" has no "S"), but a
+  quoted 'L' still counts.
+
 ### The chat knows the website (owner, 2026-10-07)
 
 "Let the chat know our site very well ... connect WhatsApp, use extension,
