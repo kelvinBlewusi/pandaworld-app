@@ -2,7 +2,7 @@
  * WhatsApp and Jumia connections as conditions on buying credits and on the
  * Chrome extension's autofill (owner, 2026-10-07):
  *
- *   - Buying any pack, Starter included, needs WhatsApp linked and Jumia
+ *   - Buying any pack needs WhatsApp linked and Jumia
  *     connected ("block credit purchase for 80 credits to 940 credits
  *     unless they have Jumia connected and WhatsApp linked ... to be able
  *     to purchase it you must link your WhatsApp and Jumia"), so a big pack
@@ -11,7 +11,7 @@
  *     (GET /api/extension/credits/eligibility).
  *   - Autofill on Standard, Pro or Business (the pack bought last) needs
  *     both still connected; the seller is told which one to connect. Free
- *     sign-up credits and Starter autofill whatever is connected ("the only
+ *     sign-up credits (and Starter, no longer sold) autofill whatever is connected ("the only
  *     pack that works for the extension even in disconnection is the 80
  *     credits pack"; "free users must not need to connect the WhatsApp and
  *     Jumia to use extension").
@@ -67,7 +67,8 @@ export async function purchaseBlock(userId: string): Promise<{ message: string; 
 export async function autofillBlock(userId: string): Promise<{ message: string; missing: Connection[] } | null> {
   if (await isUnmetered(userId)) return null;
   const pack = await currentPack(userId).catch(() => null);
-  if (!pack || packRank(pack.id) <= packRank("starter")) return null;
+  // Free credits, and a pack no longer sold (Starter), autofill whatever is connected.
+  if (!pack || packRank(pack.id) < packRank("standard")) return null;
   const missing = await missingConnections(userId);
   if (missing.length === 0) return null;
   const name = pack.id.charAt(0).toUpperCase() + pack.id.slice(1);

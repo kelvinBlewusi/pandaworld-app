@@ -536,6 +536,20 @@ read). It replaced the `FREE_FOR_ALL_MODE` constant.
   against what each run earns, and can top up low balances to the current
   welcome amount.
 
+**Starter is no longer sold (2026-10-08;** owner: "let's remove the 35 GHS
+PACK"). `CREDIT_PACKS` is Standard (GHS 70 = 210), Pro (GHS 140 = 440) and
+Business (GHS 280 = 940); "From GHS 70" on the home page and pricing meta
+follows from it, and /pricing shows Free plus three packs (4 columns).
+Starter (80 credits for GHS 35) lives on in `RETIRED_PACKS`: a past
+purchase still reads as Starter (the only one was the owner's admin test,
+2026-10-02), with packRank -1, so it has what free credits have and
+autofills with nothing connected (`autofillBlock` now tests `< standard`).
+Checkout (`getCreditPack`) refuses it; a payment for it is still credited
+(`getPaidCreditPack` in paystack-purchase.ts), so a Starter checkout opened
+before the change and paid after isn't lost. Terms and the chat's site
+guide no longer name Starter. Don't add Starter back to CREDIT_PACKS to
+resolve old purchases: that would put it on sale again.
+
 **Prices changed 2026-10-07** (see "Pricing, 2026-10-07" under Outstanding
 work): Starter 80 credits, autofill 2, 12 free credits, listing price by
 country, WhatsApp services charged. The paragraph below is the 2026-10-01

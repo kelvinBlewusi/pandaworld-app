@@ -25,24 +25,25 @@ import {
 } from "@/lib/billing/extension-credits";
 import { hasFeature } from "@/lib/billing/features";
 import { _resetBillingModeCache } from "@/lib/billing/mode";
-import { FREE_SIGNUP_CREDITS, LISTING_CREDIT_COST, getCreditPack } from "@/lib/billing/credit-packs";
+import { FREE_SIGNUP_CREDITS, LISTING_CREDIT_COST, RETIRED_PACKS, getCreditPack } from "@/lib/billing/credit-packs";
 
 const SECRET = "sk_test_flow";
 const ADMIN = "user_admin";
 const SELLER = "user_seller";
-const starter = getCreditPack("starter")!;
+// The smallest pack on sale (Starter was retired 2026-10-08).
+const pack = getCreditPack("standard")!;
 
 const ledger = () => db.tables.extension_credit_transactions ?? [];
 const purchases = () => ledger().filter((t) => t.type === "purchase");
 
-/** The transaction Paystack reports for a Starter pack bought through our checkout. */
-function charge(userId: string, reference = "pwcr_c192d83e8b1e4ec4") {
+/** The transaction Paystack reports for a pack bought through our checkout. */
+function charge(userId: string, reference = "pwcr_c192d83e8b1e4ec4", bought = pack) {
   return {
     reference,
     status: "success",
-    amount: starter.amountGhs * 100,
+    amount: bought.amountGhs * 100,
     currency: "GHS",
-    metadata: { type: "extension_credits", user_id: userId, credits: starter.credits, pack: starter.id },
+    metadata: { type: "extension_credits", user_id: userId, credits: bought.credits, pack: bought.id },
   };
 }
 
@@ -72,28 +73,28 @@ beforeEach(() => {
   global.fetch = jest.fn();
 });
 
-describe("a seller buying the Starter pack", () => {
+describe("a seller buying a pack (Standard)", () => {
   it("adds it to the welcome credits once, whichever of webhook and verify comes first", async () => {
     expect(await getOrCreateCreditBalance(SELLER)).toBe(FREE_SIGNUP_CREDITS); // signed up while billing is on
 
     expect((await paystackWebhook(charge(SELLER))).status).toBe(200);
-    expect(await getOrCreateCreditBalance(SELLER)).toBe(FREE_SIGNUP_CREDITS + starter.credits);
+    expect(await getOrCreateCreditBalance(SELLER)).toBe(FREE_SIGNUP_CREDITS + pack.credits);
 
     const back = await verifyRedirect(charge(SELLER));
-    expect(back).toEqual({ status: 200, body: { success: true, balance: FREE_SIGNUP_CREDITS + starter.credits, credited: starter.credits } });
+    expect(back).toEqual({ status: 200, body: { success: true, balance: FREE_SIGNUP_CREDITS + pack.credits, credited: pack.credits } });
     expect((await paystackWebhook(charge(SELLER))).status).toBe(200); // Paystack retrying
 
-    expect(await getOrCreateCreditBalance(SELLER)).toBe(FREE_SIGNUP_CREDITS + starter.credits);
+    expect(await getOrCreateCreditBalance(SELLER)).toBe(FREE_SIGNUP_CREDITS + pack.credits);
     expect(purchases()).toEqual([
-      expect.objectContaining({ user_id: SELLER, amount: starter.credits, balance_after: FREE_SIGNUP_CREDITS + starter.credits, reference: "pwcr_c192d83e8b1e4ec4" }),
+      expect.objectContaining({ user_id: SELLER, amount: pack.credits, balance_after: FREE_SIGNUP_CREDITS + pack.credits, reference: "pwcr_c192d83e8b1e4ec4" }),
     ]);
   });
 
   it("credits it when the seller's return reaches /verify before Paystack's webhook", async () => {
     await getOrCreateCreditBalance(SELLER);
-    expect((await verifyRedirect(charge(SELLER))).body.balance).toBe(FREE_SIGNUP_CREDITS + starter.credits);
+    expect((await verifyRedirect(charge(SELLER))).body.balance).toBe(FREE_SIGNUP_CREDITS + pack.credits);
     expect((await paystackWebhook(charge(SELLER))).status).toBe(200);
-    expect(await getOrCreateCreditBalance(SELLER)).toBe(FREE_SIGNUP_CREDITS + starter.credits);
+    expect(await getOrCreateCreditBalance(SELLER)).toBe(FREE_SIGNUP_CREDITS + pack.credits);
     expect(purchases()).toHaveLength(1);
   });
 
@@ -103,33 +104,44 @@ describe("a seller buying the Starter pack", () => {
     const left = FREE_SIGNUP_CREDITS - 6 * LISTING_CREDIT_COST;
 
     await paystackWebhook(charge(SELLER));
-    expect(await getOrCreateCreditBalance(SELLER)).toBe(left + starter.credits);
+    expect(await getOrCreateCreditBalance(SELLER)).toBe(left + pack.credits);
   });
 
   it("gives a seller with no balance yet the welcome credits too, recorded before the purchase", async () => {
     await paystackWebhook(charge(SELLER)); // signed up while billing was off: no ledger row
-    expect(await getOrCreateCreditBalance(SELLER)).toBe(FREE_SIGNUP_CREDITS + starter.credits);
+    expect(await getOrCreateCreditBalance(SELLER)).toBe(FREE_SIGNUP_CREDITS + pack.credits);
     expect(ledger().map((t) => [t.type, t.amount, t.balance_after])).toEqual([
       ["grant", FREE_SIGNUP_CREDITS, FREE_SIGNUP_CREDITS],
-      ["purchase", starter.credits, FREE_SIGNUP_CREDITS + starter.credits],
+      ["purchase", pack.credits, FREE_SIGNUP_CREDITS + pack.credits],
     ]);
   });
 
-  it("shows in their notifications and plan, unlocking only what Starter includes", async () => {
+  it("shows in their notifications and plan, unlocking what Standard includes", async () => {
     await getOrCreateCreditBalance(SELLER);
     await paystackWebhook(charge(SELLER));
 
-    expect((await getRecentTransactions(SELLER)).map((t) => t.description)).toContain(`Purchased ${starter.credits} credits (starter pack)`);
+    expect((await getRecentTransactions(SELLER)).map((t) => t.description)).toContain(`Purchased ${pack.credits} credits (standard pack)`);
+    expect((await getMostRecentCreditPack(SELLER))?.id).toBe("standard");
+    expect(await hasFeature(SELLER, "shipping_labels")).toBe(true); // Standard and up
+    expect(await hasFeature(SELLER, "order_alerts")).toBe(false); // Pro and up
+  });
+
+  // Owner, 2026-10-08: "let's remove the 35 GHS PACK". A Starter checkout
+  // opened before that and paid after still gets its credits.
+  it("credits a Starter checkout paid after Starter was retired, with no pack features", async () => {
+    const starter = RETIRED_PACKS.find((p) => p.id === "starter")!;
+    await getOrCreateCreditBalance(SELLER);
+    expect((await paystackWebhook(charge(SELLER, "pwcr_old_starter", starter))).status).toBe(200);
+    expect(await getOrCreateCreditBalance(SELLER)).toBe(FREE_SIGNUP_CREDITS + starter.credits);
     expect((await getMostRecentCreditPack(SELLER))?.id).toBe("starter");
-    expect(await hasFeature(SELLER, "shipping_labels")).toBe(false); // Standard and up
-    expect(await hasFeature(SELLER, "qc_fix")).toBe(false); // Standard and up
+    expect(await hasFeature(SELLER, "shipping_labels")).toBe(false);
   });
 
   it("is spent from like any other credits", async () => {
     await getOrCreateCreditBalance(SELLER);
     await paystackWebhook(charge(SELLER));
     expect(await deductCredits(SELLER, LISTING_CREDIT_COST, "Extension autofill"))
-      .toEqual({ ok: true, balance: FREE_SIGNUP_CREDITS + starter.credits - LISTING_CREDIT_COST });
+      .toEqual({ ok: true, balance: FREE_SIGNUP_CREDITS + pack.credits - LISTING_CREDIT_COST });
   });
 });
 
@@ -154,7 +166,7 @@ describe("refused", () => {
 describe("an admin buying a pack (the 2026-10-02 test payment)", () => {
   it("stores the credits but keeps the admin unmetered, with nothing in the bell", async () => {
     await paystackWebhook(charge(ADMIN));
-    expect(db.tables.extension_credits).toEqual([expect.objectContaining({ user_id: ADMIN, balance: FREE_SIGNUP_CREDITS + starter.credits })]);
+    expect(db.tables.extension_credits).toEqual([expect.objectContaining({ user_id: ADMIN, balance: FREE_SIGNUP_CREDITS + pack.credits })]);
     expect(await getOrCreateCreditBalance(ADMIN)).toBe(Infinity);
     expect(await getRecentTransactions(ADMIN)).toEqual([]);
   });

@@ -12,11 +12,11 @@ export interface CreditPack {
 }
 
 /**
- * Pricing since 2026-10-07: Starter is 80 credits for GHS 35 (GHS 0.44 a
- * credit; it was 100), the other packs as set 2026-10-01 (GHS 0.30 to 0.33
- * a credit). A live WhatsApp / web listing and an extension autofill are 2
+ * Pricing since 2026-10-08: Standard, Pro and Business as set 2026-10-01
+ * (GHS 0.30 to 0.33 a credit); Starter (80 credits for GHS 35, GHS 0.44 a
+ * credit) is no longer sold. A live WhatsApp / web listing and an extension autofill are 2
  * credits each (3 and 5 in Nigeria and Morocco, COUNTRY_LISTING_CREDIT_COST):
- * GHS 0.88 on Starter, about GHS 0.60 on Business. An AI image is 4
+ * about GHS 0.67 on Standard, GHS 0.60 on Business. An AI image is 4
  * credits. Launch pricing, 2026-10-01: 1 credit = GHS 0.35 at the Starter
  * price, a listing GHS 0.70, an autofill (1 credit) GHS 0.35. Costs it was set against
  * (per live WhatsApp listing, measured): AI drafting ~GHS 0.05, WhatsApp
@@ -28,11 +28,21 @@ export interface CreditPack {
  * 30 / 50 / 100), 2026-09-28 to 2026-10-01.
  */
 export const CREDIT_PACKS: CreditPack[] = [
-  // 80 credits for GHS 35 from 2026-10-07 (owner: "reduce the 100 credits to 80 for same price").
-  { id: "starter",  credits: 80,  amountGhs: 35 },
+  // Starter (80 credits for GHS 35) stopped being sold on 2026-10-08 (owner:
+  // "let's remove the 35 GHS PACK"): see RETIRED_PACKS.
   { id: "standard", credits: 210, amountGhs: 70 },
   { id: "pro",      credits: 440, amountGhs: 140 },
   { id: "business", credits: 940, amountGhs: 280 },
+];
+
+/**
+ * Packs no longer sold, still named for the sellers who bought one (the
+ * dashboard's "Plan" pill, help). Not in CREDIT_PACKS, so packRank is -1:
+ * a seller whose last pack is one of these has what free credits have
+ * (Starter's features were the same), and autofill with nothing connected.
+ */
+export const RETIRED_PACKS: CreditPack[] = [
+  { id: "starter", credits: 80, amountGhs: 35 },
 ];
 
 /** Pack id shown with the "Popular" badge in the Buy Credits modal. */
@@ -62,7 +72,7 @@ export function packRank(id: string | null | undefined): number {
  * listed as a pack's own (packFeatures).
  *
  * The owner's plan of 2026-10-07 (later the same day): free credits get
- * what Starter gets ("same as Starter"): listing, the chat, orders (pack,
+ * what Starter got ("same as Starter"; Starter retired 2026-10-08): listing, the chat, orders (pack,
  * ready to ship, cancel) and reading their shop. Changes to live Jumia
  * products from the chat (`shop_changes`) start at Standard ("they can not
  * make changes to listings on Jumia via the chat"), with labels and QC;
@@ -113,8 +123,18 @@ export function everyoneFeatures(): PackFeature[] {
   return PACK_FEATURES.filter((f) => f.minPack === EVERYONE);
 }
 
+/** A pack on sale (what a checkout can start). */
 export function getCreditPack(id: string): CreditPack | undefined {
   return CREDIT_PACKS.find((p) => p.id === id);
+}
+
+/**
+ * A pack a payment can be for: on sale, or retired. A checkout opened
+ * before a pack was retired and paid after is still credited
+ * (lib/billing/paystack-purchase.ts), against the money paid.
+ */
+export function getPaidCreditPack(id: string): CreditPack | undefined {
+  return CREDIT_PACKS.find((p) => p.id === id) ?? RETIRED_PACKS.find((p) => p.id === id);
 }
 
 /**
@@ -122,7 +142,8 @@ export function getCreditPack(id: string): CreditPack | undefined {
  * until 2026-09-28, 120/200/400 until 2026-10-01, Starter 100 until
  * 2026-10-07) — kept so a purchase
  * transaction recorded back then still resolves to the nearest pack today
- * instead of showing no "Plan" pill. (100 is today's Starter as well.)
+ * instead of showing no "Plan" pill. Starter (80, and 100 before) is a
+ * retired pack now (RETIRED_PACKS).
  */
 const LEGACY_CREDIT_AMOUNTS: Record<number, string> = {
   100: "starter",
@@ -139,10 +160,8 @@ const LEGACY_CREDIT_AMOUNTS: Record<number, string> = {
  * extension-credits.ts's getMostRecentCreditPack()).
  */
 export function getCreditPackByCredits(credits: number): CreditPack | undefined {
-  return (
-    CREDIT_PACKS.find((p) => p.credits === credits) ??
-    CREDIT_PACKS.find((p) => p.id === LEGACY_CREDIT_AMOUNTS[credits])
-  );
+  const all = [...CREDIT_PACKS, ...RETIRED_PACKS];
+  return all.find((p) => p.credits === credits) ?? all.find((p) => p.id === LEGACY_CREDIT_AMOUNTS[credits]);
 }
 
 /**

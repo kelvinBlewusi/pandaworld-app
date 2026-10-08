@@ -264,7 +264,7 @@ export async function POST(req: Request) {
   }
 
   // Standard, Pro and Business autofill with WhatsApp and Jumia connected;
-  // free credits and Starter whatever is connected (owner, 2026-10-07,
+  // free credits whatever is connected (owner, 2026-10-07,
   // lib/billing/connections.ts). The panel shows `error` as it is.
   const blocked = await autofillBlock(userId);
   if (blocked) {

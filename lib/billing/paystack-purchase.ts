@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { getCreditPack } from "@/lib/billing/credit-packs";
+import { getPaidCreditPack } from "@/lib/billing/credit-packs";
 
 /** The parts of a Paystack transaction a credit-pack purchase reads. */
 export interface PaystackTransaction {
@@ -21,7 +21,8 @@ export interface PaystackTransaction {
  * fail this; the error says so and an admin can credit it by hand.
  */
 export function creditsPaidFor(tx: PaystackTransaction): { ok: true; credits: number; packId: string } | { ok: false; error: string } {
-  const pack = getCreditPack(String(tx.metadata?.pack ?? ""));
+  // A retired pack (Starter) still counts: its checkout may have opened before it was retired.
+  const pack = getPaidCreditPack(String(tx.metadata?.pack ?? ""));
   const credits = Number(tx.metadata?.credits) || 0;
   if (!pack || credits <= 0) return { ok: false, error: `unknown pack "${String(tx.metadata?.pack)}" or credits "${String(tx.metadata?.credits)}"` };
   if (tx.currency !== "GHS") return { ok: false, error: `paid in ${tx.currency ?? "no currency"}, not GHS` };

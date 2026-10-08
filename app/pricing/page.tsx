@@ -163,7 +163,7 @@ export default async function PricingPage() {
           <p className="mt-3 max-w-3xl text-sm text-zinc-600">
             Every pack includes everything on the Free card. The bigger packs add what&apos;s listed on each card.
           </p>
-          <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-4">
             {/* The free credits as a card of their own, first (owner, 2026-10-07: "in pricing add the free price cards"). */}
             <FreeCard
               listingCost={listingCost}

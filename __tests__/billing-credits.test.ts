@@ -29,7 +29,7 @@ import {
   refundService,
 } from "@/lib/billing/extension-credits";
 import { isBillingEnabled, setBillingEnabled, _resetBillingModeCache } from "@/lib/billing/mode";
-import { CREDIT_PACKS, FREE_SIGNUP_CREDITS, LISTING_CREDIT_COST, LIVE_LISTING_CREDIT_COST, getCreditPackByCredits, listingCostFor, packReach } from "@/lib/billing/credit-packs";
+import { CREDIT_PACKS, FREE_SIGNUP_CREDITS, LISTING_CREDIT_COST, LIVE_LISTING_CREDIT_COST, getCreditPack, getCreditPackByCredits, listingCostFor, packReach } from "@/lib/billing/credit-packs";
 import { summarizeCosts, searchOverageUsd } from "@/lib/billing/costs";
 
 const ADMIN = "user_admin";
@@ -292,14 +292,15 @@ describe("costs", () => {
     expect(searchOverageUsd(5_100)).toBeCloseTo(1.4, 10);
   });
 
-  // Launch pricing, 2026-10-01: GHS 0.70 a live listing in the Starter
-  // pack, at most 15% less in bigger ones (costs are ~GHS 0.25 a listing).
-  it("prices a live listing at about GHS 0.88 on Starter (80 credits, 2026-10-07), less in each bigger pack", () => {
+  // Starter (80 credits for GHS 35, GHS 0.88 a listing) stopped being sold
+  // on 2026-10-08 (owner: "let's remove the 35 GHS PACK").
+  it("sells Standard, Pro and Business, each listing cheaper than the last, Starter no longer", () => {
+    expect(CREDIT_PACKS.map((p) => [p.id, p.credits, p.amountGhs])).toEqual([["standard", 210, 70], ["pro", 440, 140], ["business", 940, 280]]);
     const perListing = CREDIT_PACKS.map((p) => (p.amountGhs / p.credits) * LIVE_LISTING_CREDIT_COST);
-    expect(perListing[0]).toBeCloseTo(0.875, 10);
+    expect(perListing[0]).toBeCloseTo(0.667, 3);
     for (let i = 1; i < perListing.length; i++) expect(perListing[i]).toBeLessThan(perListing[i - 1]);
     expect(Math.min(...perListing)).toBeGreaterThan(0.59);
-    expect(CREDIT_PACKS.map((p) => [p.credits, p.amountGhs])).toEqual([[80, 35], [210, 70], [440, 140], [940, 280]]);
+    expect(getCreditPack("starter")).toBeUndefined();
   });
 
   it("says how far a pack goes, at the seller's listing price", () => {
@@ -307,7 +308,7 @@ describe("costs", () => {
     expect(packReach(210, 3)).toEqual({ autofills: 105, listings: 70 });
   });
 
-  it("a Starter bought at 100 credits before 2026-10-07 is still Starter", () => {
+  it("a Starter bought before it was retired (100 credits, then 80) is still Starter", () => {
     expect(getCreditPackByCredits(100)?.id).toBe("starter");
     expect(getCreditPackByCredits(80)?.id).toBe("starter");
   });
