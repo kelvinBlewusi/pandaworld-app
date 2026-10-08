@@ -96,6 +96,7 @@ import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPr
 import { answerLiveValue, answerPendingQuestion, assistantFor, plainQuickEdit, runAssistant, type AssistantOutcome, type Stage } from "@/lib/whatsapp/assistant";
 import { batchCreditRefusal, creditGate } from "@/lib/whatsapp/credit-gate";
 import { runChatCommand } from "@/lib/whatsapp/chat-commands";
+import { nudgePolishWorker, queuePolish } from "@/lib/whatsapp/chat-polish";
 
 /**
  * WhatsApp chatbot, Stage 4: multi-product batches, entirely in chat.
@@ -2758,6 +2759,8 @@ export interface FormProduct {
   sizes:    string;
   colour:   string;
   notes:    string;
+  /** "Polish photos" on: its photos are queued for polishing as it's made (lib/whatsapp/chat-polish.ts). */
+  polish?:  boolean;
 }
 
 /** A form product's details as the notes a seller would type with its photos. */
@@ -2816,7 +2819,7 @@ export async function startBatchFromForm(
   const currency = await shopCurrencyForUser(userId);
   const links = photos.flat();
   const lines = products.map((p, i) =>
-    [`${i + 1}. ${currency} ${p.price}`, p.quantity ? `qty ${p.quantity}` : "", p.sizes.trim(), p.colour.trim()].filter(Boolean).join(" · "));
+    [`${i + 1}. ${currency} ${p.price}`, p.quantity ? `qty ${p.quantity}` : "", p.sizes.trim(), p.colour.trim(), p.polish ? "✨ polish" : ""].filter(Boolean).join(" · "));
   await recordInboundMessage(
     phoneNumber, messageId, "image",
     `🧾 ${products.length} product${products.length === 1 ? "" : "s"} from the form\n${lines.join("\n")}`,
@@ -2844,9 +2847,15 @@ export async function startBatchFromForm(
     await applyNotes(slot.listingId, formNotes(p));
     // The fields as given, whatever the notes' reading made of them.
     await db.from("listings").update({ selling_price: p.price, ...(p.quantity ? { quantity: p.quantity } : {}) }).eq("id", slot.listingId);
+    // "Polish photos" (owner, 2026-10-08: "turn rough images into polished
+    // ones replacing the old one during draft"): queued now, made by the
+    // polish worker alongside the drafting, charged when they're made; the
+    // product isn't submitted until they're on it.
+    if (p.polish) await queuePolish(slot.listingId);
   }
 
   await startBatchAnalysis(phoneNumber, userId, await getOrCreateSession(userId, phoneNumber));
+  if (products.some((p) => p.polish)) await nudgePolishWorker();
   return { ok: true };
 }
 

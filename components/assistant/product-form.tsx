@@ -9,21 +9,24 @@
  * guessed from the order of chat messages: no count question, no Done, and a
  * price can't land on the wrong product. "Draft" sends them all at once
  * (POST /api/listing-assistant/products); the chat then shows them as one
- * message and reports the drafting as usual.
+ * message and reports the drafting as usual. "Polish photos" on a card
+ * (owner, 2026-10-08: "a polish before draft button ... turn rough images
+ * into polished ones replacing the old one during draft") queues that
+ * product's photos for polishing as it's made (lib/whatsapp/chat-polish.ts).
  */
 
 import { useEffect, useRef, useState } from "react";
-import { ImagePlus, Loader2, Plus, Trash2, X } from "lucide-react";
+import { ImagePlus, Loader2, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /** Jumia takes at most 8 photos a product. */
 const MAX_PHOTOS = 8;
 
 interface Photo { key: string; preview: string; mediaId?: string; uploading: boolean; error?: string }
-interface Draft { key: string; photos: Photo[]; price: string; quantity: string; sizes: string; colour: string; notes: string }
+interface Draft { key: string; photos: Photo[]; price: string; quantity: string; sizes: string; colour: string; notes: string; polish: boolean }
 
 const newKey = () => crypto.randomUUID();
-const blank = (): Draft => ({ key: newKey(), photos: [], price: "", quantity: "", sizes: "", colour: "", notes: "" });
+const blank = (): Draft => ({ key: newKey(), photos: [], price: "", quantity: "", sizes: "", colour: "", notes: "", polish: false });
 
 /** What a card still needs before the batch can go, or null. */
 function missing(d: Draft): string | null {
@@ -43,9 +46,11 @@ async function upload(file: File): Promise<{ mediaId: string } | { error: string
   return res?.ok && data.mediaId ? { mediaId: data.mediaId } : { error: data.error ?? "Didn't upload" };
 }
 
-export function ProductForm({ currency, maxProducts, initialCount = 1, initialPhotos = [], onClose, onSent }: {
+export function ProductForm({ currency, maxProducts, polishCost, initialCount = 1, initialPhotos = [], onClose, onSent }: {
   currency: string;
   maxProducts: number;
+  /** Credits a product's polish takes (POLISH_COST); none hides the option. */
+  polishCost?: number | null;
   /** Cards to start with: the count the seller gave in the chat. */
   initialCount?: number;
   /** Photos the seller just sent in the chat, already uploaded: product 1's. */
@@ -103,6 +108,7 @@ export function ProductForm({ currency, maxProducts, initialCount = 1, initialPh
 
   const problems = drafts.map(missing);
   const ready = drafts.length > 0 && problems.every((p) => p == null);
+  const polished = polishCost ? drafts.filter((d) => d.polish).length : 0;
 
   async function submit() {
     setTried(true);
@@ -119,6 +125,7 @@ export function ProductForm({ currency, maxProducts, initialCount = 1, initialPh
           price: Number(d.price),
           quantity: d.quantity.trim() ? Number(d.quantity) : null,
           sizes: d.sizes, colour: d.colour, notes: d.notes,
+          polish: Boolean(polishCost) && d.polish,
         })),
       }),
     }).catch(() => null);
@@ -152,6 +159,7 @@ export function ProductForm({ currency, maxProducts, initialCount = 1, initialPh
               n={i + 1}
               draft={d}
               currency={currency}
+              polishCost={polishCost ?? null}
               problem={tried ? problems[i] : null}
               canRemove={drafts.length > 1}
               onChange={(change) => patch(d.key, change)}
@@ -174,7 +182,9 @@ export function ProductForm({ currency, maxProducts, initialCount = 1, initialPh
         {error && <p className="border-t border-red-100 bg-red-50 px-4 py-2 text-sm text-red-700">{error}</p>}
         <div className="flex items-center justify-between gap-3 border-t border-zinc-100 bg-white px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
           <p className="min-w-0 text-xs text-zinc-500">
-            {drafts.length} product{drafts.length === 1 ? "" : "s"}{tried && !ready ? " · fill in what's marked" : ""}
+            {drafts.length} product{drafts.length === 1 ? "" : "s"}
+            {polished > 0 ? ` · ${polished} polished` : ""}
+            {tried && !ready ? " · fill in what's marked" : ""}
           </p>
           <button
             type="button"
@@ -191,10 +201,11 @@ export function ProductForm({ currency, maxProducts, initialCount = 1, initialPh
   );
 }
 
-function Card({ n, draft, currency, problem, canRemove, onChange, onPhotos, onRemovePhoto, onRemove }: {
+function Card({ n, draft, currency, polishCost, problem, canRemove, onChange, onPhotos, onRemovePhoto, onRemove }: {
   n: number;
   draft: Draft;
   currency: string;
+  polishCost: number | null;
   problem: string | null;
   canRemove: boolean;
   onChange: (change: Partial<Draft>) => void;
@@ -257,6 +268,28 @@ function Card({ n, draft, currency, problem, canRemove, onChange, onPhotos, onRe
         />
       </div>
       {draft.photos.some((p) => p.error) && <p className="mt-1 text-xs text-red-600">A photo didn&apos;t upload: remove it and add it again.</p>}
+
+      {polishCost ? (
+        <button
+          type="button"
+          role="switch"
+          aria-checked={draft.polish}
+          onClick={() => onChange({ polish: !draft.polish })}
+          className={cn(
+            "mt-3 flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors",
+            draft.polish ? "border-orange-300 bg-orange-50" : "border-zinc-200 hover:border-orange-200 hover:bg-orange-50/40",
+          )}
+        >
+          <Sparkles className={cn("h-4 w-4 shrink-0", draft.polish ? "text-orange-500" : "text-zinc-400")} />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-medium text-zinc-900">Polish photos <span className="font-normal text-zinc-500">· {polishCost} credits</span></span>
+            <span className="block text-xs text-zinc-500">4 clean photos made from yours (white background, angle, in use, close-up) replace them on the draft.</span>
+          </span>
+          <span className={cn("relative h-5 w-9 shrink-0 rounded-full transition-colors", draft.polish ? "bg-orange-500" : "bg-zinc-300")}>
+            <span className={cn("absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all", draft.polish ? "left-[18px]" : "left-0.5")} />
+          </span>
+        </button>
+      ) : null}
 
       <div className="mt-3 grid grid-cols-2 gap-3">
         <label className="block">

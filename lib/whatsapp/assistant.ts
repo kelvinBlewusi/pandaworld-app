@@ -74,6 +74,7 @@ import {
   proposeWarehouseShipped, type ReportKind,
 } from "@/lib/whatsapp/shop-insights";
 import type { LiveChange } from "@/lib/jumia/shop";
+import { MAX_NEEDS, answerResearch, parseNeeds, type ResearchNeed } from "@/lib/whatsapp/shop-research";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { assistantGate, assistantSwitchedOn } from "@/lib/whatsapp/assistant-limits";
 import { blankCodes, noteSellerMessage, sellerMemory } from "@/lib/whatsapp/seller-memory";
@@ -190,6 +191,8 @@ export type AssistantAction =
   /** The chat's billed commands (owner, 2026-10-07): run when asked, charged when they run. */
   | { type: "polish"; seq: number | null }
   | { type: "health_report" }
+  /** Several reads of their shop, answered together as asked (lib/whatsapp/shop-research.ts). */
+  | { type: "research"; needs: ResearchNeed[] }
   | { type: "note" }
   | { type: "unclear" };
 
@@ -204,6 +207,9 @@ const ORDER_STATUSES: Record<string, string> = {
   return: "RETURNED", failed: "FAILED", failed_delivery: "FAILED", pending: "PENDING", shipped: "SHIPPED", ready_to_ship: "READY_TO_SHIP",
   ready: "READY_TO_SHIP", rts: "READY_TO_SHIP",
 };
+
+/** An order status in the seller's or the AI's words ("cancelled", "ready to ship") as Jumia names it. */
+const asOrderStatus = (v: unknown) => (typeof v === "string" ? ORDER_STATUSES[v.toLowerCase().trim().replace(/[\s-]+/g, "_")] ?? null : null);
 
 const STATUS_WORDS: Record<string, string> = {
   draft:            "draft, not sent yet",
@@ -258,6 +264,7 @@ function capabilities(listingCost = LIVE_LISTING_CREDIT_COST): string {
     "- A live product's name, description, highlights or brand: the seller's own text, or rewritten by AI from what Jumia has now, shown before one tap. Jumia checks content changes again. Photos and category of live products are changed in Vendor Center.",
     "- Reports: best sellers, products with no sale, what runs out soon at the rate it sells, returns and failed deliveries, for the last 7, 30 or 90 days.",
     "- Payouts: the last Jumia payout and the statement not yet paid; every statement of the last 90 days; one statement's fees, refunds and balances. A message when Jumia pays: Pro and up.",
+    "- Questions that need several reads of their shop, answered together the way they ask: the last products they uploaded (with price, variations, stock, on or off, quality check, date added), products sorted or filtered (by price, stock, on sale, rejected, matching words), orders with what was in them, sales by product, payout statements, what they listed with PandaWorld; read from Jumia just now, free.",
     "- Before listing: whether a brand is on Jumia and allowed in a category; what a kind of product needs on Jumia (its category, the details asked, variation options, commission).",
     "- The shops under their Jumia account. Jumia's warehouse (for sellers who stock it): what it holds of a product, a delivery order into it (products and quantities, with a tap), and telling Jumia one has shipped with its tracking number.",
     "- Fees: what Jumia takes when one of their products sells (commission for its category, the per-item shipping contribution) and what they receive, at its price or a price they give.",
@@ -417,6 +424,7 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     "- A question about a product (is it live, on, active, approved, in stock, on sale?) is product_info, never live_change: only change a product when they ask for the change.",
     "- A change to many products by a rule (all, every, everything, a percentage) is bulk; to products they name one by one, live_change.",
     "- \"How many products are on / off / live\" is shop (the overview), never product_info.",
+    "- Products already in their shop (\"the last 10 products I uploaded\", \"a list of my products\", \"my newest items\") are research, never list or restart: those are only for listing new products now.",
     "- Sellers make typos (\"ordrs\" is orders, \"payed\" is paid, \"tun on\" is turn on) and write in many languages.",
     "- Insight, stats, analytics or how their shop is performing, without asking for a report or health check: shop (the overview, free). \"How is my shop doing?\" and a report or health check they ask for: health_report.",
     "- A bare number right after your own list of options picks that option (\"4\" after a list whose 4th line is shop insight is shop), not a count of products.",
@@ -480,6 +488,16 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '  the message>" or null} - tell Jumia a delivery order to its warehouse has shipped',
     '{"type":"credits"} - their credit balance (sent with a Buy credits button)',
     `{"type":"polish","product":<the product number from the message> or null} - polish a product's photos: ${PRODUCT_SHOT_COUNT} new product photos made from theirs (main on white, angle, lifestyle, detail), ${POLISH_CREDIT_COST} credits each`,
+    `{"type":"research","needs":[<up to ${MAX_NEEDS} of the reads below>]} - read their shop from Jumia and answer the question with what it shows,`,
+    '  organised as they ask. For a list or question no single action above answers: their newest or oldest products, a full list of',
+    '  products with prices or stock, products sorted or filtered, orders with their items, sales by product, or several of these at once.',
+    '  Reads (all read-only): {"source":"products","sort":"newest" or "oldest" or "price_high" or "price_low" or "stock_low" or "stock_high" or',
+    '  "name","filter":"all" or "active" or "inactive" or "rejected" or "pending" or "out_of_stock" or "low_stock" or "on_sale","words":"<their',
+    '  words for which products>" or null,"limit":<how many, up to 30; 10 if they don\'t say>,"since":null or a period};',
+    '  {"source":"orders","period":<period>,"status":null or one status as in sales,"limit":<up to 30>} (orders with their items);',
+    '  {"source":"product_sales","period":<period>} (units and money per product); {"source":"sales_summary","period":<period>};',
+    '  {"source":"payouts"} (statements of the last 90 days); {"source":"pandaworld_listings","period":<period>} (what they listed with',
+    '  PandaWorld). A period is "today", "yesterday", "week", "month" or "quarter".',
     `{"type":"health_report"} - a full health check of their whole shop from live Jumia data: what's working, what isn't, what to do (${REPORT_CREDIT_COST} credits). "How is my shop doing?" is this; best sellers or returns alone are "report".`,
     '{"type":"step"} - the message carries on what the seller is doing right now: it answers the bot\'s open question (a price, a size, a category,',
     '  a yes or no), or, while they send a product, it describes that product (its notes). PandaWorld\'s usual steps take it. In review, a',
@@ -550,6 +568,10 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '"how many kettles are in jumia\'s warehouse" → {"type":"warehouse_stock","product":"kettles"}',
     '"send 50 of the kettle to jumia warehouse on 20 Oct" → {"type":"warehouse_order","items":[{"product":"kettle","quantity":50}]}',
     '"PO 123AB shipped, tracking DHL998877" → {"type":"warehouse_shipped","po":"123AB","tracking":"DHL998877","carrier":null}',
+    '"the full list of the last 10 products uploaded on my shop" → {"type":"research","needs":[{"source":"products","sort":"newest","filter":"all","words":null,"limit":10,"since":null}]}',
+    '"my 5 most expensive perfumes and their stock" → {"type":"research","needs":[{"source":"products","sort":"price_high","filter":"all","words":"perfumes","limit":5,"since":null}]}',
+    '"which of my products added this month have sold?" → {"type":"research","needs":[{"source":"products","sort":"newest","filter":"all","words":null,"limit":30,"since":"month"},{"source":"product_sales","period":"month"}]}',
+    '"show this week\'s orders with what was in them, and my last payout" → {"type":"research","needs":[{"source":"orders","period":"week","status":null,"limit":15},{"source":"payouts"}]}',
   ].join("\n");
 }
 
@@ -1030,6 +1052,19 @@ export function contentAction(parsed: Record<string, unknown>, message: string, 
   return { type: "content_change", product, request };
 }
 
+/** "the last 10 products", "my latest uploads", "products I uploaded": products already in their shop. */
+const NEWEST_RE = /\b(?:last|latest|newest|most recent|recent(?:ly)?)\b[^.?!]{0,30}?(?<![a-z])(?:products?|items?|listings?|uploads?)\b|(?<![a-z])(?:products?|items?|listings?)\b[^.?!]{0,20}\b(?:i\s+)?(?:uploaded|added|posted|created)\b/i;
+/** Wanting to list now, not asking about what's listed: "I want to list my last 3 products". */
+const LISTING_NOW_RE = /\b(?:want to|wanna|going to|gonna|let'?s|i'?m|i am|i will|i'?ll|can i|help me|start)\s+(?:list|upload|add|post|sell)\b/i;
+const CANT_RE = /\b(?:can'?t|cannot|unable|not able|don'?t have (?:access|a way))\b/i;
+
+/** How many of their newest products the message asks for (10 when it doesn't say), or null when it isn't about them. */
+export function newestProductsAsked(message: string): number | null {
+  if (!NEWEST_RE.test(message) || LISTING_NOW_RE.test(message)) return null;
+  const n = messageNumbers(message).find((x) => Number.isInteger(x) && x >= 1 && x <= 30);
+  return n ?? 10;
+}
+
 /** "How many of my products are on", "...live on Jumia, on and off": the shop's overview. */
 const SHOP_COUNT = /\bhow many\b[^.?!]*\b(products?|items?|listings?)\b[^.?!]*\b(on|off|live|active|inactive|turned|deactivated|enabled|disabled)\b|\bhow many\b[^.?!]*\b(products?|items?)\b[^.?!]*\b(do i have|have i got|in my (shop|store)|on jumia)\b/i;
 
@@ -1039,6 +1074,14 @@ export function parseAction(
   opts: { context?: string; stage?: Stage; now?: Date } = {},
 ): AssistantAction {
   const action = parseActionRaw(raw, message, products, links, currency, opts);
+  // "the full list of the last 10products uploaded on my shop" was read as
+  // listing 10 products, and once as "I can't" (owner's web chat,
+  // 2026-10-08): it's their newest products, read from Jumia.
+  const newest = newestProductsAsked(message);
+  if (newest != null && (action.type === "list" || action.type === "restart" || action.type === "unclear"
+    || (action.type === "reply" && CANT_RE.test(action.text)))) {
+    return { type: "research", needs: [{ source: "products", sort: "newest", filter: "all", words: null, limit: newest, since: null }] };
+  }
   // Owner's test, 2026-10-07: "How many of my products are on" went to a
   // product search, and "...live on JUMIA is on and off" was answered "I
   // can't tell you". The overview has those counts.
@@ -1108,8 +1151,7 @@ function parseActionRaw(
         ? { type: "order_status", number } : ask("Which order? Send its number, e.g. \"where is order 355926919\".");
     }
     case "sales": {
-      const asStatus = (v: unknown) => (typeof v === "string" ? ORDER_STATUSES[v.toLowerCase().trim().replace(/[\s-]+/g, "_")] ?? null : null);
-      const list = Array.from(new Set((Array.isArray(parsed.status) ? parsed.status : [parsed.status]).map(asStatus).filter((s): s is string => !!s)));
+      const list = Array.from(new Set((Array.isArray(parsed.status) ? parsed.status : [parsed.status]).map(asOrderStatus).filter((s): s is string => !!s)));
       // "past time", "ever": as far back as Jumia goes.
       const period = parsed.period === "all" || parsed.period === "ever" || parsed.period === "90days" ? "quarter" : asPeriod(parsed.period, "week");
       return { type: "sales", period, status: list.length === 0 ? null : list.length === 1 ? list[0] : list };
@@ -1153,6 +1195,13 @@ function parseActionRaw(
     }
     case "health_report": case "health": case "shop_health":
       return { type: "health_report" };
+    case "research": {
+      const needs = parseNeeds(parsed.needs, {
+        backed: (words) => namesAProduct(words) && (productBacked(words, message) || productBacked(words, context)),
+        asStatus: asOrderStatus,
+      });
+      return needs.length > 0 ? { type: "research", needs } : { type: "unclear" };
+    }
     case "warehouse_stock": {
       const product = typeof parsed.product === "string" ? parsed.product.trim().slice(0, 120) : "";
       return namesAProduct(product) && productBacked(product, message)
@@ -1814,6 +1863,8 @@ async function carryOut(
       const { answerHealthReport } = await import("@/lib/whatsapp/shop-health");
       return answerHealthReport(userId, phone);
     }
+    case "research":
+      return answerResearch(userId, phone, text, action.needs);
     case "warehouse_stock":
       return answerWarehouseStock(userId, phone, action.product);
     case "warehouse_order":

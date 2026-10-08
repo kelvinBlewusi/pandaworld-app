@@ -44,10 +44,15 @@ it("makes the batch from an admin's products, under their web chat", async () =>
   expect(started).toEqual([{
     userId: "admin", address: "web:admin", id: "web-123456789",
     products: [
-      { mediaIds: ["web:admin/assistant/a.jpg"], price: 150, quantity: 2, sizes: "S, M", colour: "black", notes: "" },
-      { mediaIds: ["web:admin/assistant/a.jpg"], price: 99.5, quantity: null, sizes: "S, M", colour: "black", notes: "" },
+      { mediaIds: ["web:admin/assistant/a.jpg"], price: 150, quantity: 2, sizes: "S, M", colour: "black", notes: "", polish: false },
+      { mediaIds: ["web:admin/assistant/a.jpg"], price: 99.5, quantity: null, sizes: "S, M", colour: "black", notes: "", polish: false },
     ],
   }]);
+});
+
+it("passes Polish photos on only when it's set to true", async () => {
+  await call({ id: "web-123456789", products: [product({ polish: true }), product({ polish: "yes" }), product()] });
+  expect((started[0].products as { polish: boolean }[]).map((p) => p.polish)).toEqual([true, false, false]);
 });
 
 it("says which product needs what, and makes nothing", async () => {
