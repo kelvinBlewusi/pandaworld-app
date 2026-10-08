@@ -2234,7 +2234,10 @@ measuring, is this.
   deletes the ones the AI no longer needs.
 - **Runs**: rows in `assistant_eval_runs` (migration
   2026-10-08_assistant-eval.sql), worked by app/api/worker/assistant-eval,
-  10 cases at a time, saved as they go. pg_cron calls it each minute only
+  10 cases at a time, saved as they go. A case gets at most 40 s, and a
+  timed-out case is recorded as an error, not scored. The worker has 120 s
+  and starts a group only if it can finish. At 60 s, slow Gemini answers
+  (8 Oct afternoon) made every call time out before saving. pg_cron calls it each minute only
   while a run is queued or running; queuing from /admin/assistant-tests
   also nudges it. AI calls count as the `assistant_eval` feature, never a
   seller's.

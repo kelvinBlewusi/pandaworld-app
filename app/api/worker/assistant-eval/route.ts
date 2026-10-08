@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { workOnRuns } from "@/lib/evals/assistant-eval";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 // ─── POST /api/worker/assistant-eval ─────────────────────────────────────────
 //
 // Works through a queued run of the assistant's test set
 // (lib/evals/assistant-eval.ts): ten cases at a time against the real AI,
-// saved as it goes, for about 45 seconds a call. Called by pg_cron each
+// saved as it goes, for up to 100 seconds a call (no case takes over 40). Called by pg_cron each
 // minute while a run is queued or running
 // (supabase/migrations/2026-10-08_assistant-eval.sql), and nudged when one is
 // queued from /admin/assistant-tests.
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
   try {
-    const r = await workOnRuns(45_000);
+    const r = await workOnRuns(100_000);
     if (r.runId) console.info(`[assistant eval] run ${r.runId}: ${r.done}/${r.total}`);
     return NextResponse.json({ ok: true, ...r });
   } catch (e) {

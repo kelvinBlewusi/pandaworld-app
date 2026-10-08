@@ -9,13 +9,13 @@ import { FakeDb } from "./helpers/fake-supabase";
 
 let db = new FakeDb();
 jest.mock("@/lib/supabase/server", () => ({ createServerClient: () => db }));
-let answer: (prompt: string) => string = () => '{"type":"reply","text":"Hi! 👋","link":null}';
+let answer: (prompt: string) => string | Promise<string> = () => '{"type":"reply","text":"Hi! 👋","link":null}';
 const prompts: string[] = [];
 jest.mock("@/lib/ai/gemini-client", () => ({
   callGeminiBackend: async (_m: string, parts: { text?: string }[]) => {
     const p = parts.map((x) => x.text ?? "").join("\n");
     prompts.push(p);
-    return { text: answer(p) };
+    return { text: await answer(p) };
   },
 }));
 
@@ -126,6 +126,23 @@ describe("a run", () => {
     // Nothing left to do.
     r = await workOnRuns(60_000);
     expect(r.runId).toBeNull();
+  });
+
+  it("a case the AI doesn't answer in 40 s is an error, and the worker stops in time", async () => {
+    jest.useFakeTimers();
+    try {
+      answer = () => new Promise<string>(() => {});
+      await queueRun({ model: "m" });
+      const work = workOnRuns(100_000);
+      await jest.advanceTimersByTimeAsync(100_000);
+      const r = await work;
+      expect(r.done).toBe(20);
+      const row = (db.tables.assistant_eval_runs as Record<string, unknown>[])[0] as { status: string; errors: number; locked_until: unknown; results: { error?: string }[] };
+      expect(row).toMatchObject({ status: "running", errors: 20, locked_until: null });
+      expect(row.results[0].error).toBe("no answer within 40 s");
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 
