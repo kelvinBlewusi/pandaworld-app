@@ -196,3 +196,26 @@ export function variantClaimWarning(r: VariantReconciliation): string | null {
   if (r.kind !== "unresolved") return null;
   return `you wrote "${r.source}" — ${r.reason}, so no colour/size options were added. Tap Edit to set the ones you actually stock`;
 }
+
+/**
+ * The seller's own list of variations, when their notes give one plainly: a
+ * line "Sizes: S, M, L" / "Variations: 100ml and 200ml" (the web chat's
+ * product form writes one from its Sizes field). These ARE the variations,
+ * whatever the photos suggest (owner, 2026-10-08: earrings with "Sizes:
+ * Cream" were held because the photo's options didn't include it). Null for
+ * a range ("38 to 44") or anything that isn't a plain list, which the
+ * drafting AI reads as before.
+ */
+export function explicitVariationList(notes: string | null | undefined): string[] | null {
+  const line = (notes ?? "").match(/^\s*(?:sizes?|variations?|variants?)\s*[:=-]\s*(.+)$/im)?.[1];
+  if (!line) return null;
+  const parts = line.replace(/[.!]+$/, "")
+    .split(/\s*(?:,|;|&|\+|\band\b)\s*/i)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length === 0 || parts.length > 20) return null;
+  if (parts.some((p) => p.length > 40 || /\d\s*(?:to|–)\s*\d|\bto\b/i.test(p))) return null;
+  const seen = new Set<string>();
+  return parts.filter((p) => (seen.has(p.toLowerCase()) ? false : (seen.add(p.toLowerCase()), true)));
+}
+

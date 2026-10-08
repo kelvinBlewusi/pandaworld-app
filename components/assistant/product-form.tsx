@@ -255,7 +255,7 @@ function Card({ n, draft, currency, problem, canRemove, onChange, onPhotos, onRe
           <input inputMode="decimal" value={draft.price} onChange={(e) => onChange({ price: e.target.value.replace(/[^\d.]/g, "") })} placeholder="e.g. 150" className={field} />
         </label>
         <label className="block">
-          <span className="mb-1 block text-xs font-medium text-zinc-600">Quantity</span>
+          <span className="mb-1 block text-xs font-medium text-zinc-600">Quantity <span className="font-normal text-zinc-400">(optional)</span></span>
           <input inputMode="numeric" value={draft.quantity} onChange={(e) => onChange({ quantity: e.target.value.replace(/\D/g, "") })} placeholder="1" className={field} />
         </label>
         <label className="block">
@@ -263,11 +263,11 @@ function Card({ n, draft, currency, problem, canRemove, onChange, onPhotos, onRe
           <input value={draft.sizes} onChange={(e) => onChange({ sizes: e.target.value })} placeholder="e.g. S, M, L or 100ml" className={field} />
         </label>
         <label className="block">
-          <span className="mb-1 block text-xs font-medium text-zinc-600">Colour</span>
+          <span className="mb-1 block text-xs font-medium text-zinc-600">Colour <span className="font-normal text-zinc-400">(optional)</span></span>
           <input value={draft.colour} onChange={(e) => onChange({ colour: e.target.value })} placeholder="e.g. cream, black" className={field} />
         </label>
         <label className="col-span-2 block">
-          <span className="mb-1 block text-xs font-medium text-zinc-600">Notes</span>
+          <span className="mb-1 block text-xs font-medium text-zinc-600">Notes <span className="font-normal text-zinc-400">(optional)</span></span>
           <textarea
             value={draft.notes}
             onChange={(e) => onChange({ notes: e.target.value })}

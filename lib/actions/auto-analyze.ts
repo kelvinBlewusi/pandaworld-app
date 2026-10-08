@@ -43,9 +43,11 @@ import { verifyNoteIntent, type NoteIntent } from "@/lib/whatsapp/note-intent";
 import { nudgePolishWorker, queuePolish } from "@/lib/whatsapp/chat-polish";
 import {
   extractVariantClaim,
+  explicitVariationList,
   notesNameVariants,
   reconcileVariants,
 } from "@/lib/whatsapp/variant-claims";
+import { parseVariations } from "@/lib/whatsapp/variation-question";
 import {
   extractNoteAssertions,
   checkAssertions,
@@ -1820,6 +1822,24 @@ async function runAutoAnalyzeUnmetered(
     );
   }
 
+  // The seller's own list ("Sizes: S, M, L", the web form's Sizes field)
+  // is the variations, as typed: a free-text axis takes them as they are,
+  // a closed list matches each below (spelling, size names, then by
+  // meaning) and holds the product to ask for any that don't match. It
+  // replaces what the photos suggested rather than being checked against
+  // it (owner, 2026-10-08: "Sizes: Cream" on earrings held the product).
+  const listed = explicitVariationList(userContext);
+  if (listed) {
+    const suffixes = new Set<string>();
+    variations = listed.map((label, i) => {
+      let sku_suffix = label.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6) || "V";
+      if (suffixes.has(sku_suffix)) sku_suffix = `${sku_suffix.slice(0, 5)}${i + 1}`;
+      suffixes.add(sku_suffix);
+      return { label, sku_suffix };
+    });
+    console.info(`[auto-analyze] listing=${listingId} the seller's list of variations: ${listed.join(", ")}`);
+  }
+
   // One variant unless the seller's notes name options (owner's request,
   // 2026-10-03). The Describe prompt says so too, and was not always
   // followed: a single product drafted as two variants, the second with no
@@ -1840,7 +1860,7 @@ async function runAutoAnalyzeUnmetered(
   // the Describe pass gave none; a claim that couldn't be resolved still
   // keeps nothing.
   const noted = (intent.variants?.value ?? []).map((v) => v.trim()).filter(Boolean);
-  if (variations.length === 0 && reconciled.kind !== "unresolved" && noted.length > 0) {
+  if (variations.length === 0 && !listed && reconciled.kind !== "unresolved" && noted.length > 0) {
     const suffixes = new Set<string>();
     variations = Array.from(new Set(noted)).slice(0, 20).map((label, i) => {
       let sku_suffix = label.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6) || "V";
@@ -1880,6 +1900,11 @@ async function runAutoAnalyzeUnmetered(
         // the category's own exact, closed list — see its doc comment
         // for why an answer here can only ever be one of that list, or
         // nothing at all.
+        // A size name first ("Small" is the list's "S"), without an AI call.
+        if (variation === "..." && allowedVariantValues.length > 0) {
+          const named = parseVariations(allowedVariantValues, v.label);
+          if (named.ok && named.values.length === 1) variation = named.values[0];
+        }
         if (variation === "..." && allowedVariantValues.length > 0 && v.label.trim() !== "...") {
           const matched = await aiMatchAllowedValue(v.label, allowedVariantValues, userContext);
           if (matched) {
@@ -1919,7 +1944,7 @@ async function runAutoAnalyzeUnmetered(
     } catch (e) {
       console.warn(`[auto-analyze] variant persist failed: ${(e as Error).message}`);
     }
-  } else if (reconciled.kind === "unresolved") {
+  } else if (reconciled.kind === "unresolved" && !listed) {
     // Clear whatever a previous run left. Without this a re-analyze that
     // NOW recognises the claim would leave the old photo-derived variants
     // sitting there — the exact rows this is meant to withdraw.

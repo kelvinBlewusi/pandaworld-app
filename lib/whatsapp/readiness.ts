@@ -143,7 +143,8 @@ function sizeWordsIn(freeText: string): Set<string> {
  */
 function blankSizeClaimReason(
   freeText: string,
-  products: { attributes?: { name: string; value: unknown }[] }[],
+  products: { variation?: string; attributes?: { name: string; value: unknown }[] }[],
+  variantAxisNames: Set<string> = new Set(),
 ): string | null {
   // Two guards against reading ordinary prose as a size claim:
   //   - the word "size"/"sizes" has to actually appear ("fits medium to
@@ -162,6 +163,12 @@ function blankSizeClaimReason(
     ),
   );
   if (hasSizeValue) return null;
+  // A category whose variation is its own field, not a size field (hats:
+  // "variation", free text) keeps the sizes there, one per variant: "Sizes:
+  // S, M, L" drafted as variants S, M, L and was still held for a "Size
+  // field never filled" (2026-10-08). Only a size-named variation field
+  // can be left blank this way.
+  if (variantAxisNames.size > 0 && !Array.from(variantAxisNames).some((n) => /size/i.test(n))) return null;
 
   const claimed = Array.from(sizeWords).join(", ");
   return `size: you mentioned ${claimed} but this category's Size field was never filled — open Edit to set it per variant`;
@@ -346,7 +353,7 @@ export async function assessListingPushReadiness(
     reasons.push(`${staleAttr}: stuck at the same value across every variant, but your variants differ — open Edit to set it per variant`);
   }
 
-  const blankSizeReason = blankSizeClaimReason(freeText, products);
+  const blankSizeReason = blankSizeClaimReason(freeText, products, variantAxisNames);
   if (blankSizeReason) reasons.push(blankSizeReason);
 
   // Fashion category still carrying the plain (non-fashion) Generic brand

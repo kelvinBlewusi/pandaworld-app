@@ -69,12 +69,14 @@ const leaf = (code: number, path: string) => ({
 const AI_PICK      = leaf(1000176, "Phones & Tablets > Accessories > Portable Power Banks");
 const SELLER_PICK  = leaf(1000279, "Phones & Tablets > Mobile Accessories > Portable Power Banks & Battery Packs");
 let listable = [AI_PICK, SELLER_PICK];
+// The chosen category's attributes: none (a free-text variation) unless a test sets a closed list.
+let categoryAttrs: unknown[] = [];
 
 jest.mock("@/lib/jumia/categories", () => ({
   ...jest.requireActual("@/lib/jumia/categories"),
   getListableCategories:   async () => listable,
   getAllCategoriesForTree: async () => listable,
-  getCategoryAttributes:   async () => [],
+  getCategoryAttributes:   async () => categoryAttrs,
   fetchAttributesFromJumia: async () => [],
   upsertAttributes:        async () => {},
 }));
@@ -93,6 +95,7 @@ beforeEach(() => {
   aiCalls.length = 0;
   pickCandidates = [];
   listable = [AI_PICK, SELLER_PICK];
+  categoryAttrs = [];
   db.tables.jumia_live_listings = [];
   db.tables.variants = [];
   db.tables.jumia_connections = [];
@@ -137,3 +140,27 @@ describe("how many variants a draft gets", () => {
     expect(variationsSaved()).toEqual(["Black"]);
   });
 });
+
+// Owner, 2026-10-08: "in times when it is a plain text field for the
+// variation what is entered is what is used?" The seller's own list (the web
+// form's Sizes field writes "Sizes: …") is the variations, not a check on
+// what the photos suggested.
+describe("the seller's own list of variations", () => {
+  it("is used as typed where the category's variation is free text", async () => {
+    await runAutoAnalyze(USER, LISTING_ID, "Price: 200\nQuantity: 10\nSizes: Cream\nColour: Cream");
+    expect(variationsSaved()).toEqual(["Cream"]);
+  });
+
+  it("is matched to the category's own list, size names included, in the seller's order", async () => {
+    categoryAttrs = [{ name: "size", label: "Size", type: "enum", is_variant: true, is_mandatory: false, allowed_values: ["S", "M", "L", "XL"] }];
+    await runAutoAnalyze(USER, LISTING_ID, "Price: 130\nSizes: Small, Large and Medium");
+    expect(variationsSaved()).toEqual(["S", "L", "M"]);
+  });
+
+  it("leaves one the list can't match as \"...\", for the bot to ask about", async () => {
+    categoryAttrs = [{ name: "size", label: "Size", type: "enum", is_variant: true, is_mandatory: false, allowed_values: ["S", "M", "L", "XL"] }];
+    await runAutoAnalyze(USER, LISTING_ID, "Sizes: Huge");
+    expect(variationsSaved()).toEqual(["..."]);
+  });
+});
+
