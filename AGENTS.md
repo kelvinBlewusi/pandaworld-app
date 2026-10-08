@@ -2365,6 +2365,13 @@ measuring, is this.
   padding (`onAssistant`). The chat fills the page beside the sidebar, with
   messages and the composer in a centred `max-w-3xl` column. Phones are
   unchanged (full screen).
+- **The chat's type** (owner: "change the font size and style of the chat
+  to the same as the one you use here", i.e. Claude's): the chat uses
+  `font-chat`, the device's own UI font (tailwind.config.ts), not the site's
+  Inter Tight. Text and the composer are 16px with a 1.7 line height. The
+  bot's messages are plain text on white with no bubble; the seller's are
+  in a soft grey bubble on the right. `• ` and `1. ` lines get a hanging
+  indent (`Formatted`).
 - **Before "all"**: read the owner's front-door turns in
   whatsapp_assistant_log (`raw like '[front door]%'`). Make each misread a
   test case and run the set with the front door. Then remove the word rules

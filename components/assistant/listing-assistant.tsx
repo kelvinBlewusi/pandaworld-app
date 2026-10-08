@@ -61,12 +61,16 @@ const newId = () => `web-${crypto.randomUUID()}`;
 const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 /** WhatsApp's own formatting: *bold*, _italic_, ~strike~, and links. Built from React nodes, never HTML. */
+/** A "• " or "1. " line: its wrapped lines sit under its text, not under the marker, as in Claude's chat. */
+const LIST_LINE = /^\s*(?:[•\-–]|\d{1,2}[.)])\s/;
+
 function Formatted({ text }: { text: string }) {
   const lines = text.split("\n");
+  const listed = lines.map((l) => LIST_LINE.test(l));
   return (
     <>
       {lines.map((line, i) => (
-        <span key={i}>
+        <span key={i} className={listed[i] ? cn("block", /^\s*\d/.test(line) ? "pl-[1.4em] -indent-[1.4em]" : "pl-[0.9em] -indent-[0.9em]") : undefined}>
           {line.split(/(https?:\/\/[^\s]+|\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~)/g).map((part, j) => {
             if (/^https?:\/\//.test(part)) {
               const url = part.replace(/[.,!?)]+$/, "");
@@ -81,7 +85,7 @@ function Formatted({ text }: { text: string }) {
             if (/^~[^~\n]+~$/.test(part)) return <s key={j}>{part.slice(1, -1)}</s>;
             return <span key={j}>{part}</span>;
           })}
-          {i < lines.length - 1 && <br />}
+          {i < lines.length - 1 && !listed[i] && !listed[i + 1] && <br />}
         </span>
       ))}
     </>
@@ -448,7 +452,7 @@ export function ListingAssistant({ firstName, productForm }: {
     // 2026-10-08: "cover the entire page with the side panel still in place").
     <div
       className={cn(
-        "fixed inset-0 z-30 flex flex-col overflow-hidden bg-white",
+        "fixed inset-0 z-30 flex flex-col overflow-hidden bg-white font-chat antialiased",
         "sm:relative sm:inset-auto sm:z-auto sm:min-h-0 sm:flex-1",
         dragging && "ring-2 ring-inset ring-orange-300",
       )}
@@ -486,9 +490,9 @@ export function ListingAssistant({ firstName, productForm }: {
       </div>
 
       <div className="relative min-h-0 flex-1">
-      <div ref={scroller} onScroll={onScroll} className="h-full overflow-y-auto bg-zinc-50/60 px-3 py-4 sm:px-6 sm:py-6">
+      <div ref={scroller} onScroll={onScroll} className="h-full overflow-y-auto bg-white px-4 py-5 sm:px-6 sm:py-8">
       {/* One reading column, centred, however wide the page. */}
-      <div className="mx-auto w-full max-w-3xl space-y-3">
+      <div className="mx-auto w-full max-w-3xl space-y-6">
         {!loaded && (
           <div className="flex h-full items-center justify-center text-sm text-zinc-400">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading your conversation…
@@ -521,7 +525,7 @@ export function ListingAssistant({ firstName, productForm }: {
 
         {waiting && (
           <div className="flex items-center gap-2 pl-1 text-sm text-zinc-400">
-            <span className="flex gap-1 rounded-2xl rounded-bl-md bg-white px-3.5 py-3 shadow-sm ring-1 ring-zinc-100">
+            <span className="flex gap-1 py-2">
               <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-400 [animation-delay:-0.3s]" />
               <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-400 [animation-delay:-0.15s]" />
               <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-400" />
@@ -650,7 +654,7 @@ export function ListingAssistant({ firstName, productForm }: {
             rows={1}
             placeholder={attachments.length > 0 ? "Price and notes for these photos…" : "Type / for commands"}
             // 16px on a phone: iOS zooms the page into a smaller field on focus.
-            className="max-h-36 min-h-11 flex-1 resize-none rounded-xl border border-zinc-200 px-3.5 py-2.5 text-base text-zinc-900 sm:text-sm outline-none placeholder:text-zinc-400 focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
+            className="max-h-40 min-h-11 flex-1 resize-none rounded-xl border border-zinc-200 px-3.5 py-2.5 text-base leading-relaxed text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
           />
           <button
             type="button"
@@ -786,15 +790,17 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
     <div className={cn("flex flex-col", mine ? "items-end" : "items-start")}>
       <div
         className={cn(
-          "max-w-[85%] overflow-hidden rounded-2xl text-sm leading-relaxed sm:max-w-[70%]",
-          // The seller's own messages in a soft grey (owner, 2026-10-07), the bot's in white.
-          mine ? "rounded-br-md bg-[#efefed] text-zinc-900" : "rounded-bl-md bg-white text-zinc-800 shadow-sm ring-1 ring-zinc-100",
+          // Read like Claude's chat (owner, 2026-10-08): 16px with room
+          // between lines; the seller's own messages in a soft grey bubble
+          // (owner, 2026-10-07), the bot's as plain text on the page.
+          "text-base leading-[1.7]",
+          mine ? "max-w-[85%] overflow-hidden rounded-2xl bg-[#f0efec] text-zinc-900 sm:max-w-[75%]" : "w-full text-[#1f1f1e]",
           m.failed && "opacity-60",
         )}
       >
         {album.length > 1 ? (
           // Several photos at once: one message, a grid; each opens full size.
-          <div className="grid w-72 max-w-full grid-cols-2 gap-0.5">
+          <div className={cn("grid w-72 max-w-full grid-cols-2 gap-0.5", !mine && "overflow-hidden rounded-xl")}>
             {album.map((url, i) => (
               <a key={`${url}-${i}`} href={url} target="_blank" rel="noopener noreferrer" className={cn(album.length % 2 === 1 && i === 0 && "col-span-2")}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -805,16 +811,16 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
         ) : link && (
           <a href={link} target="_blank" rel="noopener noreferrer">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={link} alt="" className="max-h-64 w-full object-cover" onLoad={onMedia} />
+            <img src={link} alt="" className={cn("max-h-64 object-cover", mine ? "w-full" : "max-w-sm rounded-xl")} onLoad={onMedia} />
           </a>
         )}
         {shown && (
-          <div className={cn("whitespace-pre-wrap break-words px-3.5 py-2.5", link && "pt-2")}>
+          <div className={cn("whitespace-pre-wrap break-words", mine ? "px-4 py-2.5" : link && "pt-3")}>
             <Formatted text={shown} />
           </div>
         )}
         {rows.length > 0 && (
-          <div className="border-t border-zinc-100">
+          <div className={cn(mine ? "border-t border-zinc-100" : "mt-3 max-w-md overflow-hidden rounded-xl border border-zinc-200")}>
             {typeof p.buttonText === "string" && (
               <p className="px-3.5 pt-2 text-xs font-semibold uppercase tracking-wide text-zinc-400">{p.buttonText}</p>
             )}
@@ -824,7 +830,7 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
                 type="button"
                 disabled={disabled}
                 onClick={() => onTap({ id: r.id, title: r.title })}
-                className="block w-full border-b border-zinc-50 px-3.5 py-2 text-left last:border-b-0 hover:bg-orange-50 disabled:opacity-50"
+                className="block w-full border-b border-zinc-100 px-3.5 py-2.5 text-left last:border-b-0 hover:bg-orange-50 disabled:opacity-50"
               >
                 <span className="block font-medium text-zinc-900">{r.title}</span>
                 {r.description && <span className="block text-xs text-zinc-500">{r.description}</span>}
@@ -834,14 +840,14 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
         )}
       </div>
       {buttons.length > 0 && (
-        <div className="mt-1.5 flex max-w-[85%] flex-wrap gap-1.5 sm:max-w-[70%]">
+        <div className="mt-3 flex max-w-full flex-wrap gap-2">
           {buttons.map((b) => (
             <button
               key={b.id}
               type="button"
               disabled={disabled}
               onClick={() => onTap(b)}
-              className="rounded-full border border-orange-200 bg-white px-3.5 py-1.5 text-sm font-medium text-orange-700 transition-colors hover:bg-orange-50 disabled:opacity-50"
+              className="rounded-full border border-orange-200 bg-white px-4 py-1.5 text-[15px] font-medium text-orange-700 transition-colors hover:bg-orange-50 disabled:opacity-50"
             >
               {b.title}
             </button>
@@ -853,7 +859,7 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
           href={cta.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="mt-1.5 inline-flex items-center gap-1.5 rounded-full border border-orange-200 bg-white px-3.5 py-1.5 text-sm font-medium text-orange-700 transition-colors hover:bg-orange-50"
+          className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-orange-200 bg-white px-4 py-1.5 text-[15px] font-medium text-orange-700 transition-colors hover:bg-orange-50"
         >
           {cta.label} <ExternalLink className="h-3.5 w-3.5" />
         </a>
@@ -873,7 +879,7 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
           )}
         </span>
       ) : (
-        <span className="mt-1 px-1 text-[11px] text-zinc-400">{m.local ? "Sending…" : time(m.at)}</span>
+        <span className={cn("mt-1.5 text-xs text-zinc-400", mine && "px-1")}>{m.local ? "Sending…" : time(m.at)}</span>
       )}
     </div>
   );
