@@ -64,7 +64,7 @@ jest.mock("@/lib/jumia/categories", () => ({
 
 import {
   answerLiveValue, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
-  changeToAsked, draftNumberIn, isProductName, namesAProduct, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
+  changeToAsked, draftNumberIn, frontDoorFor, isProductName, namesAProduct, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { assistantGate } from "@/lib/whatsapp/assistant-limits";
 import { parseVariations } from "@/lib/whatsapp/variation-question";
@@ -351,6 +351,38 @@ describe("between batches", () => {
   it("says when the AI couldn't be reached", async () => {
     expect(await runAssistant("seller", "233", session(), "what can you do", "idle")).toBe("failed");
     expect(sent).toEqual([]);
+  });
+});
+
+describe("the front door (step 2, owner 2026-10-08)", () => {
+  const session = () => ({ phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null }) as WhatsAppSession;
+
+  it("is on for the accounts the switch names", async () => {
+    expect(await frontDoorFor("admin")).toBe(false);
+    db.tables.app_settings = [{ key: "assistant_front_door", value: "admins" }];
+    expect(await frontDoorFor("admin")).toBe(true);
+    expect(await frontDoorFor("seller")).toBe(false);
+    db.tables.app_settings = [{ key: "assistant_front_door", value: ["seller"] }];
+    expect(await frontDoorFor("seller")).toBe(true);
+    db.tables.app_settings = [{ key: "assistant_front_door", value: "all" }];
+    expect(await frontDoorFor("anyone")).toBe(true);
+  });
+
+  it("knows the shop's products the message names, and carries out a live change", async () => {
+    db.tables.app_settings = [{ key: "assistant_front_door", value: "all" }];
+    db.tables.jumia_products = [{ user_id: "seller", name: "Foldable Drone with HD Camera" }, { user_id: "seller", name: "Pedestal Fan" }];
+    aiReplies.push('{"area":"live_products"}', '{"type":"live_change","product":"Foldable Drone","stock":10}');
+    expect(await runAssistant("seller", "233", session(), "Change Foldable Drone with HD Camera to 10", "idle")).toBe("handled");
+    expect(aiPrompts[0]).toContain('Products in their Jumia shop the message names: "Foldable Drone with HD Camera"');
+    expect(aiPrompts[0]).not.toContain("Pedestal Fan");
+    expect(shopCalls[0]).toEqual(["proposeLiveChange", "Foldable Drone", { kind: "stock", stock: 10 }, { preferSid: null }]);
+  });
+
+  it("long answers go as a list to choose from", async () => {
+    db.tables.app_settings = [{ key: "assistant_front_door", value: "all" }];
+    aiReplies.push('{"area":"live_products"}', '{"type":"clarify","question":"Which products should stay on?","options":["I\'ll name the ones to keep on","None, turn everything off"]}');
+    expect(await runAssistant("seller", "233", session(), "off all other products apart from the ones i asked you turn on", "idle")).toBe("handled");
+    expect(sent[0]).toMatchObject({ kind: "list", body: "Which products should stay on?", rows: ["answer:I'll name the ones to keep on", "answer:None, turn everything off"] });
   });
 });
 

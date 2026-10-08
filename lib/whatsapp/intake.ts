@@ -585,8 +585,12 @@ async function aiReadable(
   phoneNumber: string,
   session: WhatsAppSession,
   content: Incoming & { unsupported?: string },
-): Promise<{ text: string; hintSeq?: number } | null> {
+): Promise<{ text: string; hintSeq?: number; answered?: boolean } | null> {
   const text = content.text?.trim();
+  // An answer tapped under the front door's question ("answer:Stock to 10",
+  // lib/whatsapp/assistant.ts sendClarify) is read as if they'd typed it.
+  const answer = content.tapped && text ? text.match(/^answer:([\s\S]+)$/)?.[1]?.trim() : undefined;
+  if (answer) return aiStage(session) ? { text: answer.slice(0, 200), answered: true } : null;
   if (!text || content.imageMediaId || content.unsupported || content.tapped || !aiStage(session)) return null;
   // A number picking from the bot's own numbered lines (owner's test,
   // 2026-10-07: "4" after a list whose 4th line was shop insight became
@@ -810,7 +814,8 @@ export async function handleLinkedMessage(
       position: batchPosition(session), waitingFor: openQuestion(session),
     });
     if (outcome === "handled") return;
-    content = { ...content, aiRead: outcome };
+    // A tapped answer goes on as its words, like typed text.
+    content = { ...content, ...(readable.answered ? { text: readable.text, tapped: false } : {}), aiRead: outcome };
   }
 
   const globalCmd = content.text ? parseGlobalCommand(content.text) : null;

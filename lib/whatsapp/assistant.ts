@@ -85,6 +85,7 @@ import { resetSession, updateSession, type AssistantPending, type LiveValueAsk, 
 import { parseVariations, saveVariations, sizeNamedIn, variationOptions, VARIATION_FIELD } from "@/lib/whatsapp/variation-question";
 import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPrice, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import type { ListingRow } from "@/lib/supabase/types";
+import { FRONT_DOOR_ROUTER, frontDoor, namesInMessage, type Clarify } from "@/lib/assistant-v2/front-door";
 
 /** Small and quick, like the review step's older fallback (lib/whatsapp/intent.ts). */
 export const ASSISTANT_MODEL = "gemini-2.5-flash-lite";
@@ -117,6 +118,24 @@ export async function assistantEnabled(_userId: string): Promise<boolean> {
 /** Whether the assistant reads this message (both channels, everyone, unless switched off). */
 export async function assistantFor(userId: string, _phone: string): Promise<boolean> {
   return assistantEnabled(userId);
+}
+
+/**
+ * Whether this seller's messages are read through the front door
+ * (lib/assistant-v2/front-door.ts) instead of the one big prompt and its
+ * word rules. app_settings `assistant_front_door`: "all", "admins" (the
+ * owner first, 2026-10-08), or a list of user ids. Off without the row.
+ */
+export async function frontDoorFor(userId: string): Promise<boolean> {
+  try {
+    const { data } = await createServerClient().from("app_settings").select("value").eq("key", "assistant_front_door").maybeSingle();
+    const v = data?.value as unknown;
+    if (v === "all") return true;
+    if (v === "admins") return isAdmin(userId);
+    return Array.isArray(v) && v.includes(userId);
+  } catch {
+    return false;
+  }
 }
 
 // ─── What the AI is told ──────────────────────────────────────────────────
@@ -1542,7 +1561,8 @@ export async function recentConversation(phone: string, current: string, max = 2
     const lastIn = rows[rows.length - 1];
     if (lastIn && lastIn.direction === "inbound" && (lastIn.body_text ?? "").trim() === current.trim()) rows.pop();
     return rows.slice(-max).map((r) => {
-      const body = (r.body_text ?? "").trim();
+      // A tapped answer to the front door's question reads as the answer.
+      const body = (r.body_text ?? "").trim().replace(/^answer:/, "");
       const shown = !body ? (r.message_type === "image" ? "[a photo]" : "[a message]")
         : /^[a-z_]+:\S+$/i.test(body) ? "[tapped a button]" : blankCodes(body.replace(/\s+/g, " ").slice(0, 300));
       return `${r.direction === "inbound" ? "Seller" : "Bot"}: ${shown}`;
@@ -1573,6 +1593,62 @@ export async function interpret(
     callGeminiBackend(model, [{ text: prompt }], model.startsWith("gemini-3") ? { preferBackend: "ai-studio" } : {}));
   const action = parseAction(text, message, products, links, currency, { context: conversation.join("\n"), stage, listed: !!opts.listed });
   return { action, links, raw: text };
+}
+
+/** Their Jumia products whose names share words with the message (the shop's local copy). */
+async function shopNamesIn(userId: string, message: string): Promise<string[]> {
+  try {
+    const { data } = await createServerClient().from("jumia_products").select("name").eq("user_id", userId).limit(5000);
+    return namesInMessage(message, ((data ?? []) as { name: string | null }[]).map((r) => r.name ?? "").filter(Boolean));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * interpret's counterpart for the front door: the same facts, read in two
+ * small steps (the area, then the action within it), with no word rules.
+ * It may answer with a question back (`clarify`) instead of an action.
+ */
+export async function interpretThroughFrontDoor(
+  userId: string,
+  stage: Stage,
+  products: ProductFacts[],
+  message: string,
+  opts: { batchId?: string | null; conversation?: string[]; web?: boolean; position?: string; waitingFor?: string; listed?: { count: number; what: string } | null } = {},
+): Promise<{ action: AssistantAction | Clarify; links: Record<string, AssistantLink>; raw: string }> {
+  const [currency, seller, reader, listingCost, memory, shopNames] = await Promise.all([
+    shopCurrencyForUser(userId), sellerFacts(userId), assistantModel(), listingCreditCost(userId).catch(() => LIVE_LISTING_CREDIT_COST),
+    sellerMemory(userId), shopNamesIn(userId, message),
+  ]);
+  const links = assistantLinks({ batchId: opts.batchId, countrySlug: seller.countrySlug });
+  const { action, raw } = await frontDoor({
+    stage, message, conversation: opts.conversation ?? [], drafts: products, listed: opts.listed ?? null, waitingFor: opts.waitingFor,
+    seller: seller.lines, links, currency, web: opts.web ?? false, shopNames, listingCost, position: opts.position, memory,
+  }, { router: FRONT_DOOR_ROUTER, reader }, { feature: "assistant", userId });
+  return { action, links, raw: `[front door] ${raw}` };
+}
+
+/**
+ * The front door's question back, with its answers to tap. A tap comes back
+ * as "answer:<words>" and is read as if typed (lib/whatsapp/intake.ts
+ * aiReadable), with the question in the conversation.
+ */
+async function sendClarify(phone: string, clarify: Clarify): Promise<void> {
+  const question = clarify.question.trim() || "What would you like me to do?";
+  // A bare number would read as a count once tapped: it must say what it is.
+  const options = clarify.options.map((o) => o.trim()).filter((o) => o && !/^\d+$/.test(o)).slice(0, 3);
+  if (options.length < 2) {
+    await sendTextIfConfigured(phone, question);
+    return;
+  }
+  if (options.every((o) => o.length <= 20)) {
+    await sendButtonsIfConfigured(phone, question, options.map((o) => ({ id: `answer:${o}`, title: o })));
+    return;
+  }
+  await sendListIfConfigured(phone, question, "Choose", options.map((o) => ({
+    id: `answer:${o}`, title: o.slice(0, 24), ...(o.length > 24 ? { description: o.slice(0, 72) } : {}),
+  })));
 }
 
 // ─── Carrying it out ──────────────────────────────────────────────────────
@@ -1851,6 +1927,8 @@ export async function runAssistant(
   await noteSellerMessage(userId);
 
   const batchId = stage === "sent" ? session.lastSubmittedBatchId : stage === "idle" ? null : session.batchId;
+  // Step 2 of the reliability plan, for the accounts it's switched on for.
+  const viaFrontDoor = await frontDoorFor(userId);
   let action: AssistantAction;
   let links: Record<string, AssistantLink>;
   let raw: string;
@@ -1858,10 +1936,21 @@ export async function runAssistant(
   try {
     const conversation = await recentConversation(phone, text);
     products = batchId ? await productFacts(await batchListings(batchId, userId)) : [];
-    ({ action, links, raw } = await interpret(userId, stage, products, text, {
+    const facts = {
       batchId, hintSeq, conversation, web: isWebAddress(phone), position: opts.position, waitingFor: opts.waitingFor,
       listed: listedFresh(session),
-    }));
+    };
+    if (viaFrontDoor) {
+      const read = await interpretThroughFrontDoor(userId, stage, products, text, facts);
+      if (read.action.type === "clarify") {
+        await sendClarify(phone, read.action);
+        await logTurn(userId, stage, text, read.action as unknown as AssistantAction, `asked: ${read.action.question}`.slice(0, 300), read.raw);
+        return "handled";
+      }
+      ({ action, links, raw } = read as { action: AssistantAction; links: Record<string, AssistantLink>; raw: string });
+    } else {
+      ({ action, links, raw } = await interpret(userId, stage, products, text, facts));
+    }
   } catch (e) {
     console.warn(`[assistant] interpreting for ${userId} failed: ${(e as Error).message}`);
     await logTurn(userId, stage, text, null, `failed: ${(e as Error).message}`);
@@ -1871,8 +1960,9 @@ export async function runAssistant(
   // Soft Drink - 330ml Bottles, Pack of 6", from the bot's list of rejected
   // products) got "I can only look up products related to your shop", and
   // "Water Wave Lace Front Wig" the review step's help (owner's web chat,
-  // 2026-10-08): it's that product.
-  if ((action.type === "reply" || action.type === "unclear") && stage !== "collecting" && stage !== "starting"
+  // 2026-10-08): it's that product. The front door is told the shop's
+  // matching names instead.
+  if (!viaFrontDoor && (action.type === "reply" || action.type === "unclear") && stage !== "collecting" && stage !== "starting"
     && (await namesShopProduct(userId, text).catch(() => false))) {
     action = { type: "product_info", product: text.trim().slice(0, 120) };
   }

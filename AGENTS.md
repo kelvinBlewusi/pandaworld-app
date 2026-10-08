@@ -2288,10 +2288,46 @@ measuring, is this.
     optimistic, and runs vary by about 2 points.
   - Only understanding is tested: carrying out and clarify buttons in the
     chat aren't built.
-- **Found on the way**: `bulkAction` turns scope `out_of_stock` into `all`
-  when the message lacks out-of-stock words (`SCOPE_WORDS_RE`), unless the
-  word rule passes `restock`. That is a check that widens instead of asking.
-  The confirm tap still guards it.
+  - Flash-Lite for both calls (16:18): 188/200 (94.0%), median 1.4 s,
+    ~$0.24 per 1,000. That is the live chat's score at a fourteenth of the
+    cost, but its misses start the wrong thing ("i won't continue draft for
+    only product 1" read as list 1), so the live front door reads with
+    Flash.
+- **Fixed 8 Oct (owner: "do this")**: `bulkAction` used to turn a group the
+  message didn't name (`out_of_stock`, `low_stock`, `inactive`, `active`)
+  into `all`. Now only `WHOLE_SHOP_RE` ("all products", "everything") makes
+  it the whole shop; otherwise it asks "Every product in your shop, or only
+  the ones out of stock?".
+- **Daily ceiling**: app_settings `assistant_daily_limit` = 6000 since
+  8 Oct, on the owner's go-ahead. The busiest day so far was 170 turns.
+
+### Step 2 live: the front door in the chat (owner, 2026-10-08: "go ahead with building step 2")
+
+- **Switch**: app_settings `assistant_front_door`: `"admins"` (the owner
+  first), `"all"`, or a list of user ids; off without the row
+  (`frontDoorFor` in lib/whatsapp/assistant.ts). Set to `"admins"` on
+  8 Oct. To roll out, set `"all"`; to stop, delete the row.
+- **What changes for those accounts**: in `runAssistant`,
+  `interpretThroughFrontDoor` replaces `interpret`. It makes two calls:
+  sorting on `FRONT_DOOR_ROUTER` (flash-lite) and reading on
+  `assistantModel()` (Flash), with the same facts: drafts, the list just
+  shown, the open question, position, seller facts, memory, listing cost,
+  and their Jumia products whose names share words with the message
+  (jumia_products). It uses no word rules (`parseActionUnguarded`, safety
+  checks only) and no `namesShopProduct` override. Everything after
+  (carryOut, confirm taps, credits, logs) is the same. `raw` in
+  whatsapp_assistant_log starts with `[front door]`.
+- **Questions back**: a `clarify` goes out as buttons (2–3 answers of up to
+  20 characters) or a list (longer answers). Bare numbers are never offered,
+  since a tapped "10" would read as a count. The outcome is logged
+  `asked: <question>`. A tap comes back as `answer:<words>`;
+  intake.ts `aiReadable` lets it through as if typed (taps otherwise skip
+  the AI), and if the AI hands it back it goes on as plain text.
+  `recentConversation` shows it as the words.
+- **Before "all"**: read the owner's front-door turns in
+  whatsapp_assistant_log (`raw like '[front door]%'`). Make each misread a
+  test case and run the set with the front door. Then remove the word rules
+  in `parseAction` as the current path retires.
 
 ### The chat knows the website (owner, 2026-10-07)
 
