@@ -2353,6 +2353,13 @@ measuring, is this.
     12). `healthEvidence` drops DELETED (436 vs 297). The overview and stock
     list say when changes sent in the last 30 min are still being applied.
   - 9 new cases in the test set (`src: "log 10-08 17:xx"`).
+  - After those fixes, the first run (18:18) scored 199/210 (94.8%; 96%
+    on the original 203) and 6 of the 9 new cases. The misses were the
+    sorting call (flash-lite) sending description messages to listing or
+    drafts, and a reply sent as a JSON list of two actions. Now the sorter
+    may name a second area (`"also"`) and the reading sees both areas'
+    actions and examples. A drafts reading always gets live_products too.
+    A list answer is read as its first action.
 - **The chat page** (owner: "cover the entire page with the side panel
   still in place"): on /extension/assistant the shell has no title bar or
   padding (`onAssistant`). The chat fills the page beside the sidebar, with

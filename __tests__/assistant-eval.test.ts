@@ -199,7 +199,7 @@ describe("the front door prototype", () => {
   it("every area knows what PandaWorld can do, so a reply never invents it (owner's web chat, 2026-10-08)", async () => {
     answer = sortThenRead("drafts", '{"type":"reply","text":"ok","link":null}');
     await runCase(byId("draft-v-wig-price"), "m", { pipeline: "front_door" });
-    expect(prompts[1]).toContain("This message is about: drafts.");
+    expect(prompts[1]).toContain("This message is about: drafts or live products.");
     expect(prompts[1]).toContain("What PandaWorld can do (all true; nothing else is: there is no team doing things by hand):");
     expect(prompts[1]).toContain("rewritten by AI");
   });
@@ -211,6 +211,17 @@ describe("the front door prototype", () => {
     });
     expect(text).toContain('4. "Quilted Car Cover - Waterproof, Dustproof, All-Weather Protection (Default)" · off · approved · stock 1');
     expect(openQuestion({ stage: "review", conversation: ["Bot: Okay, please provide the new description text for 'Crocheted Beanie Hat'."] })?.about).toContain("please provide the new description");
+  });
+
+  it("reads with a second area when the sorting names one, and takes the first of two answers", async () => {
+    answer = (p) => (p.includes('Reply with JSON only: {"area"') ? '{"area":"listing","also":"live_products"}'
+      : '[{"type":"sales","period":"yesterday","status":null},{"type":"sales","period":"today","status":null}]');
+    const r = await frontDoor({
+      stage: "idle", message: "change the description of the kettle", conversation: [], drafts: [], listed: null, seller: [], links: {}, currency: "GHS", web: true,
+    }, { router: "a", reader: "b" });
+    expect(prompts[1]).toContain("This message is about: listing or live products.");
+    expect(prompts[1]).toContain('{"type":"content_change"');
+    expect(r.action).toMatchObject({ type: "sales", period: "yesterday" });
   });
 
   it("when the reading call is slow, Flash-Lite reads it instead of leaving them waiting", async () => {
