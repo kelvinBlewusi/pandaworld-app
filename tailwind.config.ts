@@ -16,6 +16,9 @@ const config: Config = {
     extend: {
       fontFamily: {
         sans: ["var(--font-inter-tight)", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "sans-serif"],
+        // The Listing Assistant's chat reads like Claude's (owner, 2026-10-08):
+        // the device's own UI font at 16px, not the site's tighter Inter Tight.
+        chat: ["ui-sans-serif", "-apple-system", "BlinkMacSystemFont", "system-ui", "Segoe UI", "Roboto", "Helvetica Neue", "Arial", "sans-serif"],
       },
       colors: {
         border: "hsl(var(--border))",
