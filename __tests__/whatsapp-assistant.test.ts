@@ -769,8 +769,10 @@ describe("more of the Jumia API (owner, 2026-10-07: \"do all\")", () => {
     expect(parse('{"type":"bulk","scope":"all","price_pct":5}', "raise all my prices a bit")).toMatchObject({ type: "reply", text: expect.stringContaining("By what percentage") });
     // A sale with no dates is asked for them.
     expect(parse('{"type":"bulk","scope":"all","sale_pct":10}', "10% off everything")).toMatchObject({ type: "reply", text: expect.stringContaining("needs its dates") });
-    // "out of stock" the AI made up becomes all, the words being the products'.
+    // "out of stock" the AI made up becomes all only when the message says the whole shop.
     expect(parse('{"type":"bulk","scope":"out_of_stock","active":true}', "turn on all products")).toMatchObject({ type: "bulk", scope: "all" });
+    // Otherwise it's asked, never widened on a guess.
+    expect(parse('{"type":"bulk","scope":"out_of_stock","stock":10}', "set all back to 10")).toMatchObject({ type: "reply", text: expect.stringContaining("Every product in your shop, or only the ones out of stock?") });
     // Products it can't name from the message.
     expect(parse('{"type":"bulk","scope":"matching","words":"shoes","price_pct":5}', "raise all prices by 5%")).toMatchObject({ type: "reply" });
   });

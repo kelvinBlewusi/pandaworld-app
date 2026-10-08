@@ -986,6 +986,11 @@ const SCOPE_WORDS_RE: Partial<Record<BulkScope, RegExp>> = {
   inactive:     /\b(off|inactive|disabled|hidden|deactivated|paused)\b/i,
   active:       /\b(on|active|live|enabled|visible)\b/i,
 };
+/** The message says it's for every product in the shop, not just "all" of some group. */
+const WHOLE_SHOP_RE = /\b(all (?:of )?(?:my |the )?(?:products|items|listings|prices|stock)|every (?:product|item|listing)|everything|whole shop|entire shop)\b/i;
+const SCOPE_GROUP: Partial<Record<BulkScope, string>> = {
+  out_of_stock: "the ones out of stock", low_stock: "the ones running low", inactive: "the ones turned off", active: "the ones that are on",
+};
 
 /**
  * A rule for many products ("10% off all perfumes this weekend"), checked:
@@ -1016,8 +1021,17 @@ export function bulkAction(
     }
   } else {
     const backed = SCOPE_WORDS_RE[scope];
-    // "Restock all" is what's out of stock.
-    if (backed && !backed.test(message) && !(scope === "out_of_stock" && opts.restock)) scope = "all";
+    // A group the message doesn't name is never widened to the whole shop on
+    // a guess (owner, 2026-10-08: "restock all back to 10" read as out of
+    // stock became every product). Only "all products", "everything" make it
+    // the whole shop; otherwise ask which they mean. "Restock all" is what's
+    // out of stock.
+    if (backed && !backed.test(message) && !(scope === "out_of_stock" && opts.restock)) {
+      if (!WHOLE_SHOP_RE.test(message)) {
+        return ask(`Every product in your shop, or only ${SCOPE_GROUP[scope] ?? "some of them"}? Say it with the change, e.g. "set the stock of everything out of stock to 10" or "set all products' stock to 10".`);
+      }
+      scope = "all";
+    }
   }
   const numbers = messageNumbers(message);
   const pctMatch = message.match(PCT_RE);
