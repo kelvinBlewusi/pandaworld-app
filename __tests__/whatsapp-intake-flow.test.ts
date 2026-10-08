@@ -4000,6 +4000,50 @@ describe("the assistant, on the pilot's accounts", () => {
       expect(session().pending_notes).toContain("colour black");
     });
   });
+
+  // Step 2 of the reliability plan, switched on per account (owner, 2026-10-08).
+  describe("through the front door", () => {
+    const frontDoorOn = () => { db.tables.app_settings = [{ key: "assistant_front_door", value: [USER] }]; };
+
+    it("sorts the message, reads it in its area, and an edit to a draft is made", async () => {
+      drafted([FRIDGE, SHIRT]);
+      frontDoorOn();
+      aiPrompts.length = 0;
+      aiReplies.push('{"area":"drafts"}', '{"type":"edit","edits":[{"products":[1],"said":"fridge","changes":{"quantity":20},"ask":false}]}');
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "change the quantity of the fridge to 20" });
+      expect(aiPrompts).toHaveLength(2);
+      expect(aiPrompts[0]).toContain('Reply with JSON only: {"area"');
+      expect(aiPrompts[1]).toContain("This message is about: drafts.");
+      expect(db.tables.listings[0].quantity).toBe(20);
+      expect(db.tables.whatsapp_assistant_log.at(-1)).toMatchObject({ raw: expect.stringContaining("[front door]") });
+    });
+
+    it("asks back with buttons, and a tapped answer is read with the question", async () => {
+      drafted([FRIDGE, SHIRT]);
+      frontDoorOn();
+      aiPrompts.length = 0;
+      aiReplies.push('{"area":"drafts"}', '{"type":"clarify","question":"Change the fridge\'s quantity or its price to 20?","options":["Quantity to 20","Price to 20","20"]}');
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "fridge 20" });
+      // A bare number would read as a count once tapped, so it isn't offered.
+      expect(sent.at(-1)).toMatchObject({ kind: "buttons", body: "Change the fridge's quantity or its price to 20?", rows: ["answer:Quantity to 20", "answer:Price to 20"] });
+      expect(db.tables.whatsapp_assistant_log.at(-1)).toMatchObject({ outcome: expect.stringContaining("asked:") });
+      expect(db.tables.listings[0].quantity).toBe(3);
+
+      aiReplies.push('{"area":"drafts"}', '{"type":"edit","edits":[{"products":[1],"said":"fridge","changes":{"quantity":20},"ask":false}]}');
+      await handleLinkedMessage(USER, PHONE, "m2", { text: "answer:Quantity to 20", tapped: true });
+      expect(aiPrompts[2]).toContain('Their new message: "Quantity to 20"');
+      expect(db.tables.listings[0].quantity).toBe(20);
+    });
+
+    it("is off without the switch: one call, the usual prompt", async () => {
+      drafted([FRIDGE, SHIRT]);
+      aiPrompts.length = 0;
+      aiReplies.push('{"type":"edit","edits":[{"products":[1],"changes":{"quantity":20},"ask":false}]}');
+      await handleLinkedMessage(USER, PHONE, "m1", { text: "change the quantity of the fridge to 20" });
+      expect(aiPrompts).toHaveLength(1);
+      expect(aiPrompts[0]).not.toContain('{"area"');
+    });
+  });
 });
 
 

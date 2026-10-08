@@ -1,10 +1,13 @@
 /**
- * Step 2 of the assistant reliability plan, as a PROTOTYPE: "one front door"
- * (https://claude.ai/artifact/8f6i4rjVFvPyG8EcKFHs5n). Nothing in the chat
- * calls this. The test set (lib/evals/assistant-eval.ts) runs it beside the
- * live path on the same cases, so the two can be compared without touching
- * a seller (owner, 2026-10-08: "can we test what we had wanted to build
- * against what we have now without affecting anything?").
+ * Step 2 of the assistant reliability plan: "one front door"
+ * (https://claude.ai/artifact/8f6i4rjVFvPyG8EcKFHs5n). First built as a
+ * prototype the test set (lib/evals/assistant-eval.ts) ran beside the live
+ * path (owner, 2026-10-08: "can we test what we had wanted to build against
+ * what we have now without affecting anything?"): 97.5% against 94.0%, at a
+ * third of the AI cost. Now the chat reads messages through it for the
+ * accounts app_settings `assistant_front_door` names (frontDoorFor in
+ * lib/whatsapp/assistant.ts), the owner's first (owner: "go ahead with
+ * building step 2").
  *
  * How it reads a message, in a fixed order:
  *   1. Context as one record: where they are, the bot's open question and
@@ -46,11 +49,20 @@ export interface FrontDoorInput {
   links:        Record<string, AssistantLink>;
   currency:     string;
   web:          boolean;
-  /** Names of their Jumia products (production would search the shop's local copy). */
+  /** Names of their Jumia products (the shop's local copy, jumia_products). */
   shopNames?:   string[];
+  /** What a listing costs them, for what PandaWorld can do. */
+  listingCost?: number;
+  /** "product 2 of 3", while a batch's photos come in. */
+  position?:    string;
+  /** What the assistant remembers of them (lib/whatsapp/seller-memory.ts). */
+  memory?:      string;
 }
 
 export interface FrontDoorModels { router: string; reader: string }
+
+/** The sorting call's model: Flash-Lite sorted as well as Flash, in half the time (8 Oct test runs). */
+export const FRONT_DOOR_ROUTER = "gemini-2.5-flash-lite";
 
 // ─── 1. Context as one record ────────────────────────────────────────────────
 
@@ -95,7 +107,7 @@ export function contextText(input: FrontDoorInput): string {
   const q = openQuestion(input);
   const named = namesInMessage(input.message, input.shopNames ?? []);
   return [
-    `Where they are: ${STAGES[input.stage]}`,
+    `Where they are: ${STAGES[input.stage]}${input.position ? ` (${input.position})` : ""}`,
     `The bot's open question: ${q ? `${q.about}. What answers it: ${q.fits}. Anything else is a new request and closes the question.` : "none"}`,
     `Drafts in their batch: ${input.drafts.length ? `\n${input.drafts.map((p) => draftLine(p, input.currency)).join("\n")}` : "none"}`,
     `Products you last listed for them: ${input.listed ? `${input.listed.count} (${input.listed.what}). "Those", "them", "all of them" and "the last N" mean these.` : "none"}`,
@@ -136,7 +148,7 @@ function routerPrompt(input: FrontDoorInput): string {
 
 // ─── 3. Read, within the area ────────────────────────────────────────────────
 
-const CLARIFY = '{"type":"clarify","question":"<one short question>","options":["<2 or 3 short answers they can tap>"]} - only when you can\'t tell which action or which product they mean, or a change is missing the value to set (e.g. "change the drone to 10": its stock or its price?).';
+const CLARIFY = '{"type":"clarify","question":"<one short question, ending with ?>","options":["<2 or 3 answers they can tap, each up to 20 characters and clear on its own, e.g. \\"Stock to 10\\", not \\"10\\">"]} - only when you can\'t tell which action or which product they mean, or a change is missing the value to set (e.g. "change the drone to 10": its stock or its price?).';
 const REPLY = '{"type":"reply","text":"<your message>","link":"<a link key, or null>"} - a question you answer in a line or two; a hello; anything this area\'s actions don\'t cover.';
 
 const ACTIONS: Record<Area, string[]> = {
@@ -275,7 +287,8 @@ function readerPrompt(area: Area, input: FrontDoorInput): string {
     contextText(input),
     ...(replyArea ? [
       "", "About this seller:", ...input.seller,
-      "", "What PandaWorld can do (all true; never claim anything else):", capabilities(2),
+      ...(input.memory ? ["", "What you remember about them from earlier (to understand them; never quote it):", input.memory] : []),
+      "", "What PandaWorld can do (all true; never claim anything else):", capabilities(input.listingCost ?? 2),
       "", siteGuide(),
       "", "Links you can send (put the key in \"link\"):", ...Object.entries(input.links).map(([k, l]) => `- ${k}: ${l.what}`),
     ] : []),
@@ -309,20 +322,25 @@ const json = (text: string): Record<string, unknown> | null => {
   try { return JSON.parse(m[0]) as Record<string, unknown>; } catch { return null; }
 };
 
-async function ask(model: string, prompt: string): Promise<string> {
-  const { text } = await withAiUsageContext({ feature: "assistant_eval" }, () =>
+/** Whose AI use it is: the chat's ("assistant", for the seller) or the test set's. */
+export interface FrontDoorUsage { feature: "assistant" | "assistant_eval"; userId?: string }
+
+async function ask(model: string, prompt: string, usage: FrontDoorUsage): Promise<string> {
+  const { text } = await withAiUsageContext(usage, () =>
     callGeminiBackend(model, [{ text: prompt }], { json: true, ...(model.startsWith("gemini-3") ? { preferBackend: "ai-studio" as const } : {}) }));
   return text;
 }
 
 /** What the front door makes of a message: the area, the action (or a question back), and the AI's raw replies. */
-export async function frontDoor(input: FrontDoorInput, models: FrontDoorModels): Promise<{ area: Area; action: FrontDoorAction; raw: string }> {
-  const routed = await ask(models.router, routerPrompt(input));
+export async function frontDoor(
+  input: FrontDoorInput, models: FrontDoorModels, usage: FrontDoorUsage = { feature: "assistant_eval" },
+): Promise<{ area: Area; action: FrontDoorAction; raw: string }> {
+  const routed = await ask(models.router, routerPrompt(input), usage);
   const picked = json(routed)?.area;
   const area: Area = AREAS.has(picked as Area) ? (picked as Area) : "chat";
   // Drafts only exist in a batch: without any, a change goes to the live products.
   const reading: Area = area === "drafts" && input.drafts.length === 0 ? "live_products" : area;
-  const text = await ask(models.reader, readerPrompt(reading, input));
+  const text = await ask(models.reader, readerPrompt(reading, input), usage);
   const raw = `${routed.trim()} → ${text.trim()}`;
   const parsed = json(text);
   if (parsed?.type === "clarify") {
