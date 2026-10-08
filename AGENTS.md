@@ -2241,6 +2241,13 @@ measuring, is this.
 - **/admin/assistant-tests**: Run (the model in use, or flash / flash-lite
   to compare), score history, the latest run by area, and every case it got
   wrong with what it should have done.
+- **Baseline (8 Oct, one run each)**: gemini-2.5-flash-lite 147/203 (72%),
+  69% without the word rules; gemini-2.5-flash 194/203 (96%), the same
+  without them. Flash: ~2.6 s a reply against 1.3 s, $3.33 against $0.94 per
+  1,000 messages. On the owner's go-ahead, app_settings `assistant_model`
+  is `gemini-2.5-flash` since 2026-10-08 12:27 UTC (delete the row, or set
+  it back, to return to flash-lite; ASSISTANT_MODEL stays the default).
+  The daily ceiling (20,000 turns) now caps a worst day near $67, not $19.
 - **The rule from now on**: a misread from a real conversation becomes a
   case here first, with its right answer. A change to the prompt, the
   model or the checks ships only if no case that passed before fails. No
