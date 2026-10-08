@@ -124,6 +124,15 @@ describe("reading the newest products", () => {
     expect(aiPrompts[0]).toContain("• Gold Tone Earrings · GHS 60 · 10 in stock · off, rejected · added 1 Sept · SKU EAR-1");
   });
 
+  it("remembers the products it listed, so \"those\" and \"the last 10\" mean them", async () => {
+    db.tables.whatsapp_sessions = [{ phone_number: PHONE, user_id: USER, state: "awaiting_count" }];
+    aiAnswer = new Error("down");
+    await answerResearch(USER, PHONE, "my 2 newest products", [newest(2)]);
+    const listed = (db.tables.whatsapp_sessions[0] as { last_listed: { sids: string[]; what: string } }).last_listed;
+    expect(listed.sids).toEqual(["w1", "b1", "b2", "b3"]);
+    expect(listed.what).toBe("The 2 newest products in the Jumia shop, newest first");
+  });
+
   it("sends the data itself when the AI's answer has a figure that isn't in it", async () => {
     aiAnswer = "Your newest product is the Kinky Curly Wig at GHS 499, with 40 in stock.";
     const outcome = await answerResearch(USER, PHONE, "my newest products", [newest(2)]);

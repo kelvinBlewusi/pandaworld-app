@@ -2167,6 +2167,48 @@ get info and data and organize them to fit the sellers request."
   one in Vendor Center") instead of a plain "Fix them…", and the prompt
   knows a reason is never guessed.
 
+### Owner's web chat 09:34–10:04, the category drawer, the polish switch (2026-10-08)
+
+- **"Change/restock X to N" is a live change, never a count**
+  (`changeToAsked` in lib/whatsapp/assistant.ts, applied in parseAction
+  when the AI said list, restart, unclear, help or an empty edit). After
+  the bot asked "How many products are you listing today?", "Change
+  Foldable Drone with HD Camera to 10" opened a 10-product form and
+  "restock the foladable drone to. 10" offered a new batch.
+  - "restock", "stock", "qty", "pcs"/"psc" → stock; "price", a currency,
+    "cedis" → price; plain "to 10" → asks "the stock or the price?".
+  - Leaves alone a draft's own name, "it", a field name and anything
+    about a sale.
+  - The prompt has the rule and examples.
+- **"Those", "the last 10", "all" after a list are the products just
+  listed** (bulk scope `listed`).
+  - Saved in `whatsapp_sessions.last_listed` (migration
+    2026-10-08_last-listed.sql, applied), kept through restarts and fresh
+    for 30 minutes.
+  - Written by research's products block, answerStock (a product's stock,
+    out/low) and answerProducts (off, rejected).
+  - `bulkAction` never widens "listed" to the whole shop. With nothing
+    listed lately it asks which products; "restock all" then means what's
+    out of stock.
+  - The prompt says what was just listed.
+- **No colour, brand or name warning** for a value the AI added when the
+  message doesn't mention that field. "Large, Medium and Small" got
+  "I couldn't see the new colour".
+- **Restart only on listing talk** (`listingTalk`): listing or stopping
+  words, a quantity, or things in the plural. "Let's enter Shop assistant
+  mode" offered a batch; it now gets help.
+- **Category drawer** (components/ui/category-drawer.tsx), used by the
+  WhatsApp draft editor and the main listing pages:
+  - Drawn into document.body through a portal, pinned top and bottom
+    instead of `h-screen` (100vh ran under a phone's browser bar and hid
+    the footer), above the dashboard's layers (z-[70]).
+  - The selected path on its own line (2 lines max) and a full-width
+    "Select category" button clear of the phone's home bar.
+  - Search no longer auto-focuses on phones (the keyboard covered the list).
+- **Polish switch**: just "Polish photos" (the credit cost and the
+  explanation line removed, owner's ask). The cost still comes from the
+  page (POLISH_COST), which only decides whether the switch shows.
+
 ### The chat knows the website (owner, 2026-10-07)
 
 "Let the chat know our site very well ... connect WhatsApp, use extension,

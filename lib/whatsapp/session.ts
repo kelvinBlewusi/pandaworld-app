@@ -31,6 +31,17 @@ export interface AssistantPending {
  * kept in the same column: a bare "10" next is the answer, not a batch of 10
  * (owner's second test, 2026-10-07). See answerLiveValue.
  */
+/**
+ * The products the assistant just listed for the seller (their sids), so
+ * "those", "them" and "the last 10" mean them (lib/whatsapp/assistant.ts,
+ * bulk scope "listed"). Kept through a restart; stale after 30 minutes.
+ */
+export interface ListedProducts {
+  sids: string[];
+  what: string;
+  at:   string;
+}
+
 export interface LiveValueAsk {
   kind:      "live_value";
   field:     "stock" | "price";
@@ -148,6 +159,8 @@ export interface WhatsAppSession {
    * that isn't an answer drops it. See lib/whatsapp/assistant.ts.
    */
   assistantPending: AssistantPending | LiveValueAsk | null;
+  /** The products the assistant last listed (ListedProducts). */
+  lastListed: ListedProducts | null;
 }
 
 /** What awaitingQcAnswer holds. */
@@ -180,6 +193,7 @@ function fromRow(row: Record<string, unknown>): WhatsAppSession {
     batchQuiet: (row.batch_quiet as boolean | null) ?? null,
     preferredBatchQuiet: (row.preferred_batch_quiet as boolean | null) ?? null,
     assistantPending: (row.assistant_pending as AssistantPending | LiveValueAsk | null) ?? null,
+    lastListed: (row.last_listed as ListedProducts | null) ?? null,
   };
 }
 
@@ -315,6 +329,7 @@ export async function updateSession(
     batchQuiet: boolean | null;
     preferredBatchQuiet: boolean | null;
     assistantPending: AssistantPending | LiveValueAsk | null;
+    lastListed: ListedProducts | null;
   }>,
 ): Promise<void> {
   const db = createServerClient();
@@ -335,6 +350,7 @@ export async function updateSession(
   if (patch.batchQuiet !== undefined) update.batch_quiet = patch.batchQuiet;
   if (patch.preferredBatchQuiet !== undefined) update.preferred_batch_quiet = patch.preferredBatchQuiet;
   if (patch.assistantPending !== undefined) update.assistant_pending = patch.assistantPending;
+  if (patch.lastListed !== undefined) update.last_listed = patch.lastListed;
   await db.from("whatsapp_sessions").update(update).eq("phone_number", phoneNumber);
 }
 

@@ -34,7 +34,7 @@ import {
   syncCatalog, type ShopProduct,
 } from "@/lib/jumia/shop";
 import { formatAmount } from "@/lib/whatsapp/orders";
-import { LOW_STOCK, periodEnd, periodStart, sendLong, shopContext, shorten, statusName, type Ctx, type Period } from "@/lib/whatsapp/shop";
+import { LOW_STOCK, periodEnd, rememberListed, periodStart, sendLong, shopContext, shorten, statusName, type Ctx, type Period } from "@/lib/whatsapp/shop";
 import { orderItems, salesByProduct } from "@/lib/whatsapp/shop-insights";
 
 /** The most sources one question reads. */
@@ -121,6 +121,8 @@ export function parseNeeds(
 
 /** A product as the seller thinks of it: its variations together. */
 export interface ProductGroup {
+  /** Every variation's sid: what a change to "those" acts on. */
+  sids: string[];
   name: string; sku: string; variations: string[]; price: number | null; maxPrice: number | null; salePrice: number | null;
   stock: number | null; status: string | null; qc: string | null; qcReason: string | null; createdAt: string | null; currency: string | null;
 }
@@ -140,6 +142,7 @@ export function groupProducts(products: ShopProduct[], today: string): ProductGr
     const stocks = vs.map((v) => v.stock).filter((n): n is number => n != null);
     const sale = vs.find((v) => v.salePrice != null && (!v.saleEnd || v.saleEnd.slice(0, 10) >= today) && (!v.saleStart || v.saleStart.slice(0, 10) <= today));
     return {
+      sids: vs.map((v) => v.sid),
       name: vs[0].name,
       sku: vs[0].sellerSku,
       variations: vs.map((v) => v.variation).filter((v): v is string => !!v && v !== "..."),
@@ -231,7 +234,7 @@ export function productLine(g: ProductGroup, money: (n: number, cur?: string | n
 // ─── Reading each source ─────────────────────────────────────────────────────
 
 /** What one source gave: a heading and its lines, the data the answer is written from. */
-export interface Block { title: string; lines: string[]; failed?: boolean }
+export interface Block { title: string; lines: string[]; failed?: boolean; /** Products shown: their sids. */ sids?: string[] }
 
 const PERIOD_WORDS: Record<Period, string> = {
   today: "today", yesterday: "yesterday", week: "in the last 7 days", month: "in the last 30 days", quarter: "in the last 90 days",
@@ -266,6 +269,7 @@ async function readProducts(ctx: Ctx, need: Extract<ResearchNeed, { source: "pro
           ? `Products${what ? ` ${what}` : ""}: none`
           : `The ${groups.length} ${need.sort} product${groups.length === 1 ? "" : "s"} in the Jumia shop${what ? ` (${what})` : ""}, ${SORT_WORDS[need.sort]}`,
         lines: groups.map((g) => productLine(g, money, tz)),
+        sids: groups.flatMap((g) => g.sids),
       };
     }
     // Not read: the local copy below.
@@ -283,6 +287,7 @@ async function readProducts(ctx: Ctx, need: Extract<ResearchNeed, { source: "pro
     title: `Products${what ? ` ${what}` : ""}, ${SORT_WORDS[need.sort]}: ${shown.length === groups.length ? `all ${groups.length}` : `${shown.length} of ${groups.length}`}` +
       ` (the shop has ${groupProducts(all, today).length} in all)`,
     lines: shown.length > 0 ? shown.map((g) => productLine(g, money, tz)) : ["None."],
+    sids: shown.flatMap((g) => g.sids),
   };
 }
 
@@ -502,6 +507,9 @@ export async function answerResearch(userId: string, phone: string, request: str
   const blocks = await Promise.all(needs.map((n) => readNeed(ctx, n, deadline)));
   const data = blocksText(blocks);
   const answer = blocks.every((b) => b.failed) ? null : await composeAnswer(userId, request, data);
+  // "Those", "the last 10": the products shown (lib/whatsapp/assistant.ts, bulk scope "listed").
+  const listed = blocks.find((b) => b.sids && b.sids.length > 0);
+  if (listed) await rememberListed(phone, listed.sids!.map((sid) => ({ sid })), listed.title);
   const fromJumia = needs.some((n) => n.source !== "pandaworld_listings");
   await sendLong(phone, `${answer ?? data}${fromJumia ? "\n\n_Read from Jumia just now._" : ""}`);
   return `research ${needs.map((n) => n.source).join("+")}: ${answer ? "answered" : "data sent"}`;

@@ -137,6 +137,9 @@ describe("rules for many products", () => {
     expect(off.targets.map((p) => p.sellerSku)).toEqual(["LAT-50", "LAT-100", "NAS-K"]);
     expect(off.skipped).toEqual([{ reason: "already off", count: 1 }]);
     expect(bulkTargets(all, "matching", "parfum", { kind: "price_pct", pct: 5 }, null).targets.map((p) => p.sellerSku)).toEqual(["LAT-50", "LAT-100"]);
+    // "Those", "the last 10" (owner's web chat, 2026-10-08): only the products just listed.
+    expect(bulkTargets(all, "listed", null, { kind: "stock", stock: 20 }, null, [PERFUME_50, KETTLE]).targets.map((p) => p.sellerSku)).toEqual(["LAT-50", "NAS-K"]);
+    expect(bulkTargets(all, "listed", null, { kind: "stock", stock: 20 }, null).targets).toEqual([]);
     // Below Jumia's lowest price: left out, said.
     const cut = bulkTargets(all, "all", null, { kind: "price_pct", pct: -50 }, 70);
     expect(cut.targets.map((p) => p.sellerSku)).toEqual(["LAT-50", "LAT-100"]);

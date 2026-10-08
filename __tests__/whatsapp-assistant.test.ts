@@ -64,7 +64,7 @@ jest.mock("@/lib/jumia/categories", () => ({
 
 import {
   answerLiveValue, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
-  draftNumberIn, isProductName, namesAProduct, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
+  changeToAsked, draftNumberIn, isProductName, namesAProduct, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { assistantGate } from "@/lib/whatsapp/assistant-limits";
 import { parseVariations } from "@/lib/whatsapp/variation-question";
@@ -938,5 +938,73 @@ describe("research: several reads of the shop, answered together", () => {
     const prompt = aiPrompts[aiPrompts.length - 1];
     expect(prompt).toContain('{"type":"research","needs":[');
     expect(prompt).toContain('"the full list of the last 10 products uploaded on my shop" → {"type":"research"');
+  });
+});
+
+// The owner's web chat, 2026-10-08 (09:34 to 10:04): after the bot asked
+// how many products they're listing, product changes were read as counts.
+describe("a change to a product is never a count", () => {
+  const links = assistantLinks();
+  const stock = (product: string, n: number) => ({ type: "live_change", product, change: { kind: "stock", stock: n } });
+
+  it("reads which product, which field and the value", () => {
+    expect(changeToAsked("restock the foladable drone to. 10")).toEqual({ target: "foladable drone", field: "stock", value: 10, many: false, restock: true });
+    expect(changeToAsked("Change drone to 10 psc")).toMatchObject({ target: "drone", field: "stock", value: 10 });
+    expect(changeToAsked("Change Foldable Drone with HD Camera to 10")).toMatchObject({ target: "Foldable Drone with HD Camera", field: null, value: 10 });
+    expect(changeToAsked("set the price of the kettle to GHS 120")).toMatchObject({ target: "kettle", field: "price", value: 120 });
+    expect(changeToAsked("change the stock of the lat 10 to 20")).toMatchObject({ target: "lat 10", field: "stock", value: 20, many: true });
+    expect(changeToAsked("restock all back to 10")).toMatchObject({ target: "all", field: "stock", value: 10, many: true, restock: true });
+    expect(changeToAsked("change the price to 10")).toBeNull();
+    expect(changeToAsked("set it to 10")).toBeNull();
+    expect(changeToAsked("I want to list 10 products")).toBeNull();
+  });
+
+  it("the owner's messages, whatever the AI made of them", () => {
+    expect(parseAction('{"type":"restart"}', "restock the foladable drone to. 10", [], links)).toEqual(stock("foladable drone", 10));
+    expect(parseAction('{"type":"list","count":3}', "Change drone to 10 psc", [], links)).toEqual(stock("drone", 10));
+    expect(parseAction('{"type":"list","count":3}', "Change Foldable Drone with HD Camera to 10pcs", [], links)).toEqual(stock("Foldable Drone with HD Camera", 10));
+    // "to 10" alone could be its stock or its price: asked, never a form for 10 products.
+    const r = parseAction('{"type":"list","count":10}', "Change Foldable Drone with HD Camera to 10", [], links);
+    expect(r).toMatchObject({ type: "reply" });
+    expect((r as { text: string }).text).toContain("The *stock* or the *price* of the Foldable Drone with HD Camera?");
+    // A draft's own name is still the draft's edit, left to the AI's reading.
+    expect(parseAction('{"type":"unclear"}', "change the cotton t-shirt to 10", [SHIRT], links)).toEqual({ type: "unclear" });
+  });
+
+  it("\"those\" and \"the last 10\" are the products the bot just listed, never the whole shop", () => {
+    const listed = (n: number) => ({ type: "bulk", scope: "listed", words: null, change: { kind: "stock", stock: n } });
+    const garbage = '{"type":"edit","edits":[{"products":[2],"said":null,"changes":{"color":"black,blue,grey"},"ask":false}]}';
+    expect(parseAction(garbage, "restock all back to 10", [SHIRT], links, "GHS", { listed: true })).toEqual(listed(10));
+    expect(parseAction(garbage, "change the stock of the lat 10 to 20", [SHIRT], links, "GHS", { listed: true })).toEqual(listed(20));
+    // The AI's own "listed" for "restock all": still only those.
+    expect(parseAction('{"type":"bulk","scope":"listed","words":null,"stock":10}', "restock all back to 10", [], links, "GHS", { listed: true })).toEqual(listed(10));
+    // Nothing listed lately: restocking all is what's out of stock; "the last 10" asks which.
+    expect(parseAction(garbage, "restock all back to 10", [SHIRT], links)).toEqual({ type: "bulk", scope: "out_of_stock", words: null, change: { kind: "stock", stock: 10 } });
+    expect(parseAction(garbage, "change the stock of the lat 10 to 20", [SHIRT], links)).toMatchObject({ type: "reply", text: expect.stringContaining("Which products?") });
+    expect(parseAction('{"type":"bulk","scope":"listed","words":null,"stock":10}', "set those to 10 pcs", [], links)).toMatchObject({ type: "reply", text: expect.stringContaining("Which products?") });
+  });
+
+  it("carries a change to the listed products out on exactly those", async () => {
+    aiReplies.push('{"type":"bulk","scope":"listed","words":null,"stock":20}');
+    shopCalls.length = 0;
+    const at = new Date().toISOString();
+    await runAssistant("seller", "233", {
+      phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null,
+      lastListed: { sids: ["s1", "s2"], what: "The 10 newest products", at },
+    } as never, "change the stock of the last 10 to 20", "idle");
+    expect(shopCalls).toEqual([["proposeBulkChange", "listed", null, { kind: "stock", stock: 20 }, ["s1", "s2"]]]);
+    expect(aiPrompts[aiPrompts.length - 1]).toContain('You just listed 2 of their Jumia products for them (The 10 newest products).');
+  });
+
+  it("only listing words start or stop a batch", () => {
+    expect(parseAction('{"type":"list","count":3}', "Let's enter Shop assistant mode", [], links)).toEqual({ type: "help" });
+    expect(parseAction('{"type":"list","count":3}', "let's enter listing mode", [], links)).toEqual({ type: "restart" });
+    expect(parseAction('{"type":"restart"}', "Stop listing", [], links)).toEqual({ type: "restart" });
+  });
+
+  it("no colour warning when the message doesn't mention colour", () => {
+    const raw = '{"type":"edit","edits":[{"products":[2],"said":null,"changes":{"variations":[{"said":"Large","option":"L"},{"said":"Medium","option":"M"}],"color":"Navy Blue"},"ask":false}]}';
+    expect(parseAction(raw, "Large and Medium", [SHIRT], links)).toEqual({ type: "edit", edits: [{ seqs: [2], changes: { variations: ["L", "M"] }, ask: false }], dropped: [] });
+    expect(parseAction(raw, "Large and Medium, colour navy", [SHIRT], links)).toMatchObject({ dropped: ["colour"] });
   });
 });
