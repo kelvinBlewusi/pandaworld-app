@@ -66,7 +66,8 @@ import { sellerCountry } from "@/lib/jumia/unlistable-categories";
 import { getJumiaConnectionKind } from "@/lib/jumia/credentials";
 import { currentPack, featureAccess, featureMinPackName, type FeatureId } from "@/lib/billing/features";
 import {
-  BULK_MAX, MAX_GROUP, answerFees, answerListings, answerOrderStatus, answerPayouts, answerProductInfo, answerProducts, answerSales, answerStock,
+  BULK_MAX, BULK_PARTS_MAX, MAX_GROUP, answerFees, answerListings, answerOrderStatus, answerPayouts, answerProductInfo, answerProductText, answerProducts,
+  answerSales, answerStock,
   proposeBulkChange, proposeContentChange, proposeLiveChange, type BulkScope, type ContentRequest,
 } from "@/lib/whatsapp/shop";
 import {
@@ -193,6 +194,7 @@ export type AssistantAction =
   /** `others`: more products for the same change (one tap, one feed); `all`: every product their words fit. */
   | { type: "live_change"; product: string; change: LiveChange; fromContext?: boolean; others?: string[]; all?: boolean }
   | { type: "product_info"; product: string }
+  | { type: "product_text"; product: string }
   | { type: "fees"; product: string; price: number | null }
   | { type: "stock"; product: string | null; filter: "out" | "low" | null }
   | { type: "shop"; filter: "all" | "inactive" | "rejected" }
@@ -286,11 +288,13 @@ export function capabilities(listingCost = LIVE_LISTING_CREDIT_COST): string {
     "- Submit to Jumia and report back when each product goes live or is rejected; fix common rejections itself (banned words, restricted brands) and guide the seller through the rest with Fix & resubmit. After Jumia accepts a listing, its quality-check verdict is followed up (and the credits returned if QC rejects it) with the Standard pack and up.",
     "- Orders: \"orders\" shows orders waiting to be packed; pack them, mark them ready to ship, or cancel, here or on WhatsApp; where any order is, by its number; orders and sales for today, the week, the month or 90 days. Shipping label PDFs only on WhatsApp (Standard pack and up). Pro and up also: alerts for new Jumia orders on WhatsApp, grouped and quiet at night, and a message when orders are delivered, returned, fail delivery or are cancelled.",
     `- Their live Jumia products, found by name among everything in their shop: change a product's stock, price, a sale price with its dates, or turn it on or off, with one tap to confirm, for one product or several named together (up to ${MAX_GROUP}); where a product is (on or off, Jumia's quality check, price, sale, stock); how many are left; what's out of stock or low; which products are turned off or rejected by Jumia's quality check.`,
-    `- Rules for many products at once, shown in full before one tap: prices up or down by a percentage, a sale a percentage off (with dates), a stock or price, ending sales, turning on or off; for all their products, the ones out of stock, low, off or on, or all that match words ("all perfumes"); up to ${BULK_MAX} products.`,
-    "- A live product's name, description, highlights or brand: the seller's own text, or rewritten by AI from what Jumia has now, shown before one tap. Jumia checks content changes again. Photos and category of live products are changed in Vendor Center.",
+    `- Rules for many products at once, shown in full before one tap: prices up or down by a percentage, a sale a percentage off (with dates), a stock or price, ending sales, turning on or off; for all their products, the ones out of stock, low, off or on, or all that match words ("all perfumes"); up to ${BULK_MAX} products per tap, and a bigger rule in parts of ${BULK_MAX}, one tap each (up to ${BULK_MAX * BULK_PARTS_MAX}).`,
+    "- A live product's name, description and highlights shown as Jumia has them now (product_text). Changing them, or the brand: the seller's own text, or rewritten by AI from what Jumia has now with their instructions (\"remove the word X from the name\"), shown before one tap. Jumia checks content changes again. Photos and category of live products are changed in Vendor Center.",
     "- Reports: best sellers, products with no sale, what runs out soon at the rate it sells, returns and failed deliveries, for the last 7, 30 or 90 days.",
     "- Products rejected by Jumia's quality check: which ones, with Jumia's reason when its API gives one (often it doesn't: then the reason is only in Vendor Center, never guessed).",
     "- Payouts: the last Jumia payout and the statement not yet paid; every statement of the last 90 days; one statement's fees, refunds and balances. A message when Jumia pays: Pro and up.",
+    "- Lists of products show up to 30 at a time, so a message stays readable on a phone; \"more\" shows the next 30. The shop overview also counts the products deleted on Jumia.",
+    "- What PandaWorld keeps itself: every product listed through it (from WhatsApp, the website or the extension), with its status and date; the chat's own history of the last messages.",
     "- Questions that need several reads of their shop, answered together the way they ask: the last products they uploaded (with price, variations, stock, on or off, quality check, date added), products sorted or filtered (by price, stock, on sale, rejected, matching words), orders with what was in them, sales by product, payout statements, what they listed with PandaWorld; read from Jumia just now, free.",
     "- Before listing: whether a brand is on Jumia and allowed in a category; what a kind of product needs on Jumia (its category, the details asked, variation options, commission).",
     "- The shops under their Jumia account. Jumia's warehouse (for sellers who stock it): what it holds of a product, a delivery order into it (products and quantities, with a tap), and telling Jumia one has shipped with its tracking number.",
@@ -490,6 +494,7 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '  Values from the message, or from the seller\'s own recent messages when this one names the products. "product" may come from the',
     '  recent conversation when the message says "it", "them" or nothing.',
     '{"type":"product_info","product":"<their words>"} - where one of their Jumia products is: on or off, quality check, price, sale, stock',
+    '{"type":"product_text","product":"<their words>"} - one of their Jumia products\' name, description and highlights as Jumia has them now, to read or edit',
     '{"type":"fees","product":"<their words>","price":<number from the message> or null} - what Jumia takes and what they receive when it sells',
     '{"type":"stock","product":"<their words>" or null,"filter":"out" or "low" or null} - how many are left of a product, or what is out of stock or low',
     '{"type":"shop","filter":"all" or "inactive" or "rejected"} - their Jumia products: an overview, the ones turned off, or the ones rejected',
@@ -1026,7 +1031,8 @@ export function bulkAction(
   // "On them and keep their stock" after "on all the products that are off"
   // (owner's web chat, 2026-10-08): the rule and its group are in the message
   // before, which this one points back to. Values still come from this one.
-  const rule = opts.previous && LISTED_WORDS.test(message) ? `${message}\n${opts.previous}` : message;
+  // So is a bare value answering "What should their stock be?" ("0").
+  const rule = opts.previous && (LISTED_WORDS.test(message) || /^\s*\S+(?:\s+\S+){0,2}\s*$/.test(message)) ? `${message}\n${opts.previous}` : message;
   let scope: BulkScope;
   if (parsed.scope === "listed") {
     // "Those", "the last 10", "all" after a list: the products the bot just
@@ -1099,7 +1105,7 @@ export function bulkAction(
   return { type: "bulk", scope, words: scope === "matching" ? words : null, change };
 }
 
-const CHANGE_WORDS = /\b(change|update|edit|modify|new|another)\b/i;
+const CHANGE_WORDS = /\b(change|update|edit|modify|new|another|remove|delete|take (?:out|off)|drop|replace|rename|redraft|re-draft|correct)\b/i;
 const REWRITE_WORDS = /\b(rewrite|re-write|improve|better|write|redo|re-do|optimi[sz]e|polish|fix|make (it|the \w+) (better|nicer|attractive|catchy|professional))\b/i;
 
 /** A live product's content change, checked: its text copied from the message, or a rewrite they asked for. */
@@ -1114,14 +1120,24 @@ export function contentAction(parsed: Record<string, unknown>, message: string, 
     const v = parsed[key];
     if (typeof v === "string" && v.trim() && saidInMessage(v, message)) request[key] = v.trim();
   }
-  const rewrite = (Array.isArray(parsed.rewrite) ? parsed.rewrite : [])
-    .filter((f): f is "name" | "description" | "highlights" => f === "name" || f === "description" || f === "highlights")
-    .filter((f) => !request[f]);
+  const TEXT_FIELDS = ["name", "description", "highlights"] as const;
+  // A text the AI wrote itself for a field (not copied from the message) is
+  // never sent: it becomes a rewrite, which reads what Jumia has now and takes
+  // their words as the instructions ("just redraft the name yourself, it has
+  // the word thong in it, just remove that word": owner's WhatsApp, 2026-10-08).
+  const guessed = TEXT_FIELDS.filter((f) => typeof parsed[f] === "string" && (parsed[f] as string).trim() && !request[f]);
+  const rewrite = Array.from(new Set([
+    ...(Array.isArray(parsed.rewrite) ? parsed.rewrite : []).filter((f): f is (typeof TEXT_FIELDS)[number] => (TEXT_FIELDS as readonly unknown[]).includes(f)),
+    ...guessed,
+  ])).filter((f) => !request[f]);
   // "Change the description of the boot" with no new text in it asks for one
-  // to be written, like "rewrite" (owner's web chat, 2026-10-08).
-  const named = rewrite.some((f) => new RegExp(f === "name" ? "\\b(name|title)\\b" : `\\b${f}\\b`, "i").test(message));
+  // to be written, like "rewrite" (owner's web chat, 2026-10-08). A word of
+  // its name said with the change is about the name ("it is not a Thong so
+  // change that").
+  const inName = nameWords(product).some((w) => w.length >= 4 && new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(message));
+  const named = rewrite.some((f) => f === "name" ? /\b(name|title)\b/i.test(message) || inName : new RegExp(`\\b${f}\\b`, "i").test(message));
   if (rewrite.length > 0 && (REWRITE_WORDS.test(message) || (named && CHANGE_WORDS.test(message)))) {
-    request.rewrite = Array.from(new Set(rewrite)); request.instructions = message.slice(0, 400);
+    request.rewrite = rewrite; request.instructions = message.slice(0, 400);
   }
   if (Object.keys(request).length === 0) {
     return ask("What should I change on it? Write the new name, or say \"rewrite its description\", e.g. \"change the blender's name to Silver Crest 3 in 1 Blender 1.5L\".");
@@ -1316,6 +1332,11 @@ function parseActionRaw(
       return productBacked(product, message) || productBacked(product, context)
         ? { type: "product_info", product } : ask("Which product? Tell me its name as it shows on Jumia, e.g. \"is the Hisense fridge live?\".");
     }
+    case "product_text": {
+      const product = typeof parsed.product === "string" ? parsed.product.trim().slice(0, 120) : "";
+      return namesAProduct(product) && (productBacked(product, message) || productBacked(product, context))
+        ? { type: "product_text", product } : ask("Which product? Tell me its name as it shows on Jumia, e.g. \"show me the neck fan's description\".");
+    }
     case "fees":
     case "calculator": {
       const product = typeof parsed.product === "string" ? parsed.product.trim().slice(0, 120) : "";
@@ -1327,7 +1348,11 @@ function parseActionRaw(
       return { type: "fees", product, price };
     }
     case "stock": {
-      const product = typeof parsed.product === "string" && parsed.product.trim() && productBacked(parsed.product, message) ? parsed.product.trim().slice(0, 120) : null;
+      // "What is the stock of this product" names it in the conversation
+      // (owner's web chat, 2026-10-08: it got the whole low-stock list).
+      const product = typeof parsed.product === "string" && parsed.product.trim()
+        && (productBacked(parsed.product, message) || (namesAProduct(parsed.product) && productBacked(parsed.product, context)))
+        ? parsed.product.trim().slice(0, 120) : null;
       const filter = parsed.filter === "out" || parsed.filter === "low" ? parsed.filter : null;
       return { type: "stock", product, filter };
     }
@@ -1574,7 +1599,7 @@ export async function recentConversation(phone: string, current: string, max = 2
     if (lastIn && lastIn.direction === "inbound" && (lastIn.body_text ?? "").trim() === current.trim()) rows.pop();
     return rows.slice(-max).map((r) => {
       // A tapped answer to the front door's question reads as the answer.
-      const body = (r.body_text ?? "").trim().replace(/^answer:/, "");
+      const body = (r.body_text ?? "").trim().replace(/^answer:(?:@[a-z_]+:)?/, "");
       const shown = !body ? (r.message_type === "image" ? "[a photo]" : "[a message]")
         : /^[a-z_]+:\S+$/i.test(body) ? "[tapped a button]" : blankCodes(body.replace(/\s+/g, " ").slice(0, 300));
       return `${r.direction === "inbound" ? "Seller" : "Bot"}: ${shown}`;
@@ -1640,28 +1665,29 @@ export async function interpretThroughFrontDoor(
   message: string,
   opts: {
     batchId?: string | null; conversation?: string[]; web?: boolean; position?: string; waitingFor?: string;
-    listed?: { count: number; what: string } | null; listedSids?: string[];
+    listed?: { count: number; what: string } | null; listedSids?: string[]; answered?: { area?: string };
   } = {},
-): Promise<{ action: AssistantAction | Clarify; links: Record<string, AssistantLink>; raw: string }> {
+): Promise<{ area: string; action: AssistantAction | Clarify; links: Record<string, AssistantLink>; raw: string }> {
   const [currency, seller, reader, listingCost, memory, shop] = await Promise.all([
     shopCurrencyForUser(userId), sellerFacts(userId), assistantModel(), listingCreditCost(userId).catch(() => LIVE_LISTING_CREDIT_COST),
     sellerMemory(userId), shopFacts(userId, message, opts.listed ? opts.listedSids ?? [] : []),
   ]);
   const links = assistantLinks({ batchId: opts.batchId, countrySlug: seller.countrySlug });
-  const { action, raw } = await frontDoor({
+  const { area, action, raw } = await frontDoor({
     stage, message, conversation: opts.conversation ?? [], drafts: products, waitingFor: opts.waitingFor,
     listed: opts.listed ? { ...opts.listed, items: shop.listed } : null,
     seller: seller.lines, links, currency, web: opts.web ?? false, shopNames: shop.names, listingCost, position: opts.position, memory,
+    ...(opts.answered ? { answered: opts.answered } : {}),
   }, { router: FRONT_DOOR_ROUTER, reader }, { feature: "assistant", userId }, FRONT_DOOR_LIMITS);
-  return { action, links, raw: `[front door] ${raw}` };
+  return { area, action, links, raw: `[front door] ${raw}` };
 }
 
 /**
  * The front door's question back, with its answers to tap. A tap comes back
- * as "answer:<words>" and is read as if typed (lib/whatsapp/intake.ts
- * aiReadable), with the question in the conversation.
+ * as "answer:@<area>:<words>" and is read as if typed (lib/whatsapp/intake.ts
+ * aiReadable), in the question's area, with the question in the conversation.
  */
-async function sendClarify(phone: string, clarify: Clarify): Promise<void> {
+export async function sendClarify(phone: string, clarify: Clarify, area?: string): Promise<void> {
   const question = clarify.question.trim() || "What would you like me to do?";
   // A bare number would read as a count once tapped: it must say what it is.
   const options = clarify.options.map((o) => o.trim()).filter((o) => o && !/^\d+$/.test(o)).slice(0, 3);
@@ -1670,11 +1696,11 @@ async function sendClarify(phone: string, clarify: Clarify): Promise<void> {
     return;
   }
   if (options.every((o) => o.length <= 20)) {
-    await sendButtonsIfConfigured(phone, question, options.map((o) => ({ id: `answer:${o}`, title: o })));
+    await sendButtonsIfConfigured(phone, question, options.map((o) => ({ id: `answer:${area ? `@${area}:` : ""}${o}`, title: o })));
     return;
   }
   await sendListIfConfigured(phone, question, "Choose", options.map((o) => ({
-    id: `answer:${o}`, title: o.slice(0, 24), ...(o.length > 24 ? { description: o.slice(0, 72) } : {}),
+    id: `answer:${area ? `@${area}:` : ""}${o}`, title: o.slice(0, 24), ...(o.length > 24 ? { description: o.slice(0, 72) } : {}),
   })));
 }
 
@@ -1714,7 +1740,9 @@ export async function applyChanges(userId: string, listing: ListingRow, changes:
 
   if (changes.price != null) {
     const minimum = await priceMinimumForUser(userId);
-    if (isBelowMinimum(changes.price, minimum)) {
+    if (!(changes.price > 0)) {
+      result.problems.push("a price has to be more than 0, so the price stays as it was");
+    } else if (isBelowMinimum(changes.price, minimum)) {
       result.problems.push(`${money(changes.price, minimum.currency)} is below the lowest price Jumia allows (${money(minimum.min, minimum.currency)}), so the price stays as it was`);
     } else {
       update.selling_price = changes.price;
@@ -1943,7 +1971,7 @@ export async function runAssistant(
   text: string,
   stage: Stage,
   hintSeq?: number,
-  opts: { position?: string; waitingFor?: string } = {},
+  opts: { position?: string; waitingFor?: string; answered?: { area?: string } } = {},
 ): Promise<AssistantOutcome> {
   // A button id from an older message ("apick:2", "value:3") isn't words to understand.
   if (/^[a-z_]+:\S+$/i.test(text.trim())) return "default";
@@ -1974,9 +2002,19 @@ export async function runAssistant(
       listed: listedFresh(session),
     };
     if (viaFrontDoor) {
-      const read = await interpretThroughFrontDoor(userId, stage, products, text, { ...facts, listedSids: session.lastListed?.sids });
+      const t0 = Date.now();
+      const read = await interpretThroughFrontDoor(userId, stage, products, text, {
+        ...facts, listedSids: session.lastListed?.sids, ...(opts.answered ? { answered: opts.answered } : {}),
+      }).catch(async (e: Error) => {
+        // Failed fast (a model refused): the chat's own reading answers instead
+        // of the review step's help (owner's WhatsApp, 2026-10-08 21:16).
+        if (Date.now() - t0 > 20_000) throw e;
+        console.warn(`[assistant] front door failed for ${userId}, reading it the usual way: ${e.message}`);
+        const usual = await interpret(userId, stage, products, text, facts);
+        return { ...usual, area: "", raw: `[front door failed: ${e.message.slice(0, 120)}] ${usual.raw}` };
+      });
       if (read.action.type === "clarify") {
-        await sendClarify(phone, read.action);
+        await sendClarify(phone, read.action, read.area || undefined);
         await logTurn(userId, stage, text, read.action as unknown as AssistantAction, `asked: ${read.action.question}`.slice(0, 300), read.raw);
         return "handled";
       }
@@ -2119,6 +2157,8 @@ async function carryOut(
       });
     case "product_info":
       return answerProductInfo(userId, phone, action.product);
+    case "product_text":
+      return answerProductText(userId, phone, action.product);
     case "fees": {
       // A draft here ("what will I get for the wig?") is worked out from the draft.
       const draft = products.find((p) => fitsDraft(action.product, p.listing.title) && namesAProduct(action.product) && draftWords(action.product).length > 0);

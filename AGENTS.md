@@ -2372,6 +2372,50 @@ measuring, is this.
   bot's messages are plain text on white with no bubble; the seller's are
   in a soft grey bubble on the right. `• ` and `1. ` lines get a hanging
   indent (`Formatted`).
+- **The owner's second session (8 Oct 19:13–21:21, web and WhatsApp) and
+  what changed**:
+  - "0" after the bot's "What should their stock be?" set draft 1's price
+    to GH₵0. Plain numbers skip the AI, so the review step read it as a
+    price. Now `answersAssistantQuestion` (intake.ts) sends a plain number to
+    the front door when the bot's last message is the assistant's own
+    question. That is: review or between batches, no flow question waiting,
+    not "how many products" or "Start a new batch?". A price of 0 is never
+    saved (`handleEdit`, `applyChanges`). The beanie draft was put back to
+    GHS 130.
+  - "Yes" tapped under "Is the new name …?" was sorted as listing. Clarify
+    ids are now `answer:@<area>:<words>`. A tap is read in that area with no
+    sorting call (`FrontDoorInput.answered`). The question's words count as
+    said with the answer, so a name the question offered can be used.
+  - "Remove the word thong from the name" was refused twice. A name or text
+    the AI writes itself (not copied from the message) is never sent; it
+    becomes a rewrite with their words as instructions (`contentAction`).
+    `CHANGE_WORDS` takes remove/replace/redraft/correct. A word of the
+    product's name with a change word means the name. `rewriteContent` makes
+    only the small edit when asked for one.
+  - "Print the neck fan's description so I can edit it" got a description
+    the AI wrote itself. Now a `product_text` action (`answerProductText`,
+    shop.ts) shows the name, description and highlights read from Jumia.
+    The reading prompt says it never has descriptions, prices, stock or
+    sales.
+  - "What is the stock of this product" lost the product. `stock` now takes
+    a product named in the conversation.
+  - "Stock of all 278 on products" gave 10, then "why 30?" got a made-up
+    reason. Research product reads now page: a block carries `next`
+    (offset), the answer ends "That's 30 of 278. Say *more* for the next
+    30." and `session.lastListed.next` keeps the read. "more", "next" or
+    "the rest" within 30 minutes shows the next page (`answerMore`). Only
+    for lists of 10 or more, and not while photos come in. `capabilities()`
+    says why: a message readable on a phone.
+  - "Reduce all the stock of the entire shop to 0, in batches" got "narrow it
+    down" (297 > 200). Now a rule comes in parts of `BULK_MAX` (200), one tap
+    and one charge each, up to `BULK_PARTS_MAX` (5).
+  - "Number of deleted products" got "can't know". The overview now has a
+    line for products deleted on Jumia (not counted).
+  - A sorting call refused at once (Vertex 404 for flash-lite, 21:16) failed
+    the turn, and the review step answered. Now the reading model sorts
+    when the sorting model errors (not on a timeout). If the whole front
+    door fails within 20 s, the usual `interpret` reads it.
+  - 12 new cases (`src: "log 10-08 19:xx"` to `21:xx`).
 - **Before "all"**: read the owner's front-door turns in
   whatsapp_assistant_log (`raw like '[front door]%'`). Make each misread a
   test case and run the set with the front door. Then remove the word rules

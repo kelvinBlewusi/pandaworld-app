@@ -44,7 +44,7 @@ jest.mock("@/lib/whatsapp/client", () => ({
 }));
 
 import {
-  answerResearch, dayText, groupProducts, numbersBacked, parseNeeds, productLine, sortGroups, type ResearchNeed,
+  answerMore, answerResearch, dayText, groupProducts, numbersBacked, parseNeeds, productLine, sortGroups, type ResearchNeed,
 } from "@/lib/whatsapp/shop-research";
 import { _resetBillingModeCache } from "@/lib/billing/mode";
 import type { ShopProduct } from "@/lib/jumia/shop";
@@ -252,5 +252,39 @@ describe("the pieces", () => {
       { source: "pandaworld_listings", period: "month" },
     ]);
     expect(parseNeeds("not a list", check)).toEqual([]);
+  });
+});
+
+
+describe("a long list, 30 at a time (owner's web chat, 2026-10-08: \"give me the stock for all the 278 on products\")", () => {
+  beforeEach(() => {
+    catalog = Array.from({ length: 35 }, (_, i) => set(`k${i}`, `Kettle number ${i + 1}`, `2026-09-${String((i % 28) + 1).padStart(2, "0")}T08:00:00Z`, [{ id: `k${i}`, sku: `KET-${i + 1}`, price: 100 + i }]));
+    stock = Object.fromEntries(catalog.map((_, i) => [`k${i}`, i + 1]));
+    db.tables.whatsapp_sessions = [{ phone_number: PHONE, user_id: USER, state: "awaiting_count" }];
+    aiAnswer = new Error("down");
+  });
+  const onByStock = (limit = 30): ResearchNeed => ({ source: "products", sort: "stock_low", filter: "active", words: null, limit, since: null });
+
+  it("says how many there are and that \"more\" shows the next, then shows them", async () => {
+    expect(await answerResearch(USER, PHONE, "give me the stock for all my on products", [onByStock()])).toBe("research products: data sent (more to show)");
+    expect(sent.at(-1)).toContain("That's 30 of 35. Say *more* for the next 30.");
+    expect(sent.at(-1)).toContain("• Kettle number 30 ·");
+    expect(sent.at(-1)).not.toContain("• Kettle number 31 ·");
+    const listed = (db.tables.whatsapp_sessions[0] as { last_listed: { next: { need: { offset: number }; request: string } } }).last_listed;
+    expect(listed.next).toMatchObject({ need: { offset: 30 }, request: "give me the stock for all my on products" });
+
+    expect(await answerMore(USER, PHONE, listed as never, "more")).toBe(true);
+    expect(sent.at(-1)).toContain("31 to 35 of 35");
+    expect(sent.at(-1)).toContain("• Kettle number 35 ·");
+    expect(sent.at(-1)).not.toContain("Say *more*");
+    // Nothing more after the last page, and "more" with nothing listed is the AI's.
+    const after = (db.tables.whatsapp_sessions[0] as { last_listed: { next?: unknown } }).last_listed;
+    expect(after.next).toBeUndefined();
+    expect(await answerMore(USER, PHONE, after as never, "more")).toBe(false);
+  });
+
+  it("a short list asked for doesn't offer more", async () => {
+    expect(await answerResearch(USER, PHONE, "my 3 lowest in stock", [onByStock(3)])).toBe("research products: data sent");
+    expect(sent.at(-1)).not.toContain("Say *more*");
   });
 });

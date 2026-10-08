@@ -36,6 +36,7 @@ import {
 import { formatAmount } from "@/lib/whatsapp/orders";
 import { LOW_STOCK, periodEnd, rememberListed, periodStart, sendLong, shopContext, shorten, statusName, type Ctx, type Period } from "@/lib/whatsapp/shop";
 import { orderItems, salesByProduct } from "@/lib/whatsapp/shop-insights";
+import type { ListedProducts } from "@/lib/whatsapp/session";
 
 /** The most sources one question reads. */
 export const MAX_NEEDS = 4;
@@ -48,7 +49,7 @@ export type ProductSort = "newest" | "oldest" | "price_high" | "price_low" | "st
 export type ProductFilter = "all" | "active" | "inactive" | "rejected" | "pending" | "out_of_stock" | "low_stock" | "on_sale";
 
 export type ResearchNeed =
-  | { source: "products"; sort: ProductSort; filter: ProductFilter; words: string | null; limit: number; since: Period | null }
+  | { source: "products"; sort: ProductSort; filter: ProductFilter; words: string | null; limit: number; since: Period | null; offset?: number }
   | { source: "orders"; period: Period; status: string | null; limit: number }
   | { source: "product_sales"; period: Period }
   | { source: "sales_summary"; period: Period }
@@ -234,7 +235,12 @@ export function productLine(g: ProductGroup, money: (n: number, cur?: string | n
 // ─── Reading each source ─────────────────────────────────────────────────────
 
 /** What one source gave: a heading and its lines, the data the answer is written from. */
-export interface Block { title: string; lines: string[]; failed?: boolean; /** Products shown: their sids. */ sids?: string[] }
+export interface Block {
+  title: string; lines: string[]; failed?: boolean;
+  /** Products shown: their sids. */ sids?: string[];
+  /** More products past these: the read for the next ones, and how many there are in all when known. */
+  next?: Extract<ResearchNeed, { source: "products" }>; total?: number | null; shownTo?: number;
+}
 
 const PERIOD_WORDS: Record<Period, string> = {
   today: "today", yesterday: "yesterday", week: "in the last 7 days", month: "in the last 30 days", quarter: "in the last 90 days",
@@ -249,8 +255,10 @@ async function readProducts(ctx: Ctx, need: Extract<ResearchNeed, { source: "pro
   const since = need.since ? periodStart(need.since, tz) : null;
   const what = [FILTER_WORDS[need.filter], need.words ? `matching "${need.words}"` : "", since ? `added ${PERIOD_WORDS[need.since!]}` : ""].filter(Boolean).join(", ");
 
+  const offset = need.offset ?? 0;
   // Newest or oldest, straight from Jumia in its own order: one call, fresh.
-  const live = (need.sort === "newest" || need.sort === "oldest") && !need.words
+  // The pages after the first come from the local copy, synced below.
+  const live = offset === 0 && (need.sort === "newest" || need.sort === "oldest") && !need.words
     && (["all", "active", "inactive", "rejected", "pending"] as ProductFilter[]).includes(need.filter);
   if (live) {
     const r = await fetchCatalogPage(ctx.token, ctx.country, {
@@ -265,13 +273,16 @@ async function readProducts(ctx: Ctx, need: Extract<ResearchNeed, { source: "pro
       const stock = await fetchStock(ctx.token, deadline, r.data.map((p) => p.sid));
       if (stock.ok) for (const p of r.data) p.stock = stock.data.get(p.sid) ?? null;
       await saveProducts(ctx.userId, r.data).catch(() => undefined);
-      const groups = groupProducts(r.data, today).slice(0, need.limit);
+      const read = groupProducts(r.data, today);
+      const groups = read.slice(0, need.limit);
       return {
         title: groups.length === 0
           ? `Products${what ? ` ${what}` : ""}: none`
           : `The ${groups.length} ${need.sort} product${groups.length === 1 ? "" : "s"} in the Jumia shop${what ? ` (${what})` : ""}, ${SORT_WORDS[need.sort]}`,
         lines: groups.map((g) => productLine(g, money, tz)),
         sids: groups.flatMap((g) => g.sids),
+        // "More" for a list of 10 or more (not "my 2 newest").
+        ...(need.limit >= 10 && read.length > groups.length ? { next: { ...need, offset: groups.length }, total: null, shownTo: groups.length } : {}),
       };
     }
     // Not read: the local copy below.
@@ -284,12 +295,15 @@ async function readProducts(ctx: Ctx, need: Extract<ResearchNeed, { source: "pro
   const groups = groupProducts(picked, today)
     .filter(FILTER_TEST[need.filter])
     .filter((g) => !since || (g.createdAt != null && (toDate(g.createdAt)?.toISOString().slice(0, 10) ?? "") >= since));
-  const shown = sortGroups(groups, need.sort).slice(0, need.limit);
+  const shown = sortGroups(groups, need.sort).slice(offset, offset + need.limit);
+  const shownTo = offset + shown.length;
   return {
-    title: `Products${what ? ` ${what}` : ""}, ${SORT_WORDS[need.sort]}: ${shown.length === groups.length ? `all ${groups.length}` : `${shown.length} of ${groups.length}`}` +
+    title: `Products${what ? ` ${what}` : ""}, ${SORT_WORDS[need.sort]}: ${offset === 0 && shown.length === groups.length ? `all ${groups.length}`
+      : offset === 0 ? `${shown.length} of ${groups.length}` : `${offset + 1} to ${shownTo} of ${groups.length}`}` +
       ` (the shop has ${groupProducts(all, today).length} in all)`,
     lines: shown.length > 0 ? shown.map((g) => productLine(g, money, tz)) : ["None."],
     sids: shown.flatMap((g) => g.sids),
+    ...(need.limit >= 10 && shownTo < groups.length ? { next: { ...need, offset: shownTo }, total: groups.length, shownTo } : {}),
   };
 }
 
@@ -463,7 +477,7 @@ function composePrompt(request: string, data: string): string {
     "- A full list they asked for: every item from the data, one per line, with the details that matter for their question.",
     "- If the data doesn't answer part of the question, say so in one short line.",
     "- Lists as \"• \" lines, never numbered. *bold* with single asterisks for a short heading; never ** or # headings.",
-    "- No greeting, no sign-off, no web addresses. At most 1,800 characters. Reply in the language the seller wrote in.",
+    "- No greeting, no sign-off, no web addresses. At most 1,800 characters, or 3,500 for a list of more than 10 products. Reply in the language the seller wrote in.",
     "- At most one last short line on what they could do next, only if the data shows something worth doing (a product out of stock, one rejected).",
     "",
     "Data:",
@@ -486,7 +500,7 @@ async function composeAnswer(userId: string, request: string, data: string): Pro
       console.warn(`[shop research] ${userId}: the answer had numbers not in the data; sending the data instead`);
       return null;
     }
-    return clean.slice(0, 3000);
+    return clean.slice(0, 4000);
   } catch (e) {
     console.warn(`[shop research] ${userId}: AI answer failed: ${(e as Error).message}`);
     return null;
@@ -511,8 +525,28 @@ export async function answerResearch(userId: string, phone: string, request: str
   const answer = blocks.every((b) => b.failed) ? null : await composeAnswer(userId, request, data);
   // "Those", "the last 10": the products shown (lib/whatsapp/assistant.ts, bulk scope "listed").
   const listed = blocks.find((b) => b.sids && b.sids.length > 0);
-  if (listed) await rememberListed(phone, listed.sids!.map((sid) => ({ sid })), listed.title);
+  // A longer list comes 30 at a time; "more" shows the next (owner's web chat,
+  // 2026-10-08: "give me the stock for all the 278 on products").
+  const paged = blocks.find((b) => b.next);
+  if (listed) await rememberListed(phone, listed.sids!.map((sid) => ({ sid })), listed.title, paged?.next ? { need: paged.next, request } : undefined);
   const fromJumia = needs.some((n) => n.source !== "pandaworld_listings");
-  await sendLong(phone, `${answer ?? data}${fromJumia ? "\n\n_Read from Jumia just now._" : ""}`);
-  return `research ${needs.map((n) => n.source).join("+")}: ${answer ? "answered" : "data sent"}`;
+  const more = paged?.next
+    ? `\n\nThat's ${paged.total != null ? `${paged.shownTo} of ${paged.total}` : `the first ${paged.shownTo}`}. Say *more* for the next ${paged.next.limit}.`
+    : "";
+  await sendLong(phone, `${answer ?? data}${more}${fromJumia ? "\n\n_Read from Jumia just now._" : ""}`);
+  return `research ${needs.map((n) => n.source).join("+")}: ${answer ? "answered" : "data sent"}${paged ? " (more to show)" : ""}`;
+}
+
+/** "More", "next", "the rest": the next page of the list just shown. */
+export const MORE_RE = /^(?:show |see |send |give me )?(?:(?:the )?next(?: \d{1,3})?(?: ones| products| page)?|more(?: please| pls)?|the rest|continue)[.!]?$/i;
+
+/**
+ * The next products of the list the bot just showed, when it had more and
+ * the seller says "more" within 30 minutes. False when there's none to show.
+ */
+export async function answerMore(userId: string, phone: string, listed: ListedProducts | null, text: string | undefined): Promise<boolean> {
+  if (!text || !MORE_RE.test(text.trim()) || !listed?.next) return false;
+  if (Date.now() - new Date(listed.at).getTime() > 30 * 60_000) return false;
+  await answerResearch(userId, phone, listed.next.request, [listed.next.need]);
+  return true;
 }

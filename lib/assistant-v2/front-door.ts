@@ -58,6 +58,12 @@ export interface FrontDoorInput {
   position?:    string;
   /** What the assistant remembers of them (lib/whatsapp/seller-memory.ts). */
   memory?:      string;
+  /**
+   * Tapped as an answer to the front door's own question: the area that
+   * question was in (read there, not sorted again), and the question's words
+   * count as said with the answer.
+   */
+  answered?:    { area?: string };
 }
 
 export interface FrontDoorModels { router: string; reader: string }
@@ -187,18 +193,21 @@ const ACTIONS: Record<Area, string[]> = {
     '{"type":"content_change","product":"<the product>","name":"<copied>" or null,"description":"<copied>" or null,"highlights":null,"brand":null,"rewrite":["name","description","highlights"] or []} - a live product\'s',
     '  name, description or highlights: their own text copied whole, or "rewrite" for what they ask YOU to write (PandaWorld writes it with AI and shows it before one tap).',
     '{"type":"product_info","product":"<their words>"} - when it is really a question about a product (is it on, approved, in stock).',
+    '{"type":"product_text","product":"<their words>"} - show a product\'s name, description and highlights as Jumia has them now, so they can read or edit them.',
     '{"type":"warehouse_order","items":[{"product":"<their words>","quantity":<number>}]} - send stock to Jumia\'s warehouse.',
     '{"type":"warehouse_shipped","po":"<from the message>","tracking":"<from the message>","carrier":null} - a warehouse delivery has shipped.',
   ],
   shop_info: [
     '{"type":"product_info","product":"<their words for the product>"} - where one product is: on or off, quality check, price, sale, stock.',
     '{"type":"stock","product":"<their words>" or null,"filter":"out" or "low" or null} - how many are left of a product, or what is out of stock or low.',
-    '{"type":"shop","filter":"all" or "inactive" or "rejected"} - an overview with counts, or the products turned off, or rejected by quality check.',
+    '{"type":"shop","filter":"all" or "inactive" or "rejected"} - an overview with counts (on, off, out of stock, waiting, rejected, deleted), or the products turned off, or rejected by quality check.',
+    '{"type":"product_text","product":"<their words>"} - one product\'s name, description and highlights as Jumia has them now ("show me its description", "print the description so I can edit it").',
     '{"type":"research","needs":[<up to 4 reads>]} - read their shop and answer with what it shows, organised as asked: their newest or oldest',
     '  products, products sorted or filtered, orders with their items, sales by product, or several at once. Reads:',
     '  {"source":"products","sort":"newest" or "oldest" or "price_high" or "price_low" or "stock_low" or "stock_high" or "name","filter":"all" or',
     '  "active" or "inactive" or "rejected" or "pending" or "out_of_stock" or "low_stock" or "on_sale","words":"<their words>" or null,',
-    '  "limit":<up to 30; 10 if not said>,"since":null or a period}; {"source":"orders","period":<period>,"status":null,"limit":<up to 30>};',
+    '  "limit":<up to 30; 10 if not said; 30 for "all" of a group>,"since":null or a period}; {"source":"orders","period":<period>,"status":null,"limit":<up to 30>};',
+    '  A list longer than 30 comes 30 at a time: give the first 30 (the answer tells them to say "more" for the next).',
     '  {"source":"product_sales","period":<period>}; {"source":"sales_summary","period":<period>}; {"source":"payouts"};',
     '  {"source":"pandaworld_listings","period":<period>}. A period is "today", "yesterday", "week", "month" or "quarter".',
     '{"type":"report","kind":"best_sellers" or "slow_movers" or "restock" or "returns","period":"week" or "month" or "quarter"} - one report.',
@@ -266,6 +275,9 @@ const EXAMPLES: Record<Area, string[]> = {
     '"the full list of the last 10 products uploaded on my shop" → {"type":"research","needs":[{"source":"products","sort":"newest","filter":"all","words":null,"limit":10,"since":null}]}',
     '"which of my products added this month have sold?" → {"type":"research","needs":[{"source":"products","sort":"newest","filter":"all","words":null,"limit":30,"since":"month"},{"source":"product_sales","period":"month"}]}',
     '"how many listings have I done today?" → {"type":"listings","period":"today"}',
+    '"what did you list for me from this chat?" → {"type":"research","needs":[{"source":"pandaworld_listings","period":"month"}]}',
+    '"give me the stock of all my on products" → {"type":"research","needs":[{"source":"products","sort":"stock_low","filter":"active","words":null,"limit":30,"since":null}]}',
+    '"print the neck fan\'s description here so I can edit it" → {"type":"product_text","product":"neck fan"}',
   ],
   orders: [
     '"check for ready to ship and cancelled orders yesterday" → {"type":"sales","period":"yesterday","status":["ready_to_ship","cancelled"]}',
@@ -319,6 +331,7 @@ function readerPrompt(areas: Area[], input: FrontDoorInput): string {
     "",
     "Rules:",
     "- Every number and word you put in an action must be in their message (or, for which product, the recent conversation). Never guess or invent a value.",
+    "- You don't have their products' descriptions, highlights, prices, stock or sales: never write them yourself. Use the action that reads them (product_text, product_info, stock, research).",
     "- Name products as their shop calls them when you can tell which: from the products you last listed (\"the approved ones\" are those whose quality check passed, on or off; \"my latest uploaded product\" is the first of a list of their newest) or the products the message names.",
     "- A question about what you can do (\"can you…?\"): answer from What PandaWorld can do, and if it can, offer to do it. Never say a team or a person will do something.",
     "- Ask (clarify) only when you can't tell which action or which product, or a change has no value to set. Never ask for a detail that has a default: a period (use the action's usual one), a report's kind, the price for fees (null), how many to list (10). Use the default and answer.",
@@ -372,12 +385,28 @@ export async function frontDoor(
   limits: Partial<typeof FRONT_DOOR_LIMITS> = {},
 ): Promise<{ area: Area; action: FrontDoorAction; raw: string }> {
   const t0 = Date.now();
-  const routed = await ask(models.router, routerPrompt(input), usage, limits.routerMs);
-  const t1 = Date.now();
-  const sorted = json(routed);
   // Drafts only exist in a batch: without any, a change goes to the live products.
   const asArea = (v: unknown): Area | null =>
     !AREAS.has(v as Area) ? null : v === "drafts" && input.drafts.length === 0 ? "live_products" : (v as Area);
+  // A tapped answer stays in its question's area: "Yes" to "Is the new name
+  // …?" was sorted as listing (owner's WhatsApp, 2026-10-08).
+  const pinned = asArea(input.answered?.area);
+  let routed: string;
+  if (pinned) {
+    routed = JSON.stringify({ area: pinned, also: null, tapped: true });
+  } else {
+    try {
+      routed = await ask(models.router, routerPrompt(input), usage, limits.routerMs);
+    } catch (e) {
+      // The sorting model refused at once (Vertex answered 404 for it, owner's
+      // WhatsApp 2026-10-08 21:16, and the message got the review step's
+      // help): the reading model sorts it. Not after a timeout: no time left.
+      if (/took over/.test((e as Error).message) || models.router === models.reader) throw e;
+      routed = await ask(models.reader, routerPrompt(input), usage, limits.routerMs);
+    }
+  }
+  const t1 = Date.now();
+  const sorted = json(routed);
   const reading: Area = asArea(sorted?.area) ?? "chat";
   // A second area it could be: the reading sees both (a sorting slip no
   // longer leaves it without the right action; owner's web chat, 2026-10-08).
@@ -414,7 +443,11 @@ export async function frontDoor(
   // only 300 characters of each message, so a long list's later names were
   // missing from it.
   const context = [...input.conversation, ...(input.listed?.items ?? []).map((l) => `Bot: ${l}`)].join("\n");
-  const action = parseActionUnguarded(text, input.message, input.drafts, input.links, input.currency, {
+  // A tapped answer says yes to the question's words ("Is the new name …?"):
+  // they count as said, with the answer.
+  const asked = input.answered ? [...input.conversation].reverse().find((l) => l.startsWith("Bot:"))?.slice(4).trim() : undefined;
+  const said = asked ? `${asked}\n${input.message}` : input.message;
+  const action = parseActionUnguarded(text, said, input.drafts, input.links, input.currency, {
     context, stage: input.stage, listed: !!input.listed,
   });
   return { area: reading, action, raw };
