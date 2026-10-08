@@ -113,7 +113,7 @@ describe("reading the newest products", () => {
     const outcome = await answerResearch(USER, PHONE, "the full list of the last 10products uploaded on my shop", [newest(10)]);
     const page = calls.find((c) => c.path === "/catalog/products")!;
     expect(page.query.get("latestFirst")).toBe("true");
-    expect(page.query.get("size")).toBe("10");
+    expect(page.query.get("size")).toBe("40");
     expect(calls.some((c) => c.path === "/catalog/stock")).toBe(true);
     expect(reads()).toHaveLength(0);
     expect(outcome).toBe("research products: answered");
@@ -141,6 +141,16 @@ describe("reading the newest products", () => {
     expect(msg).toContain("*The 2 newest products in the Jumia shop, newest first*");
     expect(msg).toContain("• Kinky Curly Wig · GHS 450 · 4 in stock · on, approved · added 8 Oct · SKU WIG-1");
     expect(msg).not.toContain("499");
+  });
+
+  it("shows as many products as asked, whatever Jumia's page counts", async () => {
+    aiAnswer = new Error("down");
+    await answerResearch(USER, PHONE, "my 2 newest products", [newest(2)]);
+    expect(calls.find((c) => c.path === "/catalog/products")!.query.get("size")).toBe("8");
+    const msg = sent[sent.length - 1];
+    expect(msg).toContain("Kinky Curly Wig");
+    expect(msg).toContain("Baby Bodysuit");
+    expect(msg).not.toContain("Gold Tone Earrings");
   });
 
   it("sends the data itself when the AI can't be reached", async () => {
