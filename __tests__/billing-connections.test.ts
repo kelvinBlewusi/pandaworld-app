@@ -2,7 +2,7 @@
  * WhatsApp and Jumia as conditions (owner, 2026-10-07; lib/billing/
  * connections.ts): every pack is bought with both connected; Standard, Pro
  * and Business autofill in the extension only while both are; free credits
- * and Starter autofill whatever is connected.
+ * and Starter (no longer sold) autofill whatever is connected.
  */
 
 import { FakeDb } from "./helpers/fake-supabase";
@@ -61,7 +61,7 @@ describe("buying credits", () => {
     expect(block?.missing).toEqual(["whatsapp", "jumia"]);
     expect(block?.message).toContain("To buy credits, first link your WhatsApp number and connect your Jumia account in Settings.");
 
-    for (const tier of ["starter", "standard", "pro", "business"]) {
+    for (const tier of ["standard", "pro", "business"]) {
       const res = await checkout(new Request("https://x.test", { method: "POST", body: JSON.stringify({ tier }) }));
       expect(res.status).toBe(403);
       expect((await res.json()).connect).toEqual(["whatsapp", "jumia"]);
@@ -72,9 +72,17 @@ describe("buying credits", () => {
   it("with both connected, checkout starts", async () => {
     linked();
     expect(await purchaseBlock("seller")).toBeNull();
-    const res = await checkout(new Request("https://x.test", { method: "POST", body: JSON.stringify({ tier: "starter" }) }));
+    const res = await checkout(new Request("https://x.test", { method: "POST", body: JSON.stringify({ tier: "standard" }) }));
     expect(res.status).toBe(200);
     expect(global.fetch).toHaveBeenCalled();
+  });
+
+  // Owner, 2026-10-08: "let's remove the 35 GHS PACK".
+  it("Starter can't be bought any more", async () => {
+    linked();
+    const res = await checkout(new Request("https://x.test", { method: "POST", body: JSON.stringify({ tier: "starter" }) }));
+    expect(res.status).toBe(400);
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 
   it("the modal asks first (eligibility)", async () => {

@@ -129,8 +129,8 @@ export default function TermsPage() {
             To buy a pack, your WhatsApp number must be linked and your
             Jumia account connected to PandaWorld. With the Standard pack or
             a larger one as the last you bought, the Chrome extension&apos;s
-            autofill works while both stay connected; with free credits or
-            the Starter pack it works either way. Some features come with
+            autofill works while both stay connected; with free credits it
+            works either way. Some features come with
             particular packs, as shown on the pricing page, and stay
             available while the last pack you bought is that pack or a
             larger one; others are on every pack and on free credits.

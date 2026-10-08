@@ -78,7 +78,7 @@ export interface Ctx {
 
 /**
  * Changes to live Jumia products from the chat: the Standard pack and up
- * (owner, 2026-10-07: Starter and free credits "can not make changes to
+ * (owner, 2026-10-07: free credits "can not make changes to
  * listings on Jumia via the chat"). Reading the shop is `shop_whatsapp`,
  * every plan.
  */
