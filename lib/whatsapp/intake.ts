@@ -782,6 +782,14 @@ export async function handleLinkedMessage(
   // which also runs whenever the AI can't be reached. Taps, plain numbers,
   // a command's own words and "done" skip it (aiReadable): they mean one
   // thing already. Never while connecting Jumia: those messages are codes.
+  // The form's own button, sent as a message by a page that didn't open it
+  // (an old copy of the page): offered again.
+  const formTap = isWebAddress(phoneNumber) ? content.text?.trim().match(/^form(?:\s+(\d{1,2}))?$/i) : null;
+  if (formTap) {
+    await offerProductForm(phoneNumber, formTap[1] ? Number(formTap[1]) : null);
+    return;
+  }
+
   // A count typed after the assistant's "Start a new batch?" in review
   // starts that batch; anywhere else in review a bare number is a price or
   // a product number (owner's web chat, 2026-10-08).
@@ -1443,6 +1451,11 @@ async function handleAwaitingCount(
   // photo (live 2026-10-07: five photos, five "I need a number").
   if (content.imageMediaId && !content.text?.trim()) {
     if (await claimPhotoNudge(phoneNumber, session.lastImageAt)) {
+      // On the web the form takes them (the page puts these photos in it).
+      if (isWebAddress(phoneNumber)) {
+        await offerProductForm(phoneNumber, null, "📸 Got your photos.");
+        return;
+      }
       await replyButtons(
         phoneNumber,
         "📸 Got your photos. First, how many products are you listing? Tap a number below, then send each product's photos again with its price.",
@@ -1532,6 +1545,15 @@ async function handleAwaitingCount(
   const refusal = await batchCreditRefusal(userId, count);
   if (refusal) {
     await sendCtaUrlIfConfigured(phoneNumber, refusal, "Buy credits", buyCreditsUrl());
+    return;
+  }
+
+  // On the web, products are listed with the form (owner, 2026-10-08: "open
+  // the form on the web for users who want to list so they don't go through
+  // the old flow"): the count opens it with that many products, and no
+  // batch starts until it's sent (startBatchFromForm).
+  if (isWebAddress(phoneNumber)) {
+    await offerProductForm(phoneNumber, count);
     return;
   }
 
@@ -2708,6 +2730,23 @@ async function startBatchAnalysis(
       { cta: { label: "Review listings", url: whatsappListingsUrl(batchId) } },
     );
   }
+}
+
+/** The button the web chat opens the product form for ("form 3": with 3 products), never sent as a message. */
+export const FORM_BUTTON_ID = "form";
+
+/**
+ * Where listing on the web goes: the product form. The page opens it as
+ * this arrives, with `count` products (and any photos just sent); the
+ * button opens it again later.
+ */
+async function offerProductForm(phoneNumber: string, count: number | null, lead = ""): Promise<void> {
+  const what = count ? `${count} product${count === 1 ? "" : "s"}` : "Your products";
+  await replyButtons(
+    phoneNumber,
+    `${lead ? `${lead} ` : ""}📝 ${what}: add each one's photos, price and details in the form, then tap *Draft*.`,
+    [{ id: count ? `${FORM_BUTTON_ID} ${count}` : FORM_BUTTON_ID, title: "Open the form" }],
+  );
 }
 
 /** One product from the web chat's product form (components/assistant/product-form.tsx). */

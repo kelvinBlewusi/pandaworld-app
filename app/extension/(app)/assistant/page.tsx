@@ -6,7 +6,7 @@ import { ListingAssistant } from "@/components/assistant/listing-assistant";
 import { listingAssistantFor } from "@/lib/whatsapp/listing-assistant";
 import { isAdmin } from "@/lib/auth/is-admin";
 import { shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
-import { ADMIN_MAX_BATCH_SIZE } from "@/lib/whatsapp/batch";
+import { ADMIN_MAX_BATCH_SIZE, MAX_BATCH_SIZE } from "@/lib/whatsapp/batch";
 
 // ─── /extension/assistant — the Listing Assistant ───────────────────────────
 //
@@ -49,9 +49,10 @@ export default async function ListingAssistantPage() {
   }
 
   const user = await currentUser().catch(() => null);
-  // The product form, admins only while the owner tries it (2026-10-08).
-  const productForm = isAdmin(userId)
-    ? { currency: await shopCurrencyForUser(userId).catch(() => "GHS"), maxProducts: ADMIN_MAX_BATCH_SIZE }
-    : null;
+  // The product form: how products are listed on the web (owner, 2026-10-08).
+  const productForm = {
+    currency:    await shopCurrencyForUser(userId).catch(() => "GHS"),
+    maxProducts: isAdmin(userId) ? ADMIN_MAX_BATCH_SIZE : MAX_BATCH_SIZE,
+  };
   return <ListingAssistant firstName={user?.firstName ?? null} productForm={productForm} />;
 }

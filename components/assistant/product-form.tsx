@@ -2,8 +2,9 @@
 
 /**
  * The Listing Assistant's product form (owner, 2026-10-08: "should we
- * standardise and make product upload on the web a fixed flow? ... build the
- * form for only admin let me see first"). One card per product, each with
+ * standardise and make product upload on the web a fixed flow? ... open the
+ * form on the web for users who want to list so they don't go through the
+ * old flow"). How every seller lists on the web. One card per product, each with
  * its own photos, price, quantity, sizes, colour and notes, so nothing is
  * guessed from the order of chat messages: no count question, no Done, and a
  * price can't land on the wrong product. "Draft" sends them all at once
@@ -42,14 +43,22 @@ async function upload(file: File): Promise<{ mediaId: string } | { error: string
   return res?.ok && data.mediaId ? { mediaId: data.mediaId } : { error: data.error ?? "Didn't upload" };
 }
 
-export function ProductForm({ currency, maxProducts, onClose, onSent }: {
+export function ProductForm({ currency, maxProducts, initialCount = 1, initialPhotos = [], onClose, onSent }: {
   currency: string;
   maxProducts: number;
+  /** Cards to start with: the count the seller gave in the chat. */
+  initialCount?: number;
+  /** Photos the seller just sent in the chat, already uploaded: product 1's. */
+  initialPhotos?: { mediaId: string; preview: string }[];
   onClose: () => void;
   /** After the batch went: the chat polls for its message and the bot's. */
   onSent: () => void;
 }) {
-  const [drafts, setDrafts] = useState<Draft[]>([blank()]);
+  const [drafts, setDrafts] = useState<Draft[]>(() => {
+    const cards = Array.from({ length: Math.min(Math.max(1, initialCount), maxProducts) }, blank);
+    cards[0].photos = initialPhotos.slice(0, MAX_PHOTOS).map((p) => ({ key: newKey(), preview: p.preview, mediaId: p.mediaId, uploading: false }));
+    return cards;
+  });
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tried, setTried] = useState(false);
@@ -57,7 +66,7 @@ export function ProductForm({ currency, maxProducts, onClose, onSent }: {
   // Previews are object URLs: released when the form closes.
   const all = useRef<Draft[]>(drafts);
   all.current = drafts;
-  useEffect(() => () => all.current.forEach((d) => d.photos.forEach((p) => URL.revokeObjectURL(p.preview))), []);
+  useEffect(() => () => all.current.forEach((d) => d.photos.forEach((p) => p.preview.startsWith("blob:") && URL.revokeObjectURL(p.preview))), []);
 
   const patch = (key: string, change: Partial<Draft> | ((d: Draft) => Partial<Draft>)) =>
     setDrafts((prev) => prev.map((d) => (d.key === key ? { ...d, ...(typeof change === "function" ? change(d) : change) } : d)));
@@ -129,7 +138,7 @@ export function ProductForm({ currency, maxProducts, onClose, onSent }: {
         <div className="flex items-center justify-between border-b border-zinc-100 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-5">
           <div>
             <p className="font-semibold text-zinc-900">New products</p>
-            <p className="text-xs text-zinc-500">Each product&apos;s photos and details, then Draft. Admin preview.</p>
+            <p className="text-xs text-zinc-500">Each product&apos;s photos, price and details, then Draft.</p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close" className="flex h-10 w-10 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-100">
             <X className="h-5 w-5" />

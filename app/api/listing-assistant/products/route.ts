@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { isAdmin } from "@/lib/auth/is-admin";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { webAddress } from "@/lib/whatsapp/channel";
-import { MAX_ALBUM, ownMedia } from "@/lib/whatsapp/listing-assistant";
+import { MAX_ALBUM, listingAssistantFor, ownMedia } from "@/lib/whatsapp/listing-assistant";
 import { startBatchFromForm, type FormProduct } from "@/lib/whatsapp/intake";
 import { logAppError } from "@/lib/observability/errors";
 
@@ -12,8 +11,8 @@ import { logAppError } from "@/lib/observability/errors";
  * several products, each with its photos (media ids from
  * /api/listing-assistant/upload), price, quantity, sizes, colour and notes,
  * made into a batch and drafted (startBatchFromForm in lib/whatsapp/intake.ts).
- * Admins only while the owner tries it (2026-10-08: "build the form for only
- * admin let me see first").
+ * Every seller since 2026-10-08 (owner: "open the form on the web for users
+ * who want to list so they don't go through the old flow"); admins first.
  */
 
 export const maxDuration = 60;
@@ -23,7 +22,7 @@ const text = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slic
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Sign in first." }, { status: 401 });
-  if (!isAdmin(userId)) return NextResponse.json({ error: "Not found." }, { status: 404 });
+  if (!(await listingAssistantFor(userId))) return NextResponse.json({ error: "The Jumia Listing Assistant isn't on for your account yet." }, { status: 403 });
   const blocked = checkRateLimit(`assistant-message:${userId}`, RATE_LIMITS.assistantMessage);
   if (blocked) return blocked;
 

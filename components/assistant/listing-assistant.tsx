@@ -110,7 +110,22 @@ export function ListingAssistant({ firstName, productForm }: {
   // "Clear chat" (owner, 2026-10-07): asked first, then the chat starts over as on a first visit.
   const [confirmClear, setConfirmClear] = useState(false);
   const [clearing, setClearing] = useState(false);
-  const [formOpen, setFormOpen] = useState(false);
+  // The product form: how products are listed here (owner, 2026-10-08). Opened
+  // by New products, by the bot's "Open the form" (a count given in the chat:
+  // that many products), and as the bot offers it after the page loaded.
+  const [form, setForm] = useState<{ count: number; photos: { mediaId: string; preview: string }[] } | null>(null);
+  const mountedAt = useRef(new Date().toISOString());
+  const offered = useRef(new Set<string>());
+  const openFormRef = useRef<((count?: number) => void) | null>(null);
+  // Photos just sent in the chat: the form starts with them when the bot offers it.
+  const recentPhotos = useRef<{ at: number; photos: { mediaId: string; preview: string }[] } | null>(null);
+  const openForm = useCallback((count = 1) => {
+    const recent = recentPhotos.current && Date.now() - recentPhotos.current.at < 120_000 ? recentPhotos.current.photos : [];
+    recentPhotos.current = null;
+    setCommandsOpen(false);
+    setForm({ count, photos: recent });
+  }, []);
+  openFormRef.current = openForm;
   const lastAt = useRef<string | null>(null);
   const clearedAt = useRef<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
@@ -121,6 +136,14 @@ export function ListingAssistant({ firstName, productForm }: {
   const merge = useCallback((incoming: Message[]) => {
     if (incoming.length === 0) return;
     lastAt.current = incoming[incoming.length - 1].at;
+    // The bot offering the form, after this page loaded: open it.
+    for (const m of incoming) {
+      if (m.direction !== "outbound" || m.at <= mountedAt.current || offered.current.has(m.id)) continue;
+      const id = formButton(m);
+      if (id == null) continue;
+      offered.current.add(m.id);
+      openFormRef.current?.(id);
+    }
     setMessages((prev) => {
       const seen = new Set(prev.filter((m) => !m.local).map((m) => m.id));
       const fresh = incoming.filter((m) => !seen.has(m.id));
@@ -303,6 +326,7 @@ export function ListingAssistant({ firstName, productForm }: {
       });
       if (good.length > 0) {
         const links = good.map((g) => g.url ?? g.photo.preview);
+        recentPhotos.current = { at: Date.now(), photos: good.map((g, i) => ({ mediaId: g.mediaId, preview: links[i] })) };
         await post(
           { mediaIds: good.map((g) => g.mediaId), ...(typed ? { text: typed } : {}) },
           { type: "image", text: typed || null, payload: links.length > 1 ? { link: links[0], links } : { link: links[0] } },
@@ -408,7 +432,11 @@ export function ListingAssistant({ firstName, productForm }: {
     }
   }
 
-  const tap = (b: Button) => void send({ text: b.id, label: b.title });
+  const tap = (b: Button) => {
+    const form = /^form(?:\s+(\d{1,2}))?$/i.exec(b.id);
+    if (form) { openForm(form[1] ? Number(form[1]) : 1); return; }
+    void send({ text: b.id, label: b.title });
+  };
   const waiting = waitingSince != null;
   const empty = loaded && messages.length === 0;
   const greeting = useMemo(() => (firstName ? `Hi ${firstName}! ` : "Hi! "), [firstName]);
@@ -446,7 +474,7 @@ export function ListingAssistant({ firstName, productForm }: {
         {productForm && !locked && !connectJumia && (
           <button
             type="button"
-            onClick={() => setFormOpen(true)}
+            onClick={() => openForm()}
             className="flex h-10 shrink-0 items-center gap-2 whitespace-nowrap rounded-xl bg-orange-500 px-3 text-sm font-semibold text-white transition-colors hover:bg-orange-600"
           >
             <ClipboardList className="h-4 w-4" />
@@ -468,7 +496,7 @@ export function ListingAssistant({ firstName, productForm }: {
             <Image src="/brand/panda-p-logo-trimmed.png" alt="PandaWorld" width={634} height={562} className="mx-auto h-14 w-auto" priority />
             <p className="mt-4 text-lg font-semibold text-zinc-900">{greeting}I&apos;m your Jumia Listing Assistant.</p>
             <p className="mt-2 text-sm leading-relaxed text-zinc-600">
-              Tell me how many products you&apos;re listing, then upload each one&apos;s photos with its price and notes.
+              Tap <strong>New products</strong> and add each product&apos;s photos, price and details.
               I write the listings and send them to Jumia when you say so. Ask me about your stock, sales, payouts or credits too.
             </p>
             <div className="mt-5 flex flex-wrap justify-center gap-2">
@@ -636,11 +664,13 @@ export function ListingAssistant({ firstName, productForm }: {
         <ClearDialog busy={clearing} onCancel={() => setConfirmClear(false)} onConfirm={() => void clearChat()} />
       )}
 
-      {formOpen && productForm && (
+      {form && productForm && (
         <ProductForm
           currency={productForm.currency}
           maxProducts={productForm.maxProducts}
-          onClose={() => setFormOpen(false)}
+          initialCount={form.count}
+          initialPhotos={form.photos}
+          onClose={() => setForm(null)}
           onSent={() => { setWaitingSince(Date.now()); void poll(); }}
         />
       )}
@@ -652,6 +682,16 @@ export function ListingAssistant({ firstName, productForm }: {
       )}
     </div>
   );
+}
+
+/** The product count of the bot's "Open the form" button in this message (1 without one), or null. */
+function formButton(m: Message): number | null {
+  const buttons = m.type === "button" && Array.isArray(m.payload?.buttons) ? (m.payload!.buttons as { id?: string }[]) : [];
+  for (const b of buttons) {
+    const hit = /^form(?:\s+(\d{1,2}))?$/i.exec(b?.id ?? "");
+    if (hit) return hit[1] ? Number(hit[1]) : 1;
+  }
+  return null;
 }
 
 /** The command menu, above the message box. */
