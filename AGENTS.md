@@ -2252,6 +2252,21 @@ measuring, is this.
   case here first, with its right answer. A change to the prompt, the
   model or the checks ships only if no case that passed before fails. No
   new word rules in parseAction; safety checks stay.
+- **Step 2 as a prototype, side by side** (owner: "can we test what we had
+  wanted to build against what we have now without affecting anything?"):
+  lib/assistant-v2/front-door.ts is "one front door". It builds the context
+  as one record (stage, the bot's open question and what answers it,
+  drafts, the list just shown, the shop's products the message names),
+  makes one call to sort the message into an area, then one call that
+  only sees that area's actions and examples (the chat's own, sorted by
+  area). That call returns the chat's JSON or `clarify` (a question with
+  2–3 options) instead of guessing. Then `parseActionUnguarded`, with no word
+  rules. **Nothing in the chat imports it.** Runs with
+  `pipeline = 'front_door'` (migration 2026-10-08_assistant-eval-pipeline.sql;
+  `router_model` is the sorting call's model) go through it, and
+  `asked` counts its questions back, which are neither right nor wrong. In
+  /admin/assistant-tests, choose the way and the sorting model; click a
+  run's time to see that run.
 
 ### The chat knows the website (owner, 2026-10-07)
 

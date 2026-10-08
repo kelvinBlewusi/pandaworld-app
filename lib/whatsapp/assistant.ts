@@ -258,7 +258,7 @@ const STAGE_TEXT: Record<Stage, string> = {
  * code does (lib/whatsapp/intake.ts, orders.ts, credit-gate.ts, the
  * extension), so the AI never promises what isn't there.
  */
-function capabilities(listingCost = LIVE_LISTING_CREDIT_COST): string {
+export function capabilities(listingCost = LIVE_LISTING_CREDIT_COST): string {
   return [
     `- List products on Jumia from WhatsApp: the seller says how many (1 to ${MAX_BATCH_SIZE}), sends each product's photos with the price and notes as the caption, and AI drafts each listing (name, description, category, details) for them to check and submit. Two ways to send: all at once, or guided step by step.`,
     "- Ask for what Jumia needs that the photos don't show: a missing price, weight or other required detail, the variation, the category when unsure.",

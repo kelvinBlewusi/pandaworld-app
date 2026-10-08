@@ -20,7 +20,8 @@ jest.mock("@/lib/ai/gemini-client", () => ({
 }));
 
 import { ASSISTANT_CASES, type EvalCase } from "@/lib/evals/assistant-cases";
-import { byArea, matchesShape, passes, queueRun, runCase, workOnRuns } from "@/lib/evals/assistant-eval";
+import { byArea, matchesShape, passes, queueRun, routing, runCase, workOnRuns } from "@/lib/evals/assistant-eval";
+import { contextText, namesInMessage, openQuestion } from "@/lib/assistant-v2/front-door";
 
 const ACTIONS = new Set([
   "edit", "submit", "list", "restart", "review", "orders", "credits", "help", "reply", "live_change", "product_info", "fees", "stock", "shop",
@@ -127,3 +128,59 @@ describe("a run", () => {
     expect(r.runId).toBeNull();
   });
 });
+
+describe("the front door prototype", () => {
+  const byId = (id: string) => ASSISTANT_CASES.find((c) => c.id === id)!;
+  const sortThenRead = (area: string, action: string) => (p: string) => (p.includes('Reply with JSON only: {"area"') ? `{"area":"${area}"}` : action);
+
+  it("sorts the message first, then reads it with only that area's actions", async () => {
+    answer = sortThenRead("live_products", '{"type":"live_change","product":"drone","stock":10}');
+    const r = await runCase(byId("live-change-drone-psc"), "gemini-2.5-flash", { pipeline: "front_door", router: "gemini-2.5-flash-lite" });
+    expect(r).toMatchObject({ pass: true, bare: true, asked: false, routed: "live_products" });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("This message is about: live products.");
+    expect(prompts[1]).toContain('{"type":"live_change"');
+    expect(prompts[1]).not.toContain('{"type":"list","count"');
+  });
+
+  it("no word rules: a misreading stays wrong", async () => {
+    answer = sortThenRead("listing", '{"type":"list","count":10}');
+    expect(await runCase(byId("live-change-drone-psc"), "m", { pipeline: "front_door" })).toMatchObject({ pass: false, asked: false, routed: "listing" });
+  });
+
+  it("a question back is counted apart, not as right", async () => {
+    answer = sortThenRead("live_products", '{"type":"clarify","question":"Change its stock or its price?","options":["Stock to 10","Price to 10"]}');
+    const r = await runCase(byId("live-change-drone-psc"), "m", { pipeline: "front_door" });
+    expect(r).toMatchObject({ pass: false, asked: true });
+    expect(r.got).toContain("Change its stock or its price?");
+  });
+
+  it("a change with no drafts is read as a live product change", async () => {
+    answer = sortThenRead("drafts", '{"type":"reply","text":"ok","link":null}');
+    const r = await runCase(byId("live-change-drone-psc"), "m", { pipeline: "front_door" });
+    expect(r.routed).toBe("live_products");
+  });
+
+  it("gives the AI the open question, the list just shown and the shop's matching names", () => {
+    expect(openQuestion({ stage: "collecting", conversation: [], waitingFor: undefined })?.about).toContain("product being sent");
+    expect(openQuestion({ stage: "idle", conversation: ["Bot: How many products are you listing today?"] })?.about).toContain("how many products");
+    expect(openQuestion({ stage: "idle", conversation: ["Bot: Done ✅"] })).toBeNull();
+    expect(namesInMessage("Pedestal fan", ["Pedestal Fan - 5-Blade Airflow, Metal Grille (Black)", "Foldable Drone"])).toEqual(["Pedestal Fan - 5-Blade Airflow, Metal Grille (Black)"]);
+    const text = contextText({
+      stage: "idle", message: "Pedestal fan", conversation: [], drafts: [], listed: { count: 10, what: "your 10 newest products" },
+      seller: [], links: {}, currency: "GHS", web: true, shopNames: ["Pedestal Fan - 5-Blade Airflow, Metal Grille (Black)"],
+    });
+    expect(text).toContain("Products you last listed for them: 10 (your 10 newest products)");
+    expect(text).toContain('Products in their Jumia shop the message names: "Pedestal Fan');
+  });
+
+  it("a run is queued with its way and sorting model, and counts the questions back", async () => {
+    answer = sortThenRead("chat", '{"type":"clarify","question":"What would you like?","options":["List","Orders"]}');
+    const id = await queueRun({ model: "gemini-2.5-flash", pipeline: "front_door", router: "gemini-2.5-flash-lite" });
+    await workOnRuns(10 * 60_000);
+    const row = (db.tables.assistant_eval_runs as Record<string, unknown>[]).find((x) => x.id === id) as { pipeline: string; router_model: string; asked: number; passed: number; results: never[] };
+    expect(row).toMatchObject({ pipeline: "front_door", router_model: "gemini-2.5-flash-lite", asked: ASSISTANT_CASES.length, passed: 0 });
+    expect(routing(row.results).routed).toBe(ASSISTANT_CASES.length);
+  });
+});
+
