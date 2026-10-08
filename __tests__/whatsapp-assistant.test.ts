@@ -64,7 +64,7 @@ jest.mock("@/lib/jumia/categories", () => ({
 
 import {
   answerLiveValue, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
-  namesAProduct, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
+  draftNumberIn, namesAProduct, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { assistantGate } from "@/lib/whatsapp/assistant-limits";
 import { parseVariations } from "@/lib/whatsapp/variation-question";
@@ -162,6 +162,29 @@ describe("what the message backs up", () => {
       .toEqual({ variations: ["S", "M", "L", "XL"] });
   });
 
+  // Owner's web chat, 2026-10-08: "my message count so far" came back as
+  // the draft's own sizes again, and the bot applied them.
+  it("an edit needs something from this message: the product's current values alone are no change", () => {
+    const BODY = product(1, "3-Piece Thong Bodysuit", { options: SIZES, variations: ["L", "M", "S"] });
+    const raw = '{"type":"edit","edits":[{"products":[1],"said":null,"changes":{"variations":[{"said":"L","option":"L"},{"said":"M","option":"M"},{"said":"S","option":"S"}],"color":"cream, black and brown"},"ask":false}]}';
+    expect(parseAction(raw, "my message count so far", [BODY], assistantLinks())).toEqual({ type: "unclear" });
+    // Adding to them still keeps them.
+    expect(verifyChanges({ variations: ["L", "M", "S", "XL"] }, "add XL too", { options: SIZES, variations: ["L", "M", "S"] }).changes)
+      .toEqual({ variations: ["L", "M", "S", "XL"] });
+  });
+
+  // Same chat: "No the 150 is product 3 price" went to the live products on Jumia.
+  it("a draft named by its number in the sentence is that draft", () => {
+    const drafts = [product(1, "Thong Bodysuit"), product(2, "Vintage Radio Eau de Parfum"), product(3, "White Maple Leaf Flower Earrings")];
+    expect(draftNumberIn("the 150 is product 3 price", drafts)).toBe(3);
+    expect(draftNumberIn("#2", drafts)).toBe(2);
+    expect(draftNumberIn("product 9", drafts)).toBeNull();
+    const raw = '{"type":"edit","edits":[{"products":[3],"said":"the 150 is product 3 price","changes":{"price":150},"ask":false}]}';
+    expect(parseAction(raw, "No the 150 is product 3 price", drafts, assistantLinks())).toEqual({
+      type: "edit", edits: [{ seqs: [3], changes: { price: 150 }, ask: false }], dropped: [],
+    });
+  });
+
   it("keeps the seller's own colour words when the AI renames them", () => {
     expect(verifyChanges({ color: "Beige, Black, Brown" }, BODYSUIT_MSG, { options: [], variations: [] }))
       .toEqual({ changes: { color: "cream, black and brown" }, dropped: [] });
@@ -240,8 +263,9 @@ describe("a count of products to list", () => {
 
   it("is read from the AI only when the message backs it", () => {
     expect(parseAction('{"type":"list","count":3}', "2 shirts and a fridge please", [])).toEqual({ type: "list", count: 3 });
-    expect(parseAction('{"type":"list","count":4}', "a few shirts", [])).toEqual({ type: "unclear" });
-    expect(parseAction('{"type":"list","count":0}', "0 products", [])).toEqual({ type: "unclear" });
+    // A count the message doesn't give is still a wish to list: offered like "restart" (2026-10-08).
+    expect(parseAction('{"type":"list","count":4}', "a few shirts", [])).toEqual({ type: "restart" });
+    expect(parseAction('{"type":"list","count":1}', "let's list new products", [])).toEqual({ type: "restart" });
   });
 });
 

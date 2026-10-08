@@ -2022,6 +2022,48 @@ brown". The AI read it twice and both failed:
 - `wordInMessage`: an apostrophe joins letters ("it's" has no "S"), but a
   quoted 'L' still counts.
 
+### The web chat's product form, and four fixes from the owner's web session (2026-10-08)
+
+Owner: "check my interaction with the web today should we standardise and
+make product upload on the web a fixed flow?" Then: "fix the bugs and build
+the form for only admin let me see first".
+
+**Fixes (every seller, WhatsApp too):**
+- An edit needs something from this message: the product's current
+  variations alone back nothing (`fromMessage` in verifyChanges; "my message
+  count so far" came back as the draft's sizes again and was applied). A
+  pair's `said` is matched as whole words ("S" isn't in "message"). An edit
+  whose values are nowhere in the message, in a message naming no field or
+  number (`namesAField`), is "unclear", not "I couldn't see the new colour".
+- A draft named by number in the edit's `said` ("the 150 is product 3
+  price") is that draft (`draftNumberIn`), never a live product on Jumia.
+- After a category switch that still needs a price, that product's price is
+  asked and becomes the open question (`askForNextMissingPrice` with
+  `from`); before, the next number went to the product asked earlier.
+- "Let's list new products" in review: the AI's "list" with a count the
+  message doesn't give is now "restart" (offers "Start a new batch?"); with a
+  real count the offer's button is `start another N` (START_ANOTHER_RE takes
+  a count), and a number typed right after the offer starts that batch
+  (`NEW_BATCH_OFFER`, `startAnotherWithCount` in intake.ts) instead of being
+  read as a price.
+
+**The product form (admins only, `productForm` on the assistant page):**
+"New products" in the chat's header opens components/assistant/product-form.tsx:
+a card per product (photos uploaded through /api/listing-assistant/upload,
+price required, quantity, sizes, colour, notes), "+ Add product" up to
+ADMIN_MAX_BATCH_SIZE, "Draft N products". POST /api/listing-assistant/products
+(404 for non-admins) checks every card (own photos, a price, a whole
+quantity) and calls `startBatchFromForm` (lib/whatsapp/intake.ts): Jumia
+connected, not mid-drafting, credits for the count (batchCreditRefusal);
+records the form as the seller's message (an album, a line per product);
+makes each listing with claimBatchSlot (channel web), the photos appended,
+the fields as notes (`formNotes`: "Price: … / Quantity: … / Sizes: … /
+Colour: …") and price and quantity set; then startBatchAnalysis, so drafting
+reports in the chat as always. No count question, no Done, no sending ways.
+Not built yet: fixing held drafts on cards (price box, size chips); they
+still go through the chat's questions and the editor. To open it to
+everyone: drop the isAdmin checks in the page and the route.
+
 ### The chat knows the website (owner, 2026-10-07)
 
 "Let the chat know our site very well ... connect WhatsApp, use extension,

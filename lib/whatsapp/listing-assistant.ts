@@ -113,7 +113,7 @@ export async function jumiaGate(userId: string): Promise<boolean> {
 }
 
 /** A photo's media id from the page, if it's this seller's own upload. */
-function ownMedia(userId: string, mediaId: string | null | undefined): string | null {
+export function ownMedia(userId: string, mediaId: string | null | undefined): string | null {
   if (!mediaId || !mediaId.startsWith(WEB_MEDIA_PREFIX)) return null;
   const path = mediaId.slice(WEB_MEDIA_PREFIX.length);
   return path.startsWith(`${userId}/`) && !path.includes("..") ? mediaId : null;

@@ -13,10 +13,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { ArrowUp, ChevronDown, ChevronLeft, ExternalLink, ImagePlus, Loader2, Lock, Plus, RotateCw, Trash2, X } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronLeft, ClipboardList, ExternalLink, ImagePlus, Loader2, Lock, Plus, RotateCw, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BuyCreditsButton } from "@/components/billing/buy-credits-button";
 import { matchingCommands, slashCommand, slashToText, unfinishedFill, type PaletteCommand } from "@/components/assistant/chat-commands";
+import { ProductForm } from "@/components/assistant/product-form";
 
 interface Message {
   id:        string;
@@ -87,7 +88,11 @@ function Formatted({ text }: { text: string }) {
   );
 }
 
-export function ListingAssistant({ firstName }: { firstName?: string | null }) {
+export function ListingAssistant({ firstName, productForm }: {
+  firstName?: string | null;
+  /** The product form (components/assistant/product-form.tsx), admins only for now (owner, 2026-10-08). */
+  productForm?: { currency: string; maxProducts: number } | null;
+}) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [text, setText] = useState("");
@@ -105,6 +110,7 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
   // "Clear chat" (owner, 2026-10-07): asked first, then the chat starts over as on a first visit.
   const [confirmClear, setConfirmClear] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
   const lastAt = useRef<string | null>(null);
   const clearedAt = useRef<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
@@ -433,10 +439,21 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
         <span className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-orange-50 sm:flex">
           <Image src="/brand/panda-p-logo-trimmed.png" alt="PandaWorld" width={634} height={562} className="h-6 w-auto" />
         </span>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="font-semibold text-zinc-900">Jumia Listing Assistant</p>
           <p className="hidden truncate text-xs text-zinc-500 sm:block">List from photos, edit and submit drafts, update live products, ask about your shop.</p>
         </div>
+        {productForm && !locked && !connectJumia && (
+          <button
+            type="button"
+            onClick={() => setFormOpen(true)}
+            className="flex h-10 shrink-0 items-center gap-2 whitespace-nowrap rounded-xl bg-orange-500 px-3 text-sm font-semibold text-white transition-colors hover:bg-orange-600"
+          >
+            <ClipboardList className="h-4 w-4" />
+            <span className="sm:hidden">New</span>
+            <span className="hidden sm:inline">New products</span>
+          </button>
+        )}
       </div>
 
       <div className="relative min-h-0 flex-1">
@@ -617,6 +634,15 @@ export function ListingAssistant({ firstName }: { firstName?: string | null }) {
 
       {confirmClear && (
         <ClearDialog busy={clearing} onCancel={() => setConfirmClear(false)} onConfirm={() => void clearChat()} />
+      )}
+
+      {formOpen && productForm && (
+        <ProductForm
+          currency={productForm.currency}
+          maxProducts={productForm.maxProducts}
+          onClose={() => setFormOpen(false)}
+          onSent={() => { setWaitingSince(Date.now()); void poll(); }}
+        />
       )}
 
       {dragging && (
