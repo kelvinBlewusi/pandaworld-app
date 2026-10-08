@@ -255,6 +255,21 @@ describe("the front door prototype", () => {
     expect(prompts).toHaveLength(3);
   });
 
+  it("on Gemini 3 (AI Studio), the backup on Vertex sorts and reads when it fails", async () => {
+    // The first sorting call and the first reading call (both Gemini 3) fail.
+    answer = (p) => {
+      if (prompts.length === 1 || prompts.length === 3) throw new Error("AI Studio is down");
+      return p.includes('Reply with JSON only: {"area"') ? '{"area":"orders"}' : '{"type":"orders"}';
+    };
+    const r = await frontDoor({
+      stage: "idle", message: "orders", conversation: [], drafts: [], listed: null, seller: [], links: {}, currency: "GHS", web: true,
+    }, { router: "gemini-3.1-flash-lite", reader: "gemini-3.1-flash-lite" }, { feature: "assistant_eval" }, { routerMs: 10_000, readerMs: 25_000, fallbackMs: 12_000 });
+    // Sorting failed, the backup sorted; reading failed, the backup read.
+    expect(prompts).toHaveLength(4);
+    expect(r.action).toEqual({ type: "orders" });
+    expect(r.raw).toContain("(read by gemini-2.5-flash-lite: AI Studio is down)");
+  });
+
   it("a tapped answer is read in its question's area, the question's words as said (owner's WhatsApp, 2026-10-08)", async () => {
     const name = "Backless Bodysuit - Adjustable Straps, Design";
     answer = () => `{"type":"content_change","product":"Backless Thong Bodysuit","name":"${name}","rewrite":[]}`;
