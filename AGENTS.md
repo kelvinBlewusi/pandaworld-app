@@ -2212,6 +2212,40 @@ get info and data and organize them to fit the sellers request."
   explanation line removed, owner's ask). The cost still comes from the
   page (POLISH_COST), which only decides whether the switch shows.
 
+### The assistant's test set: how a change is checked (owner, 2026-10-08)
+
+Owner: "how can we ensure that we are not looping on what words is detected
+as what ... how do we make sure that the next solution we offer for the
+problem does not conflict the past solution." The plan (shared page:
+https://claude.ai/artifact/8f6i4rjVFvPyG8EcKFHs5n) has four steps; step 1,
+measuring, is this.
+
+- **The set** (lib/evals/assistant-cases.ts): real messages from
+  whatsapp_assistant_log (`src: "log MM-DD HH:MM"`) with the conversation
+  before them, the drafts, the list just shown and their shop's product
+  names where those matter, plus rewordings (`src: "variant"`) to test the
+  request rather than the phrase. `ok` lists every acceptable answer as a
+  shape of the parsed action ("~" = contains; arrays are sets).
+- **The runner** (lib/evals/assistant-eval.ts) gives each case exactly what
+  production does: buildPrompt, the model, parseAction, and runAssistant's
+  product-name check. It scores twice: "pass" (as deployed) and "bare"
+  (`parseActionUnguarded`: the AI's choice with safety checks only, no word
+  rules). The gap between them is what the word rules are doing; step 2
+  deletes the ones the AI no longer needs.
+- **Runs**: rows in `assistant_eval_runs` (migration
+  2026-10-08_assistant-eval.sql), worked by app/api/worker/assistant-eval,
+  10 cases at a time, saved as they go. pg_cron calls it each minute only
+  while a run is queued or running; queuing from /admin/assistant-tests
+  also nudges it. AI calls count as the `assistant_eval` feature, never a
+  seller's.
+- **/admin/assistant-tests**: Run (the model in use, or flash / flash-lite
+  to compare), score history, the latest run by area, and every case it got
+  wrong with what it should have done.
+- **The rule from now on**: a misread from a real conversation becomes a
+  case here first, with its right answer. A change to the prompt, the
+  model or the checks ships only if no case that passed before fails. No
+  new word rules in parseAction; safety checks stay.
+
 ### The chat knows the website (owner, 2026-10-07)
 
 "Let the chat know our site very well ... connect WhatsApp, use extension,

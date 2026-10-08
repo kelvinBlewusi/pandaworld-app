@@ -1123,7 +1123,7 @@ async function namesShopProduct(userId: string, message: string): Promise<boolea
   return isProductName(message, ((data ?? []) as { name: string | null }[]).map((r) => r.name ?? ""));
 }
 
-interface ParseOpts {
+export interface ParseOpts {
   context?: string;
   stage?: Stage;
   now?: Date;
@@ -1222,6 +1222,18 @@ export function parseAction(
     return { type: "shop", filter: "all" };
   }
   return action;
+}
+
+/**
+ * The AI's reply checked for safety only (values in the message, products
+ * named, nothing widened), without parseAction's word rules. The test set
+ * (lib/evals/assistant-eval.ts) scores both, to see what each rule adds.
+ */
+export function parseActionUnguarded(
+  raw: string, message: string, products: ProductFacts[], links: Record<string, AssistantLink> = {}, currency = "GHS",
+  opts: ParseOpts = {},
+): AssistantAction {
+  return parseActionRaw(raw, message, products, links, currency, opts);
 }
 
 function parseActionRaw(
