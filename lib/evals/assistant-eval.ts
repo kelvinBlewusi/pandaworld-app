@@ -52,8 +52,15 @@ const SELLER = [
 
 /** Cases asked of the AI at once. */
 const PARALLEL = 10;
-/** A run is held by one worker for this long at a time. */
+/** A run is held by one worker for this long at a time (renewed after each group). */
 const LOCK_MS = 58_000;
+/**
+ * The longest one case may take. When Gemini is slow a group used to run
+ * past the worker's time limit and be lost, again and again (8 Oct, 15:08
+ * to 15:17 UTC): now a case still waiting at this point is recorded as an
+ * error (not scored), and a group starts only if it can finish in time.
+ */
+const CASE_MS = 40_000;
 
 /** "current": what the chat does today. "front_door": the step-2 prototype. */
 export type Pipeline = "current" | "front_door";
@@ -231,7 +238,15 @@ const tally = (results: CaseResult[]) => ({
  * time, saves after each group, and marks it done once every case has a
  * result. Cases removed from the set since it was queued are skipped.
  */
-export async function workOnRuns(budgetMs = 45_000): Promise<{ runId: string | null; done: number; total: number }> {
+const capped = (c: EvalCase, work: Promise<CaseResult>): Promise<CaseResult> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<CaseResult>((resolve) => {
+    timer = setTimeout(() => resolve({ id: c.id, area: c.area, pass: false, bare: false, got: "", raw: "", error: `no answer within ${CASE_MS / 1000} s`, ms: CASE_MS }), CASE_MS);
+  });
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+};
+
+export async function workOnRuns(budgetMs = 100_000): Promise<{ runId: string | null; done: number; total: number }> {
   const db = createServerClient();
   const deadline = Date.now() + budgetMs;
   const now = new Date().toISOString();
@@ -250,9 +265,9 @@ export async function workOnRuns(budgetMs = 45_000): Promise<{ runId: string | n
   const results: CaseResult[] = Array.isArray(run.results) ? [...run.results] : [];
   const done = new Set(results.map((r) => r.id));
   const left = ASSISTANT_CASES.filter((c) => !done.has(c.id));
-  while (left.length > 0 && Date.now() < deadline - 15_000) {
+  while (left.length > 0 && Date.now() + CASE_MS < deadline) {
     const group = left.splice(0, PARALLEL);
-    results.push(...(await Promise.all(group.map((c) => runCase(c, run.model, { pipeline: run.pipeline ?? "current", router: run.router_model })))));
+    results.push(...(await Promise.all(group.map((c) => capped(c, runCase(c, run.model, { pipeline: run.pipeline ?? "current", router: run.router_model }))))));
     await db.from("assistant_eval_runs").update({
       ...tally(results), results, locked_until: new Date(Date.now() + LOCK_MS).toISOString(),
     }).eq("id", run.id);
