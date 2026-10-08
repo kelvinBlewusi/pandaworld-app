@@ -92,6 +92,13 @@ export const ASSISTANT_MODEL = "gemini-2.5-flash-lite";
 /** A "which product?" question older than this is no longer an answer's target. */
 const PENDING_TTL_MS = 30 * 60_000;
 
+/** The products the bot listed for them in the last 30 minutes, for "those" and "the last 10". */
+function listedFresh(session: WhatsAppSession): { count: number; what: string } | null {
+  const l = session.lastListed;
+  if (!l || l.sids.length === 0 || Date.now() - new Date(l.at).getTime() > PENDING_TTL_MS) return null;
+  return { count: l.sids.length, what: l.what };
+}
+
 /** Statuses a product can still be changed in chat: not sent yet, or held. */
 const EDITABLE = new Set(["draft", "awaiting_review", "failed"]);
 
@@ -384,10 +391,12 @@ export interface PromptContext {
   waitingFor?: string;
   /** What the assistant remembers about the seller from before (lib/whatsapp/seller-memory.ts). */
   memory?: string;
+  /** Products the bot just listed for them ("those", "the last 10"). */
+  listed?: { count: number; what: string } | null;
 }
 
 export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): string {
-  const { products, currency, seller, links, hintSeq, conversation = [], listingCost, web, position, waitingFor, memory } = ctx;
+  const { products, currency, seller, links, hintSeq, conversation = [], listingCost, web, position, waitingFor, memory, listed } = ctx;
   return [
     web
       ? "You are PandaWorld's Jumia Listing Assistant, a chat on the PandaWorld website. PandaWorld lists sellers' products on Jumia (Africa's online marketplace) and helps them run their Jumia shop."
@@ -400,6 +409,7 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     "",
     `Where the seller is (context, not a limit on what the message is about): ${STAGE_TEXT[stage]}${position ? ` They're on ${position}.` : ""}`,
     ...(waitingFor ? [`The bot's last question is still open: it asked for ${waitingFor}. A message that answers it (even just a number or a word) is step.`] : []),
+    ...(listed ? [`You just listed ${listed.count} of their Jumia products for them (${listed.what}). "Those", "them", "all of them" or "the last N" mean these: a change to them is bulk with "scope":"listed".`] : []),
     ...(products.length > 0 ? ["", "Products in this batch (the number is the product number):", ...products.map((p) => productLine(p, currency))] : []),
     ...(seller.length > 0 ? ["", "About this seller:", ...seller] : []),
     ...(memory ? ["", "What you remember about this seller from earlier (use it to understand them; never quote it as notes):", memory] : []),
@@ -428,6 +438,7 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     "- Products already in their shop (\"the last 10 products I uploaded\", \"a list of my products\", \"my newest items\") are research, never list or restart: those are only for listing new products now.",
     "- Sellers make typos (\"ordrs\" is orders, \"payed\" is paid, \"tun on\" is turn on) and write in many languages.",
     "- Insight, stats, analytics or how their shop is performing, without asking for a report or health check: shop (the overview, free). \"How is my shop doing?\" and a report or health check they ask for: health_report.",
+    "- A message that changes a product (\"change the drone to 10\", \"restock the kettle to 20\", \"set X to 50 pcs\") is live_change (an edit for a draft above), never a count of products to list, even right after you asked how many products they're listing. \"Restock\" and \"pcs\" mean stock.",
     "- A bare number right after your own list of options picks that option (\"4\" after a list whose 4th line is shop insight is shop), not a count of products.",
     "- About themselves (their pack, credits, WhatsApp number, Jumia connection, shop), answer only from \"About this seller\", word for word where it gives a number or name. If it isn't there, say you can't see it here and where to look (Settings).",
     "- Asked what pack they're on or what it includes: name the pack (or \"no pack yet, your free credits\"), then list what's on and what isn't from \"About this seller\", one short line each, and what the next pack adds.",
@@ -473,7 +484,7 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '  the last 90 days (history), or one statement\'s fees, refunds and balances (breakdown; the newest when no number)',
     '{"type":"report","kind":"best_sellers" or "slow_movers" or "restock" or "returns","period":"week" or "month" or "quarter"} - best sellers;',
     '  products with no sale; what runs out soon and needs restocking; returns and failed deliveries',
-    '{"type":"bulk","scope":"all" or "out_of_stock" or "low_stock" or "inactive" or "active" or "matching","words":"<their words for the',
+    '{"type":"bulk","scope":"all" or "out_of_stock" or "low_stock" or "inactive" or "active" or "matching" or "listed","words":"<their words for the',
     '  products, for matching>" or null, plus exactly one of: "price_pct":<+/- number> (prices up or down by that %), "sale_pct":<number>',
     '  (a sale that % off; dates from the message), "stock":<number>, "price":<number>, "sale_price":<number>, "sale":"end", "active":true or false}',
     '  - one change to many products by a rule. "matching" with "words" for "all the perfumes".',
@@ -569,6 +580,10 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '"how many kettles are in jumia\'s warehouse" → {"type":"warehouse_stock","product":"kettles"}',
     '"send 50 of the kettle to jumia warehouse on 20 Oct" → {"type":"warehouse_order","items":[{"product":"kettle","quantity":50}]}',
     '"PO 123AB shipped, tracking DHL998877" → {"type":"warehouse_shipped","po":"123AB","tracking":"DHL998877","carrier":null}',
+    '"restock the foldable drone to 10" → {"type":"live_change","product":"foldable drone","stock":10}',
+    '(after you listed what\'s out of stock) "restock all back to 10" → {"type":"bulk","scope":"listed","words":null,"stock":10}',
+    '(after you listed their newest products) "change the stock of the last 10 to 20" → {"type":"bulk","scope":"listed","words":null,"stock":20}',
+    '"let\'s enter shop assistant mode" → {"type":"reply","text":"<what you can do for their shop, as • lines>","link":null}',
     '"the full list of the last 10 products uploaded on my shop" → {"type":"research","needs":[{"source":"products","sort":"newest","filter":"all","words":null,"limit":10,"since":null}]}',
     '"my 5 most expensive perfumes and their stock" → {"type":"research","needs":[{"source":"products","sort":"price_high","filter":"all","words":"perfumes","limit":5,"since":null}]}',
     '"which of my products added this month have sold?" → {"type":"research","needs":[{"source":"products","sort":"newest","filter":"all","words":null,"limit":30,"since":"month"},{"source":"product_sales","period":"month"}]}',
@@ -961,6 +976,8 @@ const PCT_RE = /(\d+(?:\.\d+)?)\s*(?:%|percent|per cent|pct)/i;
 const DOWN_WORDS = /\b(reduce|lower|cut|decrease|drop|down|less|slash|minus)\b/i;
 const UP_WORDS = /\b(raise|increase|up|more|add|higher|hike|plus)\b/i;
 const RULE_WORDS = /\b(all|every|everything|whole|entire|each)\b|%|\bpercent\b/i;
+/** Words for products the bot just listed: "those", "them", "the last 10". */
+const LISTED_WORDS = /\b(those|these|them|they|the ones?|above|listed|the list|all of them|each of them|(?:last|lat|latest|first|top)\s+\d{1,3})\b/i;
 const BULK_SCOPES = new Set<BulkScope>(["all", "out_of_stock", "low_stock", "inactive", "active", "matching"]);
 /** What a scope must be backed by in the message (the AI's word alone isn't enough). */
 const SCOPE_WORDS_RE: Partial<Record<BulkScope, RegExp>> = {
@@ -975,10 +992,23 @@ const SCOPE_WORDS_RE: Partial<Record<BulkScope, RegExp>> = {
  * the message must say it's for many (all, every, a percentage), its scope
  * must be in the message, and every number and date must be written in it.
  */
-export function bulkAction(parsed: Record<string, unknown>, message: string, now: Date, currency: string): AssistantAction {
+export function bulkAction(
+  parsed: Record<string, unknown>, message: string, now: Date, currency: string,
+  opts: { listed?: boolean; restock?: boolean; many?: boolean } = {},
+): AssistantAction {
   const ask = (text: string): AssistantAction => ({ type: "reply", text, link: null });
-  if (!RULE_WORDS.test(message)) return { type: "unclear" };
-  let scope: BulkScope = BULK_SCOPES.has(parsed.scope as BulkScope) ? (parsed.scope as BulkScope) : "all";
+  let scope: BulkScope;
+  if (parsed.scope === "listed") {
+    // "Those", "the last 10", "all" after a list: the products the bot just
+    // listed (session.lastListed), only while it's fresh. Never widened to
+    // the whole shop.
+    if (!opts.listed) return ask("Which products? Ask me to list them first (e.g. \"my last 10 products\" or \"what's out of stock\"), then say what to change on them.");
+    if (!LISTED_WORDS.test(message) && !RULE_WORDS.test(message) && !opts.many) return { type: "unclear" };
+    scope = "listed";
+  } else {
+    if (!RULE_WORDS.test(message) && !opts.many) return { type: "unclear" };
+    scope = BULK_SCOPES.has(parsed.scope as BulkScope) ? (parsed.scope as BulkScope) : "all";
+  }
   const words = typeof parsed.words === "string" && parsed.words.trim() ? parsed.words.trim().slice(0, 80) : null;
   if (scope === "matching") {
     if (!words || !namesAProduct(words) || !productBacked(words, message)) {
@@ -986,7 +1016,8 @@ export function bulkAction(parsed: Record<string, unknown>, message: string, now
     }
   } else {
     const backed = SCOPE_WORDS_RE[scope];
-    if (backed && !backed.test(message)) scope = "all";
+    // "Restock all" is what's out of stock.
+    if (backed && !backed.test(message) && !(scope === "out_of_stock" && opts.restock)) scope = "all";
   }
   const numbers = messageNumbers(message);
   const pctMatch = message.match(PCT_RE);
@@ -1092,15 +1123,90 @@ async function namesShopProduct(userId: string, message: string): Promise<boolea
   return isProductName(message, ((data ?? []) as { name: string | null }[]).map((r) => r.name ?? ""));
 }
 
+interface ParseOpts {
+  context?: string;
+  stage?: Stage;
+  now?: Date;
+  /** The bot listed products for them in the last 30 minutes (session.lastListed): "those" can mean them. */
+  listed?: boolean;
+}
+
+/** Words about listing or stopping a batch: only these start or stop one. */
+const LISTING_TALK = /\b(list|listing|lists|listed|upload|uploading|add|sell|post|draft|drafts|batch|start|restart|again|over|begin|new|another|more|stop|cancel|quit|abort|forget|never ?mind|nevermind|enough|end|products?|items?|photos?|pictures?)\b/i;
+
+const NOT_PLURAL = new Set(["this", "does", "goes", "was", "has", "always", "perhaps", "unless", "across", "process", "address", "business", "less", "guess", "yours", "ours", "thanks", "plus", "status", "yes", "is", "us", "its", "his", "hers", "theirs", "whereas", "news"]);
+/** Whether the message talks about listing: its words, a quantity ("a few"), or things in the plural ("shirts"). */
+export function listingTalk(message: string): boolean {
+  if (LISTING_TALK.test(message) || /\b(few|some|couple|several|bunch|lots?)\b/i.test(message)) return true;
+  return message.toLowerCase().split(/[^a-z]+/).some((w) => w.length >= 4 && w.endsWith("s") && !w.endsWith("ss") && !NOT_PLURAL.has(w));
+}
+
+/** "the last 10", "those", "all of them": products the bot listed, not one product. */
+const MANY_RE = /^(?:all|everything|every one|each|them|those|these|they|all of them|each of them|the ones?(?: above| listed)?|the list|(?:the )?(?:last|lat|latest|first|top) \d{1,3}(?: products?| items?| ones?)?|all (?:the |my )?(?:products?|items?|ones|of those|of these))$/i;
+
+/**
+ * "restock the foladable drone to. 10", "Change drone to 10 psc", "set the
+ * price of the kettle to 120", "change the stock of the last 10 to 20":
+ * which product (or products), the field when the words say it (null when
+ * "to 10" could be stock or price), and the value. Null when the message
+ * isn't one of these. Pure.
+ */
+export function changeToAsked(message: string): { target: string; field: "stock" | "price" | null; value: number; many: boolean; restock: boolean } | null {
+  const m = message.trim().match(/^(?:please\s+|pls\s+|kindly\s+|can you\s+|could you\s+)?(restock|change|set|update|make|put|increase|reduce|raise|lower|bring)\s+(?:back\s+)?(?:the\s+|my\s+)?(?:(stock|price|quantity|qty)\s+(?:level\s+)?(?:of\s+|for\s+)?(?:the\s+|my\s+)?)?(.+?)(?:'s|’s)?\s+(?:(stock|price|quantity|qty)\s+)?(?:back\s+)?to\s*[.:]?\s*(gh₵|ghs|₵|ngn|₦|kes|ksh|ugx|\$)?\s*(\d[\d,]*(?:\.\d+)?)\s*(pcs|psc|pieces|piece|units|unit|qty|cedis|naira)?\s*[.!]?\s*$/i);
+  if (!m) return null;
+  const [, verb, fieldBefore, rawTarget, fieldAfter, currency, number, unit] = m;
+  const target = rawTarget.replace(/^(?:the|my)\s+/i, "").replace(/\s+(?:back|again)$/i, "").trim();
+  const value = parseFloat(number.replace(/,/g, ""));
+  // "change the price to 10", "set it to 10": a field or "it", not a product; the AI reads those.
+  if (!target || !Number.isFinite(value) || /^(?:price|stock|quantity|qty|colou?rs?|sizes?|name|title|brand|it|this|that|this one|that one)$/i.test(target)) return null;
+  // A sale price needs its dates: the sale's own handling reads it.
+  if (/\bsales?\b|\bdiscount\b|\bpromo\b/i.test(message)) return null;
+  const field = (fieldBefore ?? fieldAfter ?? "").toLowerCase();
+  const restock = /^restock$/i.test(verb);
+  const isStock = restock || /^(stock|quantity|qty)$/.test(field) || /^(pcs|psc|pieces|piece|units|unit|qty)$/i.test(unit ?? "");
+  const isPrice = field === "price" || !!currency || /^(cedis|naira)$/i.test(unit ?? "");
+  return {
+    target, value, restock,
+    field: isStock && !isPrice ? "stock" : isPrice && !isStock ? "price" : null,
+    many: MANY_RE.test(target),
+  };
+}
+
 /** "How many of my products are on", "...live on Jumia, on and off": the shop's overview. */
 const SHOP_COUNT = /\bhow many\b[^.?!]*\b(products?|items?|listings?)\b[^.?!]*\b(on|off|live|active|inactive|turned|deactivated|enabled|disabled)\b|\bhow many\b[^.?!]*\b(products?|items?)\b[^.?!]*\b(do i have|have i got|in my (shop|store)|on jumia)\b/i;
 
 /** The AI's reply as an action our code can carry out, or unclear. */
 export function parseAction(
   raw: string, message: string, products: ProductFacts[], links: Record<string, AssistantLink> = {}, currency = "GHS",
-  opts: { context?: string; stage?: Stage; now?: Date } = {},
+  opts: ParseOpts = {},
 ): AssistantAction {
   const action = parseActionRaw(raw, message, products, links, currency, opts);
+  // "Change Foldable Drone with HD Camera to 10" opened a form for 10
+  // products, "restock the foladable drone to. 10" offered to start a batch,
+  // and "restock all back to 10" warned about a colour (owner's web chat,
+  // 2026-10-08, after the bot had asked how many products they're listing).
+  // A change to a product is never a count.
+  const missed = action.type === "list" || action.type === "restart" || action.type === "unclear" || action.type === "help"
+    || (action.type === "edit" && action.edits.length === 0);
+  const asked = missed ? changeToAsked(message) : null;
+  if (asked && !products.some((p) => namesAProduct(asked.target) && fitsDraft(asked.target, p.listing.title))) {
+    const now = opts.now ?? new Date();
+    const value = asked.field === "price" ? { price: asked.value } : asked.field === "stock" ? { stock: asked.value } : null;
+    if (asked.many) {
+      // "the last 10", "those", "all": the products just listed, or what's out of stock when they say restock.
+      if (!value) return { type: "reply", text: `Their *stock* or their *price*? Say e.g. "set their stock to ${asked.value}" or "set their price to ${asked.value}".`, link: null };
+      if (opts.listed) return bulkAction({ scope: "listed", words: null, ...value }, message, now, currency, { listed: true, many: true });
+      if (asked.restock) return bulkAction({ scope: "out_of_stock", words: null, ...value }, message, now, currency, { restock: true, many: true });
+      return { type: "reply", text: `Which products? Ask me to list them first (e.g. "my last 10 products" or "what's out of stock"), then say "set their stock to ${asked.value}".`, link: null };
+    }
+    if (!value) {
+      return { type: "reply", text: `The *stock* or the *price* of the ${asked.target}? Say "${asked.target} stock ${asked.value}" or "${asked.target} price ${asked.value}".`, link: null };
+    }
+    return liveChangeAction({ product: asked.target, ...value }, message, opts.context ?? "", now, currency);
+  }
+  // "Let's enter Shop assistant mode" offered to start a batch: only words
+  // about listing (or stopping) start or stop one; anything else gets what it can do.
+  if (action.type === "restart" && !listingTalk(message)) return { type: "help" };
   // "the full list of the last 10products uploaded on my shop" was read as
   // listing 10 products, as "I can't" and as the hello menu (owner's web
   // chat, 2026-10-08): it's their newest products, read from Jumia.
@@ -1120,7 +1226,7 @@ export function parseAction(
 
 function parseActionRaw(
   raw: string, message: string, products: ProductFacts[], links: Record<string, AssistantLink> = {}, currency = "GHS",
-  opts: { context?: string; stage?: Stage; now?: Date } = {},
+  opts: ParseOpts = {},
 ): AssistantAction {
   const now = opts.now ?? new Date();
   const context = opts.context ?? "";
@@ -1200,7 +1306,7 @@ function parseActionRaw(
       return { type: "report", kind: parsed.kind as ReportKind, period: asPeriod(parsed.period, "month") };
     }
     case "bulk":
-      return bulkAction(parsed, message, now, currency);
+      return bulkAction(parsed, message, now, currency, { listed: opts.listed });
     case "content_change":
       return contentAction(parsed, message, context);
     case "brand_check": {
@@ -1323,6 +1429,11 @@ function parseActionRaw(
         }
         return ask(`"${m.said.slice(0, 60)}" isn't one of the drafts here. Say which draft by its number, or, for a product already on Jumia, e.g. "set the ${m.said.slice(0, 40)}'s price to 150".`);
       }
+      // A colour, brand or name the AI added that the message doesn't even
+      // mention isn't worth a warning ("Large, Medium and Small" got "I
+      // couldn't see the new colour", owner's web chat, 2026-10-08).
+      const NAMED: Record<string, RegExp> = { colour: /colou?rs?/i, brand: /\bbrand/i, name: /\b(name|title|rename|call(?:ed)? it)\b/i };
+      for (const d of Array.from(dropped)) if (NAMED[d] && !NAMED[d].test(message)) dropped.delete(d);
       if (edits.length > 0) return { type: "edit", edits, dropped: Array.from(dropped) };
       // Nothing it gave is in the message, and the message names no field
       // or number: not an edit at all ("my message count so far" came back
@@ -1420,7 +1531,7 @@ export async function interpret(
   stage: Stage,
   products: ProductFacts[],
   message: string,
-  opts: { batchId?: string | null; hintSeq?: number; conversation?: string[]; web?: boolean; position?: string; waitingFor?: string } = {},
+  opts: { batchId?: string | null; hintSeq?: number; conversation?: string[]; web?: boolean; position?: string; waitingFor?: string; listed?: { count: number; what: string } | null } = {},
 ): Promise<{ action: AssistantAction; links: Record<string, AssistantLink>; raw: string }> {
   const [currency, seller, model, listingCost, memory] = await Promise.all([
     shopCurrencyForUser(userId), sellerFacts(userId), assistantModel(), listingCreditCost(userId).catch(() => LIVE_LISTING_CREDIT_COST),
@@ -1430,11 +1541,11 @@ export async function interpret(
   const conversation = opts.conversation ?? [];
   const prompt = buildPrompt(stage, message, {
     products, currency, seller: seller.lines, links, hintSeq: opts.hintSeq, conversation, listingCost, web: opts.web,
-    position: opts.position, waitingFor: opts.waitingFor, memory,
+    position: opts.position, waitingFor: opts.waitingFor, memory, listed: opts.listed ?? null,
   });
   const { text } = await withAiUsageContext({ feature: "assistant", userId }, () =>
     callGeminiBackend(model, [{ text: prompt }], model.startsWith("gemini-3") ? { preferBackend: "ai-studio" } : {}));
-  const action = parseAction(text, message, products, links, currency, { context: conversation.join("\n"), stage });
+  const action = parseAction(text, message, products, links, currency, { context: conversation.join("\n"), stage, listed: !!opts.listed });
   return { action, links, raw: text };
 }
 
@@ -1723,6 +1834,7 @@ export async function runAssistant(
     products = batchId ? await productFacts(await batchListings(batchId, userId)) : [];
     ({ action, links, raw } = await interpret(userId, stage, products, text, {
       batchId, hintSeq, conversation, web: isWebAddress(phone), position: opts.position, waitingFor: opts.waitingFor,
+      listed: listedFresh(session),
     }));
   } catch (e) {
     console.warn(`[assistant] interpreting for ${userId} failed: ${(e as Error).message}`);
@@ -1880,7 +1992,7 @@ async function carryOut(
     case "report":
       return answerReport(userId, phone, action.kind, action.period);
     case "bulk":
-      return proposeBulkChange(userId, phone, action.scope, action.words, action.change);
+      return proposeBulkChange(userId, phone, action.scope, action.words, action.change, action.scope === "listed" ? session.lastListed?.sids ?? [] : []);
     case "content_change":
       return proposeContentChange(userId, phone, action.product, action.request);
     case "brand_check":

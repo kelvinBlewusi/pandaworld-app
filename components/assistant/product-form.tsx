@@ -49,7 +49,7 @@ async function upload(file: File): Promise<{ mediaId: string } | { error: string
 export function ProductForm({ currency, maxProducts, polishCost, initialCount = 1, initialPhotos = [], onClose, onSent }: {
   currency: string;
   maxProducts: number;
-  /** Credits a product's polish takes (POLISH_COST); none hides the option. */
+  /** Credits a product's polish takes (POLISH_COST); none hides the option. Not shown on the card (owner, 2026-10-08). */
   polishCost?: number | null;
   /** Cards to start with: the count the seller gave in the chat. */
   initialCount?: number;
@@ -281,10 +281,7 @@ function Card({ n, draft, currency, polishCost, problem, canRemove, onChange, on
           )}
         >
           <Sparkles className={cn("h-4 w-4 shrink-0", draft.polish ? "text-orange-500" : "text-zinc-400")} />
-          <span className="min-w-0 flex-1">
-            <span className="block text-sm font-medium text-zinc-900">Polish photos <span className="font-normal text-zinc-500">· {polishCost} credits</span></span>
-            <span className="block text-xs text-zinc-500">4 clean photos made from yours (white background, angle, in use, close-up) replace them on the draft.</span>
-          </span>
+          <span className="min-w-0 flex-1 text-sm font-medium text-zinc-900">Polish photos</span>
           <span className={cn("relative h-5 w-9 shrink-0 rounded-full transition-colors", draft.polish ? "bg-orange-500" : "bg-zinc-300")}>
             <span className={cn("absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all", draft.polish ? "left-[18px]" : "left-0.5")} />
           </span>

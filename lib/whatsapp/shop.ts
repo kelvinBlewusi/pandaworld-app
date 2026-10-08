@@ -52,6 +52,7 @@ import {
   type ContentFields, type LiveChange, type ProductSet, type ShopProduct,
 } from "@/lib/jumia/shop";
 import { findBrandExact, searchBrandsFromDB } from "@/lib/jumia/brands";
+import { updateSession } from "@/lib/whatsapp/session";
 import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
 import { findRestrictedWords, stripRestrictedWords } from "@/lib/ai/restricted-words";
 import { callGeminiBackend } from "@/lib/ai/gemini-client";
@@ -341,12 +342,23 @@ async function proposeGroup(
 /** The most products one tap changes by a rule ("10% off all perfumes"). */
 export const BULK_MAX = 200;
 
-/** Which products a rule is about. */
-export type BulkScope = "all" | "out_of_stock" | "low_stock" | "inactive" | "active" | "matching";
+/** Which products a rule is about. "listed": the ones the bot just listed for them (rememberListed). */
+export type BulkScope = "all" | "out_of_stock" | "low_stock" | "inactive" | "active" | "matching" | "listed";
+
+/**
+ * Remember the products just listed for the seller, so "those", "them" and
+ * "the last 10" mean them (owner's web chat, 2026-10-08). Never throws.
+ */
+export async function rememberListed(phone: string, products: Pick<ShopProduct, "sid">[], what: string): Promise<void> {
+  if (products.length === 0) return;
+  await updateSession(phone, {
+    lastListed: { sids: Array.from(new Set(products.map((p) => p.sid))).slice(0, 500), what: what.slice(0, 120), at: new Date().toISOString() },
+  }).catch(() => undefined);
+}
 
 /** The products a rule picks, and those it leaves out (with why). Pure. */
 export function bulkTargets(
-  products: ShopProduct[], scope: BulkScope, words: string | null, change: LiveChange, minimum: number | null,
+  products: ShopProduct[], scope: BulkScope, words: string | null, change: LiveChange, minimum: number | null, listed: string[] = [],
 ): { targets: ShopProduct[]; skipped: { reason: string; count: number }[] } {
   const live = products.filter((p) => p.status !== "DELETED");
   let picked: ShopProduct[];
@@ -356,6 +368,7 @@ export function bulkTargets(
     case "inactive":     picked = live.filter((p) => p.status === "INACTIVE"); break;
     case "active":       picked = live.filter((p) => p.status === "ACTIVE"); break;
     case "matching":     picked = words ? findProducts(live, words, 5000) : []; break;
+    case "listed":       picked = live.filter((p) => listed.includes(p.sid)); break;
     default:             picked = live;
   }
   const skipped = new Map<string, number>();
@@ -376,6 +389,7 @@ export function bulkTargets(
 const SCOPE_WORDS: Record<BulkScope, string> = {
   all: "your products", out_of_stock: "your out-of-stock products", low_stock: "your products low on stock",
   inactive: "your products that are off", active: "your products that are on", matching: "the products that match",
+  listed: "the products I just listed",
 };
 
 /**
@@ -384,14 +398,14 @@ const SCOPE_WORDS: Record<BulkScope, string> = {
  * back in full with one tap, as a group (lgrp:), up to BULK_MAX products.
  */
 export async function proposeBulkChange(
-  userId: string, phone: string, scope: BulkScope, words: string | null, change: LiveChange,
+  userId: string, phone: string, scope: BulkScope, words: string | null, change: LiveChange, listed: string[] = [],
 ): Promise<string> {
   const ctx = await shopContext(userId, phone, CHANGES_FEATURE, CHANGES);
   if (!ctx) return "blocked";
   const products = await catalog(ctx);
   if (!products) return "no catalog";
   const minimum = await priceMinimumForUser(userId);
-  const { targets, skipped } = bulkTargets(products, scope, words, change, minimum?.min ?? null);
+  const { targets, skipped } = bulkTargets(products, scope, words, change, minimum?.min ?? null, listed);
   const what = scope === "matching" && words ? `"${shorten(words, 40)}"` : SCOPE_WORDS[scope];
   const left = skipped.map((s) => `${s.count} ${s.reason}`).join(", ");
   if (targets.length === 0) {
@@ -759,6 +773,7 @@ export async function answerStock(userId: string, phone: string, query: string |
       return "not found";
     }
     await sendLong(phone, ["📦 Stock on Jumia", ...found.map((p) => `• ${shorten(label(p), 60)}: ${stockText(p)}`)].join("\n"));
+    await rememberListed(phone, found, `stock of "${query}"`);
     return `stock of ${found.length}`;
   }
   const out = active.filter((p) => p.stock === 0);
@@ -768,6 +783,7 @@ export async function answerStock(userId: string, phone: string, query: string |
     await sendTextIfConfigured(phone, filter === "out" ? "✅ Nothing is out of stock on Jumia." : `✅ None of your products is low on stock (${LOW_STOCK} or fewer).`);
     return "none";
   }
+  await rememberListed(phone, pick, filter === "out" ? "out of stock" : filter === "low" ? "low on stock" : "out of stock or low");
   const head = filter === "out" ? `🚫 Out of stock on Jumia (${pick.length})` : filter === "low" ? `⚠️ Low on stock (${pick.length})` : `⚠️ Out of stock or low (${pick.length})`;
   const lines = pick.slice(0, 15).map((p) => `• ${shorten(label(p), 60)}: ${stockText(p)}`);
   await sendLong(phone, [head, ...lines, ...(pick.length > 15 ? [`+${pick.length - 15} more. Ask me about one by name.`] : []), "", "Tell me the new stock to update one, e.g. \"set the fridge's stock to 10\"."].join("\n"));
@@ -794,6 +810,7 @@ export async function answerProducts(userId: string, phone: string, filter: "all
       return "none";
     }
     const lines = list.slice(0, 40).map((p) => `• ${shorten(label(p), 60)}${filter === "rejected" && p.qcReason ? `: ${shorten(p.qcReason, 80)}` : ""}`);
+    await rememberListed(phone, list, filter === "inactive" ? "turned off" : "rejected by Jumia's quality check");
     await sendLong(phone, [
       filter === "inactive" ? `⏸️ Turned off on Jumia (${list.length})` : `❌ Rejected by Jumia's quality check (${list.length})`,
       ...lines, ...(list.length > 40 ? [`+${list.length - 40} more`] : []),

@@ -19,9 +19,17 @@
  *
  * The drawer fetches `/api/jumia/categories?all=1` once and works entirely
  * from that flat list using completePath to build the tree.
+ *
+ * Owner, 2026-10-08: "does not render well on the phone and laptop, the
+ * select button on the bottom does not show well". It's drawn into
+ * document.body (a portal, so no page around it can clip it), as tall as
+ * the visible screen (pinned top and bottom: h-screen, 100vh, ran under a
+ * phone's browser bar and hid the footer), above the dashboard's own layers, with the button full
+ * width on its own line and clear of the phone's home bar.
  */
 
 import { useEffect, useMemo, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { ChevronLeft, X, Search, Loader2, AlertCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -117,6 +125,9 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
   const [query,       setQuery]       = useState("");
   const [stack,       setStack]       = useState<TreeNode[]>([]);     // breadcrumb of drill-down
   const [chosen,      setChosen]      = useState<FlatCategory | null>(null);
+  // document.body exists only in the browser.
+  const [mounted,     setMounted]     = useState(false);
+  useEffect(() => setMounted(true), []);
 
   const loadFromCache = useCallback(async () => {
     setLoading(true);
@@ -242,12 +253,13 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
     onClose();
   };
 
-  return (
+  if (!mounted) return null;
+  return createPortal(
     <>
       {/* Backdrop */}
       <div
         className={cn(
-          "fixed inset-0 z-40 bg-black/40 backdrop-blur-sm transition-opacity",
+          "fixed inset-0 z-[65] bg-black/40 backdrop-blur-sm transition-opacity",
           open ? "opacity-100" : "opacity-0 pointer-events-none"
         )}
         onClick={onClose}
@@ -256,12 +268,13 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
       {/* Drawer */}
       <aside
         className={cn(
-          "fixed top-0 right-0 z-50 h-screen w-full max-w-[420px] bg-white shadow-2xl flex flex-col transition-transform duration-200 ease-out",
-          open ? "translate-x-0" : "translate-x-full"
+          "fixed inset-y-0 right-0 z-[70] flex w-full max-w-[440px] flex-col bg-white shadow-2xl transition-transform duration-200 ease-out",
+          open ? "translate-x-0" : "translate-x-full pointer-events-none"
         )}
+        aria-hidden={!open}
       >
         {/* Header */}
-        <header className="flex items-center justify-between border-b px-5 py-4 shrink-0">
+        <header className="flex items-center justify-between border-b px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] shrink-0 sm:px-5">
           {stack.length > 0 ? (
             <button
               type="button"
@@ -280,20 +293,21 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
             <button
               type="button"
               onClick={onClose}
-              className="rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
-              aria-label="Close drawer"
+              className="flex h-10 w-10 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700"
+              aria-label="Close categories"
             >
-              <X className="h-4 w-4" />
+              <X className="h-5 w-5" />
             </button>
           </div>
         </header>
 
         {/* Search */}
-        <div className="border-b px-5 py-3 shrink-0">
+        <div className="border-b px-4 py-3 shrink-0 sm:px-5">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
             <Input
-              autoFocus={open}
+              // Not on a phone: the keyboard would cover half the list before they've looked.
+              autoFocus={open && typeof window !== "undefined" && window.matchMedia("(min-width: 640px)").matches}
               placeholder="Search for a category"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -320,7 +334,7 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
         )}
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {loading ? (
             <div className="flex items-center justify-center py-10 text-zinc-400">
               <Loader2 className="h-5 w-5 animate-spin mr-2" />
@@ -352,27 +366,25 @@ export function CategoryDrawer({ open, onClose, onSelect, initialPath }: Categor
           )}
         </div>
 
-        {/* Footer */}
-        <footer className="border-t bg-white px-5 py-3 shrink-0">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-[11px] text-zinc-500 truncate">
-              {chosen
-                ? <><span className="font-semibold text-zinc-700">Selected:</span> {chosen.path}</>
-                : "Pick a leaf category to continue"}
-            </p>
-            <Button
-              type="button"
-              size="sm"
-              disabled={!chosen}
-              onClick={handleConfirm}
-              className="bg-orange-500 hover:bg-orange-600 text-white disabled:bg-zinc-200 disabled:text-zinc-400 shrink-0"
-            >
-              Select Category
-            </Button>
-          </div>
+        {/* Footer: what's picked, then the button on its own line, always in view. */}
+        <footer className="shrink-0 border-t bg-white px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-4px_12px_rgba(0,0,0,0.04)] sm:px-5">
+          <p className="mb-2 line-clamp-2 text-xs leading-snug text-zinc-500">
+            {chosen
+              ? <><span className="font-semibold text-zinc-800">Selected:</span> {normaliseCategoryPath(chosen.path)}</>
+              : "Open the categories until you reach one without an arrow, then tap it."}
+          </p>
+          <Button
+            type="button"
+            disabled={!chosen}
+            onClick={handleConfirm}
+            className="h-12 w-full rounded-xl bg-orange-500 text-base font-semibold text-white hover:bg-orange-600 disabled:bg-orange-500 disabled:opacity-40"
+          >
+            Select category
+          </Button>
         </footer>
       </aside>
-    </>
+    </>,
+    document.body,
   );
 }
 
