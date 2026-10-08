@@ -105,6 +105,19 @@ const SIZE_NAMES: string[][] = [
   ["xxxxxl", "5xl"],
 ];
 
+/**
+ * Whether the message names this option by a size name ("Large" for "L"),
+ * as a word of its own: "it's" is not an "s".
+ */
+export function sizeNamedIn(option: string, message: string): boolean {
+  const names = SIZE_NAMES.find((n) => n.includes(squash(option)));
+  if (!names) return false;
+  const words = message.toLowerCase().split(/[^a-z0-9']+/).map((w) => w.replace(/^'+|'+$/g, "")).filter(Boolean);
+  // "Extra Large" and "X-Large" are two words that make one size name.
+  const spans = [...words, ...words.slice(1).map((w, i) => words[i] + w)];
+  return spans.some((w) => names.includes(w));
+}
+
 /** The option that is the same clothing size as `part`, when exactly one is. */
 function sameSize(options: string[], part: string): string | null {
   const names = SIZE_NAMES.find((n) => n.includes(squash(part)));

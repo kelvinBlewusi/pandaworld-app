@@ -81,7 +81,7 @@ import { isWebAddress } from "@/lib/whatsapp/channel";
 import { chatClearedAt } from "@/lib/whatsapp/chat-clear";
 import { handleOrderMessage } from "@/lib/whatsapp/orders";
 import { resetSession, updateSession, type AssistantPending, type LiveValueAsk, type WhatsAppSession } from "@/lib/whatsapp/session";
-import { parseVariations, saveVariations, variationOptions } from "@/lib/whatsapp/variation-question";
+import { parseVariations, saveVariations, sizeNamedIn, variationOptions, VARIATION_FIELD } from "@/lib/whatsapp/variation-question";
 import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPrice, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import type { ListingRow } from "@/lib/supabase/types";
 
@@ -225,7 +225,7 @@ function productLine(p: ProductFacts, currency: string): string {
     l.category_path ? `category ${l.category_path.split(">").pop()!.trim()}` : null,
     `variation(s): ${p.variations.length > 0 ? p.variations.join(", ") : "none"}`,
     p.options.length > 0
-      ? `its category's variation options: ${p.options.slice(0, 40).join(", ")}${p.options.length > 40 ? ", ..." : ""}`
+      ? `its category's variation options: ${p.options.slice(0, 120).join(", ")}${p.options.length > 120 ? ", ..." : ""}`
       : null,
   ];
   return parts.filter(Boolean).join(" · ");
@@ -426,9 +426,11 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     "- Your own messages are WhatsApp text: *bold* with single asterisks, never ** or # headings. Choices as \"• \" lines, never numbered (a number on its own is how many products they're listing).",
     "",
     "Reply with ONLY one JSON object, no markdown, one of:",
-    '{"type":"edit","edits":[{"products":[<numbers>],"said":"<their words for the product, or null>","changes":{...},"ask":false}]} - change drafts above. One entry per different change.',
+    '{"type":"edit","edits":[{"products":[<numbers>],"said":"<their words for which product (the wig), or null; never the new values>","changes":{...},"ask":false}]} - change drafts above. One entry per different change.',
     '  "changes" holds ONLY what the seller asked to change: "price" (number), "quantity" (whole number), "variations" (the full list',
-    '  the product should have afterwards: the seller\'s words for each, plus its current ones if they are adding), "title", "brand", "color"',
+    '  the product should have afterwards, plus its current ones if they are adding. Where the product\'s category lists variation options, each',
+    '  one as {"said":"<the seller\'s words, copied>","option":"<the ONE option from that list they mean>"}: "Large" is L, "free size" is One Size,',
+    '  "size 42" is EU 42, whatever list it is; only what they named, never the whole list. Otherwise the seller\'s words), "title", "brand", "color"',
     '  (text copied exactly from the message), "sale": true (a sale or discount price), "other": "<the field>" (anything else they want changed).',
     "  Every number and word must come from the seller's message. Never guess or invent a value.",
     '  "products": the products the seller means, found from the product number or from how they describe it ("the fridge" = the',
@@ -480,7 +482,8 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     `{"type":"polish","product":<the product number from the message> or null} - polish a product's photos: ${PRODUCT_SHOT_COUNT} new product photos made from theirs (main on white, angle, lifestyle, detail), ${POLISH_CREDIT_COST} credits each`,
     `{"type":"health_report"} - a full health check of their whole shop from live Jumia data: what's working, what isn't, what to do (${REPORT_CREDIT_COST} credits). "How is my shop doing?" is this; best sellers or returns alone are "report".`,
     '{"type":"step"} - the message carries on what the seller is doing right now: it answers the bot\'s open question (a price, a size, a category,',
-    '  a yes or no), or, while they send a product, it describes that product (its notes). PandaWorld\'s usual steps take it.',
+    '  a yes or no), or, while they send a product, it describes that product (its notes). PandaWorld\'s usual steps take it. In review, a',
+    '  drafted product\'s sizes or variations (even answering the bot\'s question) are an edit, matched to its category\'s options.',
     '{"type":"reply","text":"<your message>","link":"<a key above, or null>"} - everything else. You write the message:',
     "  - \"What can you do\", a hello (\"hi\", \"hello there\"), or something you can't match: in your own words (vary it, never a set",
     "    script), a short list (4 to 6 lines starting with \"• \", never numbered) of what you can do for them, each with the words that do it",
@@ -526,6 +529,8 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '"ordrs" → {"type":"orders"}',
     '(draft 2 is a wig) "make the wig 120" → {"type":"edit","edits":[{"products":[2],"said":"wig","changes":{"price":120},"ask":false}]}',
     '(no draft is a gold medal) "set the gold medal to 25" → {"type":"live_change","product":"gold medal","price":25}',
+    '(one draft; the bot asked for its sizes) "Price: 130gh Sizes: Large, Medium, Small. Colors: cream, black and brown" → {"type":"edit","edits":[{"products":[1],"said":null,"changes":{"price":130,"variations":[{"said":"Large","option":"L"},{"said":"Medium","option":"M"},{"said":"Small","option":"S"}],"color":"cream, black and brown"},"ask":false}]}',
+    '(a batch drafting or in review) "don\'t list this one again" → {"type":"restart"}',
     '(the bot just said the most is 20 at a time) "let\'s do five then" → {"type":"list","count":5}',
     '"thanks" → {"type":"reply","text":"You\'re welcome! 🙌","link":null}',
     '"how many of my products are on and off" → {"type":"shop","filter":"all"}',
@@ -572,10 +577,11 @@ export function saidInMessage(value: string, message: string): boolean {
   return v.length > 0 && squashSpaces(message).includes(v);
 }
 
-/** Whether `word` is a whole word of the message ("L" is not in "Large"). */
+/** Whether `word` is a whole word of the message ("L" is not in "Large", "S" is not in "it's"). */
 function wordInMessage(word: string, message: string): boolean {
   const w = word.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return w.length > 0 && new RegExp(`(^|[^\\p{L}\\p{N}])${w}($|[^\\p{L}\\p{N}])`, "iu").test(message);
+  // An apostrophe joins a word only between letters: "it's", not "'Large'".
+  return w.length > 0 && new RegExp(`(?<![\\p{L}\\p{N}])(?<![\\p{L}\\p{N}]['’])${w}(?![\\p{L}\\p{N}])(?!['’][\\p{L}\\p{N}])`, "iu").test(message);
 }
 
 /**
@@ -603,24 +609,88 @@ export function verifyChanges(
     if (Number.isInteger(n) && n > 0 && numbers.includes(n)) changes.quantity = n; else dropped.push("quantity");
   }
   if (Array.isArray(r.variations)) {
-    const words = r.variations.filter((v): v is string => typeof v === "string").map((v) => v.trim().slice(0, 60)).filter(Boolean);
     const lower = (xs: string[]) => xs.map((x) => x.toLowerCase());
-    const backed = words.filter((w) =>
-      wordInMessage(w, message) || lower(known.options).includes(w.toLowerCase()) || lower(known.variations).includes(w.toLowerCase()));
-    // A word nothing backs is the AI's own: left out. The product's current
-    // variations always count as backed, so none is lost that way.
+    const isOption = (v: string) => known.options.find((o) => o.toLowerCase() === v.toLowerCase());
+    const isCurrent = (v: string) => lower(known.variations).includes(v.toLowerCase());
+    const backed: string[] = [];
+    let given = 0;
+    // The options each phrase of the seller's was read as.
+    const read = new Map<string, { said: string; options: string[] }>();
+    for (const item of r.variations) {
+      if (typeof item === "string") {
+        const w = item.trim().slice(0, 60);
+        if (!w) continue;
+        given++;
+        // Written in the message, a size name for it ("Large" for "L"), or
+        // one the product has (kept when adding). Being one of the
+        // category's options isn't enough: the AI once sent all 54 of a
+        // category's sizes for "Sizes: Large, Medium, Small" (owner's web
+        // chat, 2026-10-07).
+        if (wordInMessage(w, message) || isCurrent(w) || (isOption(w) && sizeNamedIn(w, message))) backed.push(w);
+        continue;
+      }
+      if (!item || typeof item !== "object") continue;
+      // {"said","option"}: the AI's reading of the seller's words as one of
+      // the category's options ("free size" is One Size). The words must be
+      // in the message (or be a current variation), the option on the list.
+      const pair = item as Record<string, unknown>;
+      const said = typeof pair.said === "string" ? pair.said.trim().slice(0, 60) : "";
+      const option = typeof pair.option === "string" ? pair.option.trim().slice(0, 60) : "";
+      if (!said && !option) continue;
+      given++;
+      if (said === "" || !(saidInMessage(said, message) || isCurrent(said))) continue;
+      if (known.options.length === 0) { backed.push(said); continue; }
+      const match = isOption(option) ?? (isCurrent(option) ? option : null);
+      if (!match) continue;
+      const entry = read.get(said.toLowerCase()) ?? { said, options: [] };
+      if (!entry.options.includes(match)) entry.options.push(match);
+      read.set(said.toLowerCase(), entry);
+    }
+    // One phrase is one option, or one per item it lists ("Large, Medium,
+    // Small"), or a few for a range ("S to XL"). Read as more, it's the AI
+    // filling in: none of that phrase's options are kept.
+    for (const { said, options } of Array.from(read.values())) {
+      const parts = said.split(/\s*(?:,|;|&|\+|\band\b)\s*/i).filter(Boolean).length;
+      const limit = /\bto\b|[-–]|\bthrough\b|\btill\b|\buntil\b|\ball\b/i.test(said) ? 8 : Math.max(1, parts);
+      if (options.length <= limit || isCurrent(said)) backed.push(...options);
+    }
     if (backed.length > 0) changes.variations = Array.from(new Set(backed));
-    else if (words.length > 0) dropped.push("variations");
+    else if (given > 0) dropped.push("variations");
   }
   for (const key of ["title", "brand", "color"] as const) {
     const v = r[key];
     if (typeof v !== "string" || !v.trim()) continue;
-    if (saidInMessage(v, message)) changes[key] = v.trim().replace(/\s+/g, " ");
+    if (saidInMessage(v, message)) { changes[key] = v.trim().replace(/\s+/g, " "); continue; }
+    // "Colors: cream, black and brown" came back as "Beige, Black, Brown":
+    // the seller's own words, from their "colour:" line, stand instead.
+    const own = key === "color" ? colourLine(message) : null;
+    if (own) changes.color = own;
     else dropped.push(key === "title" ? "name" : key === "color" ? "colour" : key);
   }
   if (r.sale === true) changes.sale = true;
-  if (typeof r.other === "string" && r.other.trim()) changes.other = r.other.trim().slice(0, 60);
+  // A field's name ("material", "weight"), not a sentence: "Don't list this
+  // again pls" once came back as the field to change.
+  if (typeof r.other === "string" && r.other.trim() && r.other.trim().split(/\s+/).length <= 3) changes.other = r.other.trim().slice(0, 40);
   return { changes, dropped };
+}
+
+/** What follows "colour:" / "colors -" in the message, on its own line. */
+function colourLine(message: string): string | null {
+  const m = message.match(/\bcolou?rs?\s*[:=-]\s*([^\n]+)/i);
+  const v = m?.[1]?.trim().replace(/[.!]+$/, "").replace(/\s+/g, " ").slice(0, 60);
+  return v ? v : null;
+}
+
+/**
+ * Whether the AI's "said" (the seller's words for which product) is only
+ * the new values themselves: "Large, Medium, Small." came back as the
+ * product named, for "Sizes: Large, Medium, Small" (owner, 2026-10-07).
+ */
+export function saidIsValues(said: string, changes: unknown): boolean {
+  const words = (t: string) => t.toLowerCase().split(new RegExp("[^\\p{L}\\p{N}]+", "u")).filter((w) => w && !DRAFT_STOP.has(w));
+  const values = new Set(words(JSON.stringify(changes ?? {})));
+  const named = words(said);
+  return named.length > 0 && named.every((w) => values.has(w));
 }
 
 const hasChanges = (c: Changes) => Object.keys(c).length > 0;
@@ -1116,7 +1186,7 @@ function parseActionRaw(
         let seqs = seqsOf(e.products);
         // The draft must be the product they named: "set the gold medal to
         // 25" once changed a draft of gold-tone earrings (live, 2026-10-07).
-        const said = typeof e.said === "string" ? e.said.trim() : "";
+        const said = typeof e.said === "string" && !saidIsValues(e.said, e.changes) ? e.said.trim() : "";
         if (said && seqs.length > 0) {
           const fits = seqs.filter((seq) => fitsDraft(said, products.find((p) => p.seq === seq)?.listing.title ?? null));
           if (fits.length === 0) { misnamed.push({ said, changes: e.changes }); continue; }
@@ -1351,7 +1421,11 @@ export async function applyChanges(userId: string, listing: ListingRow, changes:
   // Variations last, so new rows take the price and stock just set.
   if (changes.variations) {
     const options = await variationOptions(Number(listing.category_code)).catch(() => [] as string[]);
-    const parsed = parseVariations(options, changes.variations.join(", "));
+    // One at a time: an option itself ("Black and White") stays whole.
+    const each = changes.variations.map((v) => options.find((o) => o.toLowerCase() === v.toLowerCase()) ?? parseVariations(options, v));
+    const parsed: ReturnType<typeof parseVariations> = each.some((e) => typeof e !== "string" && !e.ok)
+      ? { ok: false, unknown: each.flatMap((e) => (typeof e !== "string" && !e.ok ? e.unknown : [])) }
+      : { ok: true, values: Array.from(new Set(each.flatMap((e) => (typeof e === "string" ? [e] : e.ok ? e.values : [])))) };
     if (!parsed.ok) {
       const shown = options.length > 12 ? `${options.slice(0, 12).join(", ")}...` : options.join(", ");
       result.problems.push(`${parsed.unknown.join(", ")} isn't one of this category's options${shown ? ` (${shown})` : ""}`);
@@ -1377,10 +1451,11 @@ function productLabel(p: ProductFacts, total: number): string {
 /** Apply `changes` to these products; the reply lines and the product to open in the editor, if any. */
 async function applyToProducts(
   userId: string, products: ProductFacts[], seqs: number[], changes: Changes, message: string,
-): Promise<{ lines: string[]; editorFor: string | null; changed: number }> {
+): Promise<{ lines: string[]; editorFor: string | null; changed: number; variationsSaved: string[] }> {
   const lines: string[] = [];
   let editorFor: string | null = null;
   let changed = 0;
+  const variationsSaved: string[] = [];
   for (const seq of seqs) {
     const p = products.find((x) => x.seq === seq);
     if (!p) continue;
@@ -1389,8 +1464,9 @@ async function applyToProducts(
     if (r.done.length > 0) { lines.push(`✅ ${label}: ${r.done.join(", ")}.`); changed++; }
     for (const problem of r.problems) lines.push(`⚠️ ${label}: ${problem}.`);
     if (r.editor) editorFor = p.listing.id;
+    if (r.done.some((d) => d.startsWith("variation"))) variationsSaved.push(p.listing.id);
   }
-  return { lines, editorFor, changed };
+  return { lines, editorFor, changed, variationsSaved };
 }
 
 const SUBMIT_ALL   = { id: "submit all", title: "Submit all ✅" };
@@ -1574,11 +1650,16 @@ async function carryOut(
       const ambiguous = action.edits.find((e) => e.ask);
       const lines: string[] = [];
       let editorFor: string | null = null;
+      const variationsSaved: string[] = [];
       for (const part of clear) {
         const r = await applyToProducts(userId, products, part.seqs, part.changes, text);
         lines.push(...r.lines);
         editorFor = r.editorFor ?? editorFor;
+        variationsSaved.push(...r.variationsSaved);
       }
+      // The bot's "What variation(s) do you have?" is answered.
+      const asked = session.awaitingValueFor;
+      if (asked?.field === VARIATION_FIELD && variationsSaved.includes(asked.listingId)) await updateSession(phone, { awaitingValueFor: null });
       if (action.dropped.length > 0) {
         const EXAMPLES: Record<string, string> = {
           price: "price 150", quantity: "quantity 20", variations: "variation Large", name: "name Hisense 205L Double Door Fridge",
