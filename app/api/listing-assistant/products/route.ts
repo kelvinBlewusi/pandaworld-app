@@ -10,7 +10,8 @@ import { logAppError } from "@/lib/observability/errors";
  * The Listing Assistant's product form (components/assistant/product-form.tsx):
  * several products, each with its photos (media ids from
  * /api/listing-assistant/upload), price, quantity, sizes, colour and notes,
- * made into a batch and drafted (startBatchFromForm in lib/whatsapp/intake.ts).
+ * made into a batch and drafted (startBatchFromForm in lib/whatsapp/intake.ts),
+ * with "Polish photos" (polish: true) queuing that product's photos for polish.
  * Every seller since 2026-10-08 (owner: "open the form on the web for users
  * who want to list so they don't go through the old flow"); admins first.
  */
@@ -48,6 +49,7 @@ export async function POST(req: NextRequest) {
     products.push({
       mediaIds, price: Math.round(price * 100) / 100, quantity,
       sizes: text(r.sizes, 200), colour: text(r.colour, 80), notes: text(r.notes, 800),
+      polish: r.polish === true,
     });
   }
 

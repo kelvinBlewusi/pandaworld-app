@@ -4245,6 +4245,22 @@ describe("a batch from the web chat's product form", () => {
     expect(mine?.payload?.links).toHaveLength(3);
   });
 
+  // Owner, 2026-10-08: "a polish before draft button ... turn rough images
+  // into polished ones replacing the old one during draft".
+  it("queues the photos of a product with Polish photos on, and only that one", async () => {
+    const { startBatchFromForm } = await import("@/lib/whatsapp/intake");
+    expect(await startBatchFromForm(USER, WEB, "web-form-p", [
+      { mediaIds: [photo("a1")], price: 130, quantity: null, sizes: "", colour: "", notes: "", polish: true },
+      { mediaIds: [photo("b1")], price: 150, quantity: null, sizes: "", colour: "", notes: "" },
+    ])).toEqual({ ok: true });
+    const made = [...listings()].sort((a, b) => (a.whatsapp_seq as number) - (b.whatsapp_seq as number));
+    expect(made.map((l) => l.polish_status ?? null)).toEqual(["queued", null]);
+    expect(made[0].polish_requested_at).toEqual(expect.any(String));
+    const mine = db.tables.whatsapp_message_log.find((m) => m.direction === "inbound");
+    expect(mine?.body_text).toContain("1. GHS 130 · ✨ polish");
+    expect(mine?.body_text).not.toMatch(/2\. GHS 150.*polish/);
+  });
+
   it("refuses while the last batch is still drafting, and before Jumia is connected", async () => {
     const { startBatchFromForm } = await import("@/lib/whatsapp/intake");
     const one = [{ mediaIds: [photo("a")], price: 100, quantity: null, sizes: "", colour: "", notes: "" }];

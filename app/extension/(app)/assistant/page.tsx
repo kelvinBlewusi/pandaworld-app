@@ -7,6 +7,8 @@ import { listingAssistantFor } from "@/lib/whatsapp/listing-assistant";
 import { isAdmin } from "@/lib/auth/is-admin";
 import { shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import { ADMIN_MAX_BATCH_SIZE, MAX_BATCH_SIZE } from "@/lib/whatsapp/batch";
+import { POLISH_COST } from "@/lib/whatsapp/chat-polish";
+import { isGeminiImageEnabled } from "@/lib/gemini-image";
 
 // ─── /extension/assistant — the Listing Assistant ───────────────────────────
 //
@@ -53,6 +55,8 @@ export default async function ListingAssistantPage() {
   const productForm = {
     currency:    await shopCurrencyForUser(userId).catch(() => "GHS"),
     maxProducts: isAdmin(userId) ? ADMIN_MAX_BATCH_SIZE : MAX_BATCH_SIZE,
+    // "Polish photos" on each card when the image service is on (lib/whatsapp/chat-polish.ts).
+    polishCost:  isGeminiImageEnabled() ? POLISH_COST : null,
   };
   return <ListingAssistant firstName={user?.firstName ?? null} productForm={productForm} />;
 }

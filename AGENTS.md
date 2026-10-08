@@ -2115,6 +2115,47 @@ note says something that looks like a variation request what happens?"
   there (it held a beanie with variants S, M, L).
 - Form: Quantity, Colour and Notes are labelled "(optional)".
 
+### Polish in the form, and research across the shop (owner, 2026-10-08)
+
+Owner: "add a polish before draft button to the form so that buttons turn
+rough images into polished ones replacing the old one during draft ... let
+it be able to make a number of Different API calls to the vendor shop and
+get info and data and organize them to fit the sellers request."
+
+- **Polish photos in the product form**: a switch on each card
+  ("✨ Polish photos · 8 credits", shown only while the image service is on;
+  the page passes `polishCost` = POLISH_COST). The route takes
+  `polish: true` only as a boolean. `startBatchFromForm` queues that
+  listing (`queuePolish`, right after its photos and notes are saved) and
+  nudges the polish worker after `startBatchAnalysis`, so the four photos
+  are made alongside the drafting and replace the seller's own
+  (lib/whatsapp/chat-polish.ts, unchanged: charged per photo made, Buy
+  credits when short, own photos kept in original_images, submit waits
+  while they're being made). The form's line in the chat says "✨ polish".
+  The note-intent queue in auto-analyze still works; `queuePolish` only
+  queues once, so the two never double up.
+- **Research** (lib/whatsapp/shop-research.ts, the assistant's `research`
+  action): for questions no single answer covers, the AI names up to
+  MAX_NEEDS (4) read-only sources: `products` (sort newest, oldest, price,
+  stock, name; filter on, off, rejected, pending, out of stock, low, on
+  sale; the seller's words; limit up to 30; since a period), `orders` (with
+  their items), `product_sales`, `sales_summary`, `payouts`,
+  `pandaworld_listings`. Each is read into plain lines (`readNeed`, never
+  throws). Newest/oldest products without words come straight from Jumia
+  (`fetchCatalogPage`, GET /catalog/products with `latestFirst`, plus
+  their stock, saved back to jumia_products); the rest use the synced copy.
+  Then a second AI call (gemini-2.5-flash) writes the answer to the
+  seller's question from those lines only; `numbersBacked` checks every
+  figure in it is in the data or the question (small counts and recent
+  years allowed), else the lines go out as they are. Free (shop_whatsapp),
+  nothing changes. Words for products must be in the message or the
+  conversation (`productBacked`), else dropped.
+- **"The last 10 products uploaded" is research, never listing**:
+  `newestProductsAsked` in parseAction turns a list, restart, unclear or
+  "I can't" reply into a newest-products read (10 when no number) unless
+  the message says they want to list now ("I want to list my last 3").
+  The owner's web chat got "I can't" and then "Let's list! How many…".
+
 ### The chat knows the website (owner, 2026-10-07)
 
 "Let the chat know our site very well ... connect WhatsApp, use extension,

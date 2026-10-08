@@ -79,7 +79,7 @@ export function salesByProduct(items: JumiaOrderItem[]): Map<string, ProductSale
 const REPORT_ORDERS_MAX = 500;
 
 /** The items of their orders in a period, the newest REPORT_ORDERS_MAX orders. `partial` when not all were read. */
-async function orderItems(ctx: Ctx, from: string, to: string, deadline: number): Promise<JumiaCall<{ items: JumiaOrderItem[]; orders: number; partial: boolean }>> {
+export async function orderItems(ctx: Ctx, from: string, to: string, deadline: number): Promise<JumiaCall<{ items: JumiaOrderItem[]; orders: number; partial: boolean }>> {
   const r = await ordersCreatedSince(ctx.token, from, 5, to);
   if (!r.ok) return r;
   const orders = r.data.slice(0, REPORT_ORDERS_MAX);

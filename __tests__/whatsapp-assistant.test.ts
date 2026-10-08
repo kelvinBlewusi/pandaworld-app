@@ -865,3 +865,59 @@ describe("one message with a draft's price, sizes and colours", () => {
     expect(db.tables.listings[0].color).toBe("cream, black and brown");
   });
 });
+
+// Owner, 2026-10-08: "let it be able to make a number of Different API calls
+// to the vendor shop and get info and data and organize them to fit the
+// sellers request". The reads themselves are in shop-research.test.ts.
+describe("research: several reads of the shop, answered together", () => {
+  const links = assistantLinks();
+  const newest = (limit: number) => ({
+    type: "research", needs: [{ source: "products", sort: "newest", filter: "all", words: null, limit, since: null }],
+  });
+
+  it("\"the last 10 products uploaded\" is their newest products, never a batch of 10", () => {
+    // The owner's web chat: read as listing 10 products, then answered "I can't".
+    const msg = "the full list of the last 10products uploaded on my shop";
+    expect(parseAction('{"type":"list","count":10}', msg, [], links)).toEqual(newest(10));
+    expect(parseAction('{"type":"restart"}', msg, [], links)).toEqual(newest(10));
+    expect(parseAction('{"type":"reply","text":"I can\'t list your products here.","link":null}', msg, [], links)).toEqual(newest(10));
+    expect(parseAction('{"type":"reply","text":"x","link":null}', "show me my latest products", [], links)).toEqual({ type: "reply", text: "x", link: null });
+    expect(parseAction("nonsense", "what are the 5 items I added recently", [], links)).toEqual(newest(5));
+  });
+
+  it("listing new products now stays listing", () => {
+    expect(parseAction('{"type":"list","count":5}', "I want to list 5 new products", [], links)).toEqual({ type: "list", count: 5 });
+    expect(parseAction('{"type":"list","count":3}', "let's list my last 3 products", [], links)).toEqual({ type: "list", count: 3 });
+  });
+
+  it("keeps known reads only, at most four, with the seller's own words", () => {
+    const raw = JSON.stringify({ type: "research", needs: [
+      { source: "products", sort: "price_high", filter: "on_sale", words: "perfumes", limit: 99 },
+      { source: "products", sort: "newest", words: "gold medals" },
+      { source: "orders", period: "week", status: "cancelled", limit: 5 },
+      { source: "orders", period: "week", status: "cancelled", limit: 5 },
+      { source: "secrets" },
+      { source: "payouts" },
+      { source: "product_sales", period: "fortnight" },
+      { source: "pandaworld_listings", period: "today" },
+    ] });
+    expect(parseAction(raw, "my priciest perfumes on sale, cancelled orders this week, payouts and sales", [], links)).toEqual({
+      type: "research", needs: [
+        { source: "products", sort: "price_high", filter: "on_sale", words: "perfumes", limit: 30, since: null },
+        // "gold medals" isn't in the message: not searched for.
+        { source: "products", sort: "newest", filter: "all", words: null, limit: 10, since: null },
+        { source: "orders", period: "week", status: "CANCELED", limit: 5 },
+        { source: "payouts" },
+      ],
+    });
+    expect(parseAction('{"type":"research","needs":[{"source":"secrets"}]}', "anything", [], links)).toEqual({ type: "unclear" });
+  });
+
+  it("is in the prompt, with the owner's question as its example", async () => {
+    aiReplies.push('{"type":"reply","text":"Hi!","link":null}');
+    await runAssistant("seller", "233", { phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null } as never, "hello", "idle");
+    const prompt = aiPrompts[aiPrompts.length - 1];
+    expect(prompt).toContain('{"type":"research","needs":[');
+    expect(prompt).toContain('"the full list of the last 10 products uploaded on my shop" → {"type":"research"');
+  });
+});

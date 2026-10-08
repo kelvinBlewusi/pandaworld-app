@@ -141,6 +141,26 @@ export async function fetchCatalog(accessToken: string, country: string | null, 
   return { ok: true, data: all };
 }
 
+/**
+ * One page of the catalog in Jumia's own order: the newest first
+ * (latestFirst) or the oldest, only on or off, by quality check, or created
+ * from a day. Read fresh, for "the last 10 products I uploaded" (the local
+ * copy can be hours old). `size` counts products, each with its variations.
+ */
+export async function fetchCatalogPage(
+  accessToken: string, country: string | null,
+  opts: { latestFirst: boolean; size: number; status?: "ACTIVE" | "INACTIVE"; qcStatus?: string; createdFrom?: string },
+): Promise<JumiaCall<ShopProduct[]>> {
+  const r = await call<unknown>(accessToken, "GET", "/catalog/products", {
+    query: {
+      size: Math.min(100, Math.max(1, Math.round(opts.size))),
+      latestFirst: opts.latestFirst ? "true" : undefined,
+      status: opts.status, qcStatus: opts.qcStatus, createdAtFrom: opts.createdFrom,
+    },
+  });
+  return r.ok ? { ok: true, data: productsFromCatalog(r.data, country) } : r;
+}
+
 /** Stock per product sid: every product's (no sids), or just these. */
 export async function fetchStock(accessToken: string, deadline: number, sids?: string[]): Promise<JumiaCall<Map<string, number>>> {
   const stock = new Map<string, number>();

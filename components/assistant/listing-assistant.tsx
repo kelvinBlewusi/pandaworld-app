@@ -91,7 +91,7 @@ function Formatted({ text }: { text: string }) {
 export function ListingAssistant({ firstName, productForm }: {
   firstName?: string | null;
   /** The product form (components/assistant/product-form.tsx), admins only for now (owner, 2026-10-08). */
-  productForm?: { currency: string; maxProducts: number } | null;
+  productForm?: { currency: string; maxProducts: number; polishCost?: number | null } | null;
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -668,6 +668,7 @@ export function ListingAssistant({ firstName, productForm }: {
         <ProductForm
           currency={productForm.currency}
           maxProducts={productForm.maxProducts}
+          polishCost={productForm.polishCost ?? null}
           initialCount={form.count}
           initialPhotos={form.photos}
           onClose={() => setForm(null)}
