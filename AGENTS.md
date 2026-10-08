@@ -2064,6 +2064,41 @@ Not built yet: fixing held drafts on cards (price box, size chips); they
 still go through the chat's questions and the editor. To open it to
 everyone: drop the isAdmin checks in the page and the route.
 
+### How a seller's sizes become variations (owner, 2026-10-08)
+
+Owner, after drafting from the web form: "when the value entered can not be
+matched with the expected variation what should happen, is it guessed by
+the AI ... when it is a plain text field ... is what is entered used? if the
+note says something that looks like a variation request what happens?"
+
+- **A plain list is the variations** (`explicitVariationList` in
+  lib/whatsapp/variant-claims.ts): a line "Sizes: …" / "Variations: …" /
+  "Variants: …" with a colon, split on commas, "and", "&", "+" (never "/":
+  "S/M" is a size). The web form's Sizes field writes one. In
+  lib/actions/auto-analyze.ts it replaces the Describe pass's proposals
+  instead of being reconciled against them (before: "Sizes: Cream" on
+  earrings, whose photo suggested other options, kept nothing and held).
+  A range ("38 to 44") or no colon ("Sizes Medium Large") isn't a plain
+  list: the old reading stands (the Describe pass, then reconcileVariants).
+- **Free-text variation field** (the category's is_variant attribute has no
+  allowed values, e.g. "variation" on hats, earrings, wigs): the values as
+  typed.
+- **Closed list** (e.g. Bodysuits' Size, 549 values): each value is the
+  list's own spelling (reconcileDraftVariation: case, plural, grey/gray),
+  else a size name (`parseVariations`: "Small" is S), else the AI's match
+  by meaning, which can only answer one of the list (aiMatchAllowedValue),
+  else "..." and the bot asks with the options (the variation question),
+  where the AI's {said, option} matching applies to the reply.
+- **Notes**: still read by the Describe pass ("comes in red and blue" makes
+  those variants; "only black available" restricts), the claim check and
+  the one-variant rule. A "Colour:" line counts as naming options, so
+  photo-proposed colours can stay as variants when no Sizes are given.
+- The "Size field was never filled" Hold (readiness.ts
+  blankSizeClaimReason) applies only when the category's variation field is
+  size-named; a category whose variation is its own field keeps the sizes
+  there (it held a beanie with variants S, M, L).
+- Form: Quantity, Colour and Notes are labelled "(optional)".
+
 ### The chat knows the website (owner, 2026-10-07)
 
 "Let the chat know our site very well ... connect WhatsApp, use extension,

@@ -3,7 +3,7 @@ import {
   reconcileVariants,
   variantClaimWarning,
 } from "@/lib/whatsapp/variant-claims";
-import { notesNameVariants } from "@/lib/whatsapp/variant-claims";
+import { explicitVariationList, notesNameVariants } from "@/lib/whatsapp/variant-claims";
 
 /** The five colours the photo showed in the live failure. */
 const PHOTO = ["Red", "Yellow", "Orange", "White", "Blue"];
@@ -191,3 +191,21 @@ describe("notesNameVariants", () => {
     }
   });
 });
+
+// The web form's Sizes field writes "Sizes: …" (owner, 2026-10-08).
+describe("explicitVariationList", () => {
+  it("reads a plain list on its own line", () => {
+    expect(explicitVariationList("Price: 200\nQuantity: 10\nSizes: Cream\nColour: Cream")).toEqual(["Cream"]);
+    expect(explicitVariationList("Sizes: Small, Large and Medium")).toEqual(["Small", "Large", "Medium"]);
+    expect(explicitVariationList("Variations: 100ml & 200ml")).toEqual(["100ml", "200ml"]);
+    expect(explicitVariationList("Sizes: S/M, L/XL, s/m")).toEqual(["S/M", "L/XL"]);
+  });
+
+  it("leaves a range or no list to the drafting as before", () => {
+    expect(explicitVariationList("Sizes: 38 to 44")).toBeNull();
+    expect(explicitVariationList("GHS 70. Sizes Medium Large Xtra Large")).toBeNull();
+    expect(explicitVariationList("comes in red and blue")).toBeNull();
+    expect(explicitVariationList(null)).toBeNull();
+  });
+});
+

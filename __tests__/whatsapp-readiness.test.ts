@@ -408,6 +408,22 @@ describe("assessListingPushReadiness — canary 2 round 3: a multi-size caption 
     expect(result.ready).toBe(true);
   });
 
+  // Owner's web form, 2026-10-08: a beanie in Sun Hats, whose variation is
+  // its own free-text field ("variation"), drafted as variants S, M, L from
+  // "Sizes: S, M, L", and was held for a "Size field never filled" (the only
+  // size field there is Ring Size, not a variation).
+  it("doesn't hold sizes kept in a category's own variation field", async () => {
+    seedListing({ title: "Crocheted Beanie Hat", user_prompt: "Price: 120\nSizes: S, M, L", category_path: "Fashion > Accessories > Hats > Sun Hats" });
+    db.tables.jumia_category_attributes = [{ category_code: 1234, name: "variation", is_variant: true }, { category_code: 1234, name: "ring_size", is_variant: false }];
+    previewResult = {
+      ok: true,
+      products: ["S", "M", "L"].map((v) => ({ brand: { code: 1, name: "Fashion" }, variation: v, attributes: [{ name: "variation", value: v }] })),
+      adjustments: [], missingRequired: [], blockers: [], preflightNotes: [],
+    };
+    const result = await assessListingPushReadiness("user_1", "listing-1");
+    expect(result.reasons.join(" ")).not.toContain("was never filled");
+  });
+
   it("does not hold ordinary prose that mentions two size words but never calls them sizes, even with real variants", async () => {
     seedListing({
       title: "Adjustable Gardening Gloves",
