@@ -797,7 +797,10 @@ export async function answerProducts(userId: string, phone: string, filter: "all
     await sendLong(phone, [
       filter === "inactive" ? `⏸️ Turned off on Jumia (${list.length})` : `❌ Rejected by Jumia's quality check (${list.length})`,
       ...lines, ...(list.length > 40 ? [`+${list.length - 40} more`] : []),
-      "", filter === "inactive" ? "Tell me which to turn on, e.g. \"turn on the blender\"." : "Fix them in Jumia Vendor Center, or list them again here.",
+      "", filter === "inactive" ? "Tell me which to turn on, e.g. \"turn on the blender\"."
+        // Jumia's API often gives no reason (owner's web chat, 2026-10-08: "rejection reasons" had none to show).
+        : list.some((p) => p.qcReason) ? "Fix them in Jumia Vendor Center, or list them again here."
+        : "Jumia didn't send the reasons through its API: check each one in Vendor Center to see why. Fix them there, or list them again here.",
     ].join("\n"));
     return `${list.length} listed`;
   }

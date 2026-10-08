@@ -263,6 +263,7 @@ function capabilities(listingCost = LIVE_LISTING_CREDIT_COST): string {
     `- Rules for many products at once, shown in full before one tap: prices up or down by a percentage, a sale a percentage off (with dates), a stock or price, ending sales, turning on or off; for all their products, the ones out of stock, low, off or on, or all that match words ("all perfumes"); up to ${BULK_MAX} products.`,
     "- A live product's name, description, highlights or brand: the seller's own text, or rewritten by AI from what Jumia has now, shown before one tap. Jumia checks content changes again. Photos and category of live products are changed in Vendor Center.",
     "- Reports: best sellers, products with no sale, what runs out soon at the rate it sells, returns and failed deliveries, for the last 7, 30 or 90 days.",
+    "- Products rejected by Jumia's quality check: which ones, with Jumia's reason when its API gives one (often it doesn't: then the reason is only in Vendor Center, never guessed).",
     "- Payouts: the last Jumia payout and the statement not yet paid; every statement of the last 90 days; one statement's fees, refunds and balances. A message when Jumia pays: Pro and up.",
     "- Questions that need several reads of their shop, answered together the way they ask: the last products they uploaded (with price, variations, stock, on or off, quality check, date added), products sorted or filtered (by price, stock, on sale, rejected, matching words), orders with what was in them, sales by product, payout statements, what they listed with PandaWorld; read from Jumia just now, free.",
     "- Before listing: whether a brand is on Jumia and allowed in a category; what a kind of product needs on Jumia (its category, the details asked, variation options, commission).",
@@ -1056,13 +1057,39 @@ export function contentAction(parsed: Record<string, unknown>, message: string, 
 const NEWEST_RE = /\b(?:last|latest|newest|most recent|recent(?:ly)?)\b[^.?!]{0,30}?(?<![a-z])(?:products?|items?|listings?|uploads?)\b|(?<![a-z])(?:products?|items?|listings?)\b[^.?!]{0,20}\b(?:i\s+)?(?:uploaded|added|posted|created)\b/i;
 /** Wanting to list now, not asking about what's listed: "I want to list my last 3 products". */
 const LISTING_NOW_RE = /\b(?:want to|wanna|going to|gonna|let'?s|i'?m|i am|i will|i'?ll|can i|help me|start)\s+(?:list|upload|add|post|sell)\b/i;
-const CANT_RE = /\b(?:can'?t|cannot|unable|not able|don'?t have (?:access|a way))\b/i;
 
 /** How many of their newest products the message asks for (10 when it doesn't say), or null when it isn't about them. */
 export function newestProductsAsked(message: string): number | null {
   if (!NEWEST_RE.test(message) || LISTING_NOW_RE.test(message)) return null;
   const n = messageNumbers(message).find((x) => Number.isInteger(x) && x >= 1 && x <= 30);
   return n ?? 10;
+}
+
+const NAME_STOP = new Set(["the", "a", "an", "of", "and", "with", "for", "in", "to", "my"]);
+const nameWords = (s: string) =>
+  s.toLowerCase().replace(/…$/, "").split(new RegExp("[^\\p{L}\\p{N}]+", "u")).filter((w) => w.length >= 2 && !NAME_STOP.has(w));
+
+/**
+ * Whether the message is one of these product names on its own (three or
+ * more of its words, every one in the name), as a seller sends a name from
+ * the bot's list. Not a question. Pure.
+ */
+export function isProductName(message: string, names: string[]): boolean {
+  const t = message.trim();
+  if (!t || t.includes("?") || t.split(/\s+/).length > 20) return false;
+  const want = nameWords(t);
+  if (want.length < 3) return false;
+  return names.some((n) => {
+    const have = new Set(nameWords(n));
+    return want.every((w) => have.has(w));
+  });
+}
+
+/** Whether the message is the name of a product in their Jumia shop (the local copy). */
+async function namesShopProduct(userId: string, message: string): Promise<boolean> {
+  if (!isProductName(message, [message])) return false;
+  const { data } = await createServerClient().from("jumia_products").select("name").eq("user_id", userId);
+  return isProductName(message, ((data ?? []) as { name: string | null }[]).map((r) => r.name ?? ""));
 }
 
 /** "How many of my products are on", "...live on Jumia, on and off": the shop's overview. */
@@ -1075,11 +1102,10 @@ export function parseAction(
 ): AssistantAction {
   const action = parseActionRaw(raw, message, products, links, currency, opts);
   // "the full list of the last 10products uploaded on my shop" was read as
-  // listing 10 products, and once as "I can't" (owner's web chat,
-  // 2026-10-08): it's their newest products, read from Jumia.
+  // listing 10 products, as "I can't" and as the hello menu (owner's web
+  // chat, 2026-10-08): it's their newest products, read from Jumia.
   const newest = newestProductsAsked(message);
-  if (newest != null && (action.type === "list" || action.type === "restart" || action.type === "unclear"
-    || (action.type === "reply" && CANT_RE.test(action.text)))) {
+  if (newest != null && (action.type === "list" || action.type === "restart" || action.type === "unclear" || action.type === "reply")) {
     return { type: "research", needs: [{ source: "products", sort: "newest", filter: "all", words: null, limit: newest, since: null }] };
   }
   // Owner's test, 2026-10-07: "How many of my products are on" went to a
@@ -1702,6 +1728,15 @@ export async function runAssistant(
     console.warn(`[assistant] interpreting for ${userId} failed: ${(e as Error).message}`);
     await logTurn(userId, stage, text, null, `failed: ${(e as Error).message}`);
     return "failed";
+  }
+  // A product's name on its own, as it shows in their shop ("Malta Guinness
+  // Soft Drink - 330ml Bottles, Pack of 6", from the bot's list of rejected
+  // products) got "I can only look up products related to your shop", and
+  // "Water Wave Lace Front Wig" the review step's help (owner's web chat,
+  // 2026-10-08): it's that product.
+  if ((action.type === "reply" || action.type === "unclear") && stage !== "collecting" && stage !== "starting"
+    && (await namesShopProduct(userId, text).catch(() => false))) {
+    action = { type: "product_info", product: text.trim().slice(0, 120) };
   }
   console.info(`[assistant] ${userId} (${stage}): ${action.type}`);
 
