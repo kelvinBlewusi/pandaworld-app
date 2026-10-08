@@ -4256,3 +4256,47 @@ describe("a batch from the web chat's product form", () => {
     expect(listings()).toHaveLength(0);
   });
 });
+
+// Owner, 2026-10-08: "open the form on the web for users who want to list so
+// they don't go through the old flow". On the web a count opens the form
+// (the page opens it on the bot's "Open the form"); WhatsApp keeps its flow.
+describe("listing on the web goes through the product form", () => {
+  const WEB = `web:${USER}`;
+
+  beforeEach(() => {
+    db.tables.jumia_connections = [{ user_id: USER, status: "active", access_token: "tok", refresh_token: "ref" }];
+    db.tables.whatsapp_message_log = [];
+    seedSession({ phone_number: WEB, state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null });
+    sent.length = 0;
+  });
+  afterEach(() => { db.tables.jumia_connections = []; });
+
+  const formButtons = () => sent.at(-1)?.rows;
+
+  it("a count opens the form with that many products, and starts no batch", async () => {
+    await handleLinkedMessage(USER, WEB, "web-m1", { text: "3", tapped: true });
+    expect(sent.at(-1)!.body).toContain("3 products: add each one's photos, price and details in the form");
+    expect(formButtons()).toEqual(["form 3"]);
+    expect(session().state).toBe("awaiting_count");
+    expect(session().batch_id).toBeNull();
+  });
+
+  it("photos sent with no batch open it too", async () => {
+    await handleLinkedMessage(USER, WEB, "web-m1", { imageMediaId: `web:${USER}/assistant/a.jpg` });
+    expect(sent.at(-1)!.body).toContain("Got your photos.");
+    expect(formButtons()).toEqual(["form"]);
+    expect(listings()).toHaveLength(0);
+  });
+
+  it("the form's button sent as a message (an old page) offers it again", async () => {
+    await handleLinkedMessage(USER, WEB, "web-m1", { text: "form 2" });
+    expect(formButtons()).toEqual(["form 2"]);
+  });
+
+  it("WhatsApp keeps its own flow", async () => {
+    seedSession({ state: "awaiting_count", batch_id: null, batch_size: null, batch_seq: null });
+    await handleLinkedMessage(USER, PHONE, "m1", { text: "3", tapped: true });
+    expect(session().state).toBe("awaiting_photos");
+    expect(session().batch_size).toBe(3);
+  });
+});

@@ -38,7 +38,9 @@ export async function helpFor(userId: string, phone: string): Promise<string> {
     "Here's what you can do, " + where + ".",
     "",
     "*List products*",
-    "- Tell me how many (e.g. *3*), send each one's photos with the price and notes, then *done*.",
+    web
+      ? "- Tap *New products* (top right), add each product's photos, price and details, then *Draft*."
+      : "- Tell me how many (e.g. *3*), send each one's photos with the price and notes, then *done*.",
     "- *submit* sends the drafts to Jumia. *restart* starts over. *status* says where you are.",
     "",
     "*Your Jumia shop*" + (web ? " (type / or tap + for the list)" : " (type *menu* for the list)"),

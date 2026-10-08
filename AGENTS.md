@@ -2061,8 +2061,24 @@ the fields as notes (`formNotes`: "Price: … / Quantity: … / Sizes: … /
 Colour: …") and price and quantity set; then startBatchAnalysis, so drafting
 reports in the chat as always. No count question, no Done, no sending ways.
 Not built yet: fixing held drafts on cards (price box, size chips); they
-still go through the chat's questions and the editor. To open it to
-everyone: drop the isAdmin checks in the page and the route.
+still go through the chat's questions and the editor.
+
+**Every seller lists through the form on the web (later 2026-10-08;** owner:
+"open the form on the web for users who want to list so they don't go
+through the old flow"). The page gives everyone `productForm` (max 10, 20
+for admins) and the route only needs the assistant switched on. The chat's
+ways in stay ("how many products?", the count buttons, "I want to list 3
+products", Start another): on a web address, handleAwaitingCount stops at
+the accepted count (after the Jumia and credit checks) and sends
+`offerProductForm` ("📝 3 products: … in the form", button `form 3`)
+instead of starting a batch; photos sent with no batch get it too (button
+`form`). The page never sends a `form…` button as a message: tapping it
+opens the form, and a bot message carrying one that arrives after the page
+loaded opens it by itself, with that many cards and any photos sent in the
+last 2 minutes as product 1's. A `form…` text that reaches the bot (an old
+page) is offered again. WhatsApp keeps its own flow; a batch already
+started the old way on the web finishes the old way. Help and the chat's
+site guide point web sellers to New products.
 
 ### How a seller's sizes become variations (owner, 2026-10-08)
 
