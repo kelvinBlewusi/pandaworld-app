@@ -147,9 +147,11 @@ function routerPrompt(input: FrontDoorInput): string {
     "- A change to a product (\"change the drone to 10\", \"restock the kettle\", \"set X to 50 pcs\") is live_products, or drafts when it names one of the drafts. Never listing.",
     "- A product's name on its own after you listed products is shop_info: they want that product's details.",
     "- An order number (e.g. #394666919) is orders. How much they made or sold is orders, not money.",
+    "- A product's name, description, highlights or brand on Jumia or in Vendor Center is live_products, never listing.",
     "- Typos and other languages are normal.",
+    "- When it could be one of two areas, give the second as \"also\" (the reading sees both); otherwise \"also\" is null.",
     "",
-    'Reply with JSON only: {"area":"<one area>"}',
+    'Reply with JSON only: {"area":"<the area>","also":"<a second area it could be> or null"}',
   ].join("\n");
 }
 
@@ -286,13 +288,14 @@ const EXAMPLES: Record<Area, string[]> = {
   ],
 };
 
-function readerPrompt(area: Area, input: FrontDoorInput): string {
-  const replyArea = area === "account_help" || area === "chat";
+function readerPrompt(areas: Area[], input: FrontDoorInput): string {
+  const replyArea = areas.some((a) => a === "account_help" || a === "chat");
+  const about = areas.map((a) => a.replace(/_/g, " ")).join(" or ");
   return [
     input.web
       ? "You are PandaWorld's Jumia Listing Assistant, a chat on the PandaWorld website. PandaWorld lists sellers' products on Jumia and helps them run their Jumia shop."
       : "You are PandaWorld's assistant on WhatsApp. PandaWorld lists sellers' products on Jumia and helps them run their Jumia shop.",
-    `This message is about: ${area.replace(/_/g, " ")}. Choose ONE action as JSON; PandaWorld's code checks it and carries it out.`,
+    `This message is about: ${about}. Choose ONE action as JSON; PandaWorld's code checks it and carries it out.`,
     "",
     contextText(input),
     // In every area: a reply about what PandaWorld does comes from this, never
@@ -307,12 +310,12 @@ function readerPrompt(area: Area, input: FrontDoorInput): string {
     ] : []),
     "",
     "Actions:",
-    ...ACTIONS[area],
+    ...Array.from(new Set(areas.flatMap((a) => ACTIONS[a]))),
     REPLY,
     CLARIFY,
     "",
     "Examples (message → JSON):",
-    ...EXAMPLES[area],
+    ...areas.flatMap((a) => EXAMPLES[a]),
     "",
     "Rules:",
     "- Every number and word you put in an action must be in their message (or, for which product, the recent conversation). Never guess or invent a value.",
@@ -325,7 +328,7 @@ function readerPrompt(area: Area, input: FrontDoorInput): string {
       "- Write for WhatsApp: short and warm, *bold* with single asterisks, in the language they wrote in. Never write a web address; use \"link\".",
     ] : []),
     "",
-    "Reply with ONLY one JSON object.",
+    "Reply with ONLY one JSON object, never a list: when they ask for two things, choose the action that covers both, or the first.",
   ].join("\n");
 }
 
@@ -371,11 +374,20 @@ export async function frontDoor(
   const t0 = Date.now();
   const routed = await ask(models.router, routerPrompt(input), usage, limits.routerMs);
   const t1 = Date.now();
-  const picked = json(routed)?.area;
-  const area: Area = AREAS.has(picked as Area) ? (picked as Area) : "chat";
+  const sorted = json(routed);
   // Drafts only exist in a batch: without any, a change goes to the live products.
-  const reading: Area = area === "drafts" && input.drafts.length === 0 ? "live_products" : area;
-  const prompt = readerPrompt(reading, input);
+  const asArea = (v: unknown): Area | null =>
+    !AREAS.has(v as Area) ? null : v === "drafts" && input.drafts.length === 0 ? "live_products" : (v as Area);
+  const reading: Area = asArea(sorted?.area) ?? "chat";
+  // A second area it could be: the reading sees both (a sorting slip no
+  // longer leaves it without the right action; owner's web chat, 2026-10-08).
+  const also = asArea(sorted?.also);
+  const areas = also && also !== reading ? [reading, also] : [reading];
+  // While drafts wait, a message is often about a product already in their
+  // shop ("write its description" about a live one): the drafts reading can
+  // always change those too.
+  if (areas.includes("drafts") && !areas.includes("live_products")) areas.push("live_products");
+  const prompt = readerPrompt(areas, input);
   let text: string;
   let note = "";
   try {
@@ -387,6 +399,11 @@ export async function frontDoor(
     note = ` (read by ${FRONT_DOOR_ROUTER}: ${(e as Error).message})`;
   }
   const raw = `${secs(t1 - t0)}+${secs(Date.now() - t1)}${note} ${routed.trim()} → ${text.trim()}`;
+  // Two answers as a list ("orders for yesterday and today"): the first.
+  try {
+    const whole = JSON.parse(text.trim()) as unknown;
+    if (Array.isArray(whole) && whole[0] && typeof whole[0] === "object") text = JSON.stringify(whole[0]);
+  } catch { /* not plain JSON: read as it is */ }
   const parsed = json(text);
   if (parsed?.type === "clarify") {
     const options = (Array.isArray(parsed.options) ? parsed.options : []).filter((o): o is string => typeof o === "string").map((o) => o.slice(0, 40)).slice(0, 3);

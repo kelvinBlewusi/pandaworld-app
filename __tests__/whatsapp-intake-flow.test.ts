@@ -4013,7 +4013,7 @@ describe("the assistant, on the pilot's accounts", () => {
       await handleLinkedMessage(USER, PHONE, "m1", { text: "change the quantity of the fridge to 20" });
       expect(aiPrompts).toHaveLength(2);
       expect(aiPrompts[0]).toContain('Reply with JSON only: {"area"');
-      expect(aiPrompts[1]).toContain("This message is about: drafts.");
+      expect(aiPrompts[1]).toContain("This message is about: drafts or live products.");
       expect(db.tables.listings[0].quantity).toBe(20);
       expect(db.tables.whatsapp_assistant_log.at(-1)).toMatchObject({ raw: expect.stringContaining("[front door]") });
     });
