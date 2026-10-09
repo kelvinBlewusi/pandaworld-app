@@ -2443,6 +2443,72 @@ measuring, is this.
   turns look right; keep `interpret` only as the fallback when the front
   door fails fast, or retire it too.
 
+### What sellers can and can't ask of Jumia (owner, 2026-10-09)
+
+"The system understands what is capable and doable and what is not and
+reports on it accordingly to the seller." Jumia's spec
+(vendorcenter.jumia.com/api-docs/openapi.yaml) has 31 requests. We use 30;
+the one left, GET /catalog/stock/salesorderitem, isn't needed (stock held by
+orders is counted from the orders).
+
+- **The list**: lib/jumia/capabilities.ts. Each entry is one thing a seller
+  wants, the requests behind it, and its status: `chat`, `whatsapp`,
+  `vendor_center` (the API doesn't allow it), `impossible`, or `not_built`.
+  It also has what it needs (pack, QC approved once, Order Manager role,
+  confirm tap, credits) and, for what isn't possible, the exact `answer` the
+  seller gets. Add to it whenever a capability is added or found missing.
+- **"cannot"**: both prompts list what isn't possible by key
+  (`cannotList()`). The AI answers those with `{"type":"cannot","what":"<key>"}`,
+  and `parseActionRaw` turns that into a reply with the list's fixed text and
+  a Vendor Center button (`cannotAnswer`). The AI's own words about what
+  Jumia allows are never sent. Covers: deleting a product, a live product's
+  main photo, main category or parent SKU, changes before QC approves it,
+  adding a size to a live product (not built), the buyer's phone or
+  messaging buyers, marking orders shipped or delivered, returns, Fulfilled
+  by Jumia labels, bank details, holiday mode, seller score/reviews/views,
+  campaigns and ads, French/Arabic listings (not built: every connected
+  seller is in Ghana).
+- **Daily checks**: lib/jumia/api-checks.ts runs every read request
+  (shops, linked shops, brands, categories, products, a product set, stock,
+  an attribute set, the latest feed, orders, order items, shipment
+  providers, payouts) against the check account. That is app_settings
+  `api_check_user`, else the first ADMIN_USER_IDS with Jumia connected.
+  Read-only, paced, 13 checks.
+  - Results go in `jumia_api_checks`
+    (supabase/migrations/2026-10-09_jumia-api-checks.sql; pg_cron
+    `jumia-api-checks` at 06:13 UTC → app/api/worker/jumia-api-checks).
+  - A failure is `console.error` (Sentry) plus a WhatsApp message to that
+    account.
+  - /admin/jumia-api shows the list by area with each entry's status, needs,
+    the assistant's answer and the last check, plus "Run the checks now".
+- **A live product's other details** (`live_details`):
+  - `content_change` takes `details` ({their word: value}), `barcode` and
+    `size` ({from, to}). Each value must be in the message.
+    lib/whatsapp/live-details.ts maps their word to the category's attribute
+    (`matchAttribute`: "colour" → color, "material" → main_material). It
+    checks the value with the listing push's own rules (`allowedValueFor`,
+    `checkNumericConstraint`). Then `resolveDetails` places it: a barcode or
+    size name on the one variation meant (asks which when there are
+    several, refuses a size name another variation has).
+  - Category details come from the local copy, or are fetched once by
+    attribute set (`categoryDetails`).
+  - `contentItems` (lib/jumia/shop.ts) sets them on the product or on each
+    variation that carries them, with everything else as Jumia has it.
+  - Extra categories (deprecated by Jumia) aren't offered.
+- **Quick wins**:
+  - The rejected list and product info carry Jumia's QC comment with its
+    reason (`qcText`).
+  - A refused change reports each country's message
+    (`feedItemResults`: `errors.businessClients[].messages`).
+  - A product's stock shows how many sit in orders not shipped yet
+    (`heldByOrders`: pending and ready-to-ship orders of 30 days).
+- **Model fallback (owner: "make the fall back be 2.5 Flash since it is
+  smarter")**: `FRONT_DOOR_FALLBACK` = gemini-2.5-flash on Vertex. Limits:
+  sorting 10 s, reading 15 s, backup 20 s.
+- Tests: __tests__/jumia-capabilities.test.ts; details, stock held and
+  checks in jumia-shop-more.test.ts; 8 cases in the test set ("cannot-*",
+  "live-details-*").
+
 ### The chat knows the website (owner, 2026-10-07)
 
 "Let the chat know our site very well ... connect WhatsApp, use extension,

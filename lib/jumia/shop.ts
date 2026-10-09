@@ -73,6 +73,14 @@ const num = (v: unknown): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
+/** Jumia's QC reason with its comment, once each. Pure. */
+export function qcText(reason: string | null, comment: string | null): string | null {
+  if (!reason || !comment) return reason ?? comment;
+  if (comment.toLowerCase().includes(reason.toLowerCase())) return comment;
+  if (reason.toLowerCase().includes(comment.toLowerCase())) return reason;
+  return `${reason}: ${comment}`;
+}
+
 /**
  * GET /catalog/products as one row per variation, with the seller's own
  * country's status, QC and price (its business client), else the global price.
@@ -109,7 +117,9 @@ export function productsFromCatalog(raw: unknown, country: string | null): ShopP
         status:       str(client.status)?.toUpperCase() ?? null,
         visible:      typeof client.visible === "boolean" ? client.visible : null,
         qcStatus:     str(qc.status)?.toUpperCase() ?? null,
-        qcReason:     str(qc.rejectionReason),
+        // Jumia's reason and, when it gives one, its comment (owner,
+        // 2026-10-09: the rejected list had neither most of the time).
+        qcReason:     qcText(str(qc.rejectionReason), str(qc.rejectionComment)),
         price:        clientValue ?? num(gp.value),
         salePrice:    num(sale.localValue) ?? num(sale.value),
         saleStart:    str(sale.startAt),
@@ -327,6 +337,14 @@ export interface ContentFields {
   /** The "short_description" attribute: the highlights, as a list. */
   highlights?:  string;
   brand?:       { code: number; name: string };
+  /**
+   * Other details by Jumia's attribute name ("color_family": "Black"), with
+   * the seller's word for each (`label`): set where the product has them,
+   * on the product or on each of its variations (owner, 2026-10-09).
+   */
+  attributes?:  { name: string; label: string; value: string }[];
+  /** One variation's barcode or name ("M" → "Medium"), by its SKU. */
+  variations?:  { sellerSku: string; barcode?: string; variation?: string }[];
 }
 
 export type LiveChange =
@@ -456,9 +474,16 @@ export function feedItemResults(raw: unknown): Map<string, { failed: boolean; er
   const items = ((raw as { feedItems?: unknown[] } | null)?.feedItems ?? []) as Record<string, unknown>[];
   for (const i of items) {
     const failed = String(i.status ?? "").toUpperCase() === "FAILED";
-    const nested = ((i.errors as Record<string, unknown> | undefined)?.globalMessages as unknown[] | undefined) ?? [];
-    const first = [i.errorMessage, ...nested].map((e) => (typeof e === "string" ? e : e && typeof e === "object" ? String((e as Record<string, unknown>).message ?? "") : "")).find(Boolean);
-    const result = { failed, error: first ? first.slice(0, 200) : null };
+    const errors = (i.errors ?? {}) as Record<string, unknown>;
+    const nested = (errors.globalMessages as unknown[] | undefined) ?? [];
+    // Per country too: "jumia-gh: Price is lower than…" (the spec's
+    // errors.businessClients[].messages), which a refused change often has
+    // instead of a global message.
+    const perCountry = ((Array.isArray(errors.businessClients) ? errors.businessClients : errors.businessClients ? [errors.businessClients] : []) as Record<string, unknown>[])
+      .flatMap((b) => (Array.isArray(b.messages) ? b.messages : [b.messages]));
+    const text = (e: unknown) => (typeof e === "string" ? e : e && typeof e === "object" ? String((e as Record<string, unknown>).message ?? "") : "");
+    const messages = Array.from(new Set([i.errorMessage, ...nested, ...perCountry].map(text).filter(Boolean)));
+    const result = { failed, error: messages.length > 0 ? messages.join("; ").slice(0, 300) : null };
     for (const key of [str(i.sellerSKU) ?? str(i.sellerSku), str(i.productSid)]) if (key) out.set(key, result);
   }
   return out;
@@ -555,21 +580,32 @@ export async function contentItems(accessToken: string, products: ShopProduct[],
     if (!set) return { ok: false, status: 404, message: `Jumia didn't return ${p.name} (SKU ${p.sellerSku})` };
     if (!set.brand || !set.category) return { ok: false, status: 0, message: `Jumia didn't give ${p.name}'s brand and category, which an update needs` };
     done.add(p.setSid ?? set.id);
-    const attributes = set.attributes.map((a) => (a.name === "short_description" && fields.highlights ? { ...a, value: fields.highlights } : a));
+    const details = new Map((fields.attributes ?? []).map((a) => [a.name, a.value]));
+    const onVariation = (name: string) => set.variations.some((v) => v.attributes.some((a) => a.name === name));
+    const attributes = set.attributes.map((a) => (a.name === "short_description" && fields.highlights ? { ...a, value: fields.highlights }
+      : details.has(a.name) ? { ...a, value: details.get(a.name)! } : a));
     if (fields.highlights && !attributes.some((a) => a.name === "short_description")) attributes.push({ name: "short_description", value: fields.highlights });
+    // A detail the product doesn't carry yet goes on the product, unless its
+    // variations carry it (a size, a colour per variation).
+    for (const [name, value] of Array.from(details.entries())) {
+      if (!attributes.some((a) => a.name === name) && !onVariation(name)) attributes.push({ name, value });
+    }
     for (const v of set.variations) {
+      const own = (fields.variations ?? []).find((x) => x.sellerSku === v.sellerSku);
+      const barcode = own?.barcode ?? v.barcode;
+      const variation = own?.variation ?? v.variation;
       items.push({
         id:          v.id,
         sellerSku:   v.sellerSku,
         parentSku:   set.parentSku ?? set.variations[0].sellerSku,
-        ...(v.variation ? { variation: v.variation } : {}),
-        ...(v.barcode ? { gtinBarcode: v.barcode } : {}),
+        ...(variation ? { variation } : {}),
+        ...(barcode ? { gtinBarcode: barcode } : {}),
         name:        { value: fields.name ?? set.name },
         description: { value: fields.description ?? set.description },
         brand:       fields.brand ?? set.brand,
         category:    set.category,
         images:      set.images,
-        attributes:  [...attributes, ...v.attributes],
+        attributes:  [...attributes, ...v.attributes.map((a) => (details.has(a.name) ? { ...a, value: details.get(a.name)! } : a))],
       });
     }
     await sleep(PACE_MS);
@@ -772,6 +808,32 @@ export async function ordersWithStatus(accessToken: string, status: string | str
 }
 
 /** The statuses whose change the seller hears about (lib/whatsapp/shop-notices.ts). */
+/**
+ * How many of each SKU sit in orders not shipped yet (pending or ready to
+ * ship) from the last 30 days: what "my stock is 3 but I set 5" usually is
+ * (owner, 2026-10-09). The newest 100 such orders are read.
+ */
+export async function heldByOrders(accessToken: string, skus: string[], now = Date.now()): Promise<JumiaCall<Map<string, number>>> {
+  const out = new Map<string, number>();
+  const r = await listOrders(accessToken, {
+    status: ["PENDING", "READY_TO_SHIP"], createdAfter: jumiaTime(now - 30 * 86_400_000), createdBefore: jumiaTime(now), size: 100, sort: "DESC",
+  });
+  if (!r.ok) return r;
+  const orders = r.data.orders ?? [];
+  if (orders.length === 0) return { ok: true, data: out };
+  const items = await getItemsOfOrders(accessToken, orders.map((o) => o.id));
+  if (!items.ok) return items;
+  const want = new Set(skus);
+  for (const { items: list } of Array.from(items.data.values())) {
+    for (const i of list) {
+      const sku = i.product?.sellerSku;
+      const status = String(i.status ?? "").toUpperCase().replace(/[^A-Z]+/g, "_");
+      if (sku && want.has(sku) && (status === "PENDING" || status === "READY_TO_SHIP")) out.set(sku, (out.get(sku) ?? 0) + 1);
+    }
+  }
+  return { ok: true, data: out };
+}
+
 export const NOTICE_STATUSES = ["DELIVERED", "RETURNED", "FAILED", "CANCELED"] as const;
 
 /** Orders whose items moved to one of NOTICE_STATUSES since `sinceMs`. */
