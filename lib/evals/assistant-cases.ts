@@ -369,5 +369,5 @@ export const ASSISTANT_CASES: EvalCase[] = [
   { id: "live-details-colour", src: "variant", area: "live_changes", stage: "idle", catalog: [NECK_FAN], msg: "the neck fan's colour on jumia should be white not black", ok: [{ type: "content_change", product: "~neck fan", "request.details": "~white" }] },
   { id: "live-details-material", src: "variant", area: "live_changes", stage: "idle", catalog: [NECK_FAN], msg: "set the material of the neck fan to plastic", ok: [{ type: "content_change", product: "~neck fan", "request.details": "~plastic" }] },
   { id: "live-details-size", src: "variant", area: "live_changes", stage: "idle", msg: "rename size M of the satin gown to XL", ok: [{ type: "content_change", product: "~gown", "request.size": "~XL" }] },
-  { id: "live-details-barcode", src: "variant", area: "live_changes", stage: "idle", msg: "the electric kettle's barcode is 6001234567890", ok: [{ type: "content_change", product: "~kettle", "request.barcode": "6001234567890" }] },
+  { id: "live-details-barcode", src: "variant", area: "live_changes", stage: "idle", catalog: ["Nasco Electric Kettle 1.7L - Stainless Steel"], msg: "the electric kettle's barcode is 6001234567890", ok: [{ type: "content_change", product: "~kettle", "request.barcode": "6001234567890" }] },
 ];
