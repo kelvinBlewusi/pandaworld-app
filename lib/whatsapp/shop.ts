@@ -47,11 +47,12 @@ import { getCategoryByCode } from "@/lib/jumia/categories";
 import { COUNTRY_FEES, commissionOn, feeCategoryForPath, itemFeeFor, payoutAt } from "@/lib/marketing/country-fees";
 import { calculatorPathFor, type JumiaCountryCode } from "@/lib/marketing/countries";
 import {
-  changedPrice, fetchPayouts, fetchProductSet, fetchStock, findOrderByNumber, findProducts, fromRow, localUpdate, orderStatusWord, ordersCreatedSince,
+  changedPrice, fetchPayouts, fetchProductSet, fetchStock, findOrderByNumber, heldByOrders, findProducts, fromRow, localUpdate, orderStatusWord, ordersCreatedSince,
   ordersWithStatus, pctPrice, refreshProducts, saveProducts, sendLiveChange, sendLiveChanges, shopProducts, summarizeOrders, syncCatalog,
   type ContentFields, type LiveChange, type ProductSet, type ShopProduct,
 } from "@/lib/jumia/shop";
 import { findBrandExact, searchBrandsFromDB } from "@/lib/jumia/brands";
+import { categoryDetails, resolveDetails } from "@/lib/whatsapp/live-details";
 import { updateSession, type ListedProducts } from "@/lib/whatsapp/session";
 import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
 import { findRestrictedWords, stripRestrictedWords } from "@/lib/ai/restricted-words";
@@ -166,6 +167,11 @@ function describeContent(f: ContentFields): string {
     f.brand ? `brand → ${f.brand.name}` : null,
     f.description ? "a new description" : null,
     f.highlights ? "new highlights" : null,
+    ...(f.attributes ?? []).map((a) => `${a.label.replace(/\s*\(.*?\)\s*/g, " ").trim().toLowerCase()} → ${shorten(a.value, 40)}`),
+    ...(f.variations ?? []).flatMap((v) => [
+      v.variation ? `variation (SKU ${v.sellerSku}) → ${v.variation}` : null,
+      v.barcode ? `barcode${(f.variations ?? []).length > 1 ? ` (SKU ${v.sellerSku})` : ""} → ${v.barcode}` : null,
+    ]),
   ].filter(Boolean).join(", ") || "its content";
 }
 
@@ -476,6 +482,11 @@ export interface ContentRequest {
   brand?:       string;
   description?: string;
   highlights?:  string;
+  /** Other details in the seller's words ("colour": "black"), checked against the category (lib/whatsapp/live-details.ts). */
+  details?:     Record<string, string>;
+  barcode?:     string;
+  /** Renaming one of its sizes ("M" → "Medium"). */
+  size?:        { from: string | null; to: string };
   /** Written by AI from what Jumia has now, with the seller's own instructions. */
   rewrite?:     ("name" | "description" | "highlights")[];
   instructions?: string;
@@ -566,6 +577,23 @@ export async function proposeContentChange(userId: string, phone: string, query:
       return "brand forbidden";
     }
     fields.brand = { code: known.code, name: known.name };
+  }
+
+  // Its other details, barcode or a size's name: checked against what its
+  // category takes before anything is offered.
+  if (req.details || req.barcode || req.size) {
+    const set = await fetchProductSet(ctx.token, product.sellerSku);
+    if (!set.ok || !set.data) {
+      await sendTextIfConfigured(phone, `I couldn't read ${shorten(product.name, 60)} from Jumia just now${set.ok ? "" : `: ${set.message}`}. Try again in a minute.`);
+      return "set unreadable";
+    }
+    const attrs = req.details || req.size ? (set.data.category ? await categoryDetails(ctx.token, set.data.category.code) : []) : [];
+    const r = resolveDetails({ details: req.details, barcode: req.barcode, size: req.size ?? undefined }, set.data, attrs, found.length === 1 ? found[0].sellerSku : null);
+    if (!r.ok) {
+      await sendTextIfConfigured(phone, r.why);
+      return "details refused";
+    }
+    Object.assign(fields, r.fields);
   }
 
   if (req.rewrite && req.rewrite.length > 0) {
@@ -793,7 +821,16 @@ export async function answerStock(userId: string, phone: string, query: string |
       await sendTextIfConfigured(phone, `I couldn't find "${shorten(query, 60)}" among your Jumia products. Try its name as it shows on Jumia, or its SKU.`);
       return "not found";
     }
-    await sendLong(phone, ["📦 Stock on Jumia", ...found.map((p) => `• ${shorten(label(p), 60)}: ${stockText(p)}`)].join("\n"));
+    // What orders not shipped yet hold of it, for a few products at most.
+    const held = found.length <= 5 ? await heldByOrders(ctx.token, found.map((p) => p.sellerSku)).catch(() => null) : null;
+    const heldText = (p: ShopProduct) => {
+      const n = held?.ok ? held.data.get(p.sellerSku) ?? 0 : 0;
+      return n > 0 ? ` (${n} in order${n === 1 ? "" : "s"} not shipped yet)` : "";
+    };
+    await sendLong(phone, [
+      "📦 Stock on Jumia", ...found.map((p) => `• ${shorten(label(p), 60)}: ${stockText(p)}${heldText(p)}`),
+      ...(held?.ok && held.data.size > 0 ? ["", "Units in orders waiting to be packed or shipped leave your stock as the orders ship."] : []),
+    ].join("\n"));
     await rememberListed(phone, found, `stock of "${query}"`);
     return `stock of ${found.length}`;
   }

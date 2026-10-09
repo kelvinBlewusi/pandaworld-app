@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 // compare it with the chat as it is. Its questions back ("asked") are
 // counted apart from right and wrong.
 
-const MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash"];
+const MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3.1-flash-lite"];
 
 async function runTests(form: FormData) {
   "use server";

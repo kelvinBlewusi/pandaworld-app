@@ -224,7 +224,7 @@ describe("the front door prototype", () => {
     expect(r.action).toMatchObject({ type: "sales", period: "yesterday" });
   });
 
-  it("when the reading call is slow, Flash-Lite reads it instead of leaving them waiting", async () => {
+  it("when the reading call is slow, the backup (2.5 Flash) reads it instead of leaving them waiting", async () => {
     jest.useFakeTimers();
     try {
       answer = (p) => (p.includes('Reply with JSON only: {"area"') ? '{"area":"orders"}'
@@ -232,11 +232,11 @@ describe("the front door prototype", () => {
       const c = byId("chat-hi");
       const read = frontDoor({
         stage: c.stage, message: "orders", conversation: [], drafts: [], listed: null, seller: [], links: {}, currency: "GHS", web: true,
-      }, { router: "gemini-2.5-flash-lite", reader: "gemini-2.5-flash" }, { feature: "assistant_eval" }, { routerMs: 10_000, readerMs: 25_000, fallbackMs: 12_000 });
-      await jest.advanceTimersByTimeAsync(26_000);
+      }, { router: "gemini-3.1-flash-lite", reader: "gemini-3.1-flash-lite" }, { feature: "assistant_eval" }, { routerMs: 10_000, readerMs: 15_000, fallbackMs: 20_000 });
+      await jest.advanceTimersByTimeAsync(16_000);
       const r = await read;
       expect(r.action).toEqual({ type: "orders" });
-      expect(r.raw).toContain("(read by gemini-2.5-flash-lite: gemini-2.5-flash took over 25 s)");
+      expect(r.raw).toContain("(read by gemini-2.5-flash: gemini-3.1-flash-lite took over 15 s)");
       expect(prompts).toHaveLength(3);
     } finally {
       jest.useRealTimers();
@@ -267,7 +267,7 @@ describe("the front door prototype", () => {
     // Sorting failed, the backup sorted; reading failed, the backup read.
     expect(prompts).toHaveLength(4);
     expect(r.action).toEqual({ type: "orders" });
-    expect(r.raw).toContain("(read by gemini-2.5-flash-lite: AI Studio is down)");
+    expect(r.raw).toContain("(read by gemini-2.5-flash: AI Studio is down)");
   });
 
   it("a tapped answer is read in its question's area, the question's words as said (owner's WhatsApp, 2026-10-08)", async () => {

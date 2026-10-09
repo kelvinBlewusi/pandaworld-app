@@ -27,6 +27,7 @@
 import { callGeminiBackend } from "@/lib/ai/gemini-client";
 import { withAiUsageContext } from "@/lib/ai/usage";
 import { siteGuide } from "@/lib/whatsapp/site-guide";
+import { cannotList } from "@/lib/jumia/capabilities";
 import {
   capabilities, parseActionUnguarded, type AssistantAction, type AssistantLink, type ProductFacts, type Stage,
 } from "@/lib/whatsapp/assistant";
@@ -72,9 +73,11 @@ export interface FrontDoorModels { router: string; reader: string }
 export const FRONT_DOOR_ROUTER = "gemini-2.5-flash-lite";
 /**
  * The backup when a call fails or is slow: on Vertex, so it still answers
- * when the chosen models (Gemini 3 runs through AI Studio) don't.
+ * when the chosen models (Gemini 3 runs through AI Studio) don't. Flash, the
+ * smarter of the two (owner, 2026-10-09: "make the fall back be 2.5 Flash
+ * since it is smarter").
  */
-export const FRONT_DOOR_FALLBACK = "gemini-2.5-flash-lite";
+export const FRONT_DOOR_FALLBACK = "gemini-2.5-flash";
 
 // ─── 1. Context as one record ────────────────────────────────────────────────
 
@@ -171,6 +174,7 @@ function routerPrompt(input: FrontDoorInput): string {
 
 const CLARIFY = '{"type":"clarify","question":"<one short question, ending with ?>","options":["<2 or 3 answers they can tap, each up to 20 characters and clear on its own, e.g. \\"Stock to 10\\", not \\"10\\">"]} - only when you can\'t tell which action or which product they mean, or a change is missing the value to set (e.g. "change the drone to 10": its stock or its price?).';
 const REPLY = '{"type":"reply","text":"<your message>","link":"<a link key, or null>"} - a question you answer in a line or two; a hello; anything this area\'s actions don\'t cover.';
+const CANNOT = '{"type":"cannot","what":"<a key from Not possible from here>"} - they ask for (or ask whether you can do) one of these: PandaWorld gives the true answer and what it can do instead.';
 
 const ACTIONS: Record<Area, string[]> = {
   listing: [
@@ -198,6 +202,8 @@ const ACTIONS: Record<Area, string[]> = {
     '  "listed" is the products you last listed for them ("those", "the last 10", "all" right after your list).',
     '{"type":"content_change","product":"<the product>","name":"<copied>" or null,"description":"<copied>" or null,"highlights":null,"brand":null,"rewrite":["name","description","highlights"] or []} - a live product\'s',
     '  name, description or highlights: their own text copied whole, or "rewrite" for what they ask YOU to write (PandaWorld writes it with AI and shows it before one tap).',
+    '  Its other details go in the same action: "details":{"<the detail in their words: colour, material, weight, model…>":"<value copied>"},',
+    '  "barcode":"<digits copied>", "size":{"from":"<the size now, or null>","to":"<the new size name>"} (renaming one of its sizes).',
     '{"type":"product_info","product":"<their words>"} - when it is really a question about a product (is it on, approved, in stock).',
     '{"type":"product_text","product":"<their words>"} - show a product\'s name, description and highlights as Jumia has them now, so they can read or edit them.',
     '{"type":"warehouse_order","items":[{"product":"<their words>","quantity":<number>}]} - send stock to Jumia\'s warehouse.',
@@ -270,6 +276,8 @@ const EXAMPLES: Record<Area, string[]> = {
     '(after you listed their newest products) "change the stock of the last 10 to 20" → {"type":"bulk","scope":"listed","words":null,"stock":20}',
     '"rewrite the description of the wellington boot" → {"type":"content_change","product":"wellington boot","name":null,"description":null,"highlights":null,"brand":null,"rewrite":["description"]}',
     '(the bot asked for the new description of the kettle) "<their text>" → {"type":"content_change","product":"kettle","name":null,"description":"<their text, copied whole>","highlights":null,"brand":null,"rewrite":[]}',
+    '"the neck fan\'s colour is white not black, and it\'s plastic" → {"type":"content_change","product":"neck fan","details":{"colour":"white","material":"plastic"},"rewrite":[]}',
+    '"rename size M of the gown to Medium" → {"type":"content_change","product":"gown","size":{"from":"M","to":"Medium"},"rewrite":[]}',
     '"switch on everything that is off" → {"type":"bulk","scope":"inactive","words":null,"active":true}',
   ],
   shop_info: [
@@ -322,6 +330,7 @@ function readerPrompt(areas: Area[], input: FrontDoorInput): string {
     "", "About this seller:", ...input.seller,
     ...(input.memory ? ["", "What you remember about them from earlier (to understand them; never quote it):", input.memory] : []),
     "", "What PandaWorld can do (all true; nothing else is: there is no team doing things by hand):", capabilities(input.listingCost ?? 2),
+    "", "Not possible from here (Jumia's API doesn't allow it, or it isn't built): answer these with cannot:", cannotList(),
     ...(replyArea ? [
       "", siteGuide(),
       "", "Links you can send (put the key in \"link\"):", ...Object.entries(input.links).map(([k, l]) => `- ${k}: ${l.what}`),
@@ -330,6 +339,7 @@ function readerPrompt(areas: Area[], input: FrontDoorInput): string {
     "Actions:",
     ...Array.from(new Set(areas.flatMap((a) => ACTIONS[a]))),
     REPLY,
+    CANNOT,
     CLARIFY,
     "",
     "Examples (message → JSON):",
@@ -366,10 +376,11 @@ export interface FrontDoorUsage { feature: "assistant" | "assistant_eval"; userI
 /**
  * How long each call may take. A message the website's route (60 s) cut off
  * got no reply at all (owner's web chat, 2026-10-08 17:49, Gemini slow):
- * sorting 10 s, reading 25 s, then Flash-Lite reads it in 12 s, all well
- * inside the 60 s.
+ * sorting 10 s, reading 15 s (3.1 Flash-Lite answers in under 2 s nine times
+ * in ten), then the backup, Flash, reads it in 20 s: 45 s at worst, inside
+ * the 60 s.
  */
-export const FRONT_DOOR_LIMITS = { routerMs: 10_000, readerMs: 25_000, fallbackMs: 12_000 };
+export const FRONT_DOOR_LIMITS = { routerMs: 10_000, readerMs: 15_000, fallbackMs: 20_000 };
 
 async function ask(model: string, prompt: string, usage: FrontDoorUsage, limitMs?: number): Promise<string> {
   const call = withAiUsageContext(usage, () =>

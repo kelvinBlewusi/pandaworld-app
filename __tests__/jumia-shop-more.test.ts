@@ -38,7 +38,8 @@ jest.mock("@/lib/whatsapp/client", () => ({
 }));
 
 import { changedPrice, contentItems, pctPrice, productsFromCatalog, type ShopProduct } from "@/lib/jumia/shop";
-import { answerProductText, answerProducts, bulkTargets, handleShopTap, htmlToText, proposeBulkChange, proposeContentChange } from "@/lib/whatsapp/shop";
+import { answerProductText, answerProducts, answerStock, bulkTargets, handleShopTap, htmlToText, proposeBulkChange, proposeContentChange } from "@/lib/whatsapp/shop";
+import { runApiChecks } from "@/lib/jumia/api-checks";
 import {
   answerBrand, answerLinkedShops, answerPayoutDetail, answerReport, answerWarehouseStock, daysLeft, handleWarehouseTap, proposeWarehouseOrder,
   proposeWarehouseShipped, salesByProduct, statementLines,
@@ -240,8 +241,74 @@ describe("a live product's content", () => {
     expect(writes()).toHaveLength(0);
   });
 
+  it("its other details, checked against its category, go in the update with the rest unchanged (owner, 2026-10-09)", async () => {
+    db.tables.jumia_category_attributes = [
+      { category_code: 1000844, name: "color", label: "Color", type: "enum", allowed_values: ["Brown", "Black", "Gold"], required: false, is_variant: false, sort_order: 1 },
+      { category_code: 1000844, name: "main_material", label: "Main Material", type: "string", allowed_values: [], required: false, is_variant: false, sort_order: 2 },
+    ];
+    expect(await proposeContentChange(USER, PHONE, "kettle", { details: { colour: "purple" } })).toBe("details refused");
+    expect(last().body).toContain("It takes: Brown, Black, Gold");
+    expect(await proposeContentChange(USER, PHONE, "kettle", { details: { colour: "black", material: "steel" } })).toBe("offered content (attributes) for NAS-K");
+    expect(last().body).toContain("color → Black, main material → steel");
+    await handleShopTap(USER, PHONE, last().ids![0]);
+    const item = (writes().find((c) => c.path === "/feeds/products/update")!.body as { products: Record<string, unknown>[] }).products[0];
+    expect(item.attributes).toEqual(expect.arrayContaining([
+      { name: "color", value: "Black" }, { name: "main_material", value: "steel" }, { name: "short_description", value: "<ul><li>Old point</li></ul>" },
+    ]));
+    expect(item.name).toEqual({ value: "Nasco Electric Kettle 1.7L" });
+  });
+
+  it("a size's new name and a barcode go on that variation only", async () => {
+    db.tables.jumia_category_attributes = [
+      { category_code: 1000844, name: "volume", label: "Volume", type: "enum", allowed_values: ["50ml", "100ml", "200ml"], required: false, is_variant: true, sort_order: 1 },
+    ];
+    expect(await proposeContentChange(USER, PHONE, "eau de parfum", { size: { from: "50ml", to: "200ml" } })).toMatch(/^offered content \(variations\) for LAT-/);
+    await handleShopTap(USER, PHONE, last().ids![0]);
+    const items = (writes().find((c) => c.path === "/feeds/products/update")!.body as { products: { sellerSku: string; variation?: string }[] }).products;
+    expect(items.map((i) => [i.sellerSku, i.variation])).toEqual([["LAT-50", "200ml"], ["LAT-100", "100ml"]]);
+  });
+
   it("descriptions are shown as plain lines", () => {
     expect(htmlToText("<p>One &amp; two</p><ul><li>A</li><li>B</li></ul>")).toBe("One & two\n• A\n• B");
+  });
+});
+
+describe("stock held by orders not shipped yet (owner, 2026-10-09)", () => {
+  it("is said next to a product's stock", async () => {
+    orders = [{ id: "o9", number: "9", createdAt: "2026-10-08 10:00:00" }];
+    orderItems = { o9: [
+      { id: "i1", status: "PENDING", product: { sellerSku: "NAS-K", name: "Nasco Electric Kettle 1.7L" } },
+      { id: "i2", status: "READY_TO_SHIP", product: { sellerSku: "NAS-K", name: "Nasco Electric Kettle 1.7L" } },
+      { id: "i3", status: "DELIVERED", product: { sellerSku: "NAS-K", name: "Nasco Electric Kettle 1.7L" } },
+    ] };
+    await answerStock(USER, PHONE, "kettle", null);
+    expect(last().body).toContain("(2 in orders not shipped yet)");
+    const asked = calls.find((c) => c.path === "/orders")!;
+    expect(asked.query.get("status")).toBe("PENDING,READY_TO_SHIP");
+  });
+});
+
+describe("the daily checks of every read request", () => {
+  it("each read once, in order, nothing written; a failure is kept with Jumia's answer", async () => {
+    db.tables.jumia_categories = [{ code: 1000844, name: "Eau de Parfum", path: "Beauty > Eau de Parfum", attribute_set_sid: "as-1" }];
+    orders = [{ id: "o1", number: "1", createdAt: "2026-10-08 10:00:00" }];
+    orderItems = { o1: [{ id: "i1", status: "PENDING", product: { sellerSku: "NAS-K" } }] };
+    const r = await runApiChecks("tok", "GH", { feedId: "feed-1", paceMs: 0 });
+    expect(r.map((x) => [x.check, x.ok, x.skipped])).toEqual([
+      ["shops", true, false], ["linked_shops", true, false], ["brands", true, false], ["categories", true, false], ["products", true, false],
+      ["product_set", true, false], ["stock", true, false], ["attribute_set", true, false], ["feed", true, false], ["orders", true, false],
+      ["order_items", true, false], ["shipment_providers", true, false], ["payouts", true, false],
+    ]);
+    expect(writes()).toHaveLength(0);
+
+    const realFetch = global.fetch;
+    global.fetch = jest.fn(async (input: URL | string, init?: RequestInit) =>
+      new URL(String(input)).pathname === "/payout-statement" ? new Response('{"message":"Forbidden"}', { status: 403 }) : realFetch(input, init)) as unknown as typeof fetch;
+    orders = [];
+    const again = await runApiChecks("tok", "GH", { paceMs: 0 });
+    expect(again.find((x) => x.check === "payouts")).toMatchObject({ ok: false, detail: expect.stringContaining("403") });
+    expect(again.find((x) => x.check === "feed")).toMatchObject({ ok: true, skipped: true });
+    expect(again.find((x) => x.check === "order_items")).toMatchObject({ skipped: true });
   });
 });
 

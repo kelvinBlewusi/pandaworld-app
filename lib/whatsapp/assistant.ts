@@ -76,6 +76,7 @@ import {
 } from "@/lib/whatsapp/shop-insights";
 import { shopProducts, type LiveChange, type ShopProduct } from "@/lib/jumia/shop";
 import { MAX_NEEDS, answerResearch, parseNeeds, type ResearchNeed } from "@/lib/whatsapp/shop-research";
+import { cannotAnswer, cannotList } from "@/lib/jumia/capabilities";
 import { INTERACTIVE_BODY_MAX, splitForText } from "@/lib/whatsapp/text-limits";
 import { assistantGate, assistantSwitchedOn } from "@/lib/whatsapp/assistant-limits";
 import { blankCodes, noteSellerMessage, sellerMemory } from "@/lib/whatsapp/seller-memory";
@@ -289,7 +290,7 @@ export function capabilities(listingCost = LIVE_LISTING_CREDIT_COST): string {
     "- Orders: \"orders\" shows orders waiting to be packed; pack them, mark them ready to ship, or cancel, here or on WhatsApp; where any order is, by its number; orders and sales for today, the week, the month or 90 days. Shipping label PDFs only on WhatsApp (Standard pack and up). Pro and up also: alerts for new Jumia orders on WhatsApp, grouped and quiet at night, and a message when orders are delivered, returned, fail delivery or are cancelled.",
     `- Their live Jumia products, found by name among everything in their shop: change a product's stock, price, a sale price with its dates, or turn it on or off, with one tap to confirm, for one product or several named together (up to ${MAX_GROUP}); where a product is (on or off, Jumia's quality check, price, sale, stock); how many are left; what's out of stock or low; which products are turned off or rejected by Jumia's quality check.`,
     `- Rules for many products at once, shown in full before one tap: prices up or down by a percentage, a sale a percentage off (with dates), a stock or price, ending sales, turning on or off; for all their products, the ones out of stock, low, off or on, or all that match words ("all perfumes"); up to ${BULK_MAX} products per tap, and a bigger rule in parts of ${BULK_MAX}, one tap each (up to ${BULK_MAX * BULK_PARTS_MAX}).`,
-    "- A live product's name, description and highlights shown as Jumia has them now (product_text). Changing them, or the brand: the seller's own text, or rewritten by AI from what Jumia has now with their instructions (\"remove the word X from the name\"), shown before one tap. Jumia checks content changes again. Photos and category of live products are changed in Vendor Center.",
+    "- A live product's name, description and highlights shown as Jumia has them now (product_text). Changing them, or the brand: the seller's own text, or rewritten by AI from what Jumia has now with their instructions (\"remove the word X from the name\"), shown before one tap. Also its other details (colour, material, weight, model and whatever its category takes, checked against Jumia's options), its barcode, or a size's name. Jumia checks content changes again. Photos and category of live products are changed in Vendor Center.",
     "- Reports: best sellers, products with no sale, what runs out soon at the rate it sells, returns and failed deliveries, for the last 7, 30 or 90 days.",
     "- Products rejected by Jumia's quality check: which ones, with Jumia's reason when its API gives one (often it doesn't: then the reason is only in Vendor Center, never guessed).",
     "- Payouts: the last Jumia payout and the statement not yet paid; every statement of the last 90 days; one statement's fees, refunds and balances. A message when Jumia pays: Pro and up.",
@@ -440,6 +441,9 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     "What PandaWorld can do (all true; never claim anything else):",
     capabilities(listingCost),
     "",
+    "Not possible from here (Jumia's API doesn't allow it, or it isn't built): answer these with cannot:",
+    cannotList(),
+    "",
     siteGuide(),
     "",
     "Links you can send (put the key in \"link\"; the seller gets a button):",
@@ -514,7 +518,9 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '  - one change to many products by a rule. "matching" with "words" for "all the perfumes".',
     '{"type":"content_change","product":"<their words>","name":"<new name copied from the message>" or null,"description":"<copied>" or',
     '  null,"highlights":"<copied>" or null,"brand":"<copied>" or null,"rewrite":["name","description","highlights"] or []} - a live product\'s',
-    '  name, description, highlights or brand. "rewrite" lists what they ask you to write or improve for them.',
+    '  name, description, highlights or brand. "rewrite" lists what they ask you to write or improve for them. Also, with "product": "details":',
+    '  {"<the detail in their words, e.g. colour, material, weight>":"<value copied>"} for its other details, "barcode":"<digits copied>",',
+    '  "size":{"from":"<the size now, or null>","to":"<the new size name>"} for renaming one of its sizes.',
     '{"type":"brand_check","brand":"<the brand from the message>","product":"<the kind of product>" or null} - is a brand on Jumia, allowed?',
     '{"type":"category_info","product":"<the kind of product>"} - what Jumia needs to list it: category, details, variations, commission',
     '{"type":"shops"} - the shops under their Jumia account',
@@ -538,6 +544,7 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     '{"type":"step"} - the message carries on what the seller is doing right now: it answers the bot\'s open question (a price, a size, a category,',
     '  a yes or no), or, while they send a product, it describes that product (its notes). PandaWorld\'s usual steps take it. In review, a',
     '  drafted product\'s sizes or variations (even answering the bot\'s question) are an edit, matched to its category\'s options.',
+    '{"type":"cannot","what":"<a key from Not possible from here>"} - they ask for (or whether you can do) one of those: PandaWorld gives the true answer and what it can do instead',
     '{"type":"reply","text":"<your message>","link":"<a key above, or null>"} - everything else. You write the message:',
     "  - \"What can you do\", a hello (\"hi\", \"hello there\"), or something you can't match: in your own words (vary it, never a set",
     "    script), a short list (4 to 6 lines starting with \"• \", never numbered) of what you can do for them, each with the words that do it",
@@ -1139,8 +1146,25 @@ export function contentAction(parsed: Record<string, unknown>, message: string, 
   if (rewrite.length > 0 && (REWRITE_WORDS.test(message) || (named && CHANGE_WORDS.test(message)))) {
     request.rewrite = rewrite; request.instructions = message.slice(0, 400);
   }
+  // Its other details, barcode or a size's name (owner, 2026-10-09): each
+  // value copied from the message; which detail, and whether Jumia takes
+  // the value, is checked against the product's category when it's offered.
+  const details: Record<string, string> = {};
+  if (parsed.details && typeof parsed.details === "object" && !Array.isArray(parsed.details)) {
+    for (const [k, v] of Object.entries(parsed.details as Record<string, unknown>).slice(0, 6)) {
+      if (typeof v === "string" && v.trim() && k.trim() && saidInMessage(v, message)) details[k.trim().slice(0, 40)] = v.trim().slice(0, 200);
+    }
+  }
+  if (Object.keys(details).length > 0) request.details = details;
+  const barcode = typeof parsed.barcode === "string" ? parsed.barcode.replace(/[\s-]/g, "") : "";
+  if (/^\d{8,14}$/.test(barcode) && message.replace(/[\s-]/g, "").includes(barcode)) request.barcode = barcode;
+  const size = (parsed.size ?? null) as { from?: unknown; to?: unknown } | null;
+  if (size && typeof size.to === "string" && size.to.trim() && saidInMessage(size.to, message)) {
+    const from = typeof size.from === "string" && size.from.trim() && (saidInMessage(size.from, message) || saidInMessage(size.from, context)) ? size.from.trim() : null;
+    request.size = { from, to: size.to.trim().slice(0, 40) };
+  }
   if (Object.keys(request).length === 0) {
-    return ask("What should I change on it? Write the new name, or say \"rewrite its description\", e.g. \"change the blender's name to Silver Crest 3 in 1 Blender 1.5L\".");
+    return ask("What should I change on it? Write the new name, or say \"rewrite its description\", e.g. \"change the blender's name to Silver Crest 3 in 1 Blender 1.5L\" or \"set the fan's colour to black\".");
   }
   return { type: "content_change", product, request };
 }
@@ -1331,6 +1355,12 @@ function parseActionRaw(
       if (!namesAProduct(product)) return ask("Which product? Tell me its name as it shows on Jumia, e.g. \"is the Hisense fridge live?\".");
       return productBacked(product, message) || productBacked(product, context)
         ? { type: "product_info", product } : ask("Which product? Tell me its name as it shows on Jumia, e.g. \"is the Hisense fridge live?\".");
+    }
+    case "cannot": {
+      // Something Jumia's API doesn't allow: its fixed, true answer
+      // (lib/jumia/capabilities.ts), never the AI's own words about it.
+      const a = cannotAnswer(String(parsed.what ?? ""));
+      return a ? { type: "reply", text: a.text, link: a.link && a.link in links ? a.link : null } : { type: "unclear" };
     }
     case "product_text": {
       const product = typeof parsed.product === "string" ? parsed.product.trim().slice(0, 120) : "";
