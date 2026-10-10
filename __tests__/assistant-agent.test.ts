@@ -15,7 +15,7 @@ jest.mock("@/lib/ai/gemini-client", () => ({
 }));
 
 import {
-  ACTION_TOOLS, AGENT_TOOLS, LOOKUP_TOOLS, actionJson, agentPrompt, agentRead, catalogLookups, countsText, lookupLine, type AgentCall,
+  ACTION_TOOLS, AGENT_TOOLS, LOOKUP_TOOLS, NO_MATCH, actionJson, agentPrompt, agentRead, catalogLookups, lookupLine, type AgentCall,
 } from "@/lib/assistant-v2/agent";
 import type { FrontDoorInput } from "@/lib/assistant-v2/front-door";
 import { assistantLinks } from "@/lib/whatsapp/assistant";
@@ -46,7 +46,7 @@ function scripted(steps: Step[]) {
   return { call, seen };
 }
 
-const noLookups = { findProducts: async () => [] as string[], shopCounts: async () => "" };
+const noLookups = { findProducts: async () => [] as string[] };
 
 const KETTLE = fromRow({ product_sid: "p1", seller_sku: "KET-1", name: "Nasco Electric Kettle 1.7L", status: "ACTIVE", qc_status: "APPROVED", stock: 0, price: 250, currency: "GHS" });
 const FAN = fromRow({ product_sid: "p2", seller_sku: "FAN-1", name: "Pedestal Fan - 5-Blade", status: "INACTIVE", qc_status: "REJECTED", stock: 4 });
@@ -56,7 +56,7 @@ describe("the tools", () => {
   it("has every action once, with the lookups apart", () => {
     const names = AGENT_TOOLS.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
-    expect(LOOKUP_TOOLS.map((t) => t.name)).toEqual(["find_products", "shop_counts"]);
+    expect(LOOKUP_TOOLS.map((t) => t.name)).toEqual(["find_products"]);
     for (const t of ACTION_TOOLS) expect(t.parameters).toMatchObject({ type: "object" });
     expect(names).toEqual(expect.arrayContaining(["live_change", "bulk", "content_change", "fix_rejected", "add_size", "add_photos", "clarify", "reply", "cannot"]));
   });
@@ -89,10 +89,6 @@ describe("its lookups", () => {
     expect(lookupLine(fromRow({ product_sid: "x", seller_sku: "X", name: "Wig" }))).toBe('"Wig"');
   });
 
-  it("counts the shop as the overview does, deleted ones left out", () => {
-    expect(countsText([KETTLE, FAN, GONE])).toBe("2 products · ON 1 · OFF 1 · out of stock 1 · waiting for Jumia's check 0 · rejected 1");
-  });
-
   it("finds products the way the chat's own search does", async () => {
     const look = catalogLookups([KETTLE, FAN, GONE]);
     expect(await look.findProducts("the kettle")).toEqual([lookupLine(KETTLE)]);
@@ -116,25 +112,26 @@ describe("reading a message", () => {
     expect(r.raw).toContain("find_products");
   });
 
-  it("says when nothing matches, and acts only on the last round after two lookups", async () => {
+  it("with nothing found, acts on their words anyway; only acts on the last round after two lookups", async () => {
     const { call, seen } = scripted([
       { calls: [{ name: "find_products", args: { words: "blender" } }] },
-      { calls: [{ name: "shop_counts", args: {} }] },
-      { calls: [{ name: "reply", args: { text: "I couldn't find a blender in your shop." } }] },
+      { calls: [{ name: "find_products", args: { words: "blender robot" } }] },
+      { calls: [{ name: "product_info", args: { product: "blender" } }] },
     ]);
     const r = await agentRead(input("is my blender on?"), call, catalogLookups([KETTLE]));
     expect(seen.map((s) => s.onlyAct)).toEqual([false, false, true]);
-    expect(seen[1].turns[2].parts[0]).toEqual({ functionResponse: { name: "find_products", response: { result: "No product matches those words." } } });
-    expect(r.actions[0]).toMatchObject({ type: "reply" });
+    expect(seen[1].turns[2].parts[0]).toEqual({ functionResponse: { name: "find_products", response: { result: NO_MATCH } } });
+    expect(NO_MATCH).toContain("Never tell them it isn't in their shop");
+    expect(r.actions).toEqual([{ type: "product_info", product: "blender" }]);
   });
 
   it("stops when it only looks up on the last round", async () => {
     const { call } = scripted([
-      { calls: [{ name: "shop_counts", args: {} }] },
-      { calls: [{ name: "shop_counts", args: {} }] },
-      { calls: [{ name: "shop_counts", args: {} }] },
+      { calls: [{ name: "find_products", args: { words: "kettle" } }] },
+      { calls: [{ name: "find_products", args: { words: "kettle" } }] },
+      { calls: [{ name: "find_products", args: { words: "kettle" } }] },
     ]);
-    const r = await agentRead(input("how is my shop"), call, noLookups);
+    const r = await agentRead(input("how is my kettle"), call, noLookups);
     expect(r.calls).toBe(3);
     expect(r.actions).toEqual([{ type: "unclear" }]);
   });
