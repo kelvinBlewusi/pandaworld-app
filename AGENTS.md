@@ -2492,7 +2492,9 @@ checks and taps.
   backends (the older AI Studio SDK drops thought signatures). Gemini 3 goes
   through AI Studio. It records usage like every other call.
 - **Switch**: app_settings `assistant_agent`: `"admins"`, `"all"`, or a list
-  of user ids; off without the row (`agentFor`). Model: app_settings
+  of user ids; off without the row (`agentFor`). Set to `"admins"` on
+  10 Oct after round 5 (the pilot: the owner's account first); delete the
+  row to go back to the front door. Model: app_settings
   `assistant_agent_model`, else `assistantModel()` (`agentModel`).
 - **In `runAssistant`**: when it's on, `interpretThroughAgent` reads the
   message first. If it fails within 15 s, the front door reads it
@@ -2520,8 +2522,10 @@ checks and taps.
     cache), 221 twice: a reply said a live description can't be changed
     and "my credits" got a reply. Round 4 (reply never says it can't or
     gives numbers, credits tool, list over restart), 226/238, median
-    1.04 s, slowest tenth 1.44 s. Runs 5ab3b0c8, b4bf6e69 (front door),
-    a1f03c0f, c63c7322, b6637485, 27680c18.
+    1.04 s, slowest tenth 1.44 s. Round 5 (never sends them to Vendor
+    Center for what a tool does), 224/238, 1.02 s. Runs 5ab3b0c8,
+    b4bf6e69 (front door), a1f03c0f, c63c7322, b6637485, 27680c18,
+    0cff6f60.
   - Cost at full price $2.92 per 1,000 messages (11.3k prompt tokens a
     call against the front door's two 2.5k calls); about 70% of those
     tokens are Gemini cache hits, billed at a reduced rate the ledger
@@ -2529,7 +2533,10 @@ checks and taps.
   - Still missed by both: "the approved ones" as a group (bulk has no
     quality-check filter), a bare "0" answering a bulk rule's question,
     a rejected product's name after "rejection reasons" (fix_rejected
-    rather than product_info).
+    rather than product_info). The agent still sends "change the
+    description of my latest uploaded product on vendor center" to
+    Vendor Center (the message names it), and asks "how many?" in a reply
+    to "I want to list some products" instead of restart.
 
 ### What sellers can and can't ask of Jumia (owner, 2026-10-09)
 
