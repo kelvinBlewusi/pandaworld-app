@@ -83,7 +83,8 @@ export const ACTION_TOOLS: GeminiTool[] = [
   // Live products
   tool("live_change", "Change one or several products already on Jumia: exactly one of stock, price, sale_price, end_sale or active. Offered for a confirm tap.", {
     product: PRODUCT, products: arr(str("A product."), "Several products, the same change."),
-    stock: int("New stock."), price: num("New price."), sale_price: num("A sale price (dates are read from the message)."),
+    stock: int("New stock."), price: num("New price (\"sell it at 120\", \"make it 120\")."),
+    sale_price: num("A sale price, only when they say sale, discount, promo or off (dates are read from the message)."),
     end_sale: bool("End its sale."), active: bool("true to turn it ON, false to turn it OFF."), all: bool("Every product their words fit (\"all the hard hats\")."),
   }),
   tool("bulk", "One change to many products by a rule, shown before one tap: prices or a sale by a percentage, a stock, a price, ending sales, ON or OFF.", {
@@ -103,7 +104,7 @@ export const ACTION_TOOLS: GeminiTool[] = [
     product: PRODUCT, size: str("The new size or colour, copied."), stock: int("Stock, from the message."), price: num("Price, from the message."),
   }, ["product", "size"]),
   tool("add_photos", "More photos for a product already on Jumia (they send them next).", { product: PRODUCT }, ["product"]),
-  tool("fix_rejected", "Fix products Jumia's quality check rejected: no product to see them and pick one.", { product: PRODUCT, reason: str("Jumia's reason as they pasted it.") }),
+  tool("fix_rejected", "Fix products Jumia's quality check rejected. Leave product out when they mean all of them or none in particular (they see the list and pick one).", { product: str("One rejected product in their words; never \"rejected\" or \"all\"."), reason: str("Jumia's reason as they pasted it.") }),
   tool("warehouse_order", "Send stock to Jumia's warehouse.", { items: arr(obj({ product: PRODUCT, quantity: int("How many.") }), "Products and quantities.") }, ["items"]),
   tool("warehouse_shipped", "A delivery to Jumia's warehouse has shipped.", { po: str("Purchase order number."), tracking: str("Tracking number."), carrier: str("Carrier.") }, ["po", "tracking"]),
   // Their shop
@@ -123,8 +124,8 @@ export const ACTION_TOOLS: GeminiTool[] = [
       status: str("Orders: one status.", STATUS),
     }, ["source"]), "The reads."),
   }, ["needs"]),
-  tool("report", "One report (\"reports\" on its own: best_sellers).", { kind: str("Which.", ["best_sellers", "slow_movers", "restock", "returns"]), period: str("Period.", ["week", "month", "quarter"]) }, ["kind"]),
-  tool("health_report", "A full health check of their shop."),
+  tool("report", "One report on what sells: best sellers, slow movers, restock, returns (\"reports\" on its own: best_sellers). How the shop is doing overall is health_report.", { kind: str("Which.", ["best_sellers", "slow_movers", "restock", "returns"]), period: str("Period.", ["week", "month", "quarter"]) }, ["kind"]),
+  tool("health_report", "A full health check of their shop: \"how is my shop doing\", \"insight into my shop's performance\", \"write a report on my shop\"."),
   tool("listings", "How many products they listed with PandaWorld in a period.", { period: str("Period.", PERIOD) }),
   tool("brand_check", "Whether a brand is on Jumia and allowed.", { brand: str("The brand, copied."), product: str("The kind of product.") }, ["brand"]),
   tool("shops", "The shops under their Jumia account."),
@@ -137,7 +138,7 @@ export const ACTION_TOOLS: GeminiTool[] = [
   tool("credits", "Their credit balance."),
   tool("payouts", "The last Jumia payout and what isn't paid yet."),
   tool("payout_detail", "Every statement (history), or one statement's fees and refunds (breakdown).", { mode: str("Which.", ["history", "breakdown"]), statement: str("A statement number from the message.") }, ["mode"]),
-  tool("fees", "What Jumia takes and what they receive when a product sells.", { product: PRODUCT, price: num("A price from the message.") }, ["product"]),
+  tool("fees", "What Jumia takes and what they receive when a product sells (\"how much will I receive if it sells\").", { product: PRODUCT, price: num("A price from the message.") }, ["product"]),
   tool("help", "What PandaWorld can do, when they ask in general."),
   // Saying, not doing
   tool("cannot", "They ask for something on the Not possible list: PandaWorld gives the true answer.", { what: str("A key from Not possible from here.") }, ["what"]),
@@ -182,20 +183,19 @@ export function actionJson(name: string, args: Record<string, unknown>): Record<
 
 // ─── The prompt ──────────────────────────────────────────────────────────────
 
-export function agentPrompt(input: FrontDoorInput): string {
+/**
+ * What doesn't change from one seller or message to the next: the system
+ * instruction, the same for everyone (with the tools, about 10k tokens), so
+ * Gemini serves it from its cache instead of reading it each time. Pure.
+ */
+export function agentSystem(listingCost = 2): string {
   return [
-    input.web
-      ? "You are PandaWorld's Jumia Listing Assistant, a chat on the PandaWorld website. PandaWorld lists sellers' products on Jumia and helps them run their Jumia shop."
-      : "You are PandaWorld's assistant on WhatsApp. PandaWorld lists sellers' products on Jumia and helps them run their Jumia shop.",
+    "You are PandaWorld's assistant for Jumia sellers, on WhatsApp or in the Jumia Listing Assistant chat on the PandaWorld website. PandaWorld lists sellers' products on Jumia and helps them run their Jumia shop.",
     "You act by calling tools. PandaWorld's code checks every call and carries it out; anything that changes their Jumia shop is shown to them first for a confirm tap.",
-    "",
-    contextText(input),
-    "", "About this seller:", ...input.seller,
-    ...(input.memory ? ["", "What you remember about them from earlier (to understand them; never quote it):", input.memory] : []),
-    "", "What PandaWorld can do (all true; nothing else is: there is no team doing things by hand):", capabilities(input.listingCost ?? 2),
+    "The first message tells you where the seller is, what they've been shown, who they are, and their new message.",
+    "", "What PandaWorld can do (all true; nothing else is: there is no team doing things by hand):", capabilities(listingCost),
     "", "Not possible from here (answer these with cannot):", cannotList(),
     "", siteGuide(),
-    "", "Links you can send with reply (the key in \"link\"):", ...Object.entries(input.links).map(([k, l]) => `- ${k}: ${l.what}`),
     "",
     "Examples (message → the tool and its arguments, as JSON):",
     ...Object.values(EXAMPLES).flat(),
@@ -203,13 +203,13 @@ export function agentPrompt(input: FrontDoorInput): string {
     "Rules:",
     "- Call the tool that does what they ask. When they ask for two or three different things, call a tool for each (at most 3), in the order they asked. One request is one tool.",
     "- Read the message for what they want now. The open question is context: a message that answers it belongs with what the question was about (a description the bot asked for a live product is content_change); anything else is a new request.",
-    "- Which product: from the products you last listed (\"the approved ones\" are those whose quality check passed, ON or OFF; \"my latest uploaded product\" is the first of a list of their newest), the products the message names, or the conversation (\"those products\" after an order: that order's products). Put their names in the tool. Only when you still can't tell, look it up (find_products), at most twice; then act.",
+    "- Which product: from the products you last listed (\"the approved ones\" are those whose quality check passed, ON or OFF; \"my latest uploaded product\" is the first of a list of their newest), the products the message names, or the conversation (\"those products\" after an order: that order's products). Put their names in the tool. Only when you still can't tell, look it up (find_products), at most twice; then call the tool for what they asked.",
     "- A lookup is never an answer: stock, prices, counts and lists come from the tools that read them (product_info, stock, shop, research). Never tell them a product isn't in their shop.",
     "- Every number and word you put in a tool's arguments must be in their message (or, for which product, the recent conversation). Never guess or invent a value.",
     "- You don't have their products' descriptions, highlights, prices, stock or sales: never write them yourself; use the tool that reads them.",
     "- Drafts are only the ones listed under \"Drafts in their batch\". A product already in their shop is changed with live_change, bulk or content_change, even while drafts wait.",
     "- A change to a product (\"change the drone to 10\", \"restock the kettle\", \"set X to 50 pcs\") is a change, never listing new products. Changing a name, description or highlights with no new text means writing it (content_change with rewrite).",
-    "- While a batch's products are being sent, their details (sizes, pieces, prices, \"those are 3 different products\") are step.",
+    "- While a batch's products are being sent, their details (sizes, pieces, prices, SKUs, \"those are 3 different products\") are step: no lookup.",
     "- A product's name on its own after you listed products: product_info. An order number: order_status. How much they made or sold: sales. What PandaWorld listed for them (\"from this chat\"): research with pandaworld_listings.",
     "- Fixing rejected products: fix_rejected (no product to see them and pick one). Which ones are rejected: shop with rejected.",
     "- A question about what you can do (\"can you…?\"): answer from What PandaWorld can do, and if it can, do it or offer to. Never say a team or a person will do something.",
@@ -218,6 +218,25 @@ export function agentPrompt(input: FrontDoorInput): string {
     "- About themselves (pack, credits, shop, connections, extension use): only from About this seller. Outside Jumia and PandaWorld: say you can't help with that and suggest something you can do.",
     "- Replies: short and warm, *bold* with single asterisks, in the language they wrote in, never a web address (use link). A hello or \"what can you do\": a short list (\"• \" lines) of what you can do, then ask what they'd like. A product's status is ON or OFF, in capitals.",
   ].join("\n");
+}
+
+/** What changes with each message: the first user turn. Pure. */
+export function agentContext(input: FrontDoorInput): string {
+  return [
+    input.web ? "Channel: the Jumia Listing Assistant chat on the PandaWorld website." : "Channel: WhatsApp.",
+    "",
+    contextText(input),
+    // The record keeps 600 characters of it: a pasted description is copied whole.
+    ...(input.message.length > 600 ? ["", "Their whole message:", input.message.slice(0, 5000)] : []),
+    "", "About this seller:", ...input.seller,
+    ...(input.memory ? ["", "What you remember about them from earlier (to understand them; never quote it):", input.memory] : []),
+    "", "Links you can send with reply (the key in \"link\"):", ...Object.entries(input.links).map(([k, l]) => `- ${k}: ${l.what}`),
+  ].join("\n");
+}
+
+/** The whole of what the agent reads, for logs and tests. Pure. */
+export function agentPrompt(input: FrontDoorInput): string {
+  return `${agentSystem(input.listingCost ?? 2)}\n\n${agentContext(input)}`;
 }
 
 // ─── The read ────────────────────────────────────────────────────────────────
@@ -276,8 +295,11 @@ async function timed<T>(work: Promise<T>, ms: number, what: string): Promise<T> 
 type ToolCall = { name: string; args: Record<string, unknown>; id?: string };
 
 /** One model turn (`onlyAct`: the lookups may not be called): injectable for tests. */
-export type AgentCall = (turns: GeminiTurn[], onlyAct: boolean) => Promise<{ calls: ToolCall[]; text: string; turn: GeminiTurn }>;
+export type AgentCall = (turns: GeminiTurn[], onlyAct: boolean) => Promise<{
+  calls: ToolCall[]; text: string; turn: GeminiTurn; usage?: { prompt: number; cached: number };
+}>;
 
+/** `system` is agentSystem(): the same for every seller, so it's cached. */
 export function geminiAgentCall(model: string, system: string, usage: FrontDoorUsage): AgentCall {
   return (turns, onlyAct) => withAiUsageContext(usage, () => callGeminiWithTools(model, turns, {
     system, tools: AGENT_TOOLS, mode: "ANY", ...(onlyAct ? { allowed: ACTION_NAMES } : {}),
@@ -297,16 +319,20 @@ export async function agentRead(
 ): Promise<AgentResult> {
   const lim = { ...AGENT_LIMITS, ...limits };
   const t0 = Date.now();
-  const turns: GeminiTurn[] = [{ role: "user", parts: [{ text: `Their new message: "${input.message.slice(0, 1500)}"` }] }];
+  // contextText ends with their new message.
+  const turns: GeminiTurn[] = [{ role: "user", parts: [{ text: agentContext(input) }] }];
   const log: string[] = [];
   let finals: ToolCall[] = [];
   let calls = 0;
+  const tokens = { prompt: 0, cached: 0 };
   for (let round = 0; ; round++) {
     const last = round >= MAX_LOOKUP_ROUNDS;
     const left = lim.totalMs - (Date.now() - t0);
     if (left <= 1000) throw new Error(`agent ran out of time after ${calls} calls`);
     const r = await timed(call(turns, last), Math.min(lim.callMs, left), "agent call");
     calls++;
+    tokens.prompt += r.usage?.prompt ?? 0;
+    tokens.cached += r.usage?.cached ?? 0;
     const looked = r.calls.filter((c) => LOOKUPS.has(c.name));
     const acted = r.calls.filter((c) => !LOOKUPS.has(c.name));
     log.push(brief(r.calls) || `text: ${r.text.slice(0, 200)}`);
@@ -324,7 +350,9 @@ export async function agentRead(
     log.push(`→ ${JSON.stringify(answers.map((a) => a.functionResponse.response.result)).slice(0, 300)}`);
     turns.push(r.turn, { role: "user", parts: answers });
   }
-  const raw = `${((Date.now() - t0) / 1000).toFixed(1)}s, ${calls} call${calls === 1 ? "" : "s"}: ${log.join(" ")}`;
+  const k = (n: number) => `${(n / 1000).toFixed(1)}k`;
+  const read = tokens.prompt ? `, ${k(tokens.prompt)} in${tokens.cached ? ` (${k(tokens.cached)} cached)` : ""}` : "";
+  const raw = `${((Date.now() - t0) / 1000).toFixed(1)}s, ${calls} call${calls === 1 ? "" : "s"}${read}: ${log.join(" ")}`;
 
   const asking = finals.find((c) => c.name === "clarify");
   if (asking) {
@@ -340,8 +368,8 @@ export async function agentRead(
   const actions: AssistantAction[] = [];
   const seen = new Set<string>();
   for (const c of finals.slice(0, MAX_ACTIONS)) {
-    // Its own words beside actions only when they're the fixed "not possible" answer.
-    if (many && c.name === "reply") continue;
+    // Beside actions, its own words and "a detail of the product being sent" add nothing.
+    if (many && (c.name === "reply" || c.name === "step")) continue;
     const action = parseActionUnguarded(JSON.stringify(actionJson(c.name, c.args)), said, input.drafts, input.links, input.currency, {
       context, stage: input.stage, listed: !!input.listed,
     });

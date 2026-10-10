@@ -38,7 +38,7 @@ import {
 } from "@/lib/whatsapp/assistant";
 import { ASSISTANT_CASES, type EvalCase, type Shape } from "@/lib/evals/assistant-cases";
 import { frontDoor, type FrontDoorInput } from "@/lib/assistant-v2/front-door";
-import { agentPrompt, agentRead, catalogLookups, geminiAgentCall } from "@/lib/assistant-v2/agent";
+import { agentRead, agentSystem, catalogLookups, geminiAgentCall } from "@/lib/assistant-v2/agent";
 import { fromRow } from "@/lib/jumia/shop";
 import type { ListingRow } from "@/lib/supabase/types";
 
@@ -177,7 +177,7 @@ export async function understandAgent(c: EvalCase, model: string) {
     stage: c.stage, message: c.msg, conversation: c.ctx ?? [], drafts: facts(c), listed: c.listed ?? null,
     waitingFor: c.waitingFor, seller: SELLER, links: assistantLinks(), currency: "GHS", web: c.web ?? true, shopNames: c.catalog, listingCost: 2,
   };
-  return agentRead(input, geminiAgentCall(model, agentPrompt(input), { feature: "assistant_eval" }), catalogLookups(shop));
+  return agentRead(input, geminiAgentCall(model, agentSystem(2), { feature: "assistant_eval" }), catalogLookups(shop));
 }
 
 const summary = (a: unknown) => JSON.stringify(a).slice(0, 400);

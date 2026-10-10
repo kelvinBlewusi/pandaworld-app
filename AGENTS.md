@@ -2475,9 +2475,17 @@ checks and taps.
     `parseActionUnguarded`, the front door's checks: values from the
     message, products named, nothing widened. Changes to Jumia still go out
     as confirm taps. A `clarify` goes out as the front door's buttons.
-  - The prompt (`agentPrompt`) is the front door's context record
-    (`contextText`), seller facts, memory, `capabilities()`, `cannotList()`,
-    the site guide, links, every area's examples, and the rules.
+  - The prompt is in two parts. `agentSystem()` is the system instruction,
+    the same for every seller and message: `capabilities()`,
+    `cannotList()`, the site guide, every area's examples, and the rules
+    (the front door's router and reader rules, ported). With the tools that
+    is about 10k tokens, so Gemini's implicit cache can serve it.
+    `agentContext()` is the first user turn: the channel, the front door's
+    context record (`contextText`, ending with their message; the whole
+    message too when it is over 600 characters), seller facts, memory and
+    links. `raw` shows the tokens read and cached (`10.4k in (9.8k cached)`);
+    the ai_usage cost doesn't count the cache discount yet.
+  - Beside other actions, a `reply` or a `step` is dropped.
   - `AGENT_LIMITS`: 10 s a call, 25 s a message. It throws on a timeout or
     an error.
 - **lib/ai/gemini-client.ts `callGeminiWithTools`**: @google/genai on both

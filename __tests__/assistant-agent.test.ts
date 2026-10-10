@@ -15,7 +15,7 @@ jest.mock("@/lib/ai/gemini-client", () => ({
 }));
 
 import {
-  ACTION_TOOLS, AGENT_TOOLS, LOOKUP_TOOLS, NO_MATCH, actionJson, agentPrompt, agentRead, catalogLookups, lookupLine, type AgentCall,
+  ACTION_TOOLS, AGENT_TOOLS, LOOKUP_TOOLS, NO_MATCH, actionJson, agentContext, agentPrompt, agentRead, agentSystem, catalogLookups, lookupLine, type AgentCall,
 } from "@/lib/assistant-v2/agent";
 import type { FrontDoorInput } from "@/lib/assistant-v2/front-door";
 import { assistantLinks } from "@/lib/whatsapp/assistant";
@@ -83,6 +83,36 @@ describe("the tools", () => {
   });
 });
 
+describe("what it's told", () => {
+  it("is the same for every seller and message, so Gemini can cache it; what changes goes in the first turn", () => {
+    const a = input("restock the kettle to 10", { seller: ["- Country: Ghana", "- Their Jumia shop: GEM MALL"], memory: "likes short replies" });
+    const b = input("hello", { web: false, seller: ["- Country: Nigeria"] });
+    expect(agentSystem(2)).toBe(agentSystem(2));
+    expect(agentSystem(2)).not.toContain("GEM MALL");
+    expect(agentContext(a)).toContain("GEM MALL");
+    expect(agentContext(a)).toContain("likes short replies");
+    expect(agentContext(a)).toContain('Their new message: "restock the kettle to 10"');
+    expect(agentContext(b)).toContain("Channel: WhatsApp.");
+    expect(agentPrompt(a).startsWith(agentSystem(2))).toBe(true);
+  });
+
+  it("gets a long pasted text whole, not just the first 600 characters", () => {
+    const long = `change the kettle's description to ${"Boils fast and quietly. ".repeat(40)}The end.`;
+    expect(agentContext(input(long))).toContain("The end.");
+  });
+
+  it("sends the context as the first turn and records what was cached", async () => {
+    const seen: GeminiTurn[][] = [];
+    const call: AgentCall = async (turns) => {
+      seen.push(turns);
+      return { calls: [{ name: "orders", args: {} }], text: "", turn: { role: "model", parts: [] }, usage: { prompt: 10_400, cached: 9_800 } };
+    };
+    const r = await agentRead(input("ordrs"), call, noLookups);
+    expect((seen[0][0].parts[0] as { text: string }).text).toBe(agentContext(input("ordrs")));
+    expect(r.raw).toContain("10.4k in (9.8k cached)");
+  });
+});
+
 describe("its lookups", () => {
   it("shows a product with only what the shop's copy knows", () => {
     expect(lookupLine(KETTLE)).toBe('"Nasco Electric Kettle 1.7L" · ON · approved · stock 0 · price GHS 250');
@@ -145,6 +175,16 @@ describe("reading a message", () => {
     ] }]);
     const r = await agentRead(input("restock the kettle to 10, show me my orders, and my credits"), call, noLookups);
     expect(r.actions.map((a) => a.type)).toEqual(["live_change", "orders", "credits"]);
+  });
+
+  it("drops a step beside an edit: the details were the edit", async () => {
+    const { call } = scripted([{ calls: [
+      { name: "edit", args: { edits: [{ products: [1], changes: { price: 130 } }] } },
+      { name: "step", args: {} },
+    ] }]);
+    const drafts = [{ seq: 1, listing: { id: "l1", title: "Bodysuit", status: "draft" }, variations: [], options: [] }] as unknown as FrontDoorInput["drafts"];
+    const r = await agentRead(input("Product 1 Price: 130gh", { stage: "review", drafts }), call, noLookups);
+    expect(r.actions.map((a) => a.type)).toEqual(["edit"]);
   });
 
   it("drops its own words beside actions, and the same action twice", async () => {
