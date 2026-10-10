@@ -173,3 +173,18 @@ describe("more photos for a live product", () => {
       .toEqual({ type: "fix_rejected", product: "neck fan", reason: null });
   });
 });
+
+describe("a category Jumia refused: the picker link (owner, 2026-10-10)", () => {
+  it("opens the public picker on the refused category, in their country", async () => {
+    const { categoryPickerUrl } = await import("@/lib/whatsapp/category-question");
+    expect(categoryPickerUrl(1000279, "gh")).toMatch(/\/categories\?c=1000279&cc=GH$/);
+    expect(categoryPickerUrl("1000279", null)).toMatch(/\/categories\?c=1000279$/);
+    expect(categoryPickerUrl(null, null)).toMatch(/\/categories$/);
+  });
+
+  it("a rejected product's wrong category comes with the link to find the right one", () => {
+    const plan = fixPlan({ kind: "ask_category" }, "Neck Fan", "", "https://pandaworldai.site/categories?c=1&cc=GH");
+    expect(plan).toMatchObject({ kind: "say", text: expect.stringContaining("Find the right category here and copy it: https://pandaworldai.site/categories?c=1&cc=GH") });
+    expect(fixPlan({ kind: "ask_brand", why: "" }, "Neck Fan", "", "https://x/categories")).toMatchObject({ text: expect.not.stringContaining("/categories") });
+  });
+});

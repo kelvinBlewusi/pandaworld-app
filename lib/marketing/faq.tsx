@@ -84,7 +84,7 @@ export function faqSections(billingOn: boolean): FaqSection[] {
         ),
         plain(
           "Why is a product \"Held\"?",
-          "Something about it would make Jumia refuse it, such as a missing price or a field its category requires, like the weight. The bot asks you for it right there in the chat; answer, or tap Skip and fill it in later from List from WhatsApp in your dashboard.",
+          "Something about it would make Jumia refuse it, such as a missing price or a field its category requires, like the weight. The bot asks you for it right there in the chat; answer, or tap Skip and fill it in later from Drafts & Listings in your dashboard.",
         ),
         plain(
           "The bot picked the wrong category. How do I change it?",
@@ -92,11 +92,11 @@ export function faqSections(billingOn: boolean): FaqSection[] {
         ),
         {
           q: "How do I change something in a draft?",
-          text: "Tell the bot, e.g. \"2: change the price to 150\", or open the product from List from WhatsApp in your dashboard and edit it there.",
+          text: "Tell the bot, e.g. \"2: change the price to 150\", or open the product from Drafts & Listings in your dashboard and edit it there.",
           a: (
             <>
               Tell the bot, e.g. &quot;2: change the price to 150&quot;, or open the product from{" "}
-              <Link href="/extension/whatsapp-listings" className={linkClass}>List from WhatsApp</Link> in your
+              <Link href="/extension/whatsapp-listings" className={linkClass}>Drafts &amp; Listings</Link> in your
               dashboard and edit it there.
             </>
           ),

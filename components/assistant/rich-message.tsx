@@ -23,7 +23,7 @@ const BAR_TONE: Record<RichTone, string> = {
   good: "bg-emerald-500", bad: "bg-red-500", warn: "bg-amber-500", info: "bg-sky-500", neutral: "bg-zinc-400",
 };
 const NOTE_TONE: Record<RichTone, string> = {
-  good: "bg-emerald-50 text-emerald-800", bad: "bg-red-50 text-red-800", warn: "bg-amber-50 text-amber-900", info: "bg-sky-50 text-sky-900", neutral: "bg-zinc-50 text-zinc-600",
+  good: "bg-emerald-50 text-emerald-800", bad: "bg-red-50 text-red-800", warn: "bg-amber-50 text-amber-900", info: "bg-sky-50 text-sky-900", neutral: "bg-white text-zinc-600 ring-1 ring-inset ring-zinc-200",
 };
 
 function Cell({ value }: { value: RichCell }) {
@@ -44,7 +44,7 @@ function Table({ block }: { block: Extract<RichBlock, { kind: "table" }> }) {
   const right = (i: number) => block.align?.[i] === "right";
   const empty = (v: RichCell) => (typeof v === "string" ? !v.trim() : !v.text.trim());
   return (
-    <div className="rich-table overflow-hidden rounded-xl border border-zinc-200">
+    <div className="rich-table overflow-hidden rounded-xl border border-zinc-200 bg-white">
       <ul className="divide-y divide-zinc-100 sm:hidden">
         {block.rows.map((row, r) => (
           <li key={r} className="px-3 py-2.5">
@@ -97,7 +97,7 @@ function Table({ block }: { block: Extract<RichBlock, { kind: "table" }> }) {
 function Bars({ block }: { block: Extract<RichBlock, { kind: "bars" }> }) {
   const max = Math.max(1, ...block.items.map((b) => b.value));
   return (
-    <div className="space-y-2.5 rounded-xl border border-zinc-200 px-3.5 py-3">
+    <div className="space-y-2.5 rounded-xl border border-zinc-200 bg-white px-3.5 py-3">
       {block.items.map((b, i) => (
         <div key={i}>
           <div className="flex items-baseline justify-between gap-3 text-sm">
@@ -142,7 +142,7 @@ export function RichMessage({ blocks, renderText }: { blocks: RichBlock[]; rende
             );
           case "table":
             return b.folded ? (
-              <details key={i} className="group overflow-hidden rounded-xl border border-zinc-200 [&_.rich-table]:rounded-none [&_.rich-table]:border-0 [&_.rich-table]:border-t">
+              <details key={i} className="group overflow-hidden rounded-xl border border-zinc-200 bg-white [&_.rich-table]:rounded-none [&_.rich-table]:border-0 [&_.rich-table]:border-t">
                 <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3.5 py-2.5 text-sm font-medium text-zinc-700 [&::-webkit-details-marker]:hidden">
                   <span className="min-w-0">{b.title ?? "Details"}</span>
                   <ChevronDown className="h-4 w-4 shrink-0 text-zinc-400 transition-transform group-open:rotate-180" />

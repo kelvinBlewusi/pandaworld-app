@@ -320,8 +320,8 @@ describe("answers", () => {
   it("their products: an overview, the ones off, the ones rejected with the reason", async () => {
     await answerProducts(USER, PHONE, "all");
     expect(last().body).toBe([
-      "🛍️ Your Jumia shop: 5 products", "• On: 4", "• Off: 1", "• Out of stock: 1", "• Waiting for Jumia's check: 0", "• Rejected: 1",
-      "", "Ask me about any of them: stock, price, a sale, or turning one on or off.",
+      "🛍️ Your Jumia shop: 5 products", "• ON: 4", "• OFF: 1", "• Out of stock: 1", "• Waiting for Jumia's check: 0", "• Rejected: 1",
+      "", "Ask me about any of them: stock, price, a sale, or turning one ON or OFF.",
       "How sales are going: *sales week*. A full health check of your shop: *report* (2 credits).",
     ].join("\n"));
     // A change sent a moment ago that Jumia hasn't applied yet: said, so the numbers don't look wrong.
@@ -703,7 +703,7 @@ describe("round 3: several products, product info, fees (owner's second test, 20
     await answerProductInfo(USER, PHONE, "blender");
     expect(last().body).toBe([
       "⚪ *Nasco Blender 1.5L* · SKU NAS-BL",
-      "• Status: on (shown on Jumia)",
+      "• Status: ON (shown on Jumia)",
       "• Quality check: rejected: Poor image quality",
       "• Price: GHS 4,500",
       "• Stock: 7 left",

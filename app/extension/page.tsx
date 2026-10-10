@@ -283,11 +283,6 @@ export async function ExtensionPage() {
             <h2 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">
               Two ways to get your products listed
             </h2>
-            <p className="mx-auto mt-4 max-w-2xl text-balance text-base text-zinc-500 sm:text-lg">
-              Use the extension when you&apos;re at your laptop, or send photos on WhatsApp when
-              you&apos;re not. Either way our AI writes the listing, and you have the final say
-              before it goes live.
-            </p>
           </div>
 
           <div className="mt-12 grid grid-cols-1 gap-12 lg:grid-cols-2 lg:gap-16">

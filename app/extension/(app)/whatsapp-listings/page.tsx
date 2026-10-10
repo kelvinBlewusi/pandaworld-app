@@ -29,7 +29,7 @@ import type { ListingRow } from "@/lib/supabase/types";
 // place that population can actually reach a "Connect WhatsApp" action.
 
 export const metadata: import("next").Metadata = {
-  title: "List from WhatsApp",
+  title: "Drafts & Listings",
   robots: { index: false },
 };
 
@@ -118,7 +118,7 @@ export default async function WhatsAppListingsPage() {
   return (
     <div className="mx-auto max-w-5xl">
       <p className="mb-6 text-sm text-zinc-500">
-        Products drafted from a WhatsApp chat show here. You may edit and submit manually from here.
+        Every product drafted in a chat shows here, from WhatsApp or the Listing Assistant on this website, marked with where it was made. Edit and submit them here, or in either chat.
       </p>
 
       {batches.length === 0 ? (

@@ -223,7 +223,7 @@ export function plainReading(e: HealthEvidence): string {
   if (e.runningOut.length) todo.push(`Order more of ${shorten(e.runningOut[0].name, 30)}: about ${e.runningOut[0].days} days of stock left.`);
   if (e.orders.cancelRate + e.orders.failedRate >= 10) todo.push("Cut cancellations and failed deliveries: keep stock counts true and answer buyers fast.");
   if (e.noSale.count) todo.push(`Put the ${e.noSale.count} product${e.noSale.count === 1 ? "" : "s"} with no sale on a sale, or improve their photos and names.`);
-  if (e.catalog.inactive) todo.push(`Check the ${e.catalog.inactive} product${e.catalog.inactive === 1 ? "" : "s"} turned off: turn on what you can sell.`);
+  if (e.catalog.inactive) todo.push(`Check the ${e.catalog.inactive} product${e.catalog.inactive === 1 ? "" : "s"} turned OFF: turn ON what you can sell.`);
   if (todo.length === 0) todo.push("Keep stock up on your best sellers and add more products like them.");
   return ["*Do this next*", ...todo.slice(0, 3).map((t, i) => `${i + 1}. ${t}`)].join("\n");
 }

@@ -112,7 +112,7 @@ const reads = () => calls.filter((c) => c.method !== "GET");
 
 describe("reading the newest products", () => {
   it("asks Jumia for the newest, with their stock, and nothing is changed", async () => {
-    aiAnswer = "*Your 3 newest products*\n• Kinky Curly Wig · GHS 450 · 4 in stock · added 8 Oct\n• Baby Bodysuit · GHS 130 to GHS 150 · 7 in stock · added 7 Oct\n• Gold Tone Earrings · GHS 60 · off, rejected · added 1 Sept";
+    aiAnswer = "*Your 3 newest products*\n• Kinky Curly Wig · GHS 450 · 4 in stock · added 8 Oct\n• Baby Bodysuit · GHS 130 to GHS 150 · 7 in stock · added 7 Oct\n• Gold Tone Earrings · GHS 60 · OFF, rejected · added 1 Sept";
     const outcome = await answerResearch(USER, PHONE, "the full list of the last 10products uploaded on my shop", [newest(10)]);
     const page = calls.find((c) => c.path === "/catalog/products")!;
     expect(page.query.get("latestFirst")).toBe("true");
@@ -123,8 +123,8 @@ describe("reading the newest products", () => {
     expect(sent[sent.length - 1]).toBe(`${aiAnswer}\n\n_Read from Jumia just now._`);
     // The AI wrote it from the data, which it was given in full.
     expect(aiPrompts[0]).toContain('The seller asked: "the full list of the last 10products uploaded on my shop"');
-    expect(aiPrompts[0]).toContain("• Baby Bodysuit (3 variations: S, M, L) · GHS 130 to GHS 150 · 7 in stock · on, approved · added 7 Oct · SKU BOD-S");
-    expect(aiPrompts[0]).toContain("• Gold Tone Earrings · GHS 60 · 10 in stock · off, rejected · added 1 Sept · SKU EAR-1");
+    expect(aiPrompts[0]).toContain("• Baby Bodysuit (3 variations: S, M, L) · GHS 130 to GHS 150 · 7 in stock · ON, approved · added 7 Oct · SKU BOD-S");
+    expect(aiPrompts[0]).toContain("• Gold Tone Earrings · GHS 60 · 10 in stock · OFF, rejected · added 1 Sept · SKU EAR-1");
   });
 
   it("remembers the products it listed, so \"those\" and \"the last 10\" mean them", async () => {
@@ -142,7 +142,7 @@ describe("reading the newest products", () => {
     expect(outcome).toBe("research products: data sent");
     const msg = sent[sent.length - 1];
     expect(msg).toContain("*The 2 newest products in the Jumia shop, newest first*");
-    expect(msg).toContain("• Kinky Curly Wig · GHS 450 · 4 in stock · on, approved · added 8 Oct · SKU WIG-1");
+    expect(msg).toContain("• Kinky Curly Wig · GHS 450 · 4 in stock · ON, approved · added 8 Oct · SKU WIG-1");
     expect(msg).not.toContain("499");
   });
 
@@ -182,7 +182,7 @@ describe("several reads in one answer", () => {
     // Two reads: the seller is told it's looking.
     expect(sent[0]).toBe("🔎 Looking through your Jumia shop…");
     const msg = sent[sent.length - 1];
-    expect(msg).toContain("*Products on, highest price first: all 2 (the shop has 3 in all)*\n• Kinky Curly Wig · GHS 450");
+    expect(msg).toContain("*Products ON, highest price first: all 2 (the shop has 3 in all)*\n• Kinky Curly Wig · GHS 450");
     expect(msg).toContain("*Orders in the last 7 days: 2 (the newest 2 below)*");
     expect(msg).toContain("By status: Delivered 1, Cancelled 1");
     expect(msg).toContain("Value of those not cancelled: GHS 580");
@@ -213,7 +213,7 @@ describe("the pieces", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]).toMatchObject({ variations: ["S", "M"], price: 10, maxPrice: 12, salePrice: 9, stock: 1 });
     const line = productLine(groups[0], (n) => `GHS ${n}`, "UTC");
-    expect(line).toBe("• Thing (2 variations: S, M) · GHS 10 to GHS 12 (on sale at GHS 9) · 1 in stock · on, approved · SKU SKU");
+    expect(line).toBe("• Thing (2 variations: S, M) · GHS 10 to GHS 12 (on sale at GHS 9) · 1 in stock · ON, approved · SKU SKU");
   });
 
   it("sorts with unknown values last", () => {

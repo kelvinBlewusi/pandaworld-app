@@ -365,7 +365,7 @@ function readerPrompt(areas: Area[], input: FrontDoorInput): string {
     ...(replyArea ? [
       "- A hello or \"what can you do\": a short list (\"• \" lines, never numbered) of what you can do for them, with the words that do it, then ask what they'd like.",
       "- About themselves (pack, credits, shop, connections): only from About this seller. Outside Jumia and PandaWorld: say you can't help with that and suggest something you can do.",
-      "- Write for WhatsApp: short and warm, *bold* with single asterisks, in the language they wrote in. Never write a web address; use \"link\".",
+      "- Write for WhatsApp: short and warm, *bold* with single asterisks, in the language they wrote in. Never write a web address; use \"link\". A product's status is ON or OFF, in capitals.",
     ] : []),
     "",
     "Reply with ONLY one JSON object, never a list: when they ask for two things, choose the action that covers both, or the first.",

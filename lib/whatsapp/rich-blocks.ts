@@ -34,14 +34,14 @@ export function richBlocks(v: unknown): RichBlock[] | null {
 /** A status with its colour. */
 export const cell = (text: string, tone: RichTone): RichCell => ({ text, tone });
 
-/** "On"/"Off"/"Rejected" for a product, coloured. */
+/** "ON"/"OFF"/"Rejected" for a product, coloured (owner, 2026-10-10: ON/OFF in capitals). */
 export function productStatusCell(p: { status: string | null; qcStatus: string | null; stock: number | null }): RichCell {
   if (p.status === "DELETED") return cell("Deleted", "neutral");
   if (p.qcStatus === "REJECTED") return cell("Rejected", "bad");
   if (p.qcStatus === "PENDING" || p.qcStatus === "NOT_READY_TO_QC") return cell("Waiting for QC", "info");
-  if (p.status === "INACTIVE") return cell("Off", "neutral");
+  if (p.status === "INACTIVE") return cell("OFF", "neutral");
   if (p.status === "ACTIVE" && p.stock === 0) return cell("Out of stock", "bad");
-  if (p.status === "ACTIVE") return cell("On", "good");
+  if (p.status === "ACTIVE") return cell("ON", "good");
   return cell(p.status ? p.status.toLowerCase() : "?", "neutral");
 }
 

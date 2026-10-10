@@ -396,6 +396,7 @@ export async function sellerFacts(userId: string): Promise<{ lines: string[]; co
     lines.push(`- Order alerts on WhatsApp (new orders, order updates, payouts): ${await access("order_alerts")}`);
     const credits = Math.max(0, Math.round((await availableCredits(userId)) * 100) / 100);
     lines.push(`- Credits: ${credits} available, ${creditReach(credits, await listingCreditCost(userId))}`);
+    lines.push(...await activityFacts(userId));
   } catch (e) {
     console.warn(`[assistant] seller facts for ${userId}: ${(e as Error).message}`);
   }
@@ -403,6 +404,74 @@ export async function sellerFacts(userId: string): Promise<{ lines: string[]; co
 }
 
 const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+const LISTING_WORDS: Record<string, string> = {
+  live: "live on Jumia", pending_approval: "waiting for Jumia", processing: "waiting for Jumia", draft: "drafts not sent", awaiting_review: "drafts not sent", failed: "held or rejected",
+};
+
+/**
+ * What they've done with PandaWorld (owner, 2026-10-10: "the chat should know
+ * everything about the user's account, his activities"): what they listed
+ * and where from (this website's chat or WhatsApp), their drafts not sent
+ * yet with where each was made, the extension's autofills and the image
+ * polishes they paid for. Best-effort: nothing on a failure.
+ */
+export async function activityFacts(userId: string, now = new Date()): Promise<string[]> {
+  try {
+    const db = createServerClient();
+    const since = new Date(now.getTime() - 90 * 86_400_000).toISOString();
+    const [{ data: listings }, { count: fills }, { data: lastFill }, { data: spends }] = await Promise.all([
+      db.from("listings").select("title, status, chat_channel, created_at").eq("user_id", userId).gt("created_at", since).order("created_at", { ascending: false }).limit(500),
+      db.from("extension_fill_events").select("id", { count: "exact", head: true }).eq("user_id", userId).eq("mock", false),
+      db.from("extension_fill_events").select("created_at").eq("user_id", userId).eq("mock", false).order("created_at", { ascending: false }).limit(1),
+      db.from("extension_credit_transactions").select("amount, description, created_at").eq("user_id", userId).gt("created_at", since).limit(1000),
+    ]);
+    const rows = (listings ?? []) as { title: string | null; status: string; chat_channel: string | null; created_at: string }[];
+    const out: string[] = [];
+    if (rows.length > 0) {
+      const web = rows.filter((r) => r.chat_channel === "web").length;
+      const byStatus = new Map<string, number>();
+      for (const r of rows) {
+        const w = LISTING_WORDS[r.status] ?? r.status;
+        byStatus.set(w, (byStatus.get(w) ?? 0) + 1);
+      }
+      out.push(`- Listed with PandaWorld in the last 90 days: ${rows.length} (${web} from this website's chat, ${rows.length - web} from WhatsApp); now ${Array.from(byStatus.entries()).map(([w, n]) => `${n} ${w}`).join(", ")}`);
+      const unsent = rows.filter((r) => r.status === "draft" || r.status === "awaiting_review");
+      if (unsent.length > 0) {
+        out.push(`- Drafts not sent yet: ${unsent.slice(0, 5).map((r) => `"${(r.title ?? "untitled").slice(0, 50)}" (made on ${r.chat_channel === "web" ? "the website chat" : "WhatsApp"})`).join(", ")}${unsent.length > 5 ? ` and ${unsent.length - 5} more` : ""}`);
+      }
+    } else {
+      out.push("- Listed with PandaWorld in the last 90 days: nothing yet");
+    }
+    const lastFillAt = ((lastFill ?? []) as { created_at: string }[])[0]?.created_at;
+    out.push(`- The Chrome extension's autofills: ${fills ?? 0} in all${lastFillAt ? `, the last on ${lastFillAt.slice(0, 10)}` : ""}`);
+    const tx = (spends ?? []) as { amount: number; description: string | null; created_at: string }[];
+    const polishes = tx.filter((t) => /polish/i.test(t.description ?? "") && Number(t.amount) < 0);
+    if (polishes.length > 0) {
+      out.push(`- Image polishes in the last 90 days: ${polishes.length} charge${polishes.length === 1 ? "" : "s"}, ${Math.round(polishes.reduce((n, t) => n - Number(t.amount), 0) * 100) / 100} credits`);
+    }
+    const bought = tx.filter((t) => Number(t.amount) > 0 && /purchase|bought|pack/i.test(t.description ?? "")).sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+    if (bought) out.push(`- Last credits bought: ${bought.created_at.slice(0, 10)}`);
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Drafts not sent yet, from either chat, when this conversation has none of
+ * its own: the newest such batch in 14 days, and where it was made. So
+ * "change the gown's price to 150" or "submit them" on the website works for
+ * drafts made on WhatsApp, and the other way round (owner, 2026-10-10).
+ */
+export async function openDraftBatch(userId: string, now = new Date()): Promise<{ batchId: string; channel: "web" | "whatsapp" } | null> {
+  const { data } = await createServerClient().from("listings")
+    .select("whatsapp_batch_id, chat_channel").eq("user_id", userId).in("status", ["draft", "awaiting_review"])
+    .not("whatsapp_batch_id", "is", null).gt("created_at", new Date(now.getTime() - 14 * 86_400_000).toISOString())
+    .order("created_at", { ascending: false }).limit(1);
+  const row = ((data ?? []) as { whatsapp_batch_id: string | null; chat_channel: string | null }[])[0];
+  return row?.whatsapp_batch_id ? { batchId: row.whatsapp_batch_id, channel: row.chat_channel === "web" ? "web" : "whatsapp" } : null;
+}
 
 export interface PromptContext {
   products: ProductFacts[];
@@ -572,7 +641,7 @@ export function buildPrompt(stage: Stage, message: string, ctx: PromptContext): 
     "    \"link\" set to the page or guide (the key in [brackets]). Only steps the guide gives; up to 900 characters for steps.",
     "  - Anything outside Jumia, their shop and PandaWorld, or something PandaWorld can't do: say plainly that you don't understand",
     "    that or can't help with it, suggest something you can do, and ask them to try something different.",
-    "  Write for WhatsApp: short and warm, at most 600 characters (steps up to 900), *bold* with single asterisks, \"1.\" lines only for steps in order.",
+    "  Write for WhatsApp: short and warm, at most 600 characters (steps up to 900), *bold* with single asterisks, \"1.\" lines only for steps in order. A product's status is ON or OFF, in capitals.",
     "  Reply in the language the seller wrote in.",
     "",
     "Examples (message → JSON):",
@@ -2070,7 +2139,13 @@ export async function runAssistant(
   // Every few messages, what it remembers of the seller is brought up to date.
   await noteSellerMessage(userId);
 
-  const batchId = stage === "sent" ? session.lastSubmittedBatchId : stage === "idle" ? null : session.batchId;
+  // Between batches, drafts not sent yet from either chat are theirs to edit or submit here.
+  const borrowed = stage === "idle" ? await openDraftBatch(userId).catch(() => null) : null;
+  const batchId = borrowed?.batchId ?? (stage === "sent" ? session.lastSubmittedBatchId : stage === "idle" ? null : session.batchId);
+  const here = isWebAddress(phone) ? "web" : "whatsapp";
+  const position = borrowed
+    ? `drafts made ${borrowed.channel === here ? "here earlier" : borrowed.channel === "web" ? "on the website chat" : "on WhatsApp"} that aren't sent yet (listed below: they can edit, polish or submit them here)`
+    : opts.position;
   // Step 2 of the reliability plan, for the accounts it's switched on for.
   const viaFrontDoor = await frontDoorFor(userId);
   let action: AssistantAction;
@@ -2081,7 +2156,7 @@ export async function runAssistant(
     const conversation = await recentConversation(phone, text);
     products = batchId ? await productFacts(await batchListings(batchId, userId)) : [];
     const facts = {
-      batchId, hintSeq, conversation, web: isWebAddress(phone), position: opts.position, waitingFor: opts.waitingFor,
+      batchId, hintSeq, conversation, web: isWebAddress(phone), position, waitingFor: opts.waitingFor,
       listed: listedFresh(session),
     };
     if (viaFrontDoor) {
@@ -2127,7 +2202,9 @@ export async function runAssistant(
     return { list: action.count };
   }
 
-  const outcome = await carryOut(userId, phone, stage, batchId, products, action, text, links, session);
+  // Drafts from the other chat (or an earlier batch) are edited and submitted as a review.
+  const actStage: Stage = borrowed && (action.type === "edit" || action.type === "submit" || action.type === "review" || action.type === "polish") ? "review" : stage;
+  const outcome = await carryOut(userId, phone, actStage, batchId, products, action, text, links, actStage !== stage && batchId ? { ...session, batchId } : session);
   await logTurn(userId, stage, text, action, outcome, raw);
   // Starting a batch: after answering, where they are (a reply carries it already).
   if (stage === "starting" && action.type !== "reply" && outcome !== "default" && outcome !== "step" && outcome !== "stopped batch" && outcome !== "kept batch") {

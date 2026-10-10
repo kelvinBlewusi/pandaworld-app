@@ -152,6 +152,16 @@ export function buildDescriptionAndHighlightsStyleBlock(): string {
 }
 
 /**
+ * The rules for whichever of name, description and highlights a rewrite of a
+ * live Jumia product writes (lib/whatsapp/shop.ts rewriteContent; owner,
+ * 2026-10-10: "they should share the same prompt on writing rich and good
+ * descriptions and highlights").
+ */
+export function buildContentStyleBlockFor(fields: ("name" | "description" | "highlights")[]): string {
+  return buildBlockForLabels(fields);
+}
+
+/**
  * Description-only variant of the above, for a rewrite pass that only
  * touches the description field (e.g. aiExpandDescription) — including the
  * Highlights rule there would reference a field the call never writes.

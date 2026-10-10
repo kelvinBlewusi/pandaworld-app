@@ -23,7 +23,7 @@ import { COMMUNITY_WHATSAPP_URL } from "@/lib/constants/support";
 
 const primaryNav = [
   { href: "/extension/dashboard",  label: "Extension Dashboard", icon: LayoutDashboard },
-  { href: "/extension/whatsapp-listings", label: "List from WhatsApp", icon: WhatsAppIcon },
+  { href: "/extension/whatsapp-listings", label: "Drafts & Listings", icon: WhatsAppIcon },
   { href: "/extension/calculator", label: "Calculator",  icon: Calculator },
   { href: "/extension/listings",   label: "Autofill Activity", icon: ListChecks },
   // Points at the public /how-to page (not an /extension/... route) so the
@@ -63,7 +63,7 @@ function NavItem({ href, label, icon: Icon }: { href: string; label: string; ico
         "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-all duration-150",
         isActive
           ? "bg-zinc-900 text-white font-medium"
-          : "text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900",
+          : "text-zinc-500 hover:bg-[#ebe9e0] hover:text-zinc-900",
       )}
     >
       <Icon className="h-4 w-4 shrink-0" />
@@ -110,7 +110,7 @@ export function ExtensionSidebar({ onClose, isAdmin = false, showAssistant = fal
       // Border follows the side the panel is on: the mobile drawer now
       // slides in from the RIGHT, so its edge faces left; the desktop
       // sidebar is still on the left and keeps its right edge.
-      className="flex h-[100dvh] w-64 flex-col border-l border-zinc-200 bg-white lg:border-l-0 lg:border-r"
+      className="flex h-[100dvh] w-64 flex-col border-l border-[#e8e6dc] bg-[#f5f4ed] lg:border-l-0 lg:border-r"
       style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
     >
       <div className="flex items-center justify-between gap-2 border-b px-4 py-4">
