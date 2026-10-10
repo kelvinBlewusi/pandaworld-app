@@ -7,9 +7,10 @@
  * What changes from the front door:
  *   - One call, with every action as a tool, instead of sorting into an
  *     area first and reading within it.
- *   - It may look things up before deciding: find_products (their shop's
- *     products matching some words, with where each is) and shop_counts.
- *     At most two lookup rounds; the last call can only act.
+ *   - It may look their products up before deciding (find_products: the
+ *     shop's products matching some words, with where each is). At most two
+ *     lookup rounds; the last call can only act. Counts and lists come from
+ *     the actions that read them, never from a lookup.
  *   - It may do up to three things a message asks for ("restock the kettle
  *     to 10 and show me today's orders"), carried out in order.
  *
@@ -44,19 +45,23 @@ const PERIOD = ["today", "yesterday", "week", "month", "quarter"];
 const PRODUCT = str("The product in their words, or as their shop names it.");
 const STATUS = ["cancelled", "delivered", "returned", "failed", "pending", "ready_to_ship", "shipped"];
 
-/** Look-ups: answered back to the model, which then decides. */
+/**
+ * Look-ups: answered back to the model, which then decides. Only which
+ * product they mean: counts and lists are the actions' to read (an agent
+ * told "0 products" by a stale copy answered "You have 0 products": the
+ * first test run, 10 Oct).
+ */
 export const LOOKUP_TOOLS: GeminiTool[] = [
-  tool("find_products", "Look up products in their Jumia shop whose names match some words: each one's full name, ON or OFF, quality check, stock and price. Use it to know which product they mean, or its state, before acting. Never shown to the seller.",
+  tool("find_products", "Look up which of their Jumia products match some words: each one's full name, ON or OFF, quality check, stock and price, from PandaWorld's saved copy of their shop. Only to tell which product they mean when it isn't clear; never to answer them (the actions read Jumia). Never shown to the seller.",
     { words: str("Words from their message naming the product(s).") }, ["words"]),
-  tool("shop_counts", "How many of their Jumia products are ON, OFF, out of stock, waiting for Jumia's check and rejected. Never shown to the seller."),
 ];
 
 /** Actions: each is one of the chat's own actions, checked and carried out by the chat. */
 export const ACTION_TOOLS: GeminiTool[] = [
   // Listing new products
-  tool("list", "They want to list new products now and say how many (\"2 shirts and a fridge\" is 3).", { count: int("How many products.") }, ["count"]),
-  tool("restart", "They want to list but give no number, start a new batch, or stop or start over the batch they are sending."),
-  tool("step", "While a product is being sent: its details (price, sizes, colours, quantity, brand, condition, notes) or that its photos are done."),
+  tool("list", "They want to list new products now and say how many (\"2 shirts and a fridge\" is 3). Not while a batch is being sent: its products' details are step.", { count: int("How many products.") }, ["count"]),
+  tool("restart", "They want to list but give no number (never ask how many: this asks), start a new listing or batch, put this one on hold to list another, or stop or start over the batch they are sending."),
+  tool("step", "While a batch's products are being sent: a product's details (price, sizes, colours, pieces, quantity, brand, condition, SKU, notes, \"use as note\"), that its photos are done, or anything about the product being sent."),
   tool("category_info", "Which category, or what Jumia needs, for a kind of product.", { product: str("The kind of product.") }, ["product"]),
   // Drafts
   tool("edit", "Change drafts in their batch (only the drafts listed in the context). Only what they asked to change, every value from the message.", {
@@ -82,7 +87,7 @@ export const ACTION_TOOLS: GeminiTool[] = [
     end_sale: bool("End its sale."), active: bool("true to turn it ON, false to turn it OFF."), all: bool("Every product their words fit (\"all the hard hats\")."),
   }),
   tool("bulk", "One change to many products by a rule, shown before one tap: prices or a sale by a percentage, a stock, a price, ending sales, ON or OFF.", {
-    scope: str("Which products.", ["all", "out_of_stock", "low_stock", "inactive", "active", "matching", "listed"]),
+    scope: str("Which products. \"listed\": the products you last listed for them (\"those\", \"them\", \"the last 10\", and \"all\" right after your list). \"matching\": the products their words name.", ["all", "out_of_stock", "low_stock", "inactive", "active", "matching", "listed"]),
     words: str("Their words for the products, for matching."),
     price_pct: num("Prices up (+) or down (-) by this %."), sale_pct: num("A sale this % off."),
     stock: int("Stock to set."), price: num("Price to set."), sale_price: num("Sale price to set."),
@@ -118,7 +123,7 @@ export const ACTION_TOOLS: GeminiTool[] = [
       status: str("Orders: one status.", STATUS),
     }, ["source"]), "The reads."),
   }, ["needs"]),
-  tool("report", "One report.", { kind: str("Which.", ["best_sellers", "slow_movers", "restock", "returns"]), period: str("Period.", ["week", "month", "quarter"]) }, ["kind"]),
+  tool("report", "One report (\"reports\" on its own: best_sellers).", { kind: str("Which.", ["best_sellers", "slow_movers", "restock", "returns"]), period: str("Period.", ["week", "month", "quarter"]) }, ["kind"]),
   tool("health_report", "A full health check of their shop."),
   tool("listings", "How many products they listed with PandaWorld in a period.", { period: str("Period.", PERIOD) }),
   tool("brand_check", "Whether a brand is on Jumia and allowed.", { brand: str("The brand, copied."), product: str("The kind of product.") }, ["brand"]),
@@ -126,7 +131,7 @@ export const ACTION_TOOLS: GeminiTool[] = [
   tool("warehouse_stock", "What Jumia's warehouse holds of a product.", { product: PRODUCT }, ["product"]),
   // Orders
   tool("orders", "Orders waiting to be packed."),
-  tool("order_status", "One order, by its number.", { number: str("The order number from the message or the conversation.") }, ["number"]),
+  tool("order_status", "One order, by its number (\"#394666919\", \"tell me about this one #394666919 · GHS 94\").", { number: str("The order number from the message or the conversation, digits only.") }, ["number"]),
   tool("sales", "Their orders and sales in a period, optionally with statuses.", { period: str("Period.", PERIOD), status: arr(str("A status.", STATUS), "Statuses.") }),
   // Money and account
   tool("credits", "Their credit balance."),
@@ -136,7 +141,7 @@ export const ACTION_TOOLS: GeminiTool[] = [
   tool("help", "What PandaWorld can do, when they ask in general."),
   // Saying, not doing
   tool("cannot", "They ask for something on the Not possible list: PandaWorld gives the true answer.", { what: str("A key from Not possible from here.") }, ["what"]),
-  tool("reply", "A short answer in your words: a hello, thanks, a question about PandaWorld, anything the other tools don't cover. Never says you changed anything.", {
+  tool("reply", "A short answer in your words: a hello, thanks, a question about PandaWorld or their account, anything the other tools don't cover. Never says you did, paused, stopped, changed or will change anything, and never gives a number about their shop: tools do and read things.", {
     text: str("Your message."), link: str("A link key, if one fits."),
   }, ["text"]),
   tool("clarify", "Only when you can't tell which action or which product, or a change has no value: one short question with 2 or 3 answers to tap.", {
@@ -145,6 +150,8 @@ export const ACTION_TOOLS: GeminiTool[] = [
 ];
 
 const LOOKUPS = new Set(LOOKUP_TOOLS.map((t) => t.name));
+/** A lookup that finds nothing: the saved copy can be behind, so it still acts on their words. */
+export const NO_MATCH = "None of the products in PandaWorld's saved copy of their shop match these words. The copy can be out of date: act with their own words for the product (the action looks it up on Jumia). Never tell them it isn't in their shop.";
 /** Every tool, declared on every call (earlier turns call the lookups). */
 export const AGENT_TOOLS: GeminiTool[] = [...LOOKUP_TOOLS, ...ACTION_TOOLS];
 const ACTION_NAMES = ACTION_TOOLS.map((t) => t.name);
@@ -194,16 +201,22 @@ export function agentPrompt(input: FrontDoorInput): string {
     ...Object.values(EXAMPLES).flat(),
     "",
     "Rules:",
-    "- Call the tool that does what they ask. When they ask for two or three different things, call a tool for each (at most 3), in the order they asked.",
-    "- You may first look up their products (find_products) or their counts (shop_counts) when you need to know which product they mean or where it stands. At most twice. Then act.",
+    "- Call the tool that does what they ask. When they ask for two or three different things, call a tool for each (at most 3), in the order they asked. One request is one tool.",
+    "- Read the message for what they want now. The open question is context: a message that answers it belongs with what the question was about (a description the bot asked for a live product is content_change); anything else is a new request.",
+    "- Which product: from the products you last listed (\"the approved ones\" are those whose quality check passed, ON or OFF; \"my latest uploaded product\" is the first of a list of their newest), the products the message names, or the conversation (\"those products\" after an order: that order's products). Put their names in the tool. Only when you still can't tell, look it up (find_products), at most twice; then act.",
+    "- A lookup is never an answer: stock, prices, counts and lists come from the tools that read them (product_info, stock, shop, research). Never tell them a product isn't in their shop.",
     "- Every number and word you put in a tool's arguments must be in their message (or, for which product, the recent conversation). Never guess or invent a value.",
-    "- You don't have their products' descriptions, prices, stock or sales beyond what a lookup shows: never write them yourself; use the tool that reads them.",
-    "- Drafts are only the ones listed under \"Drafts in their batch\". A product already in their shop is changed with live_change, bulk or content_change.",
-    "- A change to a product (\"change the drone to 10\", \"restock the kettle\") is a change, never listing new products.",
-    "- Ask (clarify) only when you can't tell which action or which product, or a change has no value. Never ask for a detail with a default (a period, a report's kind, how many to list).",
-    "- A reply never says you changed, will change or are changing anything. Only a tool changes things.",
-    "- Never say a team or a person will do something.",
-    "- Replies: short and warm, *bold* with single asterisks, in the language they wrote in, never a web address (use link). A product's status is ON or OFF, in capitals.",
+    "- You don't have their products' descriptions, highlights, prices, stock or sales: never write them yourself; use the tool that reads them.",
+    "- Drafts are only the ones listed under \"Drafts in their batch\". A product already in their shop is changed with live_change, bulk or content_change, even while drafts wait.",
+    "- A change to a product (\"change the drone to 10\", \"restock the kettle\", \"set X to 50 pcs\") is a change, never listing new products. Changing a name, description or highlights with no new text means writing it (content_change with rewrite).",
+    "- While a batch's products are being sent, their details (sizes, pieces, prices, \"those are 3 different products\") are step.",
+    "- A product's name on its own after you listed products: product_info. An order number: order_status. How much they made or sold: sales. What PandaWorld listed for them (\"from this chat\"): research with pandaworld_listings.",
+    "- Fixing rejected products: fix_rejected (no product to see them and pick one). Which ones are rejected: shop with rejected.",
+    "- A question about what you can do (\"can you…?\"): answer from What PandaWorld can do, and if it can, do it or offer to. Never say a team or a person will do something.",
+    "- Ask (clarify) only when you can't tell which action or which product, or a change has no value to set. Never ask for a detail that has a default: a period (the tool's usual one), a report's kind (best_sellers), the price for fees, how many to list (restart asks).",
+    "- A reply never says you did, paused, stopped, changed or will change anything (\"I've paused the current draft\" did nothing). Only a tool does things: use it, or ask.",
+    "- About themselves (pack, credits, shop, connections, extension use): only from About this seller. Outside Jumia and PandaWorld: say you can't help with that and suggest something you can do.",
+    "- Replies: short and warm, *bold* with single asterisks, in the language they wrote in, never a web address (use link). A hello or \"what can you do\": a short list (\"• \" lines) of what you can do, then ask what they'd like. A product's status is ON or OFF, in capitals.",
   ].join("\n");
 }
 
@@ -212,7 +225,6 @@ export function agentPrompt(input: FrontDoorInput): string {
 /** What the agent can look up while deciding. */
 export interface AgentLookups {
   findProducts: (words: string) => Promise<string[]>;
-  shopCounts:   () => Promise<string>;
 }
 
 const QC: Record<string, string> = { APPROVED: "approved", PENDING: "waiting for quality check", NOT_READY_TO_QC: "waiting for quality check", REJECTED: "rejected by quality check" };
@@ -230,25 +242,10 @@ export function lookupLine(p: ShopProduct): string {
   ].filter(Boolean).join(" · ");
 }
 
-/** Their shop's counts, the way the shop overview counts them (out of stock: ON with 0 left). Pure. */
-export function countsText(products: ShopProduct[]): string {
-  const live = products.filter((p) => p.status !== "DELETED");
-  const on = live.filter((p) => p.status === "ACTIVE");
-  return [
-    `${live.length} products`,
-    `ON ${on.length}`,
-    `OFF ${live.filter((p) => p.status === "INACTIVE").length}`,
-    `out of stock ${on.filter((p) => p.stock === 0).length}`,
-    `waiting for Jumia's check ${live.filter((p) => p.qcStatus === "PENDING" || p.qcStatus === "NOT_READY_TO_QC").length}`,
-    `rejected ${live.filter((p) => p.qcStatus === "REJECTED").length}`,
-  ].join(" · ");
-}
-
 /** Lookups over their shop's local copy (jumia_products), as the chat's own product search finds them. */
 export function catalogLookups(products: ShopProduct[]): AgentLookups {
   return {
     findProducts: async (words) => findProducts(products, words, 12).map(lookupLine),
-    shopCounts:   async () => countsText(products),
   };
 }
 
@@ -321,10 +318,8 @@ export async function agentRead(
     // Look it up, answer the model, and let it decide.
     const answers = await Promise.all(looked.map(async (c) => {
       const words = typeof c.args.words === "string" ? c.args.words : "";
-      const result = c.name === "find_products"
-        ? (await lookups.findProducts(words).catch(() => [])).slice(0, 12)
-        : await lookups.shopCounts().catch(() => "unknown");
-      return { functionResponse: { ...(c.id ? { id: c.id } : {}), name: c.name, response: { result: Array.isArray(result) && result.length === 0 ? "No product matches those words." : result } } };
+      const found = (await lookups.findProducts(words).catch(() => [] as string[])).slice(0, 12);
+      return { functionResponse: { ...(c.id ? { id: c.id } : {}), name: c.name, response: { result: found.length > 0 ? found : NO_MATCH } } };
     }));
     log.push(`→ ${JSON.stringify(answers.map((a) => a.functionResponse.response.result)).slice(0, 300)}`);
     turns.push(r.turn, { role: "user", parts: answers });

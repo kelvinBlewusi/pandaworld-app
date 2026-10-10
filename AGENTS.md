@@ -2454,10 +2454,14 @@ checks and taps.
 - **lib/assistant-v2/agent.ts**: every chat action is a tool
   (`ACTION_TOOLS`: list, edit, submit, live_change, bulk, content_change,
   add_size, add_photos, fix_rejected, research, sales, payouts, reply,
-  cannot, clarify and the rest), plus two lookups (`LOOKUP_TOOLS`):
+  cannot, clarify and the rest), plus one lookup (`LOOKUP_TOOLS`):
   `find_products` (their products matching some words, with ON/OFF, quality
   check, stock and price, from jumia_products through the chat's own
-  `findProducts`) and `shop_counts` (counted as the overview counts).
+  `findProducts`), only to tell which product they mean. Nothing found
+  answers `NO_MATCH`: the saved copy can be behind, so it acts on their
+  words and never says a product isn't there. Counts and lists come from
+  the actions (a `shop_counts` lookup in the first run answered "You have
+  0 products" from a copy with none).
   - One call with every tool declared, mode ANY (it must call a tool). It
     may look things up first, at most 2 rounds; on the last round only
     actions are allowed (`allowedFunctionNames`). Its turns go back verbatim
