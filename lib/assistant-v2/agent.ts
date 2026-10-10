@@ -135,14 +135,14 @@ export const ACTION_TOOLS: GeminiTool[] = [
   tool("order_status", "One order, by its number (\"#394666919\", \"tell me about this one #394666919 · GHS 94\").", { number: str("The order number from the message or the conversation, digits only.") }, ["number"]),
   tool("sales", "Their orders and sales in a period, optionally with statuses.", { period: str("Period.", PERIOD), status: arr(str("A status.", STATUS), "Statuses.") }),
   // Money and account
-  tool("credits", "Their credit balance."),
+  tool("credits", "Their credit balance, with a button to buy more: always this for \"my credits\", \"how many credits\", even when About this seller shows a number."),
   tool("payouts", "The last Jumia payout and what isn't paid yet."),
   tool("payout_detail", "Every statement (history), or one statement's fees and refunds (breakdown).", { mode: str("Which.", ["history", "breakdown"]), statement: str("A statement number from the message.") }, ["mode"]),
   tool("fees", "What Jumia takes and what they receive when a product sells (\"how much will I receive if it sells\").", { product: PRODUCT, price: num("A price from the message.") }, ["product"]),
   tool("help", "What PandaWorld can do, when they ask in general."),
   // Saying, not doing
   tool("cannot", "They ask for something on the Not possible list: PandaWorld gives the true answer.", { what: str("A key from Not possible from here.") }, ["what"]),
-  tool("reply", "A short answer in your words: a hello, thanks, a question about PandaWorld or their account, anything the other tools don't cover. Never says you did, paused, stopped, changed or will change anything, and never gives a number about their shop: tools do and read things.", {
+  tool("reply", "A short answer in your words: a hello, thanks, a question about PandaWorld or their account, anything the other tools don't cover. Never says you did, paused, stopped, changed or will change anything, never gives a number about their shop or credits (tools read them), and never says PandaWorld can't do something (what isn't possible is cannot; the rest has a tool).", {
     text: str("Your message."), link: str("A link key, if one fits."),
   }, ["text"]),
   tool("clarify", "Only when you can't tell which action or which product, or a change has no value: one short question with 2 or 3 answers to tap.", {
@@ -212,7 +212,7 @@ export function agentSystem(listingCost = 2): string {
     "- While a batch's products are being sent, their details (sizes, pieces, prices, SKUs, \"those are 3 different products\") are step: no lookup.",
     "- A product's name on its own after you listed products: product_info. An order number: order_status. How much they made or sold: sales. What PandaWorld listed for them (\"from this chat\"): research with pandaworld_listings.",
     "- Fixing rejected products: fix_rejected (no product to see them and pick one). Which ones are rejected: shop with rejected.",
-    "- A question about what you can do (\"can you…?\"): answer from What PandaWorld can do, and if it can, do it or offer to. Never say a team or a person will do something.",
+    "- A question about what you can do (\"can you…?\"): answer from What PandaWorld can do, and if it can, do it or offer to. Never say you can't do something unless it is on the Not possible list (then use cannot). Never say a team or a person will do something.",
     "- Ask (clarify) only when you can't tell which action or which product, or a change has no value to set. Never ask for a detail that has a default: a period (the tool's usual one), a report's kind (best_sellers), the price for fees, how many to list (restart asks).",
     "- A reply never says you did, paused, stopped, changed or will change anything (\"I've paused the current draft\" did nothing). Only a tool does things: use it, or ask.",
     "- About themselves (pack, credits, shop, connections, extension use): only from About this seller. Outside Jumia and PandaWorld: say you can't help with that and suggest something you can do.",
@@ -368,8 +368,10 @@ export async function agentRead(
   const actions: AssistantAction[] = [];
   const seen = new Set<string>();
   for (const c of finals.slice(0, MAX_ACTIONS)) {
-    // Beside actions, its own words and "a detail of the product being sent" add nothing.
+    // Beside actions, its own words and "a detail of the product being sent"
+    // add nothing; nor does starting over beside listing (the list starts it).
     if (many && (c.name === "reply" || c.name === "step")) continue;
+    if (c.name === "restart" && finals.some((f) => f.name === "list")) continue;
     const action = parseActionUnguarded(JSON.stringify(actionJson(c.name, c.args)), said, input.drafts, input.links, input.currency, {
       context, stage: input.stage, listed: !!input.listed,
     });
