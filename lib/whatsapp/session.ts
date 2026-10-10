@@ -53,6 +53,18 @@ export interface LiveValueAsk {
   at:        string;
 }
 
+/**
+ * Photos coming in for a live product (lib/whatsapp/live-photos.ts): the
+ * change they go in, its product's name, and how many more it can take.
+ */
+export interface AddPhotosAsk {
+  kind:     "add_photos";
+  changeId: string;
+  name:     string;
+  room:     number;
+  at:       string;
+}
+
 export type WhatsAppSessionState =
   | "awaiting_jumia_credentials"
   | "awaiting_jumia_oauth"
@@ -161,7 +173,7 @@ export interface WhatsAppSession {
    * for the tap or the number. Null when none is outstanding; anything
    * that isn't an answer drops it. See lib/whatsapp/assistant.ts.
    */
-  assistantPending: AssistantPending | LiveValueAsk | null;
+  assistantPending: AssistantPending | LiveValueAsk | AddPhotosAsk | null;
   /** The products the assistant last listed (ListedProducts). */
   lastListed: ListedProducts | null;
 }
@@ -195,7 +207,7 @@ function fromRow(row: Record<string, unknown>): WhatsAppSession {
     lastSubmittedBatchId: (row.last_submitted_batch_id as string | null) ?? null,
     batchQuiet: (row.batch_quiet as boolean | null) ?? null,
     preferredBatchQuiet: (row.preferred_batch_quiet as boolean | null) ?? null,
-    assistantPending: (row.assistant_pending as AssistantPending | LiveValueAsk | null) ?? null,
+    assistantPending: (row.assistant_pending as AssistantPending | LiveValueAsk | AddPhotosAsk | null) ?? null,
     lastListed: (row.last_listed as ListedProducts | null) ?? null,
   };
 }
@@ -331,7 +343,7 @@ export async function updateSession(
     lastSubmittedBatchId: string | null;
     batchQuiet: boolean | null;
     preferredBatchQuiet: boolean | null;
-    assistantPending: AssistantPending | LiveValueAsk | null;
+    assistantPending: AssistantPending | LiveValueAsk | AddPhotosAsk | null;
     lastListed: ListedProducts | null;
   }>,
 ): Promise<void> {

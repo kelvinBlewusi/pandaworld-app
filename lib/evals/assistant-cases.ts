@@ -370,4 +370,11 @@ export const ASSISTANT_CASES: EvalCase[] = [
   { id: "live-details-material", src: "variant", area: "live_changes", stage: "idle", catalog: [NECK_FAN], msg: "set the material of the neck fan to plastic", ok: [{ type: "content_change", product: "~neck fan", "request.details": "~plastic" }] },
   { id: "live-details-size", src: "variant", area: "live_changes", stage: "idle", msg: "rename size M of the satin gown to XL", ok: [{ type: "content_change", product: "~gown", "request.size": "~XL" }] },
   { id: "live-details-barcode", src: "variant", area: "live_changes", stage: "idle", catalog: ["Nasco Electric Kettle 1.7L - Stainless Steel"], msg: "the electric kettle's barcode is 6001234567890", ok: [{ type: "content_change", product: "~kettle", "request.barcode": "6001234567890" }] },
+  // Owner, 2026-10-09: fixing rejected products, a new size and more photos for a live product.
+  { id: "fix-rejected-all", src: "variant", area: "live_changes", stage: "idle", msg: "can we fix my rejected products from here?", ok: [{ type: "fix_rejected", product: null }] },
+  { id: "fix-rejected-one", src: "variant", area: "live_changes", stage: "idle", catalog: [NECK_FAN], ctx: [REJECTED_LIST], msg: "fix the neck fan jumia rejected", ok: [{ type: "fix_rejected", product: "~neck fan" }] },
+  { id: "fix-rejected-reason", src: "variant", area: "live_changes", stage: "idle", catalog: [NECK_FAN], msg: "fix the neck fan: Wrong Title - the title does not describe the product", ok: [{ type: "fix_rejected", product: "~neck fan", reason: "~wrong title" }] },
+  { id: "add-size", src: "variant", area: "live_changes", stage: "idle", catalog: ["Satin Gown - Elegant Evening Dress (M)"], msg: "add size XL to the satin gown, 4 pieces at 150", ok: [{ type: "add_size", product: "~gown", "request.size": "~XL", "request.stock": 4, "request.price": 150 }] },
+  { id: "add-colour", src: "variant", area: "live_changes", stage: "idle", catalog: [NECK_FAN], msg: "I now have the neck fan in pink too, 10 of them", ok: [{ type: "add_size", product: "~neck fan", "request.size": "~pink", "request.stock": 10 }] },
+  { id: "add-photos", src: "variant", area: "live_changes", stage: "idle", catalog: [NECK_FAN], msg: "I want to add more pictures to the neck fan", ok: [{ type: "add_photos", product: "~neck fan" }] },
 ];

@@ -28,13 +28,14 @@ import { createServerClient } from "@/lib/supabase/server";
 import { callGeminiBackend } from "@/lib/ai/gemini-client";
 import { withAiUsageContext } from "@/lib/ai/usage";
 import { sendTextIfConfigured } from "@/lib/whatsapp/client";
+import { cell, sendRich, type RichBlock, type RichCell, type RichTone } from "@/lib/whatsapp/rich";
 import { getItemsOfOrders, type JumiaOrderItem } from "@/lib/jumia/orders";
 import {
   fetchCatalogPage, fetchPayouts, fetchStock, findProducts, orderStatusWord, ordersCreatedSince, ordersWithStatus, saveProducts, shopProducts, summarizeOrders,
   syncCatalog, type ShopProduct,
 } from "@/lib/jumia/shop";
 import { formatAmount } from "@/lib/whatsapp/orders";
-import { LOW_STOCK, periodEnd, rememberListed, periodStart, sendLong, shopContext, shorten, statusName, type Ctx, type Period } from "@/lib/whatsapp/shop";
+import { LOW_STOCK, periodEnd, rememberListed, periodStart, shopContext, shorten, statusName, type Ctx, type Period } from "@/lib/whatsapp/shop";
 import { orderItems, salesByProduct } from "@/lib/whatsapp/shop-insights";
 import type { ListedProducts } from "@/lib/whatsapp/session";
 
@@ -213,6 +214,30 @@ export function dayText(iso: string | null | undefined, timeZone: string, now = 
 
 const QC_TEXT: Record<string, string> = { APPROVED: "approved", PENDING: "waiting for Jumia's check", NOT_READY_TO_QC: "waiting for Jumia's check", REJECTED: "rejected" };
 
+/** A product's state as a coloured cell. Pure. */
+export function groupStateCell(g: ProductGroup): RichCell {
+  if (g.qc === "REJECTED") return cell("Rejected", "bad");
+  if (g.qc === "PENDING" || g.qc === "NOT_READY_TO_QC") return cell("Waiting for QC", "info");
+  if (g.status === "INACTIVE") return cell("Off", "neutral");
+  if (g.status === "ACTIVE" && g.stock === 0) return cell("Out of stock", "bad");
+  if (g.status === "ACTIVE") return cell("On", "good");
+  return cell(g.status?.toLowerCase() ?? "?", "neutral");
+}
+
+/** Products as a table: name (with its sizes), price, stock, state, when added. Pure. */
+export function productsTable(groups: ProductGroup[], money: (n: number, cur?: string | null) => string, timeZone: string, now = new Date()): Extract<RichBlock, { kind: "table" }> {
+  return {
+    kind: "table", columns: ["Product", "Price", "Stock", "State", "Added"], align: ["left", "right", "right", "left", "left"],
+    rows: groups.map((g) => [
+      `${shorten(g.name, 70)}${g.variations.length > 1 ? ` (${g.variations.slice(0, 6).join(", ")}${g.variations.length > 6 ? ", …" : ""})` : g.variations.length === 1 ? ` (${g.variations[0]})` : ""}`,
+      g.price == null ? "?" : g.salePrice != null ? `${money(g.salePrice, g.currency)} (sale)` : g.maxPrice != null && g.maxPrice !== g.price ? `${money(g.price, g.currency)}–${money(g.maxPrice, g.currency)}` : money(g.price, g.currency),
+      g.stock == null ? cell("?", "neutral") : cell(String(g.stock), g.stock === 0 ? "bad" : g.stock <= LOW_STOCK ? "warn" : "neutral"),
+      groupStateCell(g),
+      dayText(g.createdAt, timeZone, now),
+    ]),
+  };
+}
+
 /** One product as a line. Pure. */
 export function productLine(g: ProductGroup, money: (n: number, cur?: string | null) => string, timeZone: string, now = new Date()): string {
   const vars = g.variations.length > 1 ? ` (${g.variations.length} variations: ${g.variations.slice(0, 6).join(", ")}${g.variations.length > 6 ? ", …" : ""})`
@@ -237,10 +262,17 @@ export function productLine(g: ProductGroup, money: (n: number, cur?: string | n
 /** What one source gave: a heading and its lines, the data the answer is written from. */
 export interface Block {
   title: string; lines: string[]; failed?: boolean;
+  /** The same, laid out for the Listing Assistant's page (lib/whatsapp/rich.ts). */
+  rich?: RichBlock[];
   /** Products shown: their sids. */ sids?: string[];
   /** More products past these: the read for the next ones, and how many there are in all when known. */
   next?: Extract<ResearchNeed, { source: "products" }>; total?: number | null; shownTo?: number;
 }
+
+/** An order status's colour. */
+const STATUS_TONE: Record<string, RichTone> = {
+  PENDING: "info", READY_TO_SHIP: "info", SHIPPED: "info", DELIVERED: "good", RETURNED: "warn", FAILED: "bad", CANCELED: "bad",
+};
 
 const PERIOD_WORDS: Record<Period, string> = {
   today: "today", yesterday: "yesterday", week: "in the last 7 days", month: "in the last 30 days", quarter: "in the last 90 days",
@@ -302,6 +334,7 @@ async function readProducts(ctx: Ctx, need: Extract<ResearchNeed, { source: "pro
       : offset === 0 ? `${shown.length} of ${groups.length}` : `${offset + 1} to ${shownTo} of ${groups.length}`}` +
       ` (the shop has ${groupProducts(all, today).length} in all)`,
     lines: shown.length > 0 ? shown.map((g) => productLine(g, money, tz)) : ["None."],
+    ...(shown.length > 0 ? { rich: [productsTable(shown, money, tz)] } : {}),
     sids: shown.flatMap((g) => g.sids),
     ...(need.limit >= 10 && shownTo < groups.length ? { next: { ...need, offset: shownTo }, total: groups.length, shownTo } : {}),
   };
@@ -331,7 +364,27 @@ async function readOrders(ctx: Ctx, need: Extract<ResearchNeed, { source: "order
   const items = Date.now() < deadline ? await getItemsOfOrders(ctx.token, shown.map((o) => o.id)) : null;
   const s = summarizeOrders(r.data);
   const money = (n: number, cur?: string) => formatAmount(n, cur || ctx.currency, ctx.jc);
+  const rich: RichBlock[] = [
+    { kind: "stats", items: [
+      { label: "Orders", value: `${r.data.length}${r.data.length >= 300 && !need.status ? "+" : ""}` },
+      ...(s.currency ? [{ label: "Value, not cancelled", value: money(s.value, s.currency), tone: "good" as const }] : []),
+    ] },
+    { kind: "bars", items: Object.entries(s.byStatus).sort(([, a], [, b]) => b - a).map(([k, n]) => ({ label: statusName(k), value: n, shown: String(n), tone: STATUS_TONE[k] ?? "neutral" })) },
+    {
+      kind: "table", columns: ["Order", "Date", "Status", "Amount", "Items"], align: ["left", "left", "left", "right", "left"],
+      rows: shown.map((o) => {
+        const its = items?.ok ? items.data.get(o.id)?.items ?? [] : [];
+        const st = orderStatusWord(o);
+        return [
+          `#${o.number}`, dayText(o.createdAt, tz), cell(statusName(st), STATUS_TONE[st] ?? "neutral"),
+          o.totalAmountLocal ? money(Number(o.totalAmountLocal.value) || 0, o.totalAmountLocal.currency) : "",
+          its.length > 0 ? itemsText(its) : `${o.totalItems} item${o.totalItems === 1 ? "" : "s"}`,
+        ];
+      }),
+    },
+  ];
   return {
+    rich,
     title: `${title}: ${r.data.length}${r.data.length >= 300 && !need.status ? "+" : ""} (the newest ${shown.length} below)`,
     lines: [
       `By status: ${Object.entries(s.byStatus).map(([k, n]) => `${statusName(k)} ${n}`).join(", ")}`,
@@ -359,6 +412,18 @@ async function readProductSales(ctx: Ctx, need: Extract<ResearchNeed, { source: 
   const sold = sales.reduce((n, s) => n + s.sold, 0);
   const revenue = sales.reduce((n, s) => n + s.revenue, 0);
   return {
+    rich: [
+      { kind: "stats", items: [{ label: "Sold", value: String(sold) }, { label: "Sales", value: money(revenue, sales[0].currency), tone: "good" }, { label: "Products", value: String(sales.length) }] },
+      { kind: "bars", items: sales.slice(0, 10).map((x) => ({ label: shorten(x.name, 50), value: x.sold, shown: `${x.sold} · ${money(x.revenue, x.currency)}`, tone: "good" as const })) },
+      {
+        kind: "table", columns: ["Product", "Sold", "Sales", "Returned", "Failed", "Cancelled"], align: ["left", "right", "right", "right", "right", "right"],
+        rows: sales.slice(0, 30).map((x) => [
+          shorten(x.name, 70), String(x.sold), money(x.revenue, x.currency),
+          x.returned ? cell(String(x.returned), "warn") : "", x.failed ? cell(String(x.failed), "bad") : "", x.cancelled ? cell(String(x.cancelled), "bad") : "",
+        ]),
+        ...(sales.length > 30 ? { more: `+${sales.length - 30} more products` } : {}),
+      },
+    ],
     title: `${title} (from ${r.data.orders}${r.data.partial ? " of the newest" : ""} orders)`,
     lines: [
       `Total: ${sold} sold · ${money(revenue, sales[0].currency)}`,
@@ -380,6 +445,13 @@ async function readSalesSummary(ctx: Ctx, need: Extract<ResearchNeed, { source: 
   const s = summarizeOrders(r.data);
   if (s.orders === 0) return { title: `${title}: no orders`, lines: [] };
   return {
+    rich: [
+      { kind: "stats", items: [
+        { label: "Orders", value: `${s.orders}${s.orders >= 1000 ? "+" : ""}` },
+        ...(s.currency ? [{ label: "Value, not cancelled", value: formatAmount(s.value, s.currency, ctx.jc), tone: "good" as const }] : []),
+      ] },
+      { kind: "bars", items: Object.entries(s.byStatus).sort(([, a], [, b]) => b - a).map(([k, n]) => ({ label: statusName(k), value: n, shown: String(n), tone: STATUS_TONE[k] ?? "neutral" })) },
+    ],
     title: `${title}: ${s.orders}${s.orders >= 1000 ? "+" : ""} orders`,
     lines: [
       `By status: ${Object.entries(s.byStatus).map(([k, n]) => `${statusName(k)} ${n}`).join(", ")}`,
@@ -395,6 +467,14 @@ async function readPayouts(ctx: Ctx): Promise<Block> {
   if (r.data.length === 0) return { title: "Payout statements in the last 90 days: none", lines: [] };
   const money = (n: number | null, cur: string) => (n == null ? "?" : formatAmount(n, cur || ctx.currency, ctx.jc));
   return {
+    rich: [{
+      kind: "table", columns: ["Statement", "From", "Amount", "Status", "Sales", "Fees", "Refunds"], align: ["left", "left", "right", "left", "right", "right", "right"],
+      rows: r.data.slice(0, 10).map((s) => [
+        s.number, s.createdAt ? dayText(s.createdAt, tz) : "", money(s.amount, s.currency),
+        s.paid ? cell(`Paid${s.updatedAt ? ` ${dayText(s.updatedAt, tz)}` : ""}`, "good") : cell("Not paid yet", "info"),
+        s.itemRevenue != null ? money(s.itemRevenue, s.currency) : "", s.feesTotal != null ? money(s.feesTotal, s.currency) : "", s.refunds ? money(s.refunds, s.currency) : "",
+      ]),
+    }],
     title: `Payout statements in the last 90 days: ${r.data.length} (newest first)`,
     lines: r.data.slice(0, 10).map((s) => [
       `• Statement ${s.number}`, s.createdAt ? `from ${dayText(s.createdAt, tz)}` : "", money(s.amount, s.currency),
@@ -419,7 +499,15 @@ async function readPandaworldListings(ctx: Ctx, need: Extract<ResearchNeed, { so
   const list = (data ?? []) as { title: string | null; status: string; selling_price: number | null; created_at: string }[];
   const title = `Products listed with PandaWorld ${PERIOD_WORDS[need.period]}`;
   if (list.length === 0) return { title: `${title}: none`, lines: [] };
+  const LISTING_TONE: Record<string, RichTone> = { live: "good", pending_approval: "info", processing: "info", failed: "bad", draft: "neutral", awaiting_review: "neutral" };
   return {
+    rich: [{
+      kind: "table", columns: ["Product", "Where it is", "Price", "Listed"], align: ["left", "left", "right", "left"],
+      rows: list.map((l) => [
+        shorten(l.title ?? "(no name yet)", 70), cell(LISTING_STATUS[l.status] ?? l.status, LISTING_TONE[l.status] ?? "neutral"),
+        l.selling_price != null ? formatAmount(l.selling_price, ctx.currency, ctx.jc) : "", dayText(l.created_at, tz),
+      ]),
+    }],
     title: `${title}: ${list.length}${list.length >= MAX_ROWS ? "+" : ""} (newest first)`,
     lines: list.map((l) => [
       `• ${shorten(l.title ?? "(no name yet)", 70)}`, LISTING_STATUS[l.status] ?? l.status,
@@ -533,8 +621,32 @@ export async function answerResearch(userId: string, phone: string, request: str
   const more = paged?.next
     ? `\n\nThat's ${paged.total != null ? `${paged.shownTo} of ${paged.total}` : `the first ${paged.shownTo}`}. Say *more* for the next ${paged.next.limit}.`
     : "";
-  await sendLong(phone, `${answer ?? data}${more}${fromJumia ? "\n\n_Read from Jumia just now._" : ""}`);
+  const text = `${answer ?? data}${more}${fromJumia ? "\n\n_Read from Jumia just now._" : ""}`;
+  await sendRich(phone, text, researchLayout(blocks, answer, more.trim(), fromJumia));
   return `research ${needs.map((n) => n.source).join("+")}: ${answer ? "answered" : "data sent"}${paged ? " (more to show)" : ""}`;
+}
+
+/**
+ * The answer as the page lays it out: one read (a list of products, orders,
+ * statements) is its own table, the clearest answer; several reads put the
+ * written answer first, with each read's table folded under it. Pure.
+ */
+export function researchLayout(blocks: Block[], answer: string | null, more: string, fromJumia: boolean): RichBlock[] {
+  const out: RichBlock[] = [];
+  const drawn = blocks.filter((b) => b.rich && b.rich.length > 0);
+  const single = blocks.length === 1 && drawn.length === 1;
+  if (single) {
+    out.push({ kind: "heading", text: blocks[0].title }, ...blocks[0].rich!);
+  } else {
+    out.push({ kind: "text", text: answer ?? blocksText(blocks) });
+    for (const b of drawn) {
+      for (const r of b.rich!) if (r.kind === "table") out.push({ ...r, title: b.title, folded: true });
+    }
+  }
+  for (const b of blocks.filter((x) => x.failed)) out.push({ kind: "note", text: `${b.title}: ${b.lines[0] ?? "couldn't be read"}`, tone: "warn" });
+  if (more) out.push({ kind: "text", text: more });
+  if (fromJumia) out.push({ kind: "note", text: "Read from Jumia just now." });
+  return out;
 }
 
 /** "More", "next", "the rest": the next page of the list just shown. */

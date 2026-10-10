@@ -2463,7 +2463,7 @@ orders is counted from the orders).
   a Vendor Center button (`cannotAnswer`). The AI's own words about what
   Jumia allows are never sent. Covers: deleting a product, a live product's
   main photo, main category or parent SKU, changes before QC approves it,
-  adding a size to a live product (not built), the buyer's phone or
+  details Jumia locks once approved (`locked_details`), the buyer's phone or
   messaging buyers, marking orders shipped or delivered, returns, Fulfilled
   by Jumia labels, bank details, holiday mode, seller score/reviews/views,
   campaigns and ads, French/Arabic listings (not built: every connected
@@ -2508,6 +2508,96 @@ orders is counted from the orders).
 - Tests: __tests__/jumia-capabilities.test.ts; details, stock held and
   checks in jumia-shop-more.test.ts; 8 cases in the test set ("cannot-*",
   "live-details-*").
+
+### Fixing rejected products, a new size, more photos, locked details, rich answers (owner, 2026-10-09)
+
+- **Locked details**: Jumia refuses some details once a product is
+  approved. The owner's neck fan got "The [color] cannot be updated since
+  the product has been already approved in at least one country."
+  - lib/jumia/locked-details.ts reads the detail from that refusal
+    (`lockedDetailIn`) and keeps it in app_settings
+    `jumia_locked_attributes`, plus `color`, which was seen.
+  - shop-notices' `explainRefusal` says it plainly ("Jumia doesn't let a
+    product's colour change once its quality check has approved it. To sell
+    one in white, list it as a new product, or ask Jumia's seller support")
+    instead of Jumia's words.
+  - `proposeContentChange` drops a locked detail on an approved product
+    before offering. It says so and offers the rest, or offers nothing
+    ("details locked").
+  - Capability `locked_details` (impossible).
+- **Fix rejected products** (lib/whatsapp/fix-rejected.ts, action
+  `fix_rejected`, Standard pack like other live changes):
+  - With no product: the rejected ones, as a list to tap (`qcfix:<sku>`,
+    handled globally in intake).
+  - A product PandaWorld listed (listings.sku or variants.seller_sku, with a
+    jumia_error): its existing `fix:<listingId>` Fix & resubmit button.
+  - Anything else: `decideQcAction` on Jumia's reason (or the one the seller
+    pasted: "fix the X: <reason>"), then `fixPlan`:
+    - redraft → `proposeContentChange` with an AI rewrite of the fields the
+      reason names (`fieldsFor`), shown before one tap. Jumia checks it
+      again.
+    - brand / a value only the seller has → asked in the words that change
+      it.
+    - photos, category, price before approval → said plainly with Vendor
+      Center (the API can't), or list it again.
+- **Add a size or colour** (action `add_size`, `proposeAddSize`): LiveChange
+  `add_variation` sent to POST /feeds/products/create.
+  - `newVariationItem` builds it: the set's name, description, brand,
+    category, photos and details under its parent SKU, the first
+    variation's own details, and the size on the variation and on the
+    category's variant axis (`variantAxis`).
+  - It gets a new SKU (`newVariationSku`: PARENT-XL), the stock from the
+    message (asked when missing) and the price from the message or the
+    product's own.
+  - The size is checked against the axis's options and the sizes it has.
+  - One tap. Jumia's QC looks at it like a new product. Feed results come
+    through checkSentChanges as usual.
+  - Not yet tried against Jumia's live API: watch the first one.
+- **More photos** (action `add_photos`, lib/whatsapp/live-photos.ts):
+  - "Add photos to X" reads the product's photos (8 at most in all), keeps
+    a change row with status `collecting`, and sets
+    session.assistantPending `{kind:"add_photos"}`.
+  - Each photo is its own row in `live_photo_uploads`
+    (supabase/migrations/2026-10-09_live-photo-uploads.sql), so a WhatsApp
+    album's parallel deliveries don't overwrite each other.
+  - "Done" turns them into a content change `fields.images`, offered for
+    the tap (`offerChange`). `contentItems` sends the product's photos with
+    its main one first, then these (`withImages`).
+  - "stop" or anything else lets it go. Unfinished after 30 minutes, it's
+    dropped.
+- **Rich answers** (owner: "our presentation of results is bad"):
+  - lib/whatsapp/rich.ts `sendRich(to, text, blocks)`: on WhatsApp it sends
+    the text, exactly as before. On the web it sends the text plus
+    `payload.rich` (client.ts `sendRichIfConfigured` → message-log keeps it).
+  - Block types (lib/whatsapp/rich-blocks.ts, pure, used by the page):
+    heading, stats tiles, table (coloured status pills; `folded` under a
+    title), bars, text, note.
+  - components/assistant/rich-message.tsx draws them. Tables stack row by
+    row on phones.
+  - Converted so far:
+    - shop.ts: the overview, turned-off and rejected lists, stock (one
+      product and the out/low lists), product info, sales (summary and by
+      status), payouts.
+    - shop-insights.ts: the four reports.
+    - shop-research.ts: each read gets `rich`. `researchLayout` shows one
+      read as its own table, and several reads as the AI's written answer
+      with the tables folded under it.
+  - Next candidates: the health report, orders to pack, payout history and
+    breakdown.
+- **Web chat waiting line**: while a reply is on its way, a small line
+  under the seller's message rotates phrases picked by what they asked
+  (components/assistant/waiting-phrases.ts `waitTopic`: stock → "Counting
+  inventory", orders → "Opening the order book"…). It has a light sweep
+  and is gone the moment the reply lands, so it adds no time.
+- **Font**: the whole site uses the device's own UI font (tailwind `sans` =
+  the chat's stack). The Inter Tight import in app/layout.tsx is gone. The
+  wordmarks still load their own Inter Tight 800.
+- Tests:
+  - __tests__/live-additions.test.ts, rich-answers.test.ts,
+    waiting-phrases.test.ts.
+  - The kettle test in jumia-shop-more now expects colour refused on an
+    approved product.
+  - 6 test-set cases: fix-rejected-*, add-size, add-colour, add-photos.
 
 ### The chat knows the website (owner, 2026-10-07)
 

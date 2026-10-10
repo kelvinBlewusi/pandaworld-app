@@ -345,7 +345,12 @@ export interface ContentFields {
   attributes?:  { name: string; label: string; value: string }[];
   /** One variation's barcode or name ("M" → "Medium"), by its SKU. */
   variations?:  { sellerSku: string; barcode?: string; variation?: string }[];
+  /** More photos, after the ones it has (its main photo stays first; owner, 2026-10-09). */
+  images?:      string[];
 }
+
+/** The most photos Jumia takes on one product. */
+export const MAX_PRODUCT_IMAGES = 8;
 
 export type LiveChange =
   | { kind: "stock"; stock: number }
@@ -358,11 +363,19 @@ export type LiveChange =
   /** A sale this many percent off each product's own price, with its dates. */
   | { kind: "sale_pct"; pct: number; start: string; end: string }
   /** Name, description, highlights or brand (POST /feeds/products/update). */
-  | { kind: "content"; fields: ContentFields };
+  | { kind: "content"; fields: ContentFields }
+  /**
+   * A new size (or colour) of a live product (owner, 2026-10-09: "adding a
+   * size to a live product"): a new variation under the product's parent SKU,
+   * with its own SKU, price and stock (POST /feeds/products/create). It goes
+   * through Jumia's quality check like any new product.
+   */
+  | { kind: "add_variation"; variation: string; sellerSku: string; price: number; stock: number; axis: string | null };
 
 const FEED_PATH: Record<LiveChange["kind"], string> = {
   stock: "/feeds/products/stock", price: "/feeds/products/price", sale: "/feeds/products/price", status: "/feeds/products/status",
   price_pct: "/feeds/products/price", sale_pct: "/feeds/products/price", content: "/feeds/products/update",
+  add_variation: "/feeds/products/create",
 };
 
 /**
@@ -393,6 +406,8 @@ function feedItem(product: ShopProduct, change: LiveChange, ctx: { country: stri
       return { ...base, stock: change.stock };
     case "content":
       return "a content change is sent with the whole product (contentItems)";
+    case "add_variation":
+      return "a new size is sent with the whole product (newVariationItem)";
     case "price":
     case "price_pct":
     case "sale":
@@ -441,6 +456,13 @@ export async function sendLiveChanges(
     const built = await contentItems(accessToken, products, change.fields);
     if (!built.ok) return built;
     items.push(...built.data);
+  } else if (change.kind === "add_variation") {
+    const r = await fetchProductSet(accessToken, products[0].sellerSku);
+    if (!r.ok) return r;
+    if (!r.data) return { ok: false, status: 404, message: `Jumia didn't return ${products[0].name} (SKU ${products[0].sellerSku})` };
+    const item = newVariationItem(r.data, change, products[0].currency ?? ctx.currency);
+    if (typeof item === "string") return { ok: false, status: 0, message: item };
+    items.push(item);
   } else {
     for (const p of products) {
       const item = feedItem(p, change, ctx);
@@ -510,6 +532,8 @@ export function localUpdate(change: LiveChange, before?: Pick<ShopProduct, "pric
       ...(change.fields.name ? { name: change.fields.name } : {}),
       ...(change.fields.brand ? { brand: change.fields.brand.name } : {}),
     };
+    // A new variation is its own product: the next catalog read brings it.
+    case "add_variation": return {};
   }
 }
 
@@ -604,13 +628,75 @@ export async function contentItems(accessToken: string, products: ShopProduct[],
         description: { value: fields.description ?? set.description },
         brand:       fields.brand ?? set.brand,
         category:    set.category,
-        images:      set.images,
+        images:      withImages(set.images, fields.images),
         attributes:  [...attributes, ...v.attributes.map((a) => (details.has(a.name) ? { ...a, value: details.get(a.name)! } : a))],
       });
     }
     await sleep(PACE_MS);
   }
   return { ok: true, data: items };
+}
+
+/** Its photos with more after them: the main one stays first and main, at most MAX_PRODUCT_IMAGES. Pure. */
+export function withImages(images: ProductSet["images"], more: string[] | undefined): ProductSet["images"] {
+  if (!more || more.length === 0) return images;
+  const main = images.find((i) => i.primary) ?? images[0];
+  const ordered = main ? [main, ...images.filter((i) => i !== main)] : [...images];
+  const have = new Set(ordered.map((i) => i.url));
+  const added = more.filter((u) => u && !have.has(u)).map((url) => ({ url, primary: false }));
+  return [...ordered.map((i, n) => ({ ...i, primary: n === 0 })), ...added].slice(0, MAX_PRODUCT_IMAGES);
+}
+
+/** A new variation's SKU: the parent's with the size ("PA-12AB-XL"), not one it already has. Pure. */
+export function newVariationSku(parentSku: string, variation: string, taken: string[]): string {
+  const tag = variation.toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 12) || "V";
+  const base = `${parentSku.slice(0, 36)}-${tag}`;
+  const used = new Set(taken.map((t) => t.toUpperCase()));
+  if (!used.has(base.toUpperCase())) return base;
+  for (let n = 2; n < 100; n++) if (!used.has(`${base}-${n}`.toUpperCase())) return `${base}-${n}`;
+  return `${base}-${Date.now().toString(36).slice(-4).toUpperCase()}`;
+}
+
+/**
+ * The create feed's item for a new variation of a live product: the
+ * product's name, description, brand, category, photos and details, under
+ * its parent SKU, with the first variation's own details and this one's size
+ * (the variation, and the category's size detail when it has one). Or why
+ * not. Pure.
+ */
+export function newVariationItem(
+  set: ProductSet, change: Extract<LiveChange, { kind: "add_variation" }>, currency: string,
+): Record<string, unknown> | string {
+  if (!set.brand || !set.category) return `Jumia didn't give ${set.name}'s brand and category, which a new size needs`;
+  if (set.variations.length === 0) return `Jumia didn't give ${set.name}'s variations`;
+  if (set.variations.some((v) => (v.variation ?? "").toLowerCase() === change.variation.toLowerCase())) return `It already has ${change.variation}`;
+  const template = set.variations[0];
+  const axis = change.axis?.toLowerCase() ?? null;
+  const own = template.attributes
+    .filter((a) => a.name.toLowerCase() !== "variation")
+    .map((a) => (axis && a.name.toLowerCase() === axis ? { ...a, value: change.variation } : a));
+  const shared = set.attributes.map((a) => (axis && a.name.toLowerCase() === axis ? { ...a, value: change.variation } : a));
+  const hasAxis = axis != null && [...own, ...shared].some((a) => a.name.toLowerCase() === axis);
+  const t = (value: string) => ({ value, translations: [] as never[] });
+  return {
+    name:        t(set.name),
+    description: t(set.description),
+    parentSku:   set.parentSku ?? template.sellerSku,
+    sellerSku:   change.sellerSku,
+    variation:   change.variation,
+    brand:       set.brand,
+    category:    set.category,
+    images:      set.images,
+    price:       { value: change.price, currency },
+    stock:       change.stock,
+    attributes:  [
+      { name: "variation", value: change.variation, translations: [] },
+      ...shared.map((a) => ({ ...a, translations: [] })),
+      ...own.map((a) => ({ ...a, translations: [] })),
+      ...(axis && !hasAxis ? [{ name: change.axis!, value: change.variation, translations: [] }] : []),
+    ],
+    barcodeEan:  "",
+  };
 }
 
 // ─── The seller's shops ──────────────────────────────────────────────────────

@@ -32,9 +32,12 @@ jest.mock("@/lib/billing/features", () => ({
 
 type Sent = { kind: string; body: string; ids?: string[] };
 const sent: Sent[] = [];
+const richSent: { blocks: unknown[] }[] = [];
 jest.mock("@/lib/whatsapp/client", () => ({
   LIST_MAX_ROWS: 10,
   sendTextIfConfigured: async (_to: string, body: string) => { sent.push({ kind: "text", body }); },
+  // An answer laid out for the page (lib/whatsapp/rich.ts): its text, as sent.
+  sendRichIfConfigured: async (_to: string, body: string, rich: { blocks: unknown[] }) => { sent.push({ kind: "text", body }); richSent.push(rich); },
   sendButtonsIfConfigured: async (_to: string, body: string, b: { id: string }[]) => { sent.push({ kind: "buttons", body, ids: b.map((x) => x.id) }); },
   sendListIfConfigured: async (_to: string, body: string, _b: string, r: { id: string }[]) => { sent.push({ kind: "list", body, ids: r.map((x) => x.id) }); },
   sendCtaUrlIfConfigured: async (_to: string, body: string) => { sent.push({ kind: "cta", body }); },
@@ -328,12 +331,12 @@ describe("answers", () => {
     db.tables.jumia_product_changes = [];
     await answerProducts(USER, PHONE, "rejected");
     expect(last().body).toContain("• Nasco Blender 1.5L: Poor image quality");
-    expect(last().body).toContain("Fix them in Jumia Vendor Center, or list them again here.");
+    expect(last().body).toContain("Say \"fix the <name>\" and I'll work out the fix, or \"fix my rejected products\" to pick one.");
     // Jumia's API often gives no reason (owner's web chat, 2026-10-08): said, never guessed.
     for (const r of db.tables.jumia_products as { qc_reason: string | null }[]) r.qc_reason = null;
     await answerProducts(USER, PHONE, "rejected");
     expect(last().body).toContain("• Nasco Blender 1.5L\n");
-    expect(last().body).toContain("Jumia didn't send the reasons through its API: check each one in Vendor Center to see why.");
+    expect(last().body).toContain("Jumia didn't send the reasons through its API. Say \"fix the <name>\" and I'll work out what I can, or check the reason in Vendor Center.");
     await answerProducts(USER, PHONE, "inactive");
     expect(last().body).toContain("• Men's Cotton T-Shirt (L)");
   });

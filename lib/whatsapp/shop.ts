@@ -48,11 +48,15 @@ import { COUNTRY_FEES, commissionOn, feeCategoryForPath, itemFeeFor, payoutAt } 
 import { calculatorPathFor, type JumiaCountryCode } from "@/lib/marketing/countries";
 import {
   changedPrice, fetchPayouts, fetchProductSet, fetchStock, findOrderByNumber, heldByOrders, findProducts, fromRow, localUpdate, orderStatusWord, ordersCreatedSince,
-  ordersWithStatus, pctPrice, refreshProducts, saveProducts, sendLiveChange, sendLiveChanges, shopProducts, summarizeOrders, syncCatalog,
+  newVariationSku, ordersWithStatus, pctPrice, refreshProducts, saveProducts, sendLiveChange, sendLiveChanges, shopProducts, summarizeOrders, syncCatalog,
   type ContentFields, type LiveChange, type ProductSet, type ShopProduct,
 } from "@/lib/jumia/shop";
+import { allowedValueFor } from "@/lib/jumia/preflight";
+import { cell, productStatusCell, sendRich, stockCell, type RichBlock, type RichTone } from "@/lib/whatsapp/rich";
+import type { JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import { findBrandExact, searchBrandsFromDB } from "@/lib/jumia/brands";
 import { categoryDetails, resolveDetails } from "@/lib/whatsapp/live-details";
+import { detailWord, lockedDetails, lockedText } from "@/lib/jumia/locked-details";
 import { updateSession, type ListedProducts } from "@/lib/whatsapp/session";
 import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
 import { findRestrictedWords, stripRestrictedWords } from "@/lib/ai/restricted-words";
@@ -157,6 +161,7 @@ export function describeLiveChange(change: LiveChange, p: ShopProduct | null, ct
         ? `a sale at ${amount(pctPrice(p.price, -Math.abs(change.pct)))} (${Math.abs(change.pct)}% off) from ${change.start} to ${change.end}`
         : `a sale ${Math.abs(change.pct)}% off from ${change.start} to ${change.end}`;
     case "content": return describeContent(change.fields);
+    case "add_variation": return `add ${change.variation}: ${change.stock} in stock at ${amount(change.price)}`;
   }
 }
 
@@ -172,6 +177,7 @@ function describeContent(f: ContentFields): string {
       v.variation ? `variation (SKU ${v.sellerSku}) → ${v.variation}` : null,
       v.barcode ? `barcode${(f.variations ?? []).length > 1 ? ` (SKU ${v.sellerSku})` : ""} → ${v.barcode}` : null,
     ]),
+    f.images?.length ? `${f.images.length} more photo${f.images.length === 1 ? "" : "s"} after its main one` : null,
   ].filter(Boolean).join(", ") || "its content";
 }
 
@@ -218,6 +224,11 @@ function confirmText(products: ShopProduct[], change: LiveChange, ctx: { currenc
     const tail = `Jumia checks content changes again before they show${cost}.`;
     const body = [head, preview, tail].filter(Boolean).join("\n\n");
     return body.length <= INTERACTIVE_BODY_MAX ? body : `${body.slice(0, INTERACTIVE_BODY_MAX - tail.length - 4).trimEnd()}…\n\n${tail}`;
+  }
+  if (change.kind === "add_variation") {
+    const one = products[0];
+    return `Add *${change.variation}* to *${shorten(one.name, 100)}* on Jumia: ${change.stock} in stock at ${formatAmount(change.price, one.currency || ctx.currency, ctx.jc)}?\n\n` +
+      `It gets its own SKU (${change.sellerSku}) with the same name, photos and details, and Jumia's quality check looks at it like a new product${cost}.`;
   }
   if (products.length === 1) {
     const one = products[0];
@@ -593,7 +604,23 @@ export async function proposeContentChange(userId: string, phone: string, query:
       await sendTextIfConfigured(phone, r.why);
       return "details refused";
     }
+    // A detail Jumia won't change after approval: said now, not after a refused feed.
+    if (r.fields.attributes && found.some((p) => p.qcStatus === "APPROVED")) {
+      const locked = await lockedDetails();
+      const stuck = r.fields.attributes.filter((a) => locked.has(a.name.toLowerCase()));
+      if (stuck.length > 0) {
+        const rest = r.fields.attributes.filter((a) => !stuck.includes(a));
+        const note = lockedText(detailWord(stuck[0].name, stuck[0].label), stuck[0].value);
+        if (rest.length === 0 && !r.fields.variations && Object.keys(fields).length === 0 && !req.rewrite?.length) {
+          await sendTextIfConfigured(phone, `${shorten(product.name, 60)} is approved on Jumia, so I haven't offered that. ${note}`);
+          return "details locked";
+        }
+        await sendTextIfConfigured(phone, `${note} The rest is below.`);
+        r.fields.attributes = rest.length > 0 ? rest : undefined;
+      }
+    }
     Object.assign(fields, r.fields);
+    if (!fields.attributes) delete fields.attributes;
   }
 
   if (req.rewrite && req.rewrite.length > 0) {
@@ -627,6 +654,112 @@ export async function proposeContentChange(userId: string, phone: string, query:
     { id: `lchg:${id}`, title: "Yes, update it ✅" }, { id: `lchgno:${id}`, title: "No" },
   ]);
   return `offered content (${Object.keys(fields).join(", ")}) for ${product.sellerSku}`;
+}
+
+/** A change already kept (its row), offered for its tap. */
+export async function offerChange(userId: string, phone: string, id: string, product: ShopProduct, change: LiveChange): Promise<void> {
+  const ctx = await shopContext(userId, phone, CHANGES_FEATURE, CHANGES);
+  if (!ctx) return;
+  await sendButtonsIfConfigured(phone, confirmText([product], change, ctx), [
+    { id: `lchg:${id}`, title: "Yes, update it ✅" }, { id: `lchgno:${id}`, title: "No" },
+  ]);
+}
+
+/** A new size (or colour) for a live product: its name, and the stock and price the seller gave. */
+export interface AddSizeRequest { size: string; stock: number | null; price: number | null }
+
+/** The category's size (or colour) detail its variations use: the one their names fit, else the first with options. */
+export function variantAxis(attrs: JumiaCategoryAttribute[], set: ProductSet): JumiaCategoryAttribute | null {
+  const axes = attrs.filter((a) => a.is_variant);
+  const named = set.variations.map((v) => v.variation ?? "").filter(Boolean);
+  return axes.find((a) => a.allowed_values.length > 0 && named.length > 0 && named.every((n) => allowedValueFor(n, a) != null))
+    ?? axes.find((a) => a.allowed_values.length > 0)
+    ?? axes[0] ?? null;
+}
+
+/**
+ * A new size of a live product, offered for one tap (owner, 2026-10-09:
+ * "adding a size to a live product"): sent as a new variation under its
+ * parent SKU (lib/jumia/shop.ts newVariationItem), checked first against
+ * the sizes its category takes and the ones it has. Its stock is the
+ * seller's to say; its price theirs, or the product's own.
+ */
+export async function proposeAddSize(userId: string, phone: string, query: string, req: AddSizeRequest): Promise<string> {
+  const ctx = await shopContext(userId, phone, CHANGES_FEATURE, CHANGES);
+  if (!ctx) return "blocked";
+  if (req.price != null) {
+    const minimum = await priceMinimumForUser(userId);
+    if (req.price <= 0) {
+      await sendTextIfConfigured(phone, "A price has to be more than 0, so I haven't added it.");
+      return "price 0";
+    }
+    if (isBelowMinimum(req.price, minimum)) {
+      await sendTextIfConfigured(phone, `${money(req.price, minimum.currency)} is below the lowest price Jumia allows (${money(minimum.min, minimum.currency)}), so I haven't added it.`);
+      return "below minimum";
+    }
+  }
+  const products = await catalog(ctx);
+  if (!products) return "no catalog";
+  const found = findProducts(products, query);
+  if (found.length === 0) {
+    await sendTextIfConfigured(phone, `I couldn't find "${shorten(query, 60)}" among your Jumia products. Try its name as it shows on Jumia, or its SKU.`);
+    return "not found";
+  }
+  const sets = Array.from(new Map(found.map((p) => [p.setSid ?? p.sid, p])).values());
+  if (sets.length > 1) {
+    await sendLong(phone, [
+      `"${shorten(query, 40)}" could be ${sets.length} products. Which one gets the new size?`,
+      ...sets.slice(0, 6).map((p) => `• ${shorten(p.name, 60)} (SKU ${p.sellerSku})`),
+      "", "Say it again with its name as it shows on Jumia, or its SKU.",
+    ].join("\n"));
+    return `add size unclear: ${sets.length}`;
+  }
+  const product = sets[0];
+  const short = shorten(product.name.split(/[–—-]/)[0].trim(), 30).toLowerCase();
+  if (req.stock == null || !Number.isInteger(req.stock) || req.stock < 0) {
+    await sendTextIfConfigured(phone, `How many ${req.size} do you have? Say e.g. "add size ${req.size} to the ${short}, 5 in stock"${req.price == null ? ", and its price if it's not the same as the others" : ""}.`);
+    return "add size: no stock";
+  }
+  const set = await fetchProductSet(ctx.token, product.sellerSku);
+  if (!set.ok || !set.data) {
+    await sendTextIfConfigured(phone, `I couldn't read ${shorten(product.name, 60)} from Jumia just now${set.ok ? "" : `: ${set.message}`}. Try again in a minute.`);
+    return "set unreadable";
+  }
+  const attrs = set.data.category ? await categoryDetails(ctx.token, set.data.category.code) : [];
+  const axis = variantAxis(attrs, set.data);
+  const value = axis && axis.allowed_values.length > 0 ? allowedValueFor(req.size, axis) : req.size.trim().slice(0, 40);
+  if (!value) {
+    await sendTextIfConfigured(phone, `Jumia doesn't take "${shorten(req.size, 30)}" as a ${(axis!.label || axis!.name).toLowerCase()} for this product. It takes: ${axis!.allowed_values.slice(0, 20).join(", ")}${axis!.allowed_values.length > 20 ? ", …" : ""}.`);
+    return "add size: not an option";
+  }
+  if (set.data.variations.some((v) => (v.variation ?? "").toLowerCase() === value.toLowerCase())) {
+    await sendTextIfConfigured(phone, `${shorten(product.name, 60)} already has ${value}. To change its stock, say e.g. "set the ${short} ${value} to 5".`);
+    return "add size: has it";
+  }
+  const siblings = products.filter((p) => (p.setSid ?? p.sid) === (product.setSid ?? product.sid));
+  const price = req.price ?? siblings.find((p) => p.price != null)?.price ?? null;
+  if (price == null) {
+    await sendTextIfConfigured(phone, `What should ${value} sell for? Say e.g. "add size ${value} to the ${short}, ${req.stock} in stock at 120".`);
+    return "add size: no price";
+  }
+  const parentSku = set.data.parentSku ?? set.data.variations[0].sellerSku;
+  const change: LiveChange = {
+    kind: "add_variation", variation: value, price, stock: req.stock, axis: axis?.name ?? null,
+    sellerSku: newVariationSku(parentSku, value, products.map((p) => p.sellerSku)),
+  };
+  const { data, error } = await createServerClient().from("jumia_product_changes").insert({
+    id: crypto.randomUUID(), user_id: userId, product_sid: product.sid, seller_sku: product.sellerSku, name: product.name,
+    change, candidates: null, status: "pending",
+  }).select("id").single();
+  if (error || !data) {
+    await sendTextIfConfigured(phone, "I couldn't get that ready just now. Send it again in a moment.");
+    return `failed: ${error?.message ?? "no row"}`;
+  }
+  const id = (data as { id: string }).id;
+  await sendButtonsIfConfigured(phone, confirmText([product], change, ctx), [
+    { id: `lchg:${id}`, title: `Yes, add ${value}`.slice(0, 20) }, { id: `lchgno:${id}`, title: "No" },
+  ]);
+  return `offered add size ${value} for ${product.sellerSku}`;
 }
 
 type ShopTap =
@@ -827,10 +960,18 @@ export async function answerStock(userId: string, phone: string, query: string |
       const n = held?.ok ? held.data.get(p.sellerSku) ?? 0 : 0;
       return n > 0 ? ` (${n} in order${n === 1 ? "" : "s"} not shipped yet)` : "";
     };
-    await sendLong(phone, [
+    const anyHeld = held?.ok && held.data.size > 0;
+    await sendRich(phone, [
       "📦 Stock on Jumia", ...found.map((p) => `• ${shorten(label(p), 60)}: ${stockText(p)}${heldText(p)}`),
-      ...(held?.ok && held.data.size > 0 ? ["", "Units in orders waiting to be packed or shipped leave your stock as the orders ship."] : []),
-    ].join("\n"));
+      ...(anyHeld ? ["", "Units in orders waiting to be packed or shipped leave your stock as the orders ship."] : []),
+    ].join("\n"), [
+      { kind: "heading", text: "📦 Stock on Jumia" },
+      {
+        kind: "table", columns: ["Product", "Stock", ...(anyHeld ? ["In orders not shipped"] : []), "Status"], align: ["left", "right", ...(anyHeld ? ["right" as const] : []), "left"],
+        rows: found.map((p) => [shorten(label(p), 70), stockCell(p.stock, LOW_STOCK), ...(anyHeld ? [String(held!.ok ? held!.data.get(p.sellerSku) ?? 0 : 0)] : []), productStatusCell(p)]),
+      },
+      ...(anyHeld ? [{ kind: "note" as const, text: "Units in orders waiting to be packed or shipped leave your stock as the orders ship." }] : []),
+    ]);
     await rememberListed(phone, found, `stock of "${query}"`);
     return `stock of ${found.length}`;
   }
@@ -844,11 +985,21 @@ export async function answerStock(userId: string, phone: string, query: string |
   await rememberListed(phone, pick, filter === "out" ? "out of stock" : filter === "low" ? "low on stock" : "out of stock or low");
   const head = filter === "out" ? `🚫 Out of stock on Jumia (${pick.length})` : filter === "low" ? `⚠️ Low on stock (${pick.length})` : `⚠️ Out of stock or low (${pick.length})`;
   const lines = pick.slice(0, 15).map((p) => `• ${shorten(label(p), 60)}: ${stockText(p)}`);
-  await sendLong(phone, [
+  const flying = inFlightLine(await changesInFlight(userId));
+  const hint = "Tell me the new stock to update one, e.g. \"set the fridge's stock to 10\".";
+  await sendRich(phone, [
     head, ...lines, ...(pick.length > 15 ? [`+${pick.length - 15} more. Ask me about one by name.`] : []), "",
-    ...inFlightLine(await changesInFlight(userId)),
-    "Tell me the new stock to update one, e.g. \"set the fridge's stock to 10\".",
-  ].join("\n"));
+    ...flying, hint,
+  ].join("\n"), [
+    { kind: "heading", text: head },
+    {
+      kind: "table", columns: ["Product", "Stock", "Price"], align: ["left", "right", "right"],
+      rows: pick.slice(0, 30).map((p) => [shorten(label(p), 70), stockCell(p.stock, LOW_STOCK), p.price != null ? formatAmount(p.price, p.currency || ctx.currency, ctx.jc) : "?"]),
+      ...(pick.length > 30 ? { more: `+${pick.length - 30} more. Ask me about one by name.` } : {}),
+    },
+    ...flying.map((t) => ({ kind: "note" as const, text: t, tone: "warn" as const })),
+    { kind: "text", text: hint },
+  ]);
   return `${pick.length} listed`;
 }
 
@@ -890,32 +1041,63 @@ export async function answerProducts(userId: string, phone: string, filter: "all
     }
     const lines = list.slice(0, 40).map((p) => `• ${shorten(label(p), 60)}${filter === "rejected" && p.qcReason ? `: ${shorten(p.qcReason, 80)}` : ""}`);
     await rememberListed(phone, list, filter === "inactive" ? "turned off" : "rejected by Jumia's quality check");
-    await sendLong(phone, [
-      filter === "inactive" ? `⏸️ Turned off on Jumia (${list.length})` : `❌ Rejected by Jumia's quality check (${list.length})`,
-      ...lines, ...(list.length > 40 ? [`+${list.length - 40} more`] : []),
-      "", filter === "inactive" ? "Tell me which to turn on, e.g. \"turn on the blender\"."
-        // Jumia's API often gives no reason (owner's web chat, 2026-10-08: "rejection reasons" had none to show).
-        : list.some((p) => p.qcReason) ? "Fix them in Jumia Vendor Center, or list them again here."
-        : "Jumia didn't send the reasons through its API: check each one in Vendor Center to see why. Fix them there, or list them again here.",
-    ].join("\n"));
+    const head = filter === "inactive" ? `⏸️ Turned off on Jumia (${list.length})` : `❌ Rejected by Jumia's quality check (${list.length})`;
+    const hint = filter === "inactive" ? "Tell me which to turn on, e.g. \"turn on the blender\"."
+      // Jumia's API often gives no reason (owner's web chat, 2026-10-08: "rejection reasons" had none to show).
+      : list.some((p) => p.qcReason) ? "Say \"fix the <name>\" and I'll work out the fix, or \"fix my rejected products\" to pick one."
+      : "Jumia didn't send the reasons through its API. Say \"fix the <name>\" and I'll work out what I can, or check the reason in Vendor Center.";
+    await sendRich(phone, [head, ...lines, ...(list.length > 40 ? [`+${list.length - 40} more`] : []), "", hint].join("\n"), [
+      { kind: "heading", text: head },
+      filter === "inactive"
+        ? { kind: "table", columns: ["Product", "Stock", "Price"], align: ["left", "right", "right"],
+          rows: list.slice(0, 40).map((p) => [shorten(label(p), 70), stockCell(p.stock, LOW_STOCK), p.price != null ? formatAmount(p.price, p.currency || ctx.currency, ctx.jc) : "?"]),
+          ...(list.length > 40 ? { more: `+${list.length - 40} more` } : {}) }
+        : { kind: "table", columns: ["Product", "Jumia's reason"],
+          rows: list.slice(0, 40).map((p) => [shorten(label(p), 70), p.qcReason ? shorten(p.qcReason, 160) : cell("Not given by Jumia's API", "neutral")]),
+          ...(list.length > 40 ? { more: `+${list.length - 40} more` } : {}) },
+      { kind: "text", text: hint },
+    ]);
     return `${list.length} listed`;
   }
-  await sendTextIfConfigured(phone, [
+  const flying = inFlightLine(await changesInFlight(userId));
+  // Deleted ones are known too, just not counted ("what is the number of
+  // deleted products" got "PandaWorld can't track them": owner, 2026-10-08).
+  const deleted = products.length > live.length ? [`(Deleted on Jumia, not counted above: ${products.length - live.length})`] : [];
+  const next = [
+    "Ask me about any of them: stock, price, a sale, or turning one on or off.",
+    // Where "give me insight" goes next (owner's test, 2026-10-07).
+    `How sales are going: *sales week*. A full health check of your shop: *report* (${REPORT_CREDIT_COST} credits).`,
+  ];
+  const tone = (n: number, t: RichTone): RichTone => (n > 0 ? t : "neutral");
+  await sendRich(phone, [
     `🛍️ Your Jumia shop: ${live.length} product${live.length === 1 ? "" : "s"}`,
     `• On: ${active.length}`,
     `• Off: ${inactive.length}`,
     `• Out of stock: ${out.length}`,
     `• Waiting for Jumia's check: ${pending.length}`,
     `• Rejected: ${rejected.length}`,
-    // Deleted ones are known too, just not counted ("what is the number of
-    // deleted products" got "PandaWorld can't track them": owner, 2026-10-08).
-    ...(products.length > live.length ? [`(Deleted on Jumia, not counted above: ${products.length - live.length})`] : []),
+    ...deleted,
     "",
-    ...inFlightLine(await changesInFlight(userId)),
-    "Ask me about any of them: stock, price, a sale, or turning one on or off.",
-    // Where "give me insight" goes next (owner's test, 2026-10-07).
-    `How sales are going: *sales week*. A full health check of your shop: *report* (${REPORT_CREDIT_COST} credits).`,
-  ].join("\n"));
+    ...flying,
+    ...next,
+  ].join("\n"), [
+    { kind: "heading", text: "🛍️ Your Jumia shop", sub: `${live.length} product${live.length === 1 ? "" : "s"}` },
+    { kind: "stats", items: [
+      { label: "On", value: String(active.length), tone: tone(active.length, "good") },
+      { label: "Off", value: String(inactive.length) },
+      { label: "Out of stock", value: String(out.length), tone: tone(out.length, "bad"), note: out.length > 0 ? "on, with 0 left" : undefined },
+      { label: "Waiting for Jumia's check", value: String(pending.length), tone: tone(pending.length, "info") },
+      { label: "Rejected", value: String(rejected.length), tone: tone(rejected.length, "bad") },
+    ] },
+    ...(live.length > 0 ? [{ kind: "bars" as const, items: [
+      { label: "On, in stock", value: active.length - out.length, shown: String(active.length - out.length), tone: "good" as const },
+      { label: "On, out of stock", value: out.length, shown: String(out.length), tone: "bad" as const },
+      { label: "Off", value: inactive.length, shown: String(inactive.length), tone: "neutral" as const },
+    ] }] : []),
+    ...deleted.map((t) => ({ kind: "note" as const, text: t.replace(/^\(|\)$/g, "") })),
+    ...flying.map((t) => ({ kind: "note" as const, text: t, tone: "warn" as const })),
+    { kind: "text", text: next.join("\n") },
+  ]);
   return "overview";
 }
 
@@ -942,6 +1124,29 @@ export function productInfoText(p: ShopProduct, ctx: { currency: string; jc?: Ju
   ].join("\n");
 }
 
+/** The same, as a heading and tiles for the Listing Assistant's page. */
+export function productInfoBlocks(p: ShopProduct, ctx: { currency: string; jc?: JumiaCountry }, today: string): RichBlock[] {
+  const cur = p.currency || ctx.currency;
+  const amount = (n: number) => formatAmount(n, cur, ctx.jc);
+  const saleOn = p.salePrice != null && (!p.saleEnd || p.saleEnd.slice(0, 10) >= today);
+  const live = p.status === "ACTIVE" && p.visible !== false && p.qcStatus === "APPROVED" && (p.stock == null || p.stock > 0);
+  const status = p.status === "ACTIVE" ? (p.visible === false ? { v: "On", t: "warn" as const, n: "not shown to buyers yet" } : { v: "On", t: "good" as const, n: "shown on Jumia" })
+    : p.status === "INACTIVE" ? { v: "Off", t: "neutral" as const, n: "hidden on Jumia" } : { v: p.status === "DELETED" ? "Deleted" : "Unknown", t: "neutral" as const, n: undefined };
+  const qcTone: RichTone = p.qcStatus === "APPROVED" ? "good" : p.qcStatus === "REJECTED" ? "bad" : "info";
+  return [
+    { kind: "heading", text: `${live ? "🟢" : "⚪"} ${shorten(label(p), 90)}`, sub: `SKU ${p.sellerSku}` },
+    { kind: "stats", items: [
+      { label: "Status", value: status.v, tone: status.t, note: status.n },
+      ...(p.qcStatus ? [{ label: "Quality check", value: capitalise(QC_WORDS[p.qcStatus] ?? p.qcStatus.toLowerCase()), tone: qcTone }] : []),
+      { label: saleOn ? "Price (on sale)" : "Price", value: saleOn ? amount(p.salePrice!) : p.price != null ? amount(p.price) : "Not set",
+        tone: saleOn ? "good" : "neutral", note: saleOn ? `was ${p.price != null ? amount(p.price) : "?"}${p.saleEnd ? ` · to ${shortDate(p.saleEnd)}` : ""}` : undefined },
+      { label: "Stock", value: p.stock == null ? "?" : String(p.stock), tone: p.stock === 0 ? "bad" : p.stock != null && p.stock <= LOW_STOCK ? "warn" : "neutral", note: p.stock === 0 ? "out of stock" : undefined },
+    ] },
+    ...(p.qcStatus === "REJECTED" && p.qcReason ? [{ kind: "note" as const, text: `Jumia's reason: ${shorten(p.qcReason, 300)}. Say "fix the ${shorten(p.name.split(/[–—-]/)[0].trim(), 30).toLowerCase()}" and I'll work out the fix.`, tone: "bad" as const }] : []),
+    ...(p.status === "ACTIVE" && p.qcStatus === "APPROVED" && p.stock === 0 ? [{ kind: "note" as const, text: "Buyers can't order it until it has stock.", tone: "warn" as const }] : []),
+  ];
+}
+
 /** Where a product is on Jumia: on or off, its quality check, price, sale and stock, read fresh. */
 export async function answerProductInfo(userId: string, phone: string, query: string): Promise<string> {
   const ctx = await shopContext(userId, phone, "shop_whatsapp", "your live products");
@@ -956,10 +1161,11 @@ export async function answerProductInfo(userId: string, phone: string, query: st
   const shown = await refreshProducts(ctx.token, ctx.country, found.slice(0, 3)).catch(() => found.slice(0, 3));
   await saveProducts(userId, shown).catch(() => undefined);
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: ctx.jc?.timeZone ?? "UTC" }).format(new Date());
-  await sendLong(phone, [
-    ...shown.map((p) => productInfoText(p, ctx, today)),
-    ...(found.length > 3 ? [`+${found.length - 3} more match "${shorten(query, 40)}". Name one more exactly, or its SKU.`] : []),
-  ].join("\n\n"));
+  const moreMatch = found.length > 3 ? [`+${found.length - 3} more match "${shorten(query, 40)}". Name one more exactly, or its SKU.`] : [];
+  await sendRich(phone, [...shown.map((p) => productInfoText(p, ctx, today)), ...moreMatch].join("\n\n"), [
+    ...shown.flatMap((p) => productInfoBlocks(p, ctx, today)),
+    ...moreMatch.map((t) => ({ kind: "text" as const, text: t })),
+  ]);
   return `info on ${shown.map((p) => p.sellerSku).join(", ")}`;
 }
 
@@ -1167,6 +1373,7 @@ export async function answerSales(userId: string, phone: string, period: Period,
   if (statuses.length > 0) {
     const parts: string[] = [];
     const counts: string[] = [];
+    const blocks: RichBlock[] = [];
     for (const s of statuses) {
       const r = await ordersWithStatus(ctx.token, s, periodStart(period, tz), periodEnd(period, tz));
       if (!r.ok) {
@@ -1177,9 +1384,22 @@ export async function answerSales(userId: string, phone: string, period: Period,
       counts.push(`${r.data.length} ${name}`);
       if (r.data.length === 0) {
         parts.push(`No ${name} Jumia orders ${when}.`);
+        blocks.push({ kind: "note", text: `No ${name} Jumia orders ${when}.` });
         continue;
       }
       const max = statuses.length > 1 ? 8 : 15;
+      blocks.push(
+        { kind: "heading", text: `📦 ${r.data.length} ${name} Jumia order${r.data.length === 1 ? "" : "s"}`, sub: when },
+        {
+          kind: "table", columns: ["Order", "Amount", "Date"], align: ["left", "right", "left"],
+          rows: r.data.slice(0, 30).map((o) => [
+            `#${o.number}`,
+            o.totalAmountLocal ? formatAmount(Number(o.totalAmountLocal.value) || 0, o.totalAmountLocal.currency, ctx.jc) : "",
+            o.updatedAt || o.createdAt ? shortDate(o.updatedAt ?? o.createdAt, ctx.jc) : "",
+          ]),
+          ...(r.data.length > 30 ? { more: `+${r.data.length - 30} more` } : {}),
+        },
+      );
       const lines = r.data.slice(0, max).map((o) =>
         `• #${o.number}${o.totalAmountLocal ? ` · ${formatAmount(Number(o.totalAmountLocal.value) || 0, o.totalAmountLocal.currency, ctx.jc)}` : ""}` +
         (o.updatedAt || o.createdAt ? ` · ${shortDate(o.updatedAt ?? o.createdAt, ctx.jc)}` : ""));
@@ -1189,7 +1409,8 @@ export async function answerSales(userId: string, phone: string, period: Period,
       ].join("\n"));
     }
     const any = counts.some((c) => !c.startsWith("0 "));
-    await sendLong(phone, [...parts, ...(any ? ["Ask me about one by its number for the details."] : [])].join("\n\n"));
+    await sendRich(phone, [...parts, ...(any ? ["Ask me about one by its number for the details."] : [])].join("\n\n"),
+      [...blocks, ...(any ? [{ kind: "text" as const, text: "Ask me about one by its number for the details." }] : [])]);
     return counts.join(", ");
   }
   const r = await ordersCreatedSince(ctx.token, periodStart(period, tz), 10, periodEnd(period, tz));
@@ -1207,11 +1428,24 @@ export async function answerSales(userId: string, phone: string, period: Period,
   const parts = Object.entries(s.byStatus)
     .sort(([a], [b]) => rank(a) - rank(b))
     .map(([k, n]) => `${statusName(k)} ${n}`);
-  await sendTextIfConfigured(phone, [
+  const STATUS_TONE: Record<string, RichTone> = {
+    PENDING: "info", READY_TO_SHIP: "info", SHIPPED: "info", DELIVERED: "good", RETURNED: "warn", FAILED: "bad", CANCELED: "bad",
+  };
+  const byStatus = Object.entries(s.byStatus).sort(([a], [b]) => rank(a) - rank(b));
+  await sendRich(phone, [
     `📊 ${s.orders}${s.orders >= 1000 ? "+" : ""} Jumia order${s.orders === 1 ? "" : "s"} ${when}` + (s.currency ? ` · ${formatAmount(s.value, s.currency, ctx.jc)}` : ""),
     parts.join(" · "),
     ...(s.currency ? ["(The total leaves out cancelled orders.)"] : []),
-  ].join("\n"));
+  ].join("\n"), [
+    { kind: "heading", text: "📊 Your Jumia orders", sub: when },
+    { kind: "stats", items: [
+      { label: "Orders", value: `${s.orders}${s.orders >= 1000 ? "+" : ""}` },
+      ...(s.currency ? [{ label: "Sales", value: formatAmount(s.value, s.currency, ctx.jc), tone: "good" as const, note: "without cancelled orders" }] : []),
+      ...(s.byStatus.DELIVERED ? [{ label: "Delivered", value: String(s.byStatus.DELIVERED), tone: "good" as const }] : []),
+      ...(s.byStatus.CANCELED ? [{ label: "Cancelled", value: String(s.byStatus.CANCELED), tone: "bad" as const }] : []),
+    ] },
+    { kind: "bars", items: byStatus.map(([k, n]) => ({ label: statusName(k), value: n, shown: String(n), tone: STATUS_TONE[k] ?? "neutral" })) },
+  ]);
   return `${s.orders} orders`;
 }
 
@@ -1256,6 +1490,18 @@ export async function answerPayouts(userId: string, phone: string): Promise<stri
   const lastPaid = r.data.find((s) => s.paid);
   const open = r.data.find((s) => !s.paid);
   const lines = ["💰 Your Jumia payouts"];
+  const tiles: Extract<RichBlock, { kind: "stats" }>["items"] = [];
+  const rows: string[][] = [];
+  if (lastPaid) {
+    tiles.push({ label: "Last paid", value: amount(lastPaid.amount, lastPaid.currency), tone: "good", note: shortDate(lastPaid.updatedAt ?? lastPaid.createdAt, ctx.jc) });
+    rows.push([`Statement ${lastPaid.number}`, "Paid", amount(lastPaid.amount, lastPaid.currency), lastPaid.reference ? `ref ${lastPaid.reference}` : ""]);
+  }
+  if (open) {
+    tiles.push({ label: "Not paid yet", value: amount(open.amount, open.currency), tone: "info", note: `since ${shortDate(open.createdAt, ctx.jc)}` });
+    rows.push([`Statement ${open.number}`, "Not paid yet", amount(open.amount, open.currency),
+      [open.itemRevenue != null ? `sales ${amount(open.itemRevenue, open.currency)}` : null, open.feesTotal != null ? `fees ${amount(open.feesTotal, open.currency)}` : null,
+        open.refunds ? `refunds ${amount(open.refunds, open.currency)}` : null].filter(Boolean).join(", ")]);
+  }
   if (lastPaid) {
     lines.push(`Last paid: *${amount(lastPaid.amount, lastPaid.currency)}*, ${shortDate(lastPaid.updatedAt ?? lastPaid.createdAt, ctx.jc)}` +
       (lastPaid.reference ? ` (ref ${lastPaid.reference})` : "") + ` · statement ${lastPaid.number}`);
@@ -1269,7 +1515,12 @@ export async function answerPayouts(userId: string, phone: string): Promise<stri
     ].filter(Boolean);
     if (detail.length) lines.push(`(${detail.join(", ")})`);
   }
-  await sendTextIfConfigured(phone, lines.join("\n"));
+  await sendRich(phone, lines.join("\n"), [
+    { kind: "heading", text: "💰 Your Jumia payouts" },
+    ...(tiles.length > 0 ? [{ kind: "stats" as const, items: tiles }] : []),
+    ...(rows.length > 0 ? [{ kind: "table" as const, columns: ["Statement", "Status", "Amount", "Details"], align: ["left", "left", "right", "left"] as ("left" | "right")[], rows }] : []),
+    { kind: "text", text: "Every statement: *payout history*. One in detail: *payout breakdown*." },
+  ]);
   return "payouts";
 }
 

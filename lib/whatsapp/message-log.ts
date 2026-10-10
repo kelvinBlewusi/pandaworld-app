@@ -98,7 +98,9 @@ export function describeOutboundMessage(
   const type = body.type as string | undefined;
   if (type === "text") {
     const text = (body.text as { body?: string } | undefined)?.body;
-    return { phoneNumber: to, direction: "outbound", messageType: "text", bodyText: text ?? null };
+    // An answer laid out for the Listing Assistant's page (lib/whatsapp/rich.ts).
+    const rich = body.rich && typeof body.rich === "object" ? body.rich : null;
+    return { phoneNumber: to, direction: "outbound", messageType: "text", bodyText: text ?? null, ...(rich ? { payload: { rich } } : {}) };
   }
 
   if (type === "image") {

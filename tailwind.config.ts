@@ -15,9 +15,11 @@ const config: Config = {
     },
     extend: {
       fontFamily: {
-        sans: ["var(--font-inter-tight)", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "sans-serif"],
-        // The Listing Assistant's chat reads like Claude's (owner, 2026-10-08):
-        // the device's own UI font at 16px, not the site's tighter Inter Tight.
+        // The whole site reads in the device's own UI font, the one the
+        // Listing Assistant's chat set (owner, 2026-10-09: "change the text
+        // font for the entire site to fit the one in the chat"). The brand
+        // wordmarks keep Inter Tight, which they load themselves.
+        sans: ["ui-sans-serif", "-apple-system", "BlinkMacSystemFont", "system-ui", "Segoe UI", "Roboto", "Helvetica Neue", "Arial", "sans-serif"],
         chat: ["ui-sans-serif", "-apple-system", "BlinkMacSystemFont", "system-ui", "Segoe UI", "Roboto", "Helvetica Neue", "Arial", "sans-serif"],
       },
       colors: {
@@ -73,6 +75,21 @@ const config: Config = {
           "0%":   { backgroundPosition: "200% 0" },
           "100%": { backgroundPosition: "-200% 0" },
         },
+        // The web chat's waiting line (components/assistant/listing-assistant.tsx):
+        // a light passing over the words, each new phrase rising in.
+        "text-sweep": {
+          "0%":   { backgroundPosition: "100% 0" },
+          "100%": { backgroundPosition: "-100% 0" },
+        },
+        "phrase-in": {
+          from: { opacity: "0", transform: "translateY(4px)" },
+          to:   { opacity: "1", transform: "translateY(0)" },
+        },
+        // The chat's bars (components/assistant/rich-message.tsx) grow in from the left.
+        "bar-grow": {
+          from: { transform: "scaleX(0)" },
+          to:   { transform: "scaleX(1)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
@@ -80,6 +97,8 @@ const config: Config = {
         // Diagonal highlight sweep for the "use for free" banner
         // (app/extension/page.tsx) — pure CSS, no client JS needed.
         shimmer: "shimmer 3s linear infinite",
+        "waiting-phrase": "phrase-in 0.3s ease-out, text-sweep 1.6s linear infinite",
+        "bar-grow": "bar-grow 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both",
       },
     },
   },

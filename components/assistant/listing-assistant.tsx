@@ -18,6 +18,9 @@ import { cn } from "@/lib/utils";
 import { BuyCreditsButton } from "@/components/billing/buy-credits-button";
 import { matchingCommands, slashCommand, slashToText, unfinishedFill, type PaletteCommand } from "@/components/assistant/chat-commands";
 import { ProductForm } from "@/components/assistant/product-form";
+import { waitPhrases, waitTopic, type WaitTopic } from "@/components/assistant/waiting-phrases";
+import { RichMessage } from "@/components/assistant/rich-message";
+import { richBlocks } from "@/lib/whatsapp/rich-blocks";
 
 interface Message {
   id:        string;
@@ -46,8 +49,10 @@ type Row = { id: string; title: string; description?: string };
 const MAX_PHOTOS = 8;
 const POLL_MS = 2500;
 const POLL_WAITING_MS = 1200;
-/** How long "typing…" shows after a message with no reply yet. */
+/** How long the waiting line shows after a message with no reply yet. */
 const WAIT_MS = 90_000;
+/** How long each waiting phrase stays before the next. */
+const PHRASE_MS = 1700;
 
 const SUGGESTIONS = [
   "I want to list 3 products",
@@ -103,6 +108,7 @@ export function ListingAssistant({ firstName, productForm }: {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [sending, setSending] = useState(false);
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
+  const [waitingOn, setWaitingOn] = useState<WaitTopic>("general");
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   // At 0 credits: the bot says to top up once, then the chat locks until the balance is above 0 (owner, 2026-10-07).
@@ -268,6 +274,7 @@ export function ListingAssistant({ firstName, productForm }: {
     const id = newId();
     const local: Message = { ...placeholder, id, clientId: id, direction: "inbound", at: new Date().toISOString(), local: true, retry: body };
     setMessages((prev) => [...prev, local]);
+    setWaitingOn(waitTopic(body.label ?? body.text, { photos: Boolean(body.mediaId || body.mediaIds?.length) }));
     setWaitingSince(Date.now());
     const res = await fetch("/api/listing-assistant/message", {
       method: "POST",
@@ -523,15 +530,7 @@ export function ListingAssistant({ firstName, productForm }: {
 
         {messages.map((m) => <Bubble key={m.id} m={m} onTap={tap} onResend={resend} disabled={sending || locked} onMedia={onMedia} />)}
 
-        {waiting && (
-          <div className="flex items-center gap-2 pl-1 text-sm text-zinc-400">
-            <span className="flex gap-1 py-2">
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-400 [animation-delay:-0.3s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-400 [animation-delay:-0.15s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-400" />
-            </span>
-          </div>
-        )}
+        {waiting && <WaitingLine key={waitingSince} topic={waitingOn} />}
       </div>
       </div>
       {!atBottom && (
@@ -682,7 +681,7 @@ export function ListingAssistant({ firstName, productForm }: {
           initialCount={form.count}
           initialPhotos={form.photos}
           onClose={() => setForm(null)}
-          onSent={() => { setWaitingSince(Date.now()); void poll(); }}
+          onSent={() => { setWaitingOn("listing"); setWaitingSince(Date.now()); void poll(); }}
         />
       )}
 
@@ -691,6 +690,38 @@ export function ListingAssistant({ firstName, productForm }: {
           Drop photos to add them
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The line under the seller's message while the reply is on its way: small
+ * words that change as it works ("Opening the shop", "Counting inventory"),
+ * at the timestamp's size, with a light passing over them. Gone the moment
+ * the reply is there.
+ */
+function WaitingLine({ topic }: { topic: WaitTopic }) {
+  const phrases = useMemo(() => waitPhrases(topic), [topic]);
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setI((n) => n + 1), PHRASE_MS);
+    return () => clearInterval(t);
+  }, []);
+  // Once round, then the later ones again: the first is only for the start.
+  const phrase = phrases[i < phrases.length ? i : 1 + ((i - phrases.length) % (phrases.length - 1))];
+  return (
+    <div className="flex items-center gap-2 pl-1 text-xs" role="status" aria-live="polite">
+      <span className="flex gap-0.5" aria-hidden>
+        <span className="h-1 w-1 animate-bounce rounded-full bg-orange-400 [animation-delay:-0.3s] motion-reduce:animate-none" />
+        <span className="h-1 w-1 animate-bounce rounded-full bg-orange-400 [animation-delay:-0.15s] motion-reduce:animate-none" />
+        <span className="h-1 w-1 animate-bounce rounded-full bg-orange-400 motion-reduce:animate-none" />
+      </span>
+      <span
+        key={phrase}
+        className="animate-waiting-phrase bg-[linear-gradient(90deg,#a1a1aa_0%,#a1a1aa_35%,#27272a_50%,#a1a1aa_65%,#a1a1aa_100%)] bg-[length:200%_100%] bg-clip-text font-medium text-transparent motion-reduce:animate-none"
+      >
+        {phrase}…
+      </span>
     </div>
   );
 }
@@ -785,6 +816,8 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
   // A tap shows the button's words; an id from an older WhatsApp-style message reads as a tap.
   const label = typeof p.label === "string" ? p.label : null;
   const shown = mine && label ? label : m.text;
+  // An answer laid out as tiles, tables and bars (lib/whatsapp/rich.ts); its text is the fallback.
+  const rich = !mine ? richBlocks(p.rich) : null;
 
   return (
     <div className={cn("flex flex-col", mine ? "items-end" : "items-start")}>
@@ -814,7 +847,11 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
             <img src={link} alt="" className={cn("max-h-64 object-cover", mine ? "w-full" : "max-w-sm rounded-xl")} onLoad={onMedia} />
           </a>
         )}
-        {shown && (
+        {rich ? (
+          <div className={cn(link && "pt-3")}>
+            <RichMessage blocks={rich} renderText={(t) => <Formatted text={t} />} />
+          </div>
+        ) : shown && (
           <div className={cn("whitespace-pre-wrap break-words", mine ? "px-4 py-2.5" : link && "pt-3")}>
             <Formatted text={shown} />
           </div>

@@ -27,9 +27,12 @@ jest.mock("@/lib/ai/gemini-client", () => ({ callGeminiBackend: async () => ({ t
 
 type Sent = { kind: string; body: string; ids?: string[] };
 const sent: Sent[] = [];
+const richSent: { blocks: unknown[] }[] = [];
 jest.mock("@/lib/whatsapp/client", () => ({
   LIST_MAX_ROWS: 10,
   sendTextIfConfigured: async (_to: string, body: string) => { sent.push({ kind: "text", body }); },
+  // An answer laid out for the page (lib/whatsapp/rich.ts): its text, as sent.
+  sendRichIfConfigured: async (_to: string, body: string, rich: { blocks: unknown[] }) => { sent.push({ kind: "text", body }); richSent.push(rich); },
   sendButtonsIfConfigured: async (_to: string, body: string, b: { id: string }[]) => { sent.push({ kind: "buttons", body, ids: b.map((x) => x.id) }); },
   sendListIfConfigured: async (_to: string, body: string) => { sent.push({ kind: "list", body }); },
   sendCtaUrlIfConfigured: async (_to: string, body: string) => { sent.push({ kind: "cta", body }); },
@@ -249,12 +252,21 @@ describe("a live product's content", () => {
     expect(await proposeContentChange(USER, PHONE, "kettle", { details: { colour: "purple" } })).toBe("details refused");
     expect(last().body).toContain("It takes: Brown, Black, Gold");
     expect(await proposeContentChange(USER, PHONE, "kettle", { details: { colour: "black", material: "steel" } })).toBe("offered content (attributes) for NAS-K");
-    expect(last().body).toContain("color → Black, main material → steel");
+    // The kettle is approved, and Jumia locks its colour then (owner, 2026-10-09: the neck fan's
+    // "The [color] cannot be updated since the product has been already approved"): said first,
+    // the rest offered.
+    expect(sent[sent.length - 2].body).toContain("Jumia doesn't let a product's colour change once its quality check has approved it. To sell one in Black");
+    expect(last().body).toContain("main material → steel");
+    expect(last().body).not.toContain("color →");
     await handleShopTap(USER, PHONE, last().ids![0]);
     const item = (writes().find((c) => c.path === "/feeds/products/update")!.body as { products: Record<string, unknown>[] }).products[0];
     expect(item.attributes).toEqual(expect.arrayContaining([
-      { name: "color", value: "Black" }, { name: "main_material", value: "steel" }, { name: "short_description", value: "<ul><li>Old point</li></ul>" },
+      { name: "main_material", value: "steel" }, { name: "short_description", value: "<ul><li>Old point</li></ul>" },
     ]));
+    expect(item.attributes).not.toContainEqual({ name: "color", value: "Black" });
+    // Colour alone on an approved product: nothing offered.
+    expect(await proposeContentChange(USER, PHONE, "kettle", { details: { colour: "gold" } })).toBe("details locked");
+    expect(last().body).toContain("is approved on Jumia, so I haven't offered that.");
     expect(item.name).toEqual({ value: "Nasco Electric Kettle 1.7L" });
   });
 

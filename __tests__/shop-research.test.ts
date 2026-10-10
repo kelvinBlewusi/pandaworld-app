@@ -33,9 +33,12 @@ jest.mock("@/lib/ai/gemini-client", () => ({
 }));
 
 const sent: string[] = [];
+const richSent: { blocks: unknown[] }[] = [];
 jest.mock("@/lib/whatsapp/client", () => ({
   LIST_MAX_ROWS: 10,
   sendTextIfConfigured: async (_to: string, body: string) => { sent.push(body); },
+  // An answer laid out for the page (lib/whatsapp/rich.ts): its text, as sent.
+  sendRichIfConfigured: async (_to: string, body: string, rich: { blocks: unknown[] }) => { sent.push(body); richSent.push(rich); },
   sendButtonsIfConfigured: async (_to: string, body: string) => { sent.push(body); },
   sendListIfConfigured: async (_to: string, body: string) => { sent.push(body); },
   sendCtaUrlIfConfigured: async (_to: string, body: string) => { sent.push(body); },

@@ -22,6 +22,7 @@
 import { createServerClient } from "@/lib/supabase/server";
 import { sendButtonsIfConfigured, sendTextIfConfigured } from "@/lib/whatsapp/client";
 import { formatAmount } from "@/lib/whatsapp/orders";
+import { cell, sendRich } from "@/lib/whatsapp/rich";
 import { CHANGES_FEATURE, catalog, label, LOW_STOCK, sendLong, shopContext, shorten, type Ctx } from "@/lib/whatsapp/shop";
 import { periodEnd, periodStart, type Period } from "@/lib/whatsapp/shop";
 import { getItemsOfOrders, type JumiaCall, type JumiaOrderItem } from "@/lib/jumia/orders";
@@ -124,10 +125,17 @@ export async function answerReport(userId: string, phone: string, kind: ReportKi
       await sendTextIfConfigured(phone, `No sales ${when} yet.`);
       return "best sellers: none";
     }
-    await sendLong(phone, [
+    await sendRich(phone, [
       `🏆 Your best sellers ${when}${basis}`,
       ...top.map((s, i) => `${i + 1}. ${shorten(s.name, 55)}: ${s.sold} sold · ${money(s.revenue, s.currency)}`),
-    ].join("\n"));
+    ].join("\n"), [
+      { kind: "heading", text: "🏆 Your best sellers", sub: `${when}${basis}` },
+      { kind: "stats", items: [
+        { label: "Sold", value: String(top.reduce((n, x) => n + x.sold, 0)), note: `top ${top.length}` },
+        { label: "Sales", value: money(top.reduce((n, x) => n + x.revenue, 0), top[0].currency), tone: "good", note: `top ${top.length}` },
+      ] },
+      { kind: "bars", items: top.map((x) => ({ label: shorten(x.name, 55), value: x.sold, shown: `${x.sold} sold · ${money(x.revenue, x.currency)}`, tone: "good" as const })) },
+    ]);
     return `best sellers: ${top.length}`;
   }
 
@@ -142,10 +150,21 @@ export async function answerReport(userId: string, phone: string, kind: ReportKi
       return "returns: none";
     }
     const rate = (a: number, b: number) => (b > 0 ? `${Math.round((a / b) * 100)}%` : "–");
-    await sendLong(phone, [
+    await sendRich(phone, [
       `↩️ Returns and failed deliveries ${when}${basis}: ${back} of ${total} items (${rate(back, total)})`,
       ...rows.map((s) => `• ${shorten(s.name, 50)}: ${[s.returned ? `${s.returned} returned` : null, s.failed ? `${s.failed} failed delivery` : null].filter(Boolean).join(", ")} of ${s.sold + s.returned + s.failed} (${rate(s.returned + s.failed, s.sold + s.returned + s.failed)})`),
-    ].join("\n"));
+    ].join("\n"), [
+      { kind: "heading", text: "↩️ Returns and failed deliveries", sub: `${when}${basis}` },
+      { kind: "stats", items: [
+        { label: "Came back", value: String(back), tone: "warn", note: `of ${total} items` },
+        { label: "Rate", value: rate(back, total), tone: back / Math.max(total, 1) > 0.1 ? "bad" : "warn" },
+      ] },
+      {
+        kind: "table", columns: ["Product", "Returned", "Failed delivery", "Of", "Rate"], align: ["left", "right", "right", "right", "right"],
+        rows: rows.map((x) => [shorten(x.name, 70), x.returned ? cell(String(x.returned), "warn") : "", x.failed ? cell(String(x.failed), "bad") : "",
+          String(x.sold + x.returned + x.failed), rate(x.returned + x.failed, x.sold + x.returned + x.failed)]),
+      },
+    ]);
     return `returns: ${rows.length}`;
   }
 
@@ -163,12 +182,20 @@ export async function answerReport(userId: string, phone: string, kind: ReportKi
       await sendTextIfConfigured(phone, `✅ Every product that's on sold at least once ${when}${basis}.`);
       return "slow movers: none";
     }
-    await sendLong(phone, [
+    await sendRich(phone, [
       `🐢 ${idle.length} product${idle.length === 1 ? "" : "s"} on Jumia with no sale ${when}${basis}, most stock first:`,
       ...idle.slice(0, 15).map((x) => `• ${shorten(label(x), 55)}${x.stock != null ? `: ${x.stock} in stock` : ""}`),
       ...(idle.length > 15 ? [`+${idle.length - 15} more`] : []),
       "", "A sale can move them, e.g. \"10% off the blender this week\".",
-    ].join("\n"));
+    ].join("\n"), [
+      { kind: "heading", text: `🐢 ${idle.length} product${idle.length === 1 ? "" : "s"} with no sale`, sub: `${when}${basis}, most stock first` },
+      {
+        kind: "table", columns: ["Product", "Stock", "Price"], align: ["left", "right", "right"],
+        rows: idle.slice(0, 30).map((x) => [shorten(label(x), 70), x.stock != null ? String(x.stock) : "?", x.price != null ? money(x.price, x.currency ?? "") : "?"]),
+        ...(idle.length > 30 ? { more: `+${idle.length - 30} more` } : {}),
+      },
+      { kind: "text", text: "A sale can move them, e.g. \"10% off the blender this week\"." },
+    ]);
     return `slow movers: ${idle.length}`;
   }
 
@@ -183,13 +210,26 @@ export async function answerReport(userId: string, phone: string, kind: ReportKi
     await sendTextIfConfigured(phone, `✅ Nothing runs out in the next 2 weeks at the rate it sold ${when}${basis}.`);
     return "restock: none";
   }
-  await sendLong(phone, [
+  await sendRich(phone, [
     `📦 Restock soon (at the rate each sold ${when}${basis}):`,
     ...soon.slice(0, 15).map(({ s, product, left }) =>
       `• ${shorten(label(product), 50)}: ${product.stock === 0 ? "out of stock" : `${product.stock} left, about ${left} day${left === 1 ? "" : "s"}`} · sold ${s.sold}`),
     ...(soon.length > 15 ? [`+${soon.length - 15} more`] : []),
     "", "Tell me the new stock to update one, e.g. \"set the kettle's stock to 30\".",
-  ].join("\n"));
+  ].join("\n"), [
+    { kind: "heading", text: "📦 Restock soon", sub: `at the rate each sold ${when}${basis}` },
+    {
+      kind: "table", columns: ["Product", "Left", "Runs out in", "Sold"], align: ["left", "right", "right", "right"],
+      rows: soon.slice(0, 30).map(({ s, product, left }) => [
+        shorten(label(product), 70),
+        cell(String(product.stock ?? "?"), product.stock === 0 ? "bad" : "warn"),
+        product.stock === 0 ? cell("Out now", "bad") : cell(`about ${left} day${left === 1 ? "" : "s"}`, (left ?? 0) <= 7 ? "bad" : "warn"),
+        String(s.sold),
+      ]),
+      ...(soon.length > 30 ? { more: `+${soon.length - 30} more` } : {}),
+    },
+    { kind: "text", text: "Tell me the new stock to update one, e.g. \"set the kettle's stock to 30\"." },
+  ]);
   return `restock: ${soon.length}`;
 }
 
