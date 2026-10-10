@@ -16,6 +16,11 @@
  * it, and ask back rather than guess), which nothing in the chat uses. Its
  * questions back are counted apart ("asked"): not wrong, but a tap more.
  *
+ * Or through agent mode (lib/assistant-v2/agent.ts: one call with every
+ * action as a tool, lookups of the case's catalog, up to three actions). It
+ * passes when every action it takes is one of the case's answers; "bare"
+ * counts it when any one is.
+ *
  * Runs are rows in assistant_eval_runs, worked through by
  * app/api/worker/assistant-eval (pg_cron each minute while one is queued,
  * and nudged when one is queued from /admin/assistant-tests). Nothing a
@@ -32,7 +37,9 @@ import {
   type AssistantAction, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { ASSISTANT_CASES, type EvalCase, type Shape } from "@/lib/evals/assistant-cases";
-import { frontDoor } from "@/lib/assistant-v2/front-door";
+import { frontDoor, type FrontDoorInput } from "@/lib/assistant-v2/front-door";
+import { agentPrompt, agentRead, catalogLookups, geminiAgentCall } from "@/lib/assistant-v2/agent";
+import { fromRow } from "@/lib/jumia/shop";
 import type { ListingRow } from "@/lib/supabase/types";
 
 /** What the AI is told about the seller: the shape sellerFacts gives, for a Standard seller in Ghana. */
@@ -62,9 +69,9 @@ const LOCK_MS = 58_000;
  */
 const CASE_MS = 40_000;
 
-/** "current": what the chat does today. "front_door": the step-2 prototype. */
-export type Pipeline = "current" | "front_door";
-export const PIPELINES: Pipeline[] = ["current", "front_door"];
+/** "current": the one big prompt. "front_door": sort, then read. "agent": function calling (the pilot). */
+export type Pipeline = "current" | "front_door" | "agent";
+export const PIPELINES: Pipeline[] = ["current", "front_door", "agent"];
 
 export interface CaseResult {
   id: string;
@@ -160,6 +167,19 @@ export async function understandFrontDoor(c: EvalCase, models: { router: string;
   }, models);
 }
 
+/**
+ * What agent mode makes of the case's message: its lookups answered from
+ * the case's catalog (names only; nothing else about them is known).
+ */
+export async function understandAgent(c: EvalCase, model: string) {
+  const shop = (c.catalog ?? []).map((name, i) => fromRow({ product_sid: `p${i + 1}`, seller_sku: `SKU-${i + 1}`, name }));
+  const input: FrontDoorInput = {
+    stage: c.stage, message: c.msg, conversation: c.ctx ?? [], drafts: facts(c), listed: c.listed ?? null,
+    waitingFor: c.waitingFor, seller: SELLER, links: assistantLinks(), currency: "GHS", web: c.web ?? true, shopNames: c.catalog, listingCost: 2,
+  };
+  return agentRead(input, geminiAgentCall(model, agentPrompt(input), { feature: "assistant_eval" }), catalogLookups(shop));
+}
+
 const summary = (a: unknown) => JSON.stringify(a).slice(0, 400);
 
 export async function runCase(c: EvalCase, model: string, opts: { pipeline?: Pipeline; router?: string | null } = {}): Promise<CaseResult> {
@@ -168,6 +188,14 @@ export async function runCase(c: EvalCase, model: string, opts: { pipeline?: Pip
   // One retry: a timeout isn't the assistant misunderstanding.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
+      if (opts.pipeline === "agent") {
+        const { actions, clarify, raw } = await understandAgent(c, model);
+        const asked = clarify != null;
+        const reply = c.ok.some((shape) => shape.type === "reply" && Object.keys(shape).length === 1);
+        const pass = asked ? reply : actions.every((a) => passes(a, c));
+        const bare = asked ? reply : actions.some((a) => passes(a, c));
+        return { id: c.id, area: c.area, pass, bare, asked, got: summary(clarify ?? (actions.length === 1 ? actions[0] : actions)), raw: raw.slice(0, 600), ms: Date.now() - t0 };
+      }
       if (opts.pipeline === "front_door") {
         const { area, action, raw } = await understandFrontDoor(c, { router: opts.router || model, reader: model });
         // A question back is a reply with buttons: right where any reply is.

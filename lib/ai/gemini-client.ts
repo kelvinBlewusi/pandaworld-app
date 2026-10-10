@@ -234,6 +234,72 @@ export async function callGeminiBackend(
   };
 }
 
+// ─── Function calling (the assistant's agent mode) ──────────────────────────
+
+/** A tool the model may call: its name, what it does, its arguments as JSON Schema. */
+export interface GeminiTool { name: string; description: string; parameters: Record<string, unknown> }
+
+/** One turn of a conversation with tools, in the API's own shape (parts kept verbatim, thought signatures included). */
+export type GeminiTurn = { role: "user" | "model"; parts: Record<string, unknown>[] };
+
+export interface GeminiToolResult {
+  /** The model's calls, in order (`id`, when the API gives one, goes back with the answer). */
+  calls: { name: string; args: Record<string, unknown>; id?: string }[];
+  /** Any text it wrote instead of (or with) calls. */
+  text: string;
+  /** Its turn as it came, to send back with the tools' answers: Gemini 3 needs its thought signatures returned. */
+  turn: GeminiTurn;
+  backend: "vertex" | "ai-studio";
+}
+
+let _aiStudioGenAI: GoogleGenAI | null = null;
+function getAIStudioGenAI(): GoogleGenAI {
+  if (_aiStudioGenAI) return _aiStudioGenAI;
+  if (!process.env.GOOGLE_API_KEY) throw new Error("GOOGLE_API_KEY is required for AI Studio.");
+  _aiStudioGenAI = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
+  return _aiStudioGenAI;
+}
+
+/**
+ * One call with tools the model may call (Gemini function calling), for the
+ * assistant's agent mode (lib/assistant-v2/agent.ts). Through @google/genai on
+ * both backends: the older AI Studio SDK drops the thought signatures Gemini 3
+ * needs back with the tools' answers. `mode` "ANY" makes it call a tool
+ * rather than write text; `allowed`, which of the tools it may call this time.
+ */
+export async function callGeminiWithTools(
+  modelName: string,
+  turns: GeminiTurn[],
+  opts: { system: string; tools: GeminiTool[]; mode?: "AUTO" | "ANY"; allowed?: string[]; preferBackend?: "vertex" | "ai-studio" },
+): Promise<GeminiToolResult> {
+  const aiStudio = (opts.preferBackend === "ai-studio" && Boolean(process.env.GOOGLE_API_KEY)) || !isVertexEnabled();
+  const client = aiStudio ? getAIStudioGenAI() : getVertexClient();
+  const result = await client.models.generateContent({
+    model: modelName,
+    contents: turns as unknown as import("@google/genai").Content[],
+    config: {
+      systemInstruction: opts.system,
+      tools: [{ functionDeclarations: opts.tools.map((t) => ({ name: t.name, description: t.description, parametersJsonSchema: t.parameters })) }],
+      toolConfig: {
+        functionCallingConfig: {
+          mode: (opts.mode ?? "AUTO") as import("@google/genai").FunctionCallingConfigMode,
+          // Every tool stays declared (earlier turns call them); only these may be called now.
+          ...(opts.mode === "ANY" && opts.allowed?.length ? { allowedFunctionNames: opts.allowed } : {}),
+        },
+      },
+    },
+  });
+  const backend = aiStudio ? "ai-studio" as const : "vertex" as const;
+  await recordAiUsage({ model: modelName, backend, ...readUsage(result) });
+  const parts = (result.candidates?.[0]?.content?.parts ?? []) as Record<string, unknown>[];
+  const calls = parts
+    .map((p) => p.functionCall as { id?: string; name?: string; args?: Record<string, unknown> } | undefined)
+    .filter((c): c is { id?: string; name: string; args?: Record<string, unknown> } => !!c?.name)
+    .map((c) => ({ name: c.name, args: c.args ?? {}, ...(c.id ? { id: c.id } : {}) }));
+  const text = parts.filter((p) => typeof p.text === "string" && !p.thought).map((p) => p.text as string).join("");
+  return { calls, text, turn: { role: "model", parts }, backend };
+}
+
 /**
  * Diagnostic helper — surfaces in Vercel logs which backend is live so
  * we can tell at a glance whether the migration env vars took effect.

@@ -88,7 +88,8 @@ import { resetSession, updateSession, type AssistantPending, type LiveValueAsk, 
 import { parseVariations, saveVariations, sizeNamedIn, variationOptions, VARIATION_FIELD } from "@/lib/whatsapp/variation-question";
 import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPrice, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
 import type { ListingRow } from "@/lib/supabase/types";
-import { FRONT_DOOR_LIMITS, FRONT_DOOR_ROUTER, frontDoor, namesInMessage, type Clarify } from "@/lib/assistant-v2/front-door";
+import { FRONT_DOOR_LIMITS, FRONT_DOOR_ROUTER, frontDoor, namesInMessage, type Clarify, type FrontDoorInput } from "@/lib/assistant-v2/front-door";
+import { agentPrompt, agentRead, catalogLookups, geminiAgentCall } from "@/lib/assistant-v2/agent";
 
 /** Small and quick, like the review step's older fallback (lib/whatsapp/intent.ts). */
 export const ASSISTANT_MODEL = "gemini-2.5-flash-lite";
@@ -130,8 +131,25 @@ export async function assistantFor(userId: string, _phone: string): Promise<bool
  * owner first, 2026-10-08), or a list of user ids. Off without the row.
  */
 export async function frontDoorFor(userId: string): Promise<boolean> {
+  return switchedOnFor("assistant_front_door", userId);
+}
+
+/**
+ * Whether this seller's messages are read by agent mode
+ * (lib/assistant-v2/agent.ts: one call with every action as a tool, lookups
+ * of their products first when needed, up to three actions a message).
+ * app_settings `assistant_agent`: "all", "admins" (the pilot, owner
+ * 2026-10-10), or a list of user ids. Off without the row. When it fails,
+ * the front door reads the message instead.
+ */
+export async function agentFor(userId: string): Promise<boolean> {
+  return switchedOnFor("assistant_agent", userId);
+}
+
+/** An app_settings switch: "all", "admins", or a list of user ids. Off without the row or on error. */
+async function switchedOnFor(key: string, userId: string): Promise<boolean> {
   try {
-    const { data } = await createServerClient().from("app_settings").select("value").eq("key", "assistant_front_door").maybeSingle();
+    const { data } = await createServerClient().from("app_settings").select("value").eq("key", key).maybeSingle();
     const v = data?.value as unknown;
     if (v === "all") return true;
     if (v === "admins") return isAdmin(userId);
@@ -1716,6 +1734,16 @@ export async function routerModel(): Promise<string> {
   }
 }
 
+/** Agent mode's model: app_settings `assistant_agent_model`, else the one the assistant uses. */
+export async function agentModel(): Promise<string> {
+  try {
+    const { data } = await createServerClient().from("app_settings").select("value").eq("key", "assistant_agent_model").maybeSingle();
+    return typeof data?.value === "string" && MODELS.has(data.value) ? data.value : await assistantModel();
+  } catch {
+    return assistantModel();
+  }
+}
+
 /** The model the assistant uses: app_settings `assistant_model`, else ASSISTANT_MODEL. */
 export async function assistantModel(): Promise<string> {
   try {
@@ -1832,6 +1860,41 @@ export async function interpretThroughFrontDoor(
     ...(opts.answered ? { answered: opts.answered } : {}),
   }, { router: await routerModel(), reader }, { feature: "assistant", userId }, FRONT_DOOR_LIMITS);
   return { area, action, links, raw: `[front door] ${raw}` };
+}
+
+/**
+ * interpret's counterpart for agent mode: the same facts as the front door,
+ * read in one call with every action as a tool, looking up their products
+ * (the shop's local copy) when it needs to. One to three actions, or a
+ * question back. Throws when the model fails or runs out of time.
+ */
+export async function interpretThroughAgent(
+  userId: string,
+  stage: Stage,
+  products: ProductFacts[],
+  message: string,
+  opts: {
+    batchId?: string | null; conversation?: string[]; web?: boolean; position?: string; waitingFor?: string;
+    listed?: { count: number; what: string } | null; listedSids?: string[]; answered?: { area?: string };
+  } = {},
+): Promise<{ actions: AssistantAction[]; clarify: Clarify | null; links: Record<string, AssistantLink>; raw: string }> {
+  const [currency, seller, model, listingCost, memory, shop] = await Promise.all([
+    shopCurrencyForUser(userId), sellerFacts(userId), agentModel(), listingCreditCost(userId).catch(() => LIVE_LISTING_CREDIT_COST),
+    sellerMemory(userId), shopProducts(userId).then((all) => all.filter((p) => p.status !== "DELETED")).catch(() => [] as ShopProduct[]),
+  ]);
+  const links = assistantLinks({ batchId: opts.batchId, countrySlug: seller.countrySlug });
+  const bySid = new Map(shop.map((p) => [p.sid, p]));
+  const listedItems = opts.listed
+    ? (opts.listedSids ?? []).map((sid) => bySid.get(sid)).filter((p): p is ShopProduct => !!p).slice(0, 30).map(listedLine)
+    : [];
+  const input: FrontDoorInput = {
+    stage, message, conversation: opts.conversation ?? [], drafts: products, waitingFor: opts.waitingFor,
+    listed: opts.listed ? { ...opts.listed, items: listedItems } : null,
+    seller: seller.lines, links, currency, web: opts.web ?? false, shopNames: shop.map((p) => p.name).filter(Boolean), listingCost,
+    position: opts.position, memory, ...(opts.answered ? { answered: opts.answered } : {}),
+  };
+  const read = await agentRead(input, geminiAgentCall(model, agentPrompt(input), { feature: "assistant", userId }), catalogLookups(shop));
+  return { actions: read.actions, clarify: read.clarify, links, raw: `[agent ${model}] ${read.raw}` };
 }
 
 /**
@@ -2146,12 +2209,15 @@ export async function runAssistant(
   const position = borrowed
     ? `drafts made ${borrowed.channel === here ? "here earlier" : borrowed.channel === "web" ? "on the website chat" : "on WhatsApp"} that aren't sent yet (listed below: they can edit, polish or submit them here)`
     : opts.position;
-  // Step 2 of the reliability plan, for the accounts it's switched on for.
-  const viaFrontDoor = await frontDoorFor(userId);
-  let action: AssistantAction;
+  // Step 2 of the reliability plan, for the accounts it's switched on for;
+  // agent mode, the pilot after it (2026-10-10), before it where that's on.
+  const [viaFrontDoor, viaAgent] = await Promise.all([frontDoorFor(userId), agentFor(userId)]);
+  let actions: AssistantAction[];
   let links: Record<string, AssistantLink>;
   let raw: string;
   let products: ProductFacts[] = [];
+  // Read without the word rules (front door or agent): no product-name override after.
+  let unguarded = viaFrontDoor;
   try {
     const conversation = await recentConversation(phone, text);
     products = batchId ? await productFacts(await batchListings(batchId, userId)) : [];
@@ -2159,11 +2225,30 @@ export async function runAssistant(
       batchId, hintSeq, conversation, web: isWebAddress(phone), position, waitingFor: opts.waitingFor,
       listed: listedFresh(session),
     };
-    if (viaFrontDoor) {
+    const more = { ...facts, listedSids: session.lastListed?.sids, ...(opts.answered ? { answered: opts.answered } : {}) };
+    let agentNote = "";
+    let read: { actions: AssistantAction[]; links: Record<string, AssistantLink>; raw: string } | null = null;
+    if (viaAgent) {
       const t0 = Date.now();
-      const read = await interpretThroughFrontDoor(userId, stage, products, text, {
-        ...facts, listedSids: session.lastListed?.sids, ...(opts.answered ? { answered: opts.answered } : {}),
-      }).catch(async (e: Error) => {
+      try {
+        const agent = await interpretThroughAgent(userId, stage, products, text, more);
+        if (agent.clarify) {
+          await sendClarify(phone, agent.clarify);
+          await logTurn(userId, stage, text, agent.clarify as unknown as AssistantAction, `asked: ${agent.clarify.question}`.slice(0, 300), agent.raw);
+          return "handled";
+        }
+        read = agent;
+        unguarded = true;
+      } catch (e) {
+        // Slow or refused: the front door reads it, while there's time left in the request.
+        if (Date.now() - t0 > 15_000) throw e;
+        console.warn(`[assistant] agent failed for ${userId}, reading it through the front door: ${(e as Error).message}`);
+        agentNote = `[agent failed: ${(e as Error).message.slice(0, 120)}] `;
+      }
+    }
+    if (!read && (viaFrontDoor || viaAgent)) {
+      const t0 = Date.now();
+      const door = await interpretThroughFrontDoor(userId, stage, products, text, more).catch(async (e: Error) => {
         // Failed fast (a model refused): the chat's own reading answers instead
         // of the review step's help (owner's WhatsApp, 2026-10-08 21:16).
         if (Date.now() - t0 > 20_000) throw e;
@@ -2171,15 +2256,19 @@ export async function runAssistant(
         const usual = await interpret(userId, stage, products, text, facts);
         return { ...usual, area: "", raw: `[front door failed: ${e.message.slice(0, 120)}] ${usual.raw}` };
       });
-      if (read.action.type === "clarify") {
-        await sendClarify(phone, read.action, read.area || undefined);
-        await logTurn(userId, stage, text, read.action as unknown as AssistantAction, `asked: ${read.action.question}`.slice(0, 300), read.raw);
+      if (door.action.type === "clarify") {
+        await sendClarify(phone, door.action, door.area || undefined);
+        await logTurn(userId, stage, text, door.action as unknown as AssistantAction, `asked: ${door.action.question}`.slice(0, 300), agentNote + door.raw);
         return "handled";
       }
-      ({ action, links, raw } = read as { action: AssistantAction; links: Record<string, AssistantLink>; raw: string });
-    } else {
-      ({ action, links, raw } = await interpret(userId, stage, products, text, facts));
+      unguarded = true;
+      read = { actions: [door.action as AssistantAction], links: door.links, raw: agentNote + door.raw };
     }
+    if (!read) {
+      const usual = await interpret(userId, stage, products, text, facts);
+      read = { actions: [usual.action], links: usual.links, raw: usual.raw };
+    }
+    ({ actions, links, raw } = read);
   } catch (e) {
     console.warn(`[assistant] interpreting for ${userId} failed: ${(e as Error).message}`);
     await logTurn(userId, stage, text, null, `failed: ${(e as Error).message}`);
@@ -2191,25 +2280,38 @@ export async function runAssistant(
   // "Water Wave Lace Front Wig" the review step's help (owner's web chat,
   // 2026-10-08): it's that product. The front door is told the shop's
   // matching names instead.
-  if (!viaFrontDoor && (action.type === "reply" || action.type === "unclear") && stage !== "collecting" && stage !== "starting"
+  if (!unguarded && actions.length === 1 && (actions[0].type === "reply" || actions[0].type === "unclear") && stage !== "collecting" && stage !== "starting"
     && (await namesShopProduct(userId, text).catch(() => false))) {
-    action = { type: "product_info", product: text.trim().slice(0, 120) };
+    actions = [{ type: "product_info", product: text.trim().slice(0, 120) }];
   }
-  console.info(`[assistant] ${userId} (${stage}): ${action.type}`);
+  console.info(`[assistant] ${userId} (${stage}): ${actions.map((a) => a.type).join(" + ")}`);
 
-  if (action.type === "list" && (stage === "idle" || stage === "sent")) {
-    await logTurn(userId, stage, text, action, `list ${action.count}`, raw);
-    return { list: action.count };
+  // Several things asked at once (agent mode): each carried out in order, as
+  // if asked one after the other. Listing new products comes last: the
+  // caller starts the batch once the rest is answered.
+  let outcome = "default";
+  let list: number | null = null;
+  for (let i = 0; i < actions.length; i++) {
+    const action = actions[i];
+    const why = i === 0 ? raw : undefined;
+    if (action.type === "list" && (stage === "idle" || stage === "sent")) {
+      await logTurn(userId, stage, text, action, `list ${action.count}`, why);
+      list = action.count;
+      continue;
+    }
+    // Drafts from the other chat (or an earlier batch) are edited and submitted as a review.
+    const actStage: Stage = borrowed && (action.type === "edit" || action.type === "submit" || action.type === "review" || action.type === "polish") ? "review" : stage;
+    const done = await carryOut(userId, phone, actStage, batchId, products, action, text, links, actStage !== stage && batchId ? { ...session, batchId } : session);
+    await logTurn(userId, stage, text, action, done, why);
+    // With others beside it, a step or "nothing to do here" doesn't hand the message back to the flow.
+    if (actions.length === 1 || (done !== "default" && done !== "step")) outcome = actions.length === 1 ? done : "handled";
+    // Starting a batch: after answering, where they are (a reply carries it already).
+    if (stage === "starting" && action.type !== "reply" && done !== "default" && done !== "step" && done !== "stopped batch" && done !== "kept batch"
+      && i === actions.length - 1) {
+      await sendTextIfConfigured(phone, startingNudge(session));
+    }
   }
-
-  // Drafts from the other chat (or an earlier batch) are edited and submitted as a review.
-  const actStage: Stage = borrowed && (action.type === "edit" || action.type === "submit" || action.type === "review" || action.type === "polish") ? "review" : stage;
-  const outcome = await carryOut(userId, phone, actStage, batchId, products, action, text, links, actStage !== stage && batchId ? { ...session, batchId } : session);
-  await logTurn(userId, stage, text, action, outcome, raw);
-  // Starting a batch: after answering, where they are (a reply carries it already).
-  if (stage === "starting" && action.type !== "reply" && outcome !== "default" && outcome !== "step" && outcome !== "stopped batch" && outcome !== "kept batch") {
-    await sendTextIfConfigured(phone, startingNudge(session));
-  }
+  if (list != null) return { list };
   return outcome === "default" ? "default" : outcome === "step" ? "step" : "handled";
 }
 

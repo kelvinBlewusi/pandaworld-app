@@ -2443,6 +2443,63 @@ measuring, is this.
   turns look right; keep `interpret` only as the fallback when the front
   door fails fast, or retire it too.
 
+### Agent mode: the pilot with function calling (owner, 2026-10-10: "let's build the agent mode pilot with function calling")
+
+Asked whether to rebuild on Google ADK or move to Cloud Run: no ADK (its
+TypeScript version is pre-1.0 and not recommended for production) and no
+Cloud Run (Gemini's time is most of a reply's time). Instead, Gemini's own
+function calling inside this code, beside the front door, with the same
+checks and taps.
+
+- **lib/assistant-v2/agent.ts**: every chat action is a tool
+  (`ACTION_TOOLS`: list, edit, submit, live_change, bulk, content_change,
+  add_size, add_photos, fix_rejected, research, sales, payouts, reply,
+  cannot, clarify and the rest), plus two lookups (`LOOKUP_TOOLS`):
+  `find_products` (their products matching some words, with ON/OFF, quality
+  check, stock and price, from jumia_products through the chat's own
+  `findProducts`) and `shop_counts` (counted as the overview counts).
+  - One call with every tool declared, mode ANY (it must call a tool). It
+    may look things up first, at most 2 rounds; on the last round only
+    actions are allowed (`allowedFunctionNames`). Its turns go back verbatim
+    (Gemini 3 needs its thought signatures), with each lookup's answer as a
+    functionResponse.
+  - Up to 3 actions a message ("restock the kettle to 10 and show me
+    today's sales"), carried out in order. A `reply` beside actions is
+    dropped; so is the same action twice.
+  - Each call becomes the chat's own action JSON (`actionJson`: end_sale →
+    sale "end", submit all → "all", details list → record) and goes through
+    `parseActionUnguarded`, the front door's checks: values from the
+    message, products named, nothing widened. Changes to Jumia still go out
+    as confirm taps. A `clarify` goes out as the front door's buttons.
+  - The prompt (`agentPrompt`) is the front door's context record
+    (`contextText`), seller facts, memory, `capabilities()`, `cannotList()`,
+    the site guide, links, every area's examples, and the rules.
+  - `AGENT_LIMITS`: 10 s a call, 25 s a message. It throws on a timeout or
+    an error.
+- **lib/ai/gemini-client.ts `callGeminiWithTools`**: @google/genai on both
+  backends (the older AI Studio SDK drops thought signatures). Gemini 3 goes
+  through AI Studio. It records usage like every other call.
+- **Switch**: app_settings `assistant_agent`: `"admins"`, `"all"`, or a list
+  of user ids; off without the row (`agentFor`). Model: app_settings
+  `assistant_agent_model`, else `assistantModel()` (`agentModel`).
+- **In `runAssistant`**: when it's on, `interpretThroughAgent` reads the
+  message first. If it fails within 15 s, the front door reads it
+  (`raw` starts `[agent failed: …] [front door]`); after that, the turn
+  fails to the usual flow. Each action is carried out and logged on its own
+  row; the first row carries `raw` (`[agent <model>] 1.4s, 2 calls:
+  find_products(…) → […] live_change(…)`). A `list` comes last: the other
+  answers go out, then the batch starts. `answersAssistantQuestion`
+  (intake.ts) lets a bare number answer the agent's question too.
+- **Test runs**: pipeline `"agent"` in lib/evals/assistant-eval.ts
+  (`understandAgent`; lookups answered from the case's `catalog`, names
+  only). A case passes when every action it takes is one of the case's
+  answers; `passed_bare` counts it when any one is. /admin/assistant-tests
+  has "Agent (function calling, pilot)".
+- **Tests**: __tests__/assistant-agent.test.ts (tools, lookups, the loop,
+  several actions, checks, timeouts) and "agent mode" in
+  whatsapp-assistant.test.ts (several actions in order, a list last, asking
+  back, the front door when it fails).
+
 ### What sellers can and can't ask of Jumia (owner, 2026-10-09)
 
 "The system understands what is capable and doable and what is not and
