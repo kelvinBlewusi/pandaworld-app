@@ -97,7 +97,7 @@ import { findBrandExact, getBrandCount, searchBrandsFromDB } from "@/lib/jumia/b
 import { chatChannelOf, isWebAddress } from "@/lib/whatsapp/channel";
 import { limitedText } from "@/lib/whatsapp/assistant-limits";
 import { carryPriceToVariants, carrySaleToVariants, carryStockToVariants, chatPrice, dropVariantSalesFrom, shopCurrencyForUser } from "@/lib/whatsapp/listing-edits";
-import { answerLiveValue, answerPendingQuestion, assistantFor, frontDoorFor, plainQuickEdit, runAssistant, type AssistantOutcome, type Stage } from "@/lib/whatsapp/assistant";
+import { agentFor, answerLiveValue, answerPendingQuestion, assistantFor, frontDoorFor, plainQuickEdit, runAssistant, type AssistantOutcome, type Stage } from "@/lib/whatsapp/assistant";
 import { batchCreditRefusal, creditGate } from "@/lib/whatsapp/credit-gate";
 import { runChatCommand } from "@/lib/whatsapp/chat-commands";
 import { nudgePolishWorker, queuePolish } from "@/lib/whatsapp/chat-polish";
@@ -640,7 +640,7 @@ async function pickedFromList(phoneNumber: string, text: string): Promise<boolea
 
 /**
  * Whether the bot's last message is the assistant's own question, so a bare
- * number answers it: through the front door only, between batches or in
+ * number answers it: through the front door or agent mode only, between batches or in
  * review, with no step of the listing flow waiting for a value, and not the
  * flow's own "how many products" or "Start a new batch?" (a count there).
  */
@@ -649,7 +649,7 @@ async function answersAssistantQuestion(userId: string, phoneNumber: string, ses
   if (session.awaitingPriceFor || session.awaitingValueFor || session.awaitingCategoryFor || session.awaitingQcAnswer || session.assistantPending) return false;
   const bot = await lastBotMessage(phoneNumber);
   if (!bot || !bot.body.includes("?") || /how many products/i.test(bot.body) || bot.body.startsWith(NEW_BATCH_OFFER)) return false;
-  return frontDoorFor(userId);
+  return (await frontDoorFor(userId)) || agentFor(userId);
 }
 
 /** "product 2 of 3", while a batch's photos come in. */

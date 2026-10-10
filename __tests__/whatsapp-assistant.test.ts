@@ -30,6 +30,8 @@ jest.mock("@/lib/whatsapp/orders", () => ({
 const aiReplies: string[] = [];
 const aiPrompts: string[] = [];
 let aiCalls = 0;
+// Agent mode's turns: each the tool calls it makes.
+const toolReplies: { name: string; args: Record<string, unknown> }[][] = [];
 jest.mock("@/lib/ai/gemini-client", () => ({
   callGeminiBackend: async (model: string, parts: { text?: string }[]) => {
     aiCalls++;
@@ -37,6 +39,13 @@ jest.mock("@/lib/ai/gemini-client", () => ({
     const text = aiReplies.shift();
     if (text == null) throw new Error("no AI reply scripted");
     return { text, model, backend: "vertex" };
+  },
+  callGeminiWithTools: async (_model: string, _turns: unknown[], opts: { system: string }) => {
+    aiCalls++;
+    aiPrompts.push(opts.system);
+    const calls = toolReplies.shift();
+    if (calls == null) throw new Error("no tool calls scripted");
+    return { calls, text: "", turn: { role: "model", parts: calls.map((c) => ({ functionCall: c })) }, backend: "ai-studio" };
   },
 }));
 
@@ -63,7 +72,7 @@ jest.mock("@/lib/jumia/categories", () => ({
 }));
 
 import {
-  answerLiveValue, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
+  agentFor, answerLiveValue, assistantEnabled, assistantFor, assistantLinks, cleanReply, countBacked, fitsDraft, isStateQuestion, looksLikeQuestion, messageNumbers,
   changeToAsked, draftNumberIn, frontDoorFor, isProductName, namesAProduct, recentConversation, saidIsValues, saleWindow, splitProducts, parseAction, plainQuickEdit, runAssistant, verifyChanges, type ProductFacts,
 } from "@/lib/whatsapp/assistant";
 import { assistantGate } from "@/lib/whatsapp/assistant-limits";
@@ -84,6 +93,7 @@ beforeEach(() => {
   orderCalls.length = 0;
   aiReplies.length = 0;
   aiPrompts.length = 0;
+  toolReplies.length = 0;
   shopCalls.length = 0;
   aiCalls = 0;
 });
@@ -383,6 +393,57 @@ describe("the front door (step 2, owner 2026-10-08)", () => {
     aiReplies.push('{"area":"live_products"}', '{"type":"clarify","question":"Which products should stay on?","options":["I\'ll name the ones to keep on","None, turn everything off"]}');
     expect(await runAssistant("seller", "233", session(), "off all other products apart from the ones i asked you turn on", "idle")).toBe("handled");
     expect(sent[0]).toMatchObject({ kind: "list", body: "Which products should stay on?", rows: ["answer:@live_products:I'll name the ones to keep on", "answer:@live_products:None, turn everything off"] });
+  });
+});
+
+describe("agent mode (the pilot, owner 2026-10-10)", () => {
+  const session = () => ({ phoneNumber: "233", userId: "seller", state: "awaiting_count", batchId: null, lastSubmittedBatchId: null }) as WhatsAppSession;
+
+  it("is on for the accounts the switch names", async () => {
+    expect(await agentFor("admin")).toBe(false);
+    db.tables.app_settings = [{ key: "assistant_agent", value: "admins" }];
+    expect(await agentFor("admin")).toBe(true);
+    expect(await agentFor("seller")).toBe(false);
+    db.tables.app_settings = [{ key: "assistant_agent", value: ["seller"] }];
+    expect(await agentFor("seller")).toBe(true);
+  });
+
+  it("carries out several things asked at once, in order", async () => {
+    db.tables.app_settings = [{ key: "assistant_agent", value: "all" }];
+    db.tables.jumia_products = [{ user_id: "seller", product_sid: "p1", seller_sku: "KET", name: "Nasco Electric Kettle 1.7L", status: "ACTIVE" }];
+    toolReplies.push(
+      [{ name: "find_products", args: { words: "kettle" } }],
+      [{ name: "live_change", args: { product: "Nasco Electric Kettle 1.7L", stock: 10 } }, { name: "sales", args: { period: "today" } }],
+    );
+    expect(await runAssistant("seller", "233", session(), "restock the kettle to 10 and show me today's sales", "idle")).toBe("handled");
+    expect(shopCalls.map((c) => c[0])).toEqual(["proposeLiveChange", "answerSales"]);
+    expect(shopCalls[0]).toEqual(["proposeLiveChange", "Nasco Electric Kettle 1.7L", { kind: "stock", stock: 10 }, { preferSid: null }]);
+    const log = db.tables.whatsapp_assistant_log as { outcome: string; raw?: string }[];
+    expect(log.map((l) => l.outcome)).toEqual(["offered", "sales"]);
+    expect(log[0].raw).toContain("[agent ");
+    expect(log[1].raw).toBeUndefined();
+  });
+
+  it("starts a batch after answering the rest", async () => {
+    db.tables.app_settings = [{ key: "assistant_agent", value: "all" }];
+    toolReplies.push([{ name: "list", args: { count: 3 } }, { name: "credits", args: {} }]);
+    expect(await runAssistant("seller", "233", session(), "I want to list 3 products, how many credits do I have?", "idle")).toEqual({ list: 3 });
+    expect(sent.length).toBeGreaterThan(0);
+  });
+
+  it("asks back with answers to tap", async () => {
+    db.tables.app_settings = [{ key: "assistant_agent", value: "all" }];
+    toolReplies.push([{ name: "clarify", args: { question: "Which kettle?", options: ["Nasco 1.7L", "Binatone 2L"] } }]);
+    expect(await runAssistant("seller", "233", session(), "restock the kettle to 10", "idle")).toBe("handled");
+    expect(sent[0]).toMatchObject({ kind: "buttons", body: "Which kettle?", rows: ["answer:Nasco 1.7L", "answer:Binatone 2L"] });
+  });
+
+  it("falls back to the front door when it fails", async () => {
+    db.tables.app_settings = [{ key: "assistant_agent", value: "all" }, { key: "assistant_front_door", value: "all" }];
+    aiReplies.push('{"area":"orders"}', '{"type":"orders"}');
+    expect(await runAssistant("seller", "233", session(), "show me my orders", "idle")).toBe("handled");
+    expect(orderCalls.length + shopCalls.length + sent.length).toBeGreaterThan(0);
+    expect((db.tables.whatsapp_assistant_log as { raw: string }[])[0].raw).toMatch(/^\[agent failed: no tool calls scripted\] \[front door\]/);
   });
 });
 

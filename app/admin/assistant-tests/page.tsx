@@ -16,6 +16,10 @@ export const dynamic = "force-dynamic";
 // (lib/assistant-v2/front-door.ts), which nothing in the chat uses, to
 // compare it with the chat as it is. Its questions back ("asked") are
 // counted apart from right and wrong.
+//
+// "Agent" runs put them through agent mode (lib/assistant-v2/agent.ts,
+// function calling, the pilot): right when every action it takes is one of
+// the case's answers; "any action right" when at least one is.
 
 const MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3.1-flash-lite"];
 
@@ -23,7 +27,8 @@ async function runTests(form: FormData) {
   "use server";
   const model = String(form.get("model") ?? "");
   const way = String(form.get("pipeline") ?? "");
-  const [pipeline, router] = way.startsWith("front_door") ? ["front_door" as const, way.split(":")[1] || undefined] : ["current" as const, undefined];
+  const [pipeline, router] = way.startsWith("front_door") ? ["front_door" as const, way.split(":")[1] || undefined]
+    : way === "agent" ? ["agent" as const, undefined] : ["current" as const, undefined];
   await queueRun({
     model: MODELS.includes(model) ? model : undefined, pipeline,
     router: router && MODELS.includes(router) ? router : undefined, note: "from the admin page",
@@ -43,13 +48,15 @@ export default async function AssistantTestsPage({ searchParams }: { searchParam
   const cases = new Map(ASSISTANT_CASES.map((c) => [c.id, c]));
   const failures = (latest?.results ?? []).filter((r) => !r.pass);
   const scored = (r: EvalRun) => r.done - r.errors;
-  const frontDoor = (r: EvalRun) => r.pipeline === "front_door";
-  const way = (r: EvalRun) => (frontDoor(r) ? `Front door${r.router_model && r.router_model !== r.model ? ` (sorts with ${r.router_model})` : ""}` : "Current");
+  // Both ask back; neither has word rules to go without.
+  const frontDoor = (r: EvalRun) => r.pipeline === "front_door" || r.pipeline === "agent";
+  const agent = (r: EvalRun) => r.pipeline === "agent";
+  const way = (r: EvalRun) => (agent(r) ? "Agent" : frontDoor(r) ? `Front door${r.router_model && r.router_model !== r.model ? ` (sorts with ${r.router_model})` : ""}` : "Current");
   const avgMs = (r: EvalRun) => {
     const timed = (r.results ?? []).filter((x) => !x.error);
     return timed.length ? `${(timed.reduce((n, x) => n + x.ms, 0) / timed.length / 1000).toFixed(1)} s` : "–";
   };
-  const route = latest && frontDoor(latest) ? routing(latest.results) : null;
+  const route = latest && frontDoor(latest) && !agent(latest) ? routing(latest.results) : null;
 
   return (
     <div className="space-y-8">
@@ -66,8 +73,9 @@ export default async function AssistantTestsPage({ searchParams }: { searchParam
           </select>
           <select name="pipeline" defaultValue="current" className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm">
             <option value="current">The chat as it is</option>
-            <option value="front_door">Front door (prototype)</option>
+            <option value="front_door">Front door</option>
             {MODELS.map((m) => <option key={m} value={`front_door:${m}`}>Front door, sorting with {m}</option>)}
+            <option value="agent">Agent (function calling, pilot)</option>
           </select>
           <button type="submit" className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-700">Run the test set</button>
           <span className="text-xs text-zinc-500">About 3 minutes. Refresh to see it fill in.</span>
@@ -77,7 +85,7 @@ export default async function AssistantTestsPage({ searchParams }: { searchParam
       <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white">
         <table className="w-full text-sm">
           <thead className="text-left text-xs uppercase tracking-wide text-zinc-500">
-            <tr><th className="px-4 py-2">When</th><th className="px-4 py-2">Way</th><th className="px-4 py-2">Model</th><th className="px-4 py-2">Status</th><th className="px-4 py-2">Score</th><th className="px-4 py-2">Without word rules</th><th className="px-4 py-2">Asked back</th><th className="px-4 py-2">Time each</th><th className="px-4 py-2">Errors</th></tr>
+            <tr><th className="px-4 py-2">When</th><th className="px-4 py-2">Way</th><th className="px-4 py-2">Model</th><th className="px-4 py-2">Status</th><th className="px-4 py-2">Score</th><th className="px-4 py-2">Without word rules / any action right</th><th className="px-4 py-2">Asked back</th><th className="px-4 py-2">Time each</th><th className="px-4 py-2">Errors</th></tr>
           </thead>
           <tbody>
             {runs.length === 0 && <tr><td colSpan={9} className="px-4 py-6 text-center text-zinc-500">No runs yet. Run the test set to get the first score.</td></tr>}
@@ -88,7 +96,7 @@ export default async function AssistantTestsPage({ searchParams }: { searchParam
                 <td className="px-4 py-2 font-mono text-xs">{r.model}</td>
                 <td className="px-4 py-2">{r.status === "done" ? "Done" : r.status === "running" ? `Running ${r.done}/${r.total}` : r.status === "queued" ? "Queued" : r.status}</td>
                 <td className="px-4 py-2 font-semibold tabular-nums">{r.passed}/{scored(r)} · {pct(r.passed, scored(r))}</td>
-                <td className="px-4 py-2 tabular-nums text-zinc-600">{frontDoor(r) ? "–" : `${r.passed_bare}/${scored(r)} · ${pct(r.passed_bare, scored(r))}`}</td>
+                <td className="px-4 py-2 tabular-nums text-zinc-600">{frontDoor(r) && !agent(r) ? "–" : `${r.passed_bare}/${scored(r)} · ${pct(r.passed_bare, scored(r))}`}</td>
                 <td className="px-4 py-2 tabular-nums text-zinc-600">{frontDoor(r) ? `${r.asked ?? 0} · ${pct(r.asked ?? 0, scored(r))}` : "–"}</td>
                 <td className="px-4 py-2 tabular-nums text-zinc-600">{avgMs(r)}</td>
                 <td className="px-4 py-2 tabular-nums text-zinc-600">{r.errors}</td>

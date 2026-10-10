@@ -260,7 +260,7 @@ const ACTIONS: Record<Area, string[]> = {
  * examples (lib/whatsapp/assistant.ts buildPrompt), so the two are compared
  * on how they're built, not on what they were shown.
  */
-const EXAMPLES: Record<Area, string[]> = {
+export const EXAMPLES: Record<Area, string[]> = {
   listing: [
     '"I have 3 bags to list" → {"type":"list","count":3}',
     '(the bot just said the most is 20 at a time) "let\'s do five then" → {"type":"list","count":5}',
