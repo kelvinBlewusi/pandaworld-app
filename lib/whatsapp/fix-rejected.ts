@@ -22,6 +22,7 @@ import { decideQcAction, type QcAction } from "@/lib/jumia/qc-remedy";
 import { findProducts, type ShopProduct } from "@/lib/jumia/shop";
 import { getCategoryByCode } from "@/lib/jumia/categories";
 import { categoryDetails } from "@/lib/whatsapp/live-details";
+import { categoryPickerUrl } from "@/lib/whatsapp/category-question";
 import { CHANGES, CHANGES_FEATURE, catalog, label, proposeContentChange, shopContext, shorten } from "@/lib/whatsapp/shop";
 
 const VENDOR_CENTER = "https://vendorcenter.jumia.com";
@@ -49,8 +50,9 @@ export function fieldsFor(reason: string): ("name" | "description" | "highlights
 }
 
 /** The plan for one rejected product, from what decideQcAction said. Pure. */
-export function fixPlan(action: QcAction, name: string, reason: string): FixPlan {
+export function fixPlan(action: QcAction, name: string, reason: string, pickerUrl?: string): FixPlan {
   const short = shortName(name);
+  const findIt = pickerUrl ? ` Find the right category here and copy it: ${pickerUrl}` : "";
   switch (action.kind) {
     case "redraft": {
       const fields = fieldsFor(reason);
@@ -76,9 +78,9 @@ export function fixPlan(action: QcAction, name: string, reason: string): FixPlan
     case "ask_photos":
       return { kind: "say", vendorCenter: true, text: `📷 *${shorten(name, 60)}*: Jumia's quality check rejected the photos${action.why}. Jumia doesn't let its API change a product's main photo, so change them in Vendor Center (${REJECTED_PATH}), or list it again here with new photos (clear, well lit, plain background).` };
     case "switch_category":
-      return { kind: "say", vendorCenter: true, text: `🗂️ *${shorten(name, 60)}*: Jumia's quality check says it belongs in "${action.path}". Jumia doesn't let its API move a product to another category, so change it in Vendor Center (${REJECTED_PATH}), or list it again here and I'll put it there.` };
+      return { kind: "say", vendorCenter: true, text: `🗂️ *${shorten(name, 60)}*: Jumia's quality check says it belongs in "${action.path}". Jumia doesn't let its API move a product to another category, so change it in Vendor Center (${REJECTED_PATH}), or list it again here and I'll put it there.${findIt}` };
     case "ask_category":
-      return { kind: "say", vendorCenter: true, text: `🗂️ *${shorten(name, 60)}*: Jumia's quality check says the category is wrong, without saying which is right. Jumia doesn't let its API move a product to another category, so change it in Vendor Center (${REJECTED_PATH}), or list it again here in the right one.` };
+      return { kind: "say", vendorCenter: true, text: `🗂️ *${shorten(name, 60)}*: Jumia's quality check says the category is wrong, without saying which is right. Jumia doesn't let its API move a product to another category, so change it in Vendor Center (${REJECTED_PATH}), or list it again here in the right one.${findIt}` };
     case "ask_details":
       return { kind: "say", vendorCenter: true, text: `🔍 *${shorten(name, 60)}*: Jumia's API didn't send why it was rejected. Open it in Vendor Center (${REJECTED_PATH}), copy Jumia's reason, and send it here as "fix the ${short}: <the reason>". I'll work out the fix.` };
     case "cannot_fix":
@@ -180,7 +182,7 @@ export async function fixRejected(userId: string, phone: string, query: string |
     reason, comment: null, title: product.name, brand: product.brand, categoryPath: category?.path ?? null,
     fields: attrs.map((a) => ({ name: a.name, label: a.label ?? null })),
   });
-  const plan = fixPlan(decided.action, product.name, reason ?? "");
+  const plan = fixPlan(decided.action, product.name, reason ?? "", categoryPickerUrl(product.categoryCode, ctx.country));
   console.info(`[qc-chat] ${product.sellerSku}: ${decided.action.kind} (${decided.source})`);
   if (plan.kind === "say") {
     if (plan.vendorCenter) await sendCtaUrlIfConfigured(phone, plan.text, "Vendor Center", VENDOR_CENTER);

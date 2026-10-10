@@ -2509,6 +2509,88 @@ orders is counted from the orders).
   checks in jumia-shop-more.test.ts; 8 cases in the test set ("cannot-*",
   "live-details-*").
 
+### Owner's PDF list (2026-10-10): category picker, chat look, account awareness
+
+- **Category rejections → the picker page**:
+  - Every category question (Jumia refused the category, QC says it's
+    wrong, a category QC named that we can't find) now opens with the
+    owner's words: "Sorry, the category I chose wasn't accepted by Jumia.
+    Choose the right one from the list below, or open this link to find
+    the right one and copy it". This is lib/whatsapp/intake.ts
+    `askSellerForCategory`, plus the follow-ups in `handleCategoryAnswer`
+    and the `recat:` tap.
+  - The link is `categoryPickerUrl(code, country)`
+    (lib/whatsapp/category-question.ts): `/categories?c=<refused
+    code>&cc=GH`.
+  - fix-rejected's category plans carry it too.
+- **/categories** (app/categories, public in middleware, not indexed):
+  - It shows components/ui/category-deck.tsx alone. That is the editor
+    drawer's tree, rows and search as an inline panel (the drawer exports
+    `buildTree`, `normaliseCategoryPath`, the types).
+  - It opens inside the refused category's parent, with that category
+    selected.
+  - The black "You can't list products in this category" banner shows for
+    it and for any category refused in the country. The button is "Copy
+    category", which copies the path ("A > B > C") for the seller to paste
+    into either chat. `handleCategoryAnswer` takes a path.
+  - A note points to a similar product on the country's jumia storefront.
+    A green line says when products have gone live in the selected
+    category in that country.
+  - Data comes from GET /api/categories?country=GH (public, CDN-cached 1 h):
+    the same rows as the drawer's /api/jumia/categories?all=1, plus
+    `blocked` (jumia_unlistable_categories) and `proven`
+    (jumia_live_listings) for the country.
+- **Web chat's "Pick a category" card**: when its rows are `recat:` taps,
+  a last row "Not here? Browse all categories" opens the same deck inside
+  the message (compact, "Select category"). Its country and refused
+  category come from the message's own /categories link. Picking one sends
+  the `recat:<listing>:<code>` tap.
+- **Categories per country (research)**:
+  - Jumia's API gives one category tree (27,862 categories). We sync it
+    once, and 27,861 have an attribute set, so "listable" in our table
+    doesn't mean listable in a given country.
+  - What differs by country is learned from what happens:
+    - refusals ("can't list products in this category") go to
+      jumia_unlistable_categories by country (18 in Ghana so far);
+    - categories products went live in go to jumia_live_listings by
+      country.
+  - Suggestions leave out the refused ones and put the proven ones first
+    (`categorySuggestionsFor`, `provenCategoriesFor`). The picker shows
+    both.
+  - Every seller today is in Ghana. A new country starts with nothing
+    known and learns the same way.
+  - Jumia's API has no "categories you may list in" request. Vendor Center
+    knows, but doesn't expose it.
+- **Chat look**: the Listing Assistant page uses Claude's colours: page
+  #faf9f5, seller bubbles #f0eee6, cards white. The app sidebar is #f5f4ed
+  everywhere (hover #ebe9e0).
+- **Live rewrites write like new listings**: `rewriteContent`
+  (lib/whatsapp/shop.ts) uses lib/ai/content-style-rules.ts
+  `buildContentStyleBlockFor(fields)`, the same name, description and
+  highlights rules the drafting and the extension use, instead of its own
+  short rules. Edits like "remove the word X" still change only that.
+- **The chat knows the account**: `sellerFacts` adds `activityFacts`:
+  - listings of the last 90 days by source (`listings.chat_channel` 'web',
+    else WhatsApp) and by status;
+  - drafts not sent yet, with where each was made;
+  - the extension's autofills (extension_fill_events), image polishes and
+    the last credit purchase (extension_credit_transactions).
+- **Drafts across chats**: between batches, `runAssistant` takes the newest
+  batch with drafts not sent yet, from either chat, within 14 days
+  (`openDraftBatch`).
+  - The prompt is told where those drafts were made.
+  - Edit, submit, review and polish act on that batch as a review.
+  - So "change the gown's price to 150" on the website edits a draft made
+    on WhatsApp, and the other way round.
+- **"List from WhatsApp" is now "Drafts & Listings"**: the sidebar, the
+  page title, the chat's texts, the FAQ and the site guide. Each batch
+  there has a "WhatsApp" or "Website chat" badge.
+- **ON/OFF**: product status is written ON and OFF in capitals: the
+  overview, lists, product info, research lines, rich cells, commands and
+  the AI's replies (a rule in every prompt).
+- The homepage's "Use the extension when you're at your laptop…" line under
+  "Two ways to get your products listed" is gone.
+
 ### Fixing rejected products, a new size, more photos, locked details, rich answers (owner, 2026-10-09)
 
 - **Locked details**: Jumia refuses some details once a product is

@@ -124,6 +124,9 @@ const isPublicRoute = createRouteMatcher([
   '/jumia-commission-rates',
   '/sell-on-jumia',
   '/sell-on-jumia/(.*)',
+  // The public category picker a category rejection links to (owner, 2026-10-10).
+  '/categories',
+  '/api/categories',
   '/api/extension/fill',
   '/api/extension/account',
   '/api/extension/polish-images',

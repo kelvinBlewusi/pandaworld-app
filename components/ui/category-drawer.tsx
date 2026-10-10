@@ -36,7 +36,7 @@ import { Button } from "@/components/ui/button";
 import { CategoryRow } from "@/components/ui/category-row";
 import { cn } from "@/lib/utils";
 
-interface FlatCategory {
+export interface FlatCategory {
   code:               number;
   name:               string;
   path:               string;          // "Electronics > Headphones > Over-Ear Headphones"
@@ -52,7 +52,7 @@ export interface SelectedCategory {
   path: string;
 }
 
-interface TreeNode {
+export interface TreeNode {
   segment:      string;                // single segment label e.g. "Headphones"
   fullPath:     string;                // "Electronics > Headphones"
   category:     FlatCategory | null;   // present only when path matches an actual category row
@@ -65,7 +65,7 @@ interface TreeNode {
 // and tree-building so downstream code only has to worry about one form.
 export const CATEGORY_PATH_SEPARATOR_REGEX = /\s*[>/]\s*/g;
 
-function normaliseCategoryPath(p: string): string {
+export function normaliseCategoryPath(p: string): string {
   return p.replace(CATEGORY_PATH_SEPARATOR_REGEX, " > ").trim();
 }
 
@@ -73,7 +73,7 @@ function normaliseCategoryPath(p: string): string {
 // completePath becomes a node. A node has its own `category` record iff
 // some row's path matches its normalised full path; intermediate
 // synthesised nodes (just for tree structure) have `category: null`.
-function buildTree(categories: FlatCategory[]): TreeNode {
+export function buildTree(categories: FlatCategory[]): TreeNode {
   const root: TreeNode = { segment: "", fullPath: "", category: null, children: [] };
 
   // Index categories by NORMALISED path for quick lookup. Categories may

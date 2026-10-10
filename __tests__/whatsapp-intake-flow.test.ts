@@ -2626,8 +2626,10 @@ describe("Fix & resubmit", () => {
 
     expect(autoAnalyzeCalls).toHaveLength(0);
     expect(pushCallCount).toBe(0);
-    const question = sent.find((m) => m.body.includes("Which category does Vendor Center allow"));
-    expect(question!.body).toContain(`⚠️ "Electric Kettle - Stainless Steel, 1.8L Capacity": Jumia can't list products in this category. Let's choose a different (more specific) category and try again.`);
+    // Owner, 2026-10-10: "sorry, the category I chose was not accepted by Jumia ... visit this link to copy the right one".
+    const question = sent.find((m) => m.body.includes("find the right one and copy it"));
+    expect(question!.body).toContain(`⚠️ "Electric Kettle - Stainless Steel, 1.8L Capacity": Sorry, the category I chose wasn't accepted by Jumia.`);
+    expect(question!.body).toMatch(/\/categories\?c=\d+/);
     expect(session().awaiting_category_for).toBe(REJECTED_ID);
   });
 
@@ -2893,10 +2895,11 @@ describe("asking the seller for a category Jumia refuses", () => {
   it("asks which category Vendor Center accepts instead of sending the seller to the editor", async () => {
     await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${LISTING_ID}` });
 
-    const question = listSent().find((m) => m.body.includes("Which category does Vendor Center allow"));
+    const question = listSent().find((m) => m.body.includes("find the right one and copy it"));
     expect(question).toBeDefined();
-    expect(question!.body).toContain(`"Portable Power Bank 20000mAh Fast Charging": Jumia can't list products in this category.`);
-    expect(question!.body).toContain("Search jumia.com.gh for a product like this one");
+    expect(question!.body).toContain(`"Portable Power Bank 20000mAh Fast Charging": Sorry, the category I chose wasn't accepted by Jumia.`);
+    expect(question!.body).toContain("/categories?c=");
+    expect(question!.body).toContain("a similar product on jumia.com.gh");
     expect(question!.rows).toContain(`recat:${LISTING_ID}:1000279`);
     // Never offers a category Jumia has already refused in Ghana.
     expect(question!.rows).not.toContain(`recat:${LISTING_ID}:1000176`);
@@ -3007,7 +3010,7 @@ describe("asking the seller for a category Jumia refuses", () => {
 
     await handleLinkedMessage(USER, PHONE, "m1", { text: "zzqx" });
 
-    expect(sent.some((m) => m.body.includes("couldn't find that category") && m.body.includes("Search jumia.com.gh"))).toBe(true);
+    expect(sent.some((m) => m.body.includes("couldn't find that category") && m.body.includes("/categories?"))).toBe(true);
     expect(session().awaiting_category_for).toBe(LISTING_ID);
   });
 
@@ -3038,7 +3041,7 @@ describe("asking the seller for a category Jumia refuses", () => {
     await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${LISTING_ID}` });
 
     const ask = listSent().find((m) => m.body.includes('Jumia refused "External Battery Packs", the category you picked'));
-    expect(ask!.body).toContain("Search jumia.com.gh");
+    expect(ask!.body).toContain("/categories?c=");
     expect(autoAnalyzeCalls).toHaveLength(0);
     expect(pushCallCount).toBe(0);
     expect(sent.some((m) => m.kind === "cta")).toBe(false);
@@ -3050,7 +3053,7 @@ describe("asking the seller for a category Jumia refuses", () => {
 
     await handleLinkedMessage(USER, PHONE, "m1", { text: `fix:${LISTING_ID}` });
 
-    expect(listSent().some((m) => m.body.includes("Let's choose a different (more specific) category"))).toBe(true);
+    expect(listSent().some((m) => m.body.includes("Sorry, the category I chose wasn't accepted by Jumia."))).toBe(true);
     expect(autoAnalyzeCalls).toHaveLength(0);
     expect(pushCallCount).toBe(0);
     expect(session().awaiting_category_for).toBe(LISTING_ID);
@@ -3068,7 +3071,7 @@ describe("asking the seller for a category Jumia refuses", () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0].kind).toBe("list");
-    expect(sent[0].body).toContain(`⚠️ "Portable Power Bank 20000mAh Fast Charging": Jumia can't list products in this category.`);
+    expect(sent[0].body).toContain(`⚠️ "Portable Power Bank 20000mAh Fast Charging": Sorry, the category I chose wasn't accepted by Jumia.`);
     expect(sent[0].rows).toContain(`recat:${LISTING_ID}:1000279`);
     expect(sent.some((m) => (m.rows ?? []).includes(`fix:${LISTING_ID}`))).toBe(false);
     expect(session().awaiting_category_for).toBe(LISTING_ID);

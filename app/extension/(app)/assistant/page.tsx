@@ -45,7 +45,7 @@ export default async function ListingAssistantPage() {
           href="/extension/whatsapp-listings"
           className="mt-5 inline-flex rounded-lg bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-orange-600"
         >
-          List from WhatsApp
+          Drafts &amp; Listings
         </Link>
       </div>
     );

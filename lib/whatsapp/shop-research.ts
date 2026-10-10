@@ -173,7 +173,7 @@ const FILTER_TEST: Record<ProductFilter, (g: ProductGroup) => boolean> = {
 };
 
 const FILTER_WORDS: Record<ProductFilter, string> = {
-  all: "", active: "on", inactive: "turned off", rejected: "rejected by Jumia's quality check", pending: "waiting for Jumia's check",
+  all: "", active: "ON", inactive: "turned OFF", rejected: "rejected by Jumia's quality check", pending: "waiting for Jumia's check",
   out_of_stock: "out of stock", low_stock: `low on stock (${LOW_STOCK} or fewer)`, on_sale: "on sale",
 };
 const SORT_WORDS: Record<ProductSort, string> = {
@@ -218,9 +218,9 @@ const QC_TEXT: Record<string, string> = { APPROVED: "approved", PENDING: "waitin
 export function groupStateCell(g: ProductGroup): RichCell {
   if (g.qc === "REJECTED") return cell("Rejected", "bad");
   if (g.qc === "PENDING" || g.qc === "NOT_READY_TO_QC") return cell("Waiting for QC", "info");
-  if (g.status === "INACTIVE") return cell("Off", "neutral");
+  if (g.status === "INACTIVE") return cell("OFF", "neutral");
   if (g.status === "ACTIVE" && g.stock === 0) return cell("Out of stock", "bad");
-  if (g.status === "ACTIVE") return cell("On", "good");
+  if (g.status === "ACTIVE") return cell("ON", "good");
   return cell(g.status?.toLowerCase() ?? "?", "neutral");
 }
 
@@ -244,7 +244,7 @@ export function productLine(g: ProductGroup, money: (n: number, cur?: string | n
     : g.variations.length === 1 ? ` (${g.variations[0]})` : "";
   const price = g.price == null ? "no price" : g.maxPrice != null && g.maxPrice !== g.price ? `${money(g.price, g.currency)} to ${money(g.maxPrice, g.currency)}` : money(g.price, g.currency);
   const stock = g.stock == null ? "stock unknown" : g.stock === 0 ? "out of stock" : `${g.stock} in stock`;
-  const state = [g.status === "ACTIVE" ? "on" : g.status === "INACTIVE" ? "off" : null, g.qc ? QC_TEXT[g.qc] ?? g.qc.toLowerCase() : null]
+  const state = [g.status === "ACTIVE" ? "ON" : g.status === "INACTIVE" ? "OFF" : null, g.qc ? QC_TEXT[g.qc] ?? g.qc.toLowerCase() : null]
     .filter(Boolean).join(", ") + (g.qc === "REJECTED" && g.qcReason ? `: ${shorten(g.qcReason, 70)}` : "");
   const added = dayText(g.createdAt, timeZone, now);
   return [
@@ -564,7 +564,7 @@ function composePrompt(request: string, data: string): string {
     "- Use ONLY this data. Products, orders, amounts, counts and dates exactly as written below: never invent, estimate or add up a figure that isn't written here.",
     "- A full list they asked for: every item from the data, one per line, with the details that matter for their question.",
     "- If the data doesn't answer part of the question, say so in one short line.",
-    "- Lists as \"• \" lines, never numbered. *bold* with single asterisks for a short heading; never ** or # headings.",
+    "- Lists as \"• \" lines, never numbered. *bold* with single asterisks for a short heading; never ** or # headings. A product's status is ON or OFF, in capitals.",
     "- No greeting, no sign-off, no web addresses. At most 1,800 characters, or 3,500 for a list of more than 10 products. Reply in the language the seller wrote in.",
     "- At most one last short line on what they could do next, only if the data shows something worth doing (a product out of stock, one rejected).",
     "",

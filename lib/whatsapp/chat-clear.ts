@@ -4,7 +4,7 @@
  * the first time"). The messages stay in the log (what was said and billed
  * is kept); the chat shows only those after `chat_cleared_at`, and the
  * assistant reads only those as the conversation. The session starts over,
- * as restart does: drafts and listings stay on List from WhatsApp, the
+ * as restart does: drafts and listings stay on Drafts & Listings, the
  * credits don't change.
  *
  * WhatsApp keeps its own copy of a chat on the phone, which only the seller
@@ -19,7 +19,7 @@ export const CLEAR_ON_WHATSAPP =
   "🧹 WhatsApp keeps this chat on your phone, so clear it there: open the chat's menu (⋮, or tap my name) → *Clear chat*. Nothing changes on PandaWorld.\n\nTo start a new batch, type *restart*.";
 
 export const CLEAR_CONFIRM_TEXT =
-  "Clear this chat? The conversation goes and I start fresh, like your first visit. Your drafts and listings stay on List from WhatsApp, and your credits don't change.";
+  "Clear this chat? The conversation goes and I start fresh, like your first visit. Your drafts and listings stay on Drafts & Listings, and your credits don't change.";
 
 /** The tap that clears it, under CLEAR_CONFIRM_TEXT. */
 export const CLEAR_NOW_ID = "clear chat now";

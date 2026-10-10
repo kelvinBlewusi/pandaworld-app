@@ -68,7 +68,7 @@ export const GUIDES: Guide[] = [
       "Link your WhatsApp number to PandaWorld with a one-time code in under a minute, then list products on Jumia by sending photos in a chat.",
     intro: "Takes under a minute — no app to install, just one WhatsApp message.",
     steps: [
-      "In your PandaWorld dashboard, open Settings → Integrations (or the \"List from WhatsApp\" screen) and click \"Connect WhatsApp\".",
+      "In your PandaWorld dashboard, open Settings → Integrations (or the \"Drafts & Listings\" screen) and click \"Connect WhatsApp\".",
       "PandaWorld gives you a one-time code, like LINK-A1B2C3D4, and a ready-to-tap WhatsApp link.",
       "Tap \"Open WhatsApp to link\" — or send the code yourself to +233548534323. The message is pre-filled for you either way.",
       "PandaWorld confirms the link right away. The code expires after 15 minutes, so generate a new one if it lapses before you send it.",

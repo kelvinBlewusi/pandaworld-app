@@ -40,6 +40,7 @@ import {
   CATEGORY_SKIP_RE,
   findOnJumiaTip,
   jumiaStorefront,
+  categoryPickerUrl,
   parseCategoryInstruction,
   type CategoryChoice,
 } from "@/lib/whatsapp/category-question";
@@ -5482,13 +5483,18 @@ async function askSellerForCategory(
   ]);
   await updateSession(phoneNumber, { awaitingCategoryFor: listingId });
 
-  // tipFirst: the seller's own pick was just refused, so a list like the
-  // one they already chose from is the weaker option — lead with the tip.
-  const body = opts.tipFirst
-    ? `⚠️ ${label}: ${lead} ${findOnJumiaTip(country)}${suggestions.length > 0 ? " Or pick one below." : ""}`
-    : `⚠️ ${label}: ${lead} Which category does Vendor Center allow for it? ` +
-      `${suggestions.length > 0 ? "Pick one below or type" : "Type"} the category name, and I'll redraft and resubmit it for you.\n\n` +
-      `Not sure? ${findOnJumiaTip(country)}`;
+  // Owner, 2026-10-10: "sorry, the category I chose was not accepted by
+  // Jumia. Choose the right one from the list below or visit this link to
+  // copy the right one": the link opens the category deck on the refused
+  // category (app/categories), to find the right one and copy it here.
+  // tipFirst: the seller's own pick was just refused, so it's theirs, not ours.
+  const link = categoryPickerUrl((listing.category_code as string | null) ?? null, country);
+  const opener = opts.tipFirst ? lead
+    : lead === CATEGORY_REFUSED_LEAD ? "Sorry, the category I chose wasn't accepted by Jumia."
+    : `Sorry, the category I chose wasn't accepted by Jumia. ${lead}`;
+  const body = `⚠️ ${label}: ${opener} ` +
+    `${suggestions.length > 0 ? "Choose the right one from the list below, or open" : "Open"} this link to find the right one and copy it, then paste it here, and I'll redraft and resubmit it for you:\n${link}\n\n` +
+    `You can also copy it from a similar product on ${jumiaStorefront(country)}.`;
 
   if (suggestions.length > 0) {
     await replyList(phoneNumber, body, "Pick a category", suggestions.map((c) => categoryListRow(listingId, c)));
@@ -5603,7 +5609,7 @@ async function handleCategoryAnswer(
   const lead = answer.kind === "refused"
     ? `${label}: Jumia has already refused "${answer.name}" in your country, so I can't use it.`
     : `${label}: I couldn't find that category on Jumia.`;
-  const body = `${lead} ${findOnJumiaTip(country)}${suggestions.length > 0 ? " Or pick one below." : ""}`;
+  const body = `${lead} ${suggestions.length > 0 ? "Pick one below, or find" : "Find"} the right one here and copy it: ${categoryPickerUrl((listing.category_code as string | null) ?? null, country)}`;
   if (suggestions.length > 0) {
     await replyList(phoneNumber, body, "Pick a category", suggestions.map((c) => categoryListRow(listingId, c)));
   } else {
@@ -5653,7 +5659,7 @@ async function applySellerCategory(
   if (refused.has(categoryCode)) {
     await replyText(
       phoneNumber,
-      `${label}: Jumia has already refused that category in your country. Pick another one, or paste the category path of a similar product on ${jumiaStorefront(await sellerCountry(userId).catch(() => null))}.`,
+      `${label}: Jumia has already refused that category in your country. Pick another one, or find the right one here and copy it: ${categoryPickerUrl(categoryCode, await sellerCountry(userId).catch(() => null))}`,
     );
     return;
   }
@@ -5670,7 +5676,7 @@ async function applySellerCategory(
     await updateSession(phoneNumber, { awaitingCategoryFor: listingId });
     await replyText(
       phoneNumber,
-      `⚠️ ${label}: Jumia can't take listings in that category. Pick another one, or paste the category path of a similar product on ${jumiaStorefront(await sellerCountry(userId).catch(() => null))}.`,
+      `⚠️ ${label}: Jumia can't take listings in that category. Pick another one, or find the right one here and copy it: ${categoryPickerUrl(categoryCode, await sellerCountry(userId).catch(() => null))}`,
     );
     return;
   }

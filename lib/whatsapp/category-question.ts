@@ -13,6 +13,7 @@
 import { getListableCategories, type JumiaCategoryRow } from "@/lib/jumia/categories";
 import { searchCategoriesByText } from "@/lib/jumia/category-search";
 import { blockedCategoryCodes, sellerCountry } from "@/lib/jumia/unlistable-categories";
+import { appUrl } from "@/lib/whatsapp/app-url";
 
 export interface CategoryChoice {
   code: number;
@@ -319,6 +320,17 @@ const JUMIA_STOREFRONTS: Record<string, string> = {
 
 export function jumiaStorefront(country: string | null): string {
   return (country && JUMIA_STOREFRONTS[country.toUpperCase()]) || "Jumia";
+}
+
+/**
+ * The public category picker, opened on the category Jumia refused, with
+ * what Jumia refused in their country (app/categories; owner, 2026-10-10:
+ * "visit this link to copy the right one").
+ */
+export function categoryPickerUrl(code: number | string | null | undefined, country: string | null): string {
+  const c = Number(code);
+  const params = [Number.isInteger(c) && c > 0 ? `c=${c}` : null, country ? `cc=${country.toUpperCase()}` : null].filter(Boolean).join("&");
+  return `${appUrl()}/categories${params ? `?${params}` : ""}`;
 }
 
 /**

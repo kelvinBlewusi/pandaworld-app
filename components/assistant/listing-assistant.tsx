@@ -21,6 +21,7 @@ import { ProductForm } from "@/components/assistant/product-form";
 import { waitPhrases, waitTopic, type WaitTopic } from "@/components/assistant/waiting-phrases";
 import { RichMessage } from "@/components/assistant/rich-message";
 import { richBlocks } from "@/lib/whatsapp/rich-blocks";
+import { CategoryDeck } from "@/components/ui/category-deck";
 
 interface Message {
   id:        string;
@@ -459,7 +460,9 @@ export function ListingAssistant({ firstName, productForm }: {
     // 2026-10-08: "cover the entire page with the side panel still in place").
     <div
       className={cn(
-        "fixed inset-0 z-30 flex flex-col overflow-hidden bg-white font-chat antialiased",
+        // Claude's chat colours (owner, 2026-10-10: "a grey background like the Claude
+        // interface ... with the side panel having a different grade").
+        "fixed inset-0 z-30 flex flex-col overflow-hidden bg-[#faf9f5] font-chat antialiased",
         "sm:relative sm:inset-auto sm:z-auto sm:min-h-0 sm:flex-1",
         dragging && "ring-2 ring-inset ring-orange-300",
       )}
@@ -467,7 +470,7 @@ export function ListingAssistant({ firstName, productForm }: {
       onDragLeave={() => setDragging(false)}
       onDrop={(e) => { e.preventDefault(); setDragging(false); if (!locked) addFiles(e.dataTransfer.files); }}
     >
-      <div className="flex items-center gap-1 border-b border-zinc-100 px-2 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))] sm:gap-3 sm:px-6 sm:py-2.5">
+      <div className="flex items-center gap-1 border-b border-[#ebe9e1] px-2 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))] sm:gap-3 sm:px-6 sm:py-2.5">
         <Link
           href="/extension/dashboard"
           aria-label="Back to the dashboard"
@@ -497,7 +500,7 @@ export function ListingAssistant({ firstName, productForm }: {
       </div>
 
       <div className="relative min-h-0 flex-1">
-      <div ref={scroller} onScroll={onScroll} className="h-full overflow-y-auto bg-white px-4 py-5 sm:px-6 sm:py-8">
+      <div ref={scroller} onScroll={onScroll} className="h-full overflow-y-auto px-4 py-5 sm:px-6 sm:py-8">
       {/* One reading column, centred, however wide the page. */}
       <div className="mx-auto w-full max-w-3xl space-y-6">
         {!loaded && (
@@ -566,7 +569,7 @@ export function ListingAssistant({ firstName, productForm }: {
       )}
 
       {locked ? (
-        <div className="border-t border-zinc-100 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-4">
+        <div className="border-t border-[#ebe9e1] bg-[#faf9f5] p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-4">
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <p className="flex items-start gap-2 text-sm text-amber-900">
               <Lock className="mt-0.5 h-4 w-4 shrink-0" />
@@ -576,7 +579,7 @@ export function ListingAssistant({ firstName, productForm }: {
           </div>
         </div>
       ) : (
-      <div className="border-t border-zinc-100 bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-4">
+      <div className="border-t border-[#ebe9e1] bg-[#faf9f5] p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-4">
       <div className="relative mx-auto w-full max-w-3xl">
         {(commandsOpen || (text.startsWith("/") && !/\s/.test(text))) && (
           <CommandMenu
@@ -616,7 +619,7 @@ export function ListingAssistant({ firstName, productForm }: {
             type="button"
             onClick={() => fileInput.current?.click()}
             disabled={sending || attachments.length >= MAX_PHOTOS}
-            className="flex h-11 shrink-0 items-center gap-2 rounded-xl border border-zinc-200 px-3 text-sm font-medium text-zinc-700 transition-colors hover:border-orange-300 hover:bg-orange-50 disabled:opacity-50"
+            className="flex h-11 shrink-0 items-center gap-2 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-700 transition-colors hover:border-orange-300 hover:bg-orange-50 disabled:opacity-50"
             aria-label="Upload photos"
           >
             <ImagePlus className="h-5 w-5 text-orange-500" />
@@ -627,7 +630,7 @@ export function ListingAssistant({ firstName, productForm }: {
             onClick={() => setCommandsOpen((o) => !o)}
             disabled={sending}
             className={cn(
-              "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-zinc-200 text-zinc-600 transition-colors hover:border-orange-300 hover:bg-orange-50 disabled:opacity-50",
+              "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-white text-zinc-600 transition-colors hover:border-orange-300 hover:bg-orange-50 disabled:opacity-50",
               commandsOpen && "border-orange-300 bg-orange-50 text-orange-600",
             )}
             aria-label="Commands"
@@ -653,7 +656,7 @@ export function ListingAssistant({ firstName, productForm }: {
             rows={1}
             placeholder={attachments.length > 0 ? "Price and notes for these photos…" : "Type / for commands"}
             // 16px on a phone: iOS zooms the page into a smaller field on focus.
-            className="max-h-40 min-h-11 flex-1 resize-none rounded-xl border border-zinc-200 px-3.5 py-2.5 text-base leading-relaxed text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
+            className="max-h-40 min-h-11 flex-1 resize-none rounded-xl border border-zinc-200 bg-white px-3.5 py-2.5 text-base leading-relaxed text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
           />
           <button
             type="button"
@@ -778,7 +781,7 @@ function ClearDialog({ busy, onCancel, onConfirm }: { busy: boolean; onCancel: (
         </span>
         <p id="clear-chat-title" className="mt-3 font-semibold text-zinc-900">Clear this chat?</p>
         <p className="mt-1.5 text-sm leading-relaxed text-zinc-600">
-          The conversation goes and the assistant starts fresh, like your first visit. Your drafts and listings stay on List from WhatsApp, and your credits don&apos;t change.
+          The conversation goes and the assistant starts fresh, like your first visit. Your drafts and listings stay on Drafts &amp; Listings, and your credits don&apos;t change.
         </p>
         <div className="mt-5 flex gap-2">
           <button
@@ -818,6 +821,14 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
   const shown = mine && label ? label : m.text;
   // An answer laid out as tiles, tables and bars (lib/whatsapp/rich.ts); its text is the fallback.
   const rich = !mine ? richBlocks(p.rich) : null;
+  // The category question (lib/whatsapp/intake.ts askSellerForCategory): its
+  // rows answer it as recat:<listing>:<code>, and its link names the refused
+  // category and the country, so the whole deck can open right here (owner,
+  // 2026-10-10: "an arrow that makes it navigable to pick the right one").
+  const recat = rows.map((r) => /^recat:([0-9a-f-]{36}):\d+$/i.exec(r.id)).find(Boolean)?.[1] ?? null;
+  const pickerLink = recat ? /\/categories\?([^\s]+)/.exec(m.text ?? "")?.[1] ?? "" : "";
+  const pickerParams = new URLSearchParams(pickerLink);
+  const [browsing, setBrowsing] = useState(false);
 
   return (
     <div className={cn("flex flex-col", mine ? "items-end" : "items-start")}>
@@ -827,7 +838,7 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
           // between lines; the seller's own messages in a soft grey bubble
           // (owner, 2026-10-07), the bot's as plain text on the page.
           "text-base leading-[1.7]",
-          mine ? "max-w-[85%] overflow-hidden rounded-2xl bg-[#f0efec] text-zinc-900 sm:max-w-[75%]" : "w-full text-[#1f1f1e]",
+          mine ? "max-w-[85%] overflow-hidden rounded-2xl bg-[#f0eee6] text-zinc-900 sm:max-w-[75%]" : "w-full text-[#1f1f1e]",
           m.failed && "opacity-60",
         )}
       >
@@ -857,7 +868,7 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
           </div>
         )}
         {rows.length > 0 && (
-          <div className={cn(mine ? "border-t border-zinc-100" : "mt-3 max-w-md overflow-hidden rounded-xl border border-zinc-200")}>
+          <div className={cn(mine ? "border-t border-zinc-100" : "mt-3 max-w-md overflow-hidden rounded-xl border border-zinc-200 bg-white")}>
             {typeof p.buttonText === "string" && (
               <p className="px-3.5 pt-2 text-xs font-semibold uppercase tracking-wide text-zinc-400">{p.buttonText}</p>
             )}
@@ -873,6 +884,30 @@ function Bubble({ m, onTap, onResend, disabled, onMedia }: {
                 {r.description && <span className="block text-xs text-zinc-500">{r.description}</span>}
               </button>
             ))}
+            {recat && (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => setBrowsing((b) => !b)}
+                className="flex w-full items-center justify-between gap-3 border-t border-zinc-100 px-3.5 py-2.5 text-left text-orange-700 hover:bg-orange-50 disabled:opacity-50"
+              >
+                <span className="font-medium">{browsing ? "Close the categories" : "Not here? Browse all categories"}</span>
+                <ChevronDown className={cn("h-4 w-4 shrink-0 transition-transform", browsing ? "rotate-180" : "-rotate-90")} />
+              </button>
+            )}
+          </div>
+        )}
+        {recat && browsing && (
+          <div className="mt-3 max-w-md overflow-hidden rounded-xl border border-zinc-200">
+            <CategoryDeck
+              compact
+              mode="select"
+              country={pickerParams.get("cc")}
+              initialCode={Number(pickerParams.get("c")) || null}
+              rejectedCode={Number(pickerParams.get("c")) || null}
+              onClose={() => setBrowsing(false)}
+              onSelect={(c) => { setBrowsing(false); onTap({ id: `recat:${recat}:${c.code}`, title: c.name }); }}
+            />
           </div>
         )}
       </div>

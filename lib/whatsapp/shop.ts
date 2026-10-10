@@ -61,6 +61,7 @@ import { updateSession, type ListedProducts } from "@/lib/whatsapp/session";
 import { checkRestrictedBrand } from "@/lib/jumia/prohibited-catalog";
 import { findRestrictedWords, stripRestrictedWords } from "@/lib/ai/restricted-words";
 import { callGeminiBackend } from "@/lib/ai/gemini-client";
+import { buildContentStyleBlockFor } from "@/lib/ai/content-style-rules";
 import { withAiUsageContext } from "@/lib/ai/usage";
 
 const ID = "[0-9a-f-]{36}";
@@ -153,7 +154,7 @@ export function describeLiveChange(change: LiveChange, p: ShopProduct | null, ct
     case "stock":  return p?.stock != null ? `stock ${p.stock} → ${change.stock}` : `stock to ${change.stock}`;
     case "price":  return p?.price != null ? `price ${amount(p.price)} → ${amount(change.price)}` : `price to ${amount(change.price)}`;
     case "sale":   return change.sale ? `a sale at ${amount(change.sale.price)} from ${change.sale.start} to ${change.sale.end}` : "end its sale";
-    case "status": return change.active ? "turn it on (shown on Jumia)" : "turn it off (hidden on Jumia)";
+    case "status": return change.active ? "turn it ON (shown on Jumia)" : "turn it OFF (hidden on Jumia)";
     case "price_pct":
       return p?.price != null ? `price ${amount(p.price)} → ${amount(pctPrice(p.price, change.pct))} (${pct(change.pct)})` : `price ${pct(change.pct)}`;
     case "sale_pct":
@@ -521,11 +522,15 @@ export async function rewriteContent(
       `The seller's instructions: ${instructions.slice(0, 400)}`,
       "When the instructions ask for a small edit (remove, replace or add a word), make only that edit and keep the rest exactly as it is.",
     ] : []),
+    // The same writing rules as a new listing's draft (lib/ai/content-style-rules.ts),
+    // so a rewrite reads as well as what PandaWorld lists (owner, 2026-10-10).
+    "For anything you write afresh, follow the content style below, using only the facts above.",
+    buildContentStyleBlockFor(fields).trim(),
     "",
     "Return ONLY JSON with these keys and nothing else:",
-    ...(fields.includes("name") ? ['"name": the product name, 20 to 60 characters (or as long as it is now, for a small edit): brand, what it is, its key spec (size, capacity, colour). No promotional words.'] : []),
-    ...(fields.includes("description") ? ['"description": 120 to 250 words as simple HTML: <p> paragraphs, then a <ul> of key features. Plain, factual, no prices, no contact details, no links.'] : []),
-    ...(fields.includes("highlights") ? ['"highlights": 4 to 6 short bullet points as one HTML <ul><li>…</li></ul>.'] : []),
+    ...(fields.includes("name") ? ['"name": the product name (or as long as it is now, for a small edit). No promotional words.'] : []),
+    ...(fields.includes("description") ? ['"description": the description as HTML, following the content style. No prices, no contact details, no links.'] : []),
+    ...(fields.includes("highlights") ? ['"highlights": the highlights as HTML, following the content style.'] : []),
   ].join("\n");
   const { text } = await withAiUsageContext({ feature: "assistant", userId }, () => callGeminiBackend(REWRITE_MODEL, [{ text: prompt }]));
   const match = text.match(/\{[\s\S]*\}/);
@@ -1040,9 +1045,9 @@ export async function answerProducts(userId: string, phone: string, filter: "all
       return "none";
     }
     const lines = list.slice(0, 40).map((p) => `• ${shorten(label(p), 60)}${filter === "rejected" && p.qcReason ? `: ${shorten(p.qcReason, 80)}` : ""}`);
-    await rememberListed(phone, list, filter === "inactive" ? "turned off" : "rejected by Jumia's quality check");
-    const head = filter === "inactive" ? `⏸️ Turned off on Jumia (${list.length})` : `❌ Rejected by Jumia's quality check (${list.length})`;
-    const hint = filter === "inactive" ? "Tell me which to turn on, e.g. \"turn on the blender\"."
+    await rememberListed(phone, list, filter === "inactive" ? "turned OFF" : "rejected by Jumia's quality check");
+    const head = filter === "inactive" ? `⏸️ Turned OFF on Jumia (${list.length})` : `❌ Rejected by Jumia's quality check (${list.length})`;
+    const hint = filter === "inactive" ? "Tell me which to turn ON, e.g. \"turn on the blender\"."
       // Jumia's API often gives no reason (owner's web chat, 2026-10-08: "rejection reasons" had none to show).
       : list.some((p) => p.qcReason) ? "Say \"fix the <name>\" and I'll work out the fix, or \"fix my rejected products\" to pick one."
       : "Jumia didn't send the reasons through its API. Say \"fix the <name>\" and I'll work out what I can, or check the reason in Vendor Center.";
@@ -1064,15 +1069,15 @@ export async function answerProducts(userId: string, phone: string, filter: "all
   // deleted products" got "PandaWorld can't track them": owner, 2026-10-08).
   const deleted = products.length > live.length ? [`(Deleted on Jumia, not counted above: ${products.length - live.length})`] : [];
   const next = [
-    "Ask me about any of them: stock, price, a sale, or turning one on or off.",
+    "Ask me about any of them: stock, price, a sale, or turning one ON or OFF.",
     // Where "give me insight" goes next (owner's test, 2026-10-07).
     `How sales are going: *sales week*. A full health check of your shop: *report* (${REPORT_CREDIT_COST} credits).`,
   ];
   const tone = (n: number, t: RichTone): RichTone => (n > 0 ? t : "neutral");
   await sendRich(phone, [
     `🛍️ Your Jumia shop: ${live.length} product${live.length === 1 ? "" : "s"}`,
-    `• On: ${active.length}`,
-    `• Off: ${inactive.length}`,
+    `• ON: ${active.length}`,
+    `• OFF: ${inactive.length}`,
     `• Out of stock: ${out.length}`,
     `• Waiting for Jumia's check: ${pending.length}`,
     `• Rejected: ${rejected.length}`,
@@ -1083,16 +1088,16 @@ export async function answerProducts(userId: string, phone: string, filter: "all
   ].join("\n"), [
     { kind: "heading", text: "🛍️ Your Jumia shop", sub: `${live.length} product${live.length === 1 ? "" : "s"}` },
     { kind: "stats", items: [
-      { label: "On", value: String(active.length), tone: tone(active.length, "good") },
-      { label: "Off", value: String(inactive.length) },
-      { label: "Out of stock", value: String(out.length), tone: tone(out.length, "bad"), note: out.length > 0 ? "on, with 0 left" : undefined },
+      { label: "ON", value: String(active.length), tone: tone(active.length, "good") },
+      { label: "OFF", value: String(inactive.length) },
+      { label: "Out of stock", value: String(out.length), tone: tone(out.length, "bad"), note: out.length > 0 ? "ON, with 0 left" : undefined },
       { label: "Waiting for Jumia's check", value: String(pending.length), tone: tone(pending.length, "info") },
       { label: "Rejected", value: String(rejected.length), tone: tone(rejected.length, "bad") },
     ] },
     ...(live.length > 0 ? [{ kind: "bars" as const, items: [
-      { label: "On, in stock", value: active.length - out.length, shown: String(active.length - out.length), tone: "good" as const },
-      { label: "On, out of stock", value: out.length, shown: String(out.length), tone: "bad" as const },
-      { label: "Off", value: inactive.length, shown: String(inactive.length), tone: "neutral" as const },
+      { label: "ON, in stock", value: active.length - out.length, shown: String(active.length - out.length), tone: "good" as const },
+      { label: "ON, out of stock", value: out.length, shown: String(out.length), tone: "bad" as const },
+      { label: "OFF", value: inactive.length, shown: String(inactive.length), tone: "neutral" as const },
     ] }] : []),
     ...deleted.map((t) => ({ kind: "note" as const, text: t.replace(/^\(|\)$/g, "") })),
     ...flying.map((t) => ({ kind: "note" as const, text: t, tone: "warn" as const })),
@@ -1109,7 +1114,7 @@ const QC_WORDS: Record<string, string> = {
 export function productInfoText(p: ShopProduct, ctx: { currency: string; jc?: JumiaCountry }, today: string): string {
   const cur = p.currency || ctx.currency;
   const amount = (n: number) => formatAmount(n, cur, ctx.jc);
-  const on = p.status === "ACTIVE" ? (p.visible === false ? "on, but not shown to buyers yet" : "on (shown on Jumia)") : p.status === "INACTIVE" ? "off (hidden on Jumia)" : p.status === "DELETED" ? "deleted" : "unknown";
+  const on = p.status === "ACTIVE" ? (p.visible === false ? "ON, but not shown to buyers yet" : "ON (shown on Jumia)") : p.status === "INACTIVE" ? "OFF (hidden on Jumia)" : p.status === "DELETED" ? "deleted" : "unknown";
   const qc = p.qcStatus ? QC_WORDS[p.qcStatus] ?? p.qcStatus.toLowerCase() : null;
   const saleOn = p.salePrice != null && (!p.saleEnd || p.saleEnd.slice(0, 10) >= today);
   const live = p.status === "ACTIVE" && p.visible !== false && p.qcStatus === "APPROVED" && (p.stock == null || p.stock > 0);
@@ -1130,8 +1135,8 @@ export function productInfoBlocks(p: ShopProduct, ctx: { currency: string; jc?: 
   const amount = (n: number) => formatAmount(n, cur, ctx.jc);
   const saleOn = p.salePrice != null && (!p.saleEnd || p.saleEnd.slice(0, 10) >= today);
   const live = p.status === "ACTIVE" && p.visible !== false && p.qcStatus === "APPROVED" && (p.stock == null || p.stock > 0);
-  const status = p.status === "ACTIVE" ? (p.visible === false ? { v: "On", t: "warn" as const, n: "not shown to buyers yet" } : { v: "On", t: "good" as const, n: "shown on Jumia" })
-    : p.status === "INACTIVE" ? { v: "Off", t: "neutral" as const, n: "hidden on Jumia" } : { v: p.status === "DELETED" ? "Deleted" : "Unknown", t: "neutral" as const, n: undefined };
+  const status = p.status === "ACTIVE" ? (p.visible === false ? { v: "ON", t: "warn" as const, n: "not shown to buyers yet" } : { v: "ON", t: "good" as const, n: "shown on Jumia" })
+    : p.status === "INACTIVE" ? { v: "OFF", t: "neutral" as const, n: "hidden on Jumia" } : { v: p.status === "DELETED" ? "Deleted" : "Unknown", t: "neutral" as const, n: undefined };
   const qcTone: RichTone = p.qcStatus === "APPROVED" ? "good" : p.qcStatus === "REJECTED" ? "bad" : "info";
   return [
     { kind: "heading", text: `${live ? "🟢" : "⚪"} ${shorten(label(p), 90)}`, sub: `SKU ${p.sellerSku}` },

@@ -191,6 +191,13 @@ export function WhatsAppListingsView({ batches }: { batches: WhatsAppBatch[] }) 
                       <p className="text-sm font-semibold text-zinc-800">
                         {batch.listings.length} product{batch.listings.length === 1 ? "" : "s"}
                       </p>
+                      {/* Where the batch was made (owner, 2026-10-10: drafts from the
+                          website chat and WhatsApp share this page, told apart). */}
+                      <span className={batch.listings[0]?.chat_channel === "web"
+                        ? "rounded-full bg-orange-50 px-2 py-0.5 text-[11px] font-medium text-orange-700"
+                        : "rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"}>
+                        {batch.listings[0]?.chat_channel === "web" ? "Website chat" : "WhatsApp"}
+                      </span>
                       {summary && <p className="text-xs text-zinc-400">{summary}</p>}
                     </div>
                     <p className="text-xs text-zinc-400">{formatBatchDate(batch.createdAt)}</p>

@@ -24,10 +24,10 @@ describe("rich answers", () => {
   });
 
   it("statuses and stock are coloured", () => {
-    expect(productStatusCell(product({}))).toEqual({ text: "On", tone: "good" });
+    expect(productStatusCell(product({}))).toEqual({ text: "ON", tone: "good" });
     expect(productStatusCell(product({ stock: 0 }))).toEqual({ text: "Out of stock", tone: "bad" });
     expect(productStatusCell(product({ qcStatus: "REJECTED" }))).toEqual({ text: "Rejected", tone: "bad" });
-    expect(productStatusCell(product({ status: "INACTIVE" }))).toEqual({ text: "Off", tone: "neutral" });
+    expect(productStatusCell(product({ status: "INACTIVE" }))).toEqual({ text: "OFF", tone: "neutral" });
     expect(stockCell(0)).toEqual({ text: "0", tone: "bad" });
     expect(stockCell(2)).toEqual({ text: "2", tone: "warn" });
     expect(stockCell(40)).toEqual({ text: "40", tone: "neutral" });
@@ -48,7 +48,7 @@ describe("rich answers", () => {
     ], "2026-10-09");
     const t = productsTable(groups, (n) => `GHS ${n}`, "Africa/Accra", new Date("2026-10-09T12:00:00Z"));
     expect(t.columns).toEqual(["Product", "Price", "Stock", "State", "Added"]);
-    expect(t.rows[0]).toEqual(["Satin Gown (M, L)", "GHS 150–GHS 160", { text: "2", tone: "warn" }, { text: "On", tone: "good" }, "1 Oct"]);
+    expect(t.rows[0]).toEqual(["Satin Gown (M, L)", "GHS 150–GHS 160", { text: "2", tone: "warn" }, { text: "ON", tone: "good" }, "1 Oct"]);
     expect(t.rows[1][3]).toEqual({ text: "Rejected", tone: "bad" });
   });
 
