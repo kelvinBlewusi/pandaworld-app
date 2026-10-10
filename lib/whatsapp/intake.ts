@@ -24,6 +24,8 @@ import { columnFor, readAttributeValue } from "@/lib/jumia/attribute-mapping";
 import { refillAttributesForCategory } from "@/lib/jumia/refill-attributes";
 import { classifyJumiaRejection, isAutoFixable, extractRejectionText, rejectionFingerprint, shouldBlockRepeatedAutoFix, extractNotVisibleAttributeNames, isStaleCategoryError, type Remedy, isPriceRejection, priceLimitInRejection } from "@/lib/jumia/rejection-remedy";
 import { decideQcAction, type QcContext } from "@/lib/jumia/qc-remedy";
+import { fixRejected, parseFixTap } from "@/lib/whatsapp/fix-rejected";
+import { answerAddPhotos } from "@/lib/whatsapp/live-photos";
 import { featureAccess, featureMinPackName } from "@/lib/billing/features";
 import { removeAttributesFromCache, getCategoryByCode, getCategoryAttributes, type JumiaCategoryAttribute } from "@/lib/jumia/categories";
 import { isUnlistableCategoryError, sellerCountry } from "@/lib/jumia/unlistable-categories";
@@ -749,6 +751,13 @@ export async function handleLinkedMessage(
   if (!content.imageMediaId && (await handleShopTap(userId, phoneNumber, content.text))) return;
   // The same for a delivery order into Jumia's warehouse (lib/whatsapp/shop-insights.ts).
   if (!content.imageMediaId && (await handleWarehouseTap(userId, phoneNumber, content.text))) return;
+  // A rejected product tapped on "fix my rejected products" (lib/whatsapp/fix-rejected.ts).
+  const qcFixSku = content.imageMediaId ? null : parseFixTap(content.text);
+  if (qcFixSku) {
+    const outcome = await fixRejected(userId, phoneNumber, qcFixSku);
+    console.info(`[qc-chat] tap ${qcFixSku}: ${outcome}`);
+    return;
+  }
   // "More" after a list that had more: its next products (lib/whatsapp/shop-research.ts).
   // Not while a batch's photos come in, where "next" is the next product.
   if (!content.imageMediaId && (session.state === "awaiting_count" || session.state === "awaiting_confirmation")
@@ -757,6 +766,12 @@ export async function handleLinkedMessage(
   // The answer to the assistant's "What should its stock be?" about a live
   // product: a bare "10" is the stock, not a batch of 10 (owner's second
   // test, 2026-10-07). Anything else drops the question and carries on.
+  // Photos asked for a live product (lib/whatsapp/live-photos.ts): each one
+  // kept, "done" offers them for the tap; anything else lets the question go.
+  if (session.assistantPending && "kind" in session.assistantPending && session.assistantPending.kind === "add_photos") {
+    if (await answerAddPhotos(userId, phoneNumber, session.assistantPending, content)) return;
+    session = { ...session, assistantPending: null };
+  }
   if (session.assistantPending && "kind" in session.assistantPending) {
     if (await answerLiveValue(userId, phoneNumber, session, content.imageMediaId ? undefined : content.text)) return;
     session = { ...session, assistantPending: null };

@@ -39,6 +39,7 @@ import { botPausedForCredits } from "@/lib/whatsapp/credit-gate";
 import { formatAmount } from "@/lib/whatsapp/orders";
 import { inQuietHours, lastInboundAt, WINDOW_MS } from "@/lib/whatsapp/order-alerts";
 import { describeLiveChange, recordApplied } from "@/lib/whatsapp/shop";
+import { detailWord, lockedDetailIn, lockedText, rememberLocked } from "@/lib/jumia/locked-details";
 import {
   feedItemResults, fetchPayouts, markNoticed, noticed, orderStatusWord, ordersChangedSince, type LiveChange, type PayoutStatement,
 } from "@/lib/jumia/shop";
@@ -71,6 +72,19 @@ const feedError = (errors: unknown[]): string => {
   const first = errors.map((e) => (typeof e === "string" ? e : e && typeof e === "object" ? String((e as Record<string, unknown>).message ?? JSON.stringify(e)) : "")).find(Boolean);
   return first ? first.slice(0, 200) : "Jumia didn't say why";
 };
+
+/**
+ * Jumia's reason, or what it means for the seller when it's one we know: a
+ * detail it won't change after approval is said plainly, with what to do,
+ * and kept so the next seller is told before asking (lib/jumia/locked-details.ts).
+ */
+export async function explainRefusal(reason: string, change: LiveChange | null): Promise<string> {
+  const locked = lockedDetailIn(reason);
+  if (!locked) return reason;
+  await rememberLocked(locked);
+  const attr = change?.kind === "content" ? change.fields.attributes?.find((a) => a.name.toLowerCase() === locked) : undefined;
+  return lockedText(detailWord(locked, attr?.label), attr?.value);
+}
 
 /**
  * Changes sent to Jumia: applied (noted), refused (told), or no answer after
@@ -109,7 +123,7 @@ async function checkSentChanges(now: Date, deadline: number, run: ShopNoticesRun
           const reason = refused ? (item?.error ?? feedError(feed!.errors)) : "Jumia didn't confirm it within a day";
           await db.from("jumia_product_changes").update({ status: "failed", error: reason, updated_at: now.toISOString() }).eq("id", String(r.id));
           const what = describeLiveChange(r.change as LiveChange, null, { currency: creds.currency });
-          refusedLines.push(`*${String(r.name ?? r.seller_sku)}* (${what}): ${reason}`);
+          refusedLines.push(`*${String(r.name ?? r.seller_sku)}* (${what}): ${await explainRefusal(reason, r.change as LiveChange)}`);
           run.changes++;
         } else if (done) {
           await db.from("jumia_product_changes").update({ status: "done", updated_at: now.toISOString() }).eq("id", String(r.id));

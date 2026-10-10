@@ -158,6 +158,16 @@ export async function sendText(to: string, text: string, { preview = false } = {
 }
 
 /**
+ * An answer laid out for the Listing Assistant's page (lib/whatsapp/rich.ts):
+ * its text, with the blocks the page draws. Web chat only; WhatsApp gets
+ * the text (sendRich).
+ */
+export async function sendRichIfConfigured(to: string, text: string, rich: { blocks: unknown[] }): Promise<void> {
+  if (!canSend(to)) return;
+  await callGraphApi({ to, type: "text", text: { body: text, preview_url: false }, rich });
+}
+
+/**
  * A short prompt with up to 3 tappable reply buttons (Meta's interactive
  * "button" message type — the max it supports is 3, each title capped at
  * 20 characters).

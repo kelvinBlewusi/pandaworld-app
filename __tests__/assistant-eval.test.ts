@@ -26,7 +26,7 @@ import { contextText, frontDoor, namesInMessage, openQuestion } from "@/lib/assi
 const ACTIONS = new Set([
   "edit", "submit", "list", "restart", "review", "orders", "credits", "help", "reply", "live_change", "product_info", "product_text", "fees", "stock", "shop",
   "order_status", "sales", "listings", "payouts", "payout_detail", "report", "bulk", "content_change", "brand_check", "category_info", "shops",
-  "warehouse_stock", "warehouse_order", "warehouse_shipped", "polish", "health_report", "research", "note", "unclear",
+  "warehouse_stock", "warehouse_order", "warehouse_shipped", "polish", "health_report", "research", "note", "unclear", "fix_rejected", "add_size", "add_photos",
 ]);
 const STAGES = new Set(["review", "sent", "idle", "starting", "collecting", "drafting"]);
 
