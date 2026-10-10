@@ -250,6 +250,8 @@ export interface GeminiToolResult {
   /** Its turn as it came, to send back with the tools' answers: Gemini 3 needs its thought signatures returned. */
   turn: GeminiTurn;
   backend: "vertex" | "ai-studio";
+  /** Prompt tokens, and how many of them Gemini served from its cache (implicit caching of a repeated start). */
+  usage: { prompt: number; cached: number };
 }
 
 let _aiStudioGenAI: GoogleGenAI | null = null;
@@ -290,14 +292,16 @@ export async function callGeminiWithTools(
     },
   });
   const backend = aiStudio ? "ai-studio" as const : "vertex" as const;
-  await recordAiUsage({ model: modelName, backend, ...readUsage(result) });
+  const counted = readUsage(result);
+  await recordAiUsage({ model: modelName, backend, ...counted });
+  const cached = (result as { usageMetadata?: { cachedContentTokenCount?: number } }).usageMetadata?.cachedContentTokenCount ?? 0;
   const parts = (result.candidates?.[0]?.content?.parts ?? []) as Record<string, unknown>[];
   const calls = parts
     .map((p) => p.functionCall as { id?: string; name?: string; args?: Record<string, unknown> } | undefined)
     .filter((c): c is { id?: string; name: string; args?: Record<string, unknown> } => !!c?.name)
     .map((c) => ({ name: c.name, args: c.args ?? {}, ...(c.id ? { id: c.id } : {}) }));
   const text = parts.filter((p) => typeof p.text === "string" && !p.thought).map((p) => p.text as string).join("");
-  return { calls, text, turn: { role: "model", parts }, backend };
+  return { calls, text, turn: { role: "model", parts }, backend, usage: { prompt: counted.promptTokens, cached } };
 }
 
 /**
