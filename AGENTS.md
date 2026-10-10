@@ -2511,6 +2511,25 @@ checks and taps.
   several actions, checks, timeouts) and "agent mode" in
   whatsapp-assistant.test.ts (several actions in order, a list last, asking
   back, the front door when it fails).
+- **Test runs, 10 Oct (238 cases, Gemini 3.1 Flash-Lite; front door
+  218/238, median 1.75 s, $1.34 per 1,000 messages)**:
+  - Round 1, 198: it answered from its lookups ("You have 0 products" from
+    a `shop_counts` with no catalog, "no kettle in your shop") and lacked
+    the front door's rules. Round 2 (one lookup that never answers, the
+    rules ported), 225. Round 3 (system instruction made fixed for the
+    cache), 221 twice: a reply said a live description can't be changed
+    and "my credits" got a reply. Round 4 (reply never says it can't or
+    gives numbers, credits tool, list over restart), 226/238, median
+    1.04 s, slowest tenth 1.44 s. Runs 5ab3b0c8, b4bf6e69 (front door),
+    a1f03c0f, c63c7322, b6637485, 27680c18.
+  - Cost at full price $2.92 per 1,000 messages (11.3k prompt tokens a
+    call against the front door's two 2.5k calls); about 70% of those
+    tokens are Gemini cache hits, billed at a reduced rate the ledger
+    doesn't count.
+  - Still missed by both: "the approved ones" as a group (bulk has no
+    quality-check filter), a bare "0" answering a bulk rule's question,
+    a rejected product's name after "rejection reasons" (fix_rejected
+    rather than product_info).
 
 ### What sellers can and can't ask of Jumia (owner, 2026-10-09)
 
