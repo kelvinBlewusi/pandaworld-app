@@ -187,6 +187,12 @@ describe("reading a message", () => {
     expect(r.actions.map((a) => a.type)).toEqual(["edit"]);
   });
 
+  it("lists rather than starting over twice: \"start a new batch of 5\"", async () => {
+    const { call } = scripted([{ calls: [{ name: "restart", args: {} }, { name: "list", args: { count: 5 } }] }]);
+    const r = await agentRead(input("start a new batch of 5 products"), call, noLookups);
+    expect(r.actions).toEqual([{ type: "list", count: 5 }]);
+  });
+
   it("drops its own words beside actions, and the same action twice", async () => {
     const { call } = scripted([{ calls: [
       { name: "reply", args: { text: "Done! I've restocked it." } },
